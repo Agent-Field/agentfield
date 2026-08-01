@@ -3,7 +3,7 @@ Media Provider Abstraction for AgentField
 
 Provides a unified interface for different media generation backends:
 - Fal.ai (Flux, SDXL, Whisper, TTS, Video models)
-- MiniMax (Video generation)
+- MiniMax (Media generation)
 - OpenRouter (via LiteLLM)
 - OpenAI DALL-E (via LiteLLM)
 - Future: ElevenLabs, Replicate, etc.
@@ -650,7 +650,7 @@ class FalProvider(MediaProvider):
 
 
 class MiniMaxProvider(MediaProvider):
-    """MiniMax provider for asynchronous video generation."""
+    """MiniMax media generation provider."""
 
     def __init__(
         self,
@@ -671,7 +671,7 @@ class MiniMaxProvider(MediaProvider):
 
     @property
     def supported_modalities(self) -> List[str]:
-        return ["video", "music"]
+        return ["video", "music", "audio"]
 
     async def generate_image(
         self,
@@ -691,9 +691,136 @@ class MiniMaxProvider(MediaProvider):
         format: str = "wav",
         *,
         system: Optional[str] = None,
+        stream: bool = False,
+        language_boost: Optional[str] = None,
+        output_format: str = "hex",
+        voice_setting: Optional[Dict[str, Any]] = None,
+        pronunciation_dict: Optional[Dict[str, Any]] = None,
+        audio_setting: Optional[Dict[str, Any]] = None,
+        voice_modify: Optional[Dict[str, Any]] = None,
+        subtitle_enable: Optional[bool] = None,
         **kwargs,
     ) -> MultimodalResponse:
-        raise NotImplementedError("minimax does not support audio generation")
+        """Generate speech via the MiniMax t2a_v2 endpoint."""
+        import base64
+        import os
+
+        import aiohttp
+
+        api_key = self._api_key or os.environ.get("MINIMAX_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "MiniMax API key required. Set MINIMAX_API_KEY or pass api_key "
+                "to MiniMaxProvider."
+            )
+        if stream:
+            raise ValueError("MiniMax streaming TTS is not supported by generate_audio")
+        if output_format not in {"hex", "url"}:
+            raise ValueError("MiniMax audio output_format must be hex or url")
+
+        audio_options = dict(audio_setting or {})
+        audio_format = audio_options.get("format", format)
+        if audio_format not in {"mp3", "wav", "flac", "pcm"}:
+            raise ValueError("MiniMax audio format must be mp3, wav, flac, or pcm")
+        audio_options["format"] = audio_format
+
+        voice_options = dict(voice_setting or {})
+        speed = kwargs.pop("speed", None)
+        if voice != "alloy":
+            voice_options.setdefault("voice_id", voice)
+        if speed is not None and voice_options:
+            voice_options.setdefault("speed", speed)
+        elif speed not in (None, 1.0):
+            raise ValueError(
+                "MiniMax speed requires a voice or voice_setting with voice_id"
+            )
+        if voice_options and not voice_options.get("voice_id"):
+            raise ValueError("MiniMax voice_setting requires voice_id")
+
+        send_model = self._strip_prefix(model or "speech-2.8-hd")
+        if not send_model:
+            raise ValueError("MiniMax audio generation requires a model")
+
+        body: Dict[str, Any] = {
+            "model": send_model,
+            "text": text,
+            "stream": False,
+            "output_format": output_format,
+            "audio_setting": audio_options,
+        }
+        optional_fields = {
+            "language_boost": language_boost,
+            "voice_setting": voice_options or None,
+            "pronunciation_dict": pronunciation_dict,
+            "voice_modify": voice_modify,
+            "subtitle_enable": subtitle_enable,
+        }
+        body.update(
+            {key: value for key, value in optional_fields.items() if value is not None}
+        )
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        timeout = aiohttp.ClientTimeout(total=120.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{self._base_url}/t2a_v2",
+                headers=headers,
+                json=body,
+            ) as response:
+                if response.status >= 400:
+                    detail = await response.text()
+                    raise RuntimeError(
+                        f"MiniMax audio generation failed ({response.status}): "
+                        f"{detail[:500]}"
+                    )
+                data = await response.json()
+
+        if not isinstance(data, dict):
+            raise RuntimeError("MiniMax audio generation returned an invalid response")
+        base_resp = data.get("base_resp") or {}
+        if not isinstance(base_resp, dict):
+            raise RuntimeError("MiniMax audio generation returned an invalid response")
+        status_code = base_resp.get("status_code")
+        if status_code not in (None, 0):
+            status_msg = base_resp.get("status_msg") or "unknown error"
+            raise RuntimeError(
+                f"MiniMax audio generation failed ({status_code}): {status_msg}"
+            )
+
+        response_data = data.get("data") or {}
+        if not isinstance(response_data, dict):
+            raise RuntimeError("MiniMax audio generation returned no audio")
+        status = response_data.get("status")
+        if status not in (None, 2):
+            raise RuntimeError("MiniMax audio generation did not complete")
+        audio_value = response_data.get("audio")
+        if not isinstance(audio_value, str) or not audio_value:
+            raise RuntimeError("MiniMax audio generation returned no audio")
+
+        if output_format == "url":
+            output = AudioOutput(data=None, format=audio_format, url=audio_value)
+        else:
+            try:
+                audio_bytes = bytes.fromhex(audio_value)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "MiniMax audio generation returned invalid hex audio"
+                ) from exc
+            output = AudioOutput(
+                data=base64.b64encode(audio_bytes).decode("ascii"),
+                format=audio_format,
+                url=None,
+            )
+        return MultimodalResponse(
+            text=text,
+            audio=output,
+            images=[],
+            files=[],
+            raw_response=data,
+        )
 
     async def generate_music(
         self,

@@ -180,8 +180,6 @@ async def test_minimax_video_validates_credentials_model_and_duration(monkeypatc
         )
     with pytest.raises(NotImplementedError, match="image generation"):
         await provider.generate_image("An image")
-    with pytest.raises(NotImplementedError, match="audio generation"):
-        await provider.generate_audio("Audio")
 
 
 @pytest.mark.asyncio
@@ -251,4 +249,4 @@ def test_minimax_provider_configuration_and_registry():
         base_url=MINIMAX_GLOBAL_BASE_URL,
     )
     assert isinstance(provider, MiniMaxProvider)
-    assert provider.supported_modalities == ["video", "music"]
+    assert provider.supported_modalities == ["video", "music", "audio"]

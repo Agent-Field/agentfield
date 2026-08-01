@@ -402,7 +402,7 @@ class AgentAI:
 
     @property
     def _minimax_provider(self):
-        """Lazy-initialized MiniMax provider for video generation."""
+        """Lazy-initialized MiniMax media provider."""
         if self._minimax_provider_instance is None:
             from agentfield.media_providers import MiniMaxProvider
 
@@ -1466,6 +1466,19 @@ class AgentAI:
             model = (
                 self.agent.ai_config.audio_model
             )  # Use configured audio model (defaults to tts-1)
+
+        if model.startswith("minimax/"):
+            provider = self._media_router.resolve(model, "audio")
+            text_input = " ".join(str(arg) for arg in args if isinstance(arg, str))
+            if not text_input:
+                text_input = "Hello, this is a test audio message."
+            return await provider.generate_audio(
+                text=text_input,
+                model=model,
+                voice=voice,
+                format=format,
+                **kwargs,
+            )
 
         # Try media router for fal models
         try:
