@@ -611,4 +611,4 @@ def test_minimax_provider_configuration_and_registry():
         base_url=MINIMAX_GLOBAL_BASE_URL,
     )
     assert isinstance(provider, MiniMaxProvider)
-    assert provider.supported_modalities == ["video", "music", "audio"]
+    assert provider.supported_modalities == ["video", "music", "audio", "image"]
