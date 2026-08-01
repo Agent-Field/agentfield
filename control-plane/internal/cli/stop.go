@@ -329,8 +329,8 @@ func queryRunningExecutions(serverURL, nodeID string) ([]runningExecution, error
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := GetAPIKey(); key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
+	if key := strings.TrimSpace(GetAPIKey()); key != "" {
+		req.Header.Set("X-API-Key", key)
 	}
 
 	resp, err := client.Do(req)

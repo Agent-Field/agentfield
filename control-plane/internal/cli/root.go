@@ -10,6 +10,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli/commands"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -52,6 +53,11 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 			if verbose {
 				logger.Logger.Debug().Msg("Verbose logging enabled.")
 			}
+			// Hand the flag-supplied key to the package layer so agent child
+			// processes spawned by `af run` inherit the same credential the
+			// CLI itself is using. Env vars and stored credentials are read
+			// there directly; only the flag has to be pushed across.
+			packages.SetAPIKeyOverride(apiKey)
 			return nil
 		},
 		// Default to server mode when no subcommand is provided (backward compatibility)
@@ -119,6 +125,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 
 	// Add remaining old commands (not yet migrated)
 	RootCmd.AddCommand(NewUninstallCommand())
+	RootCmd.AddCommand(NewAuthCommand())
 	RootCmd.AddCommand(NewSecretsCommand())
 	RootCmd.AddCommand(NewListCommand())
 	RootCmd.AddCommand(NewStopCommand())
@@ -224,11 +231,13 @@ func GetServerURL() string {
 	return "http://localhost:8080"
 }
 
+// GetAPIKey returns the API key to send to the control plane: the --api-key
+// flag, then AGENTFIELD_API_KEY, then the key `af auth login` stored for the
+// current server. Empty means no key is configured anywhere, which is the
+// default local setup and stays unauthenticated.
 func GetAPIKey() string {
-	if apiKey != "" {
-		return apiKey
-	}
-	return os.Getenv("AGENTFIELD_API_KEY")
+	key, _ := resolveAPIKeyWithSource()
+	return key
 }
 
 func GetOutputFormat() string {
