@@ -630,6 +630,13 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 	env = append(env, "AGENTFIELD_STRICT_PORT=1")
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER=%s", serverURL))
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", serverURL))
+	// A control plane with an API key configured rejects an unauthenticated
+	// registration, so the node needs the same credential the CLI resolved
+	// (flag, environment, or `af auth login`). Absent on a default local
+	// setup, where the variable is simply not exported.
+	if key := packages.ResolveAPIKey(); key != "" {
+		env = append(env, fmt.Sprintf("AGENTFIELD_API_KEY=%s", key))
+	}
 	env = packages.PythonUTF8Env(env)
 
 	// Resolve declared variables from the encrypted secret store. Secrets are

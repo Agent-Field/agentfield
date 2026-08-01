@@ -692,6 +692,7 @@ class Agent(FastAPI):
                                          and None defers entirely to platform defaults.
             api_key (str, optional): API key for authenticating with the AgentField control plane.
                                     When set, will be sent as X-API-Key header on all requests.
+                                    Defaults to the AGENTFIELD_API_KEY environment variable.
             **kwargs: Additional keyword arguments passed to FastAPI constructor.
 
         Example:
@@ -786,7 +787,11 @@ class Agent(FastAPI):
         # Initialize async configuration
         self.async_config = async_config or AsyncConfig.from_environment()
 
-        # Store API key for authentication
+        # Store API key for authentication. `af run` exports AGENTFIELD_API_KEY
+        # for agents it starts, so an agent registers against a control plane
+        # that has authentication enabled without needing the key in its code.
+        if api_key is None:
+            api_key = os.environ.get("AGENTFIELD_API_KEY") or None
         self.api_key = api_key
 
         # Initialize AgentFieldClient with async configuration and API key

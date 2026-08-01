@@ -357,6 +357,14 @@ type Config struct {
 	// an Authorization: Bearer <token> header on control-plane requests.
 	Token string
 
+	// APIKey authenticates control-plane requests via the X-API-Key header.
+	// Optional. Defaults to the AGENTFIELD_API_KEY environment variable, which
+	// `af run` exports for the agents it starts, so an agent registers against
+	// an authenticated control plane without carrying the key in its code.
+	// Unlike Token this is only ever sent outbound; it is not used to validate
+	// incoming requests.
+	APIKey string
+
 	// DeploymentType describes how the agent runs (affects execution behavior).
 	// Optional. Default: "long_running". Common values: "long_running",
 	// "serverless". Use a descriptive string for custom modes.
@@ -560,6 +568,9 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.TeamID == "" {
 		cfg.TeamID = "default"
 	}
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		cfg.APIKey = strings.TrimSpace(os.Getenv("AGENTFIELD_API_KEY"))
+	}
 	if cfg.ListenAddress == "" {
 		cfg.ListenAddress = ":8001"
 	}
@@ -635,6 +646,9 @@ func New(cfg Config) (*Agent, error) {
 
 	if strings.TrimSpace(cfg.AgentFieldURL) != "" {
 		opts := []client.Option{client.WithHTTPClient(httpClient), client.WithBearerToken(cfg.Token)}
+		if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
+			opts = append(opts, client.WithAPIKey(apiKey))
+		}
 		if cfg.DID != "" && cfg.PrivateKeyJWK != "" {
 			opts = append(opts, client.WithDIDAuth(cfg.DID, cfg.PrivateKeyJWK))
 		}
