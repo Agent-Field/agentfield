@@ -547,10 +547,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
-    env:
-      # Never auto-discover identities from the runner keychain; macOS signing
-      # uses the explicit CSC_LINK cert, Windows stays unsigned.
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - name: Checkout release commit
         uses: actions/checkout@v4
@@ -608,6 +604,14 @@ jobs:
       # Missing secrets degrade the artifact instead of blocking the release:
       # no CSC_LINK → unsigned (ad-hoc) build, no APPLE_APP_SPECIFIC_PASSWORD
       # → signed but un-notarized build, each with a workflow warning.
+      #
+      # Do NOT set CSC_IDENTITY_AUTO_DISCOVERY=false for this step. It reads as
+      # "don't guess an identity from the keychain", but electron-builder treats
+      # it as "skip code signing entirely" even when CSC_LINK is supplied — the
+      # app then gets ad-hoc signed, and notarization of an unsigned app comes
+      # back Invalid. That is what happened to v0.1.118-rc.10, which shipped
+      # without its macOS DMG. Providing CSC_LINK is already explicit, so
+      # nothing is auto-discovered here.
       - name: Build installers (macOS, signed + notarized)
         if: runner.os == 'macOS'
         working-directory: desktop
@@ -618,18 +622,25 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -z "$CSC_LINK" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
-            echo "::warning::signing/notarization secrets incomplete; electron-builder will skip what it lacks credentials for"
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ] || [ -z "$APPLE_ID" ] \
+            || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::warning::signing/notarization secrets incomplete; producing an unsigned build"
             # Partial APPLE_* env makes electron-builder hard-fail, and an
             # unsigned app can never notarize; drop the set entirely so it
-            # degrades to a skip-with-warning instead.
+            # degrades to a skip-with-warning instead. Auto-discovery stays off
+            # so an unsigned build cannot silently pick up a keychain identity.
             unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
           fi
           npm run dist
 
       - name: Build installers (Windows)
         if: runner.os == 'Windows'
         working-directory: desktop
+        env:
+          # Windows releases are unsigned; keep electron-builder from picking up
+          # any identity that happens to be on the runner.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run dist
 
       # The .app inside the DMG is already notarized + stapled; notarizing and
@@ -644,9 +655,15 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "$CSC_LINK" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+          # Same condition as the build step above. If they disagree, an
+          # incomplete secret set produces an unsigned app here and then fails
+          # the release on a notarization rejection instead of degrading to a
+          # warning.
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ] || [ -z "$APPLE_ID" ] \
+            || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
             echo "::warning::signing/notarization secrets incomplete; skipping DMG notarization and Gatekeeper verification"
             exit 0
           fi
@@ -657,11 +674,32 @@ jobs:
             exit 1
           fi
           for dmg in "${dmgs[@]}"; do
+            # `notarytool submit --wait` exits 0 even when Apple answers
+            # Invalid, so the status has to be read out of the output rather
+            # than inferred from the exit code. rc.10 sailed past this point and
+            # only failed later in `stapler`, which reports a ticket lookup
+            # error instead of the actual rejection.
+            submit_log="$(mktemp)"
+            # `|| true` so that a hard notarytool failure still reaches the
+            # status check below and gets its reason printed, rather than
+            # tripping `set -e` with no explanation.
             xcrun notarytool submit "$dmg" \
               --apple-id "$APPLE_ID" \
               --password "$APPLE_APP_SPECIFIC_PASSWORD" \
               --team-id "$APPLE_TEAM_ID" \
-              --wait
+              --wait 2>&1 | tee "$submit_log" || true
+            status="$(sed -n 's/^ *status: *//p' "$submit_log" | tail -1)"
+            if [ "$status" != "Accepted" ]; then
+              echo "::error::notarization of $dmg returned '${status:-unknown}'; Apple's report follows"
+              submission_id="$(sed -n 's/^ *id: *//p' "$submit_log" | head -1)"
+              if [ -n "$submission_id" ]; then
+                xcrun notarytool log "$submission_id" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" || true
+              fi
+              exit 1
+            fi
             xcrun stapler staple "$dmg"
             xcrun stapler validate "$dmg"
           done
