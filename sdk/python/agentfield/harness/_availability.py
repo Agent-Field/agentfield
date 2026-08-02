@@ -33,6 +33,13 @@ PROVIDER_SPECS = {
         install_command="curl -fsSL https://opencode.ai/install | bash",
         auth_env_vars=(),
     ),
+    "grok": ProviderSpec(
+        binary="grok",
+        version_args=("--version",),
+        # Grok Build CLI is distributed by xAI; install path may vary by platform.
+        install_command="install the Grok Build CLI and run `grok login`",
+        auth_env_vars=("XAI_API_KEY",),
+    ),
 }
 
 # Providers without a PROVIDER_SPECS entry (claude-code today, or any future

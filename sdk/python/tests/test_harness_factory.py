@@ -35,6 +35,7 @@ def test_supported_providers_contains_expected_names():
     assert "codex" in SUPPORTED_PROVIDERS
     assert "gemini" in SUPPORTED_PROVIDERS
     assert "opencode" in SUPPORTED_PROVIDERS
+    assert "grok" in SUPPORTED_PROVIDERS
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +206,13 @@ def test_claude_code_provider_satisfies_harness_provider_protocol():
     from agentfield.harness.providers.claude import ClaudeCodeProvider
 
     provider = ClaudeCodeProvider()
+    assert isinstance(provider, HarnessProvider)
+
+
+def test_grok_provider_satisfies_harness_provider_protocol():
+    from agentfield.harness.providers.grok import GrokProvider
+
+    provider = GrokProvider()
     assert isinstance(provider, HarnessProvider)
 
 

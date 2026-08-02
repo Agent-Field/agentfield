@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from agentfield.harness.providers._base import HarnessProvider
     from agentfield.types import HarnessConfig
 
-SUPPORTED_PROVIDERS = {"claude-code", "codex", "gemini", "opencode"}
+SUPPORTED_PROVIDERS = {"claude-code", "codex", "gemini", "opencode", "grok"}
 
 
 def build_provider(config: "HarnessConfig") -> "HarnessProvider":
@@ -34,4 +34,8 @@ def build_provider(config: "HarnessConfig") -> "HarnessProvider":
         return OpenCodeProvider(
             bin_path=getattr(config, "opencode_bin", "opencode"),
         )
+    if provider_name == "grok":
+        from agentfield.harness.providers.grok import GrokProvider
+
+        return GrokProvider(bin_path=getattr(config, "grok_bin", "grok"))
     raise NotImplementedError(f"Provider {provider_name!r} is not yet implemented.")

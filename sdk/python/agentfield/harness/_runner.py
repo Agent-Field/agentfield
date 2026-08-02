@@ -174,6 +174,7 @@ def _resolve_options(
             "codex_bin",
             "gemini_bin",
             "opencode_bin",
+            "grok_bin",
             "schema_max_retries",
             "schema_mode",
         ]:
@@ -209,10 +210,12 @@ def _accumulate_metrics(
         if raw.metrics.session_id:
             session_id = raw.metrics.session_id
         all_messages.extend(raw.messages)
-        tokens["input_tokens"] += raw.metrics.input_tokens
-        tokens["output_tokens"] += raw.metrics.output_tokens
-        tokens["cache_read_tokens"] += raw.metrics.cache_read_tokens
-        tokens["cache_creation_tokens"] += raw.metrics.cache_creation_tokens
+        # Coerce None → 0: some CLI providers omit token fields and previously
+        # leaked None into Metrics, crashing aggregation with int += None.
+        tokens["input_tokens"] += raw.metrics.input_tokens or 0
+        tokens["output_tokens"] += raw.metrics.output_tokens or 0
+        tokens["cache_read_tokens"] += raw.metrics.cache_read_tokens or 0
+        tokens["cache_creation_tokens"] += raw.metrics.cache_creation_tokens or 0
         if raw.metrics.model and not tokens["model"]:
             tokens["model"] = raw.metrics.model
 

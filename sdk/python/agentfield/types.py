@@ -276,7 +276,7 @@ class DiscoveryResult:
 class HarnessConfig(BaseModel):
     provider: str = Field(
         ...,
-        description='Coding agent provider: "claude-code" | "codex" | "gemini" | "opencode"',
+        description='Coding agent provider: "claude-code" | "codex" | "gemini" | "opencode" | "grok"',
     )
     model: str = Field(default="sonnet", description="Default model identifier.")
     max_turns: int = Field(default=30, description="Maximum agent iterations.")
@@ -320,6 +320,9 @@ class HarnessConfig(BaseModel):
     gemini_bin: str = Field(default="gemini", description="Path to gemini binary.")
     opencode_bin: str = Field(
         default="opencode", description="Path to opencode binary."
+    )
+    grok_bin: str = Field(
+        default="grok", description="Path to Grok Build CLI binary."
     )
     schema_mode: str = Field(
         default="single",
