@@ -1,7 +1,8 @@
-"""Research execution router with Tavily integration."""
+"""Research execution router with pluggable web search."""
 
 from __future__ import annotations
 
+import json
 import os
 from typing import List
 
@@ -11,6 +12,158 @@ from schemas import Citation, ResearchFindings, SearchQueries, TaskResult
 
 
 research_router = AgentRouter(prefix="research")
+
+PARALLEL_MCP_URL = "https://search.parallel.ai/mcp"
+SUPPORTED_SEARCH_PROVIDERS = ("tavily", "parallel")
+
+
+def _search_provider() -> str:
+    """Return the explicitly selected backend while preserving Tavily by default."""
+    provider = os.getenv("SEARCH_PROVIDER", "tavily").strip().lower() or "tavily"
+    if provider not in SUPPORTED_SEARCH_PROVIDERS:
+        supported = ", ".join(SUPPORTED_SEARCH_PROVIDERS)
+        raise ValueError(
+            f"Unsupported SEARCH_PROVIDER '{provider}'. Expected one of: {supported}"
+        )
+    return provider
+
+
+def _parallel_request(query: str, request_id: int) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {
+            "name": "web_search",
+            "arguments": {
+                "objective": query,
+                "search_queries": [query],
+            },
+        },
+    }
+
+
+def _parallel_results(response: object) -> list[dict]:
+    """Decode one Parallel MCP response into the example's existing result shape."""
+    if not isinstance(response, dict):
+        raise ValueError("Parallel returned an invalid JSON-RPC response")
+    if response.get("error") is not None:
+        raise ValueError("Parallel returned a JSON-RPC error")
+
+    result = response.get("result")
+    if not isinstance(result, dict) or result.get("isError") is True:
+        raise ValueError("Parallel returned an MCP tool error")
+
+    content = result.get("content")
+    if not isinstance(content, list):
+        raise ValueError("Parallel returned no MCP content")
+
+    payload = None
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            candidate = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(candidate, dict) and isinstance(candidate.get("results"), list):
+            payload = candidate
+            break
+
+    if payload is None:
+        raise ValueError("Parallel returned invalid web_search content")
+
+    normalized = []
+    for item in payload["results"]:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url")
+        title = item.get("title")
+        if not isinstance(url, str) or not url.strip():
+            continue
+        if not isinstance(title, str) or not title.strip():
+            continue
+
+        excerpts = item.get("excerpts", [])
+        if isinstance(excerpts, str):
+            excerpts = [excerpts]
+        if not isinstance(excerpts, list):
+            excerpts = []
+        text = "\n\n".join(
+            excerpt.strip()
+            for excerpt in excerpts
+            if isinstance(excerpt, str) and excerpt.strip()
+        )
+        normalized.append(
+            {
+                "title": title,
+                "url": url,
+                "content": text,
+                "raw_content": text,
+            }
+        )
+
+    return normalized
+
+
+def _execute_tavily_search(queries: List[str]) -> list[dict]:
+    try:
+        from tavily import TavilyClient
+    except ImportError:
+        raise ImportError("tavily-python not installed. Run: pip install tavily-python")
+
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        raise ValueError("TAVILY_API_KEY environment variable not set")
+
+    client = TavilyClient(api_key=api_key)
+    all_results = []
+    for query in queries:
+        try:
+            result = client.search(
+                query=query,
+                search_depth="advanced",
+                max_results=5,
+                include_answer=False,
+                include_raw_content=True,
+            )
+            all_results.append(result)
+        except Exception as e:
+            all_results.append({"error": str(e), "query": query})
+    return all_results
+
+
+async def _execute_parallel_search(queries: List[str]) -> list[dict]:
+    import aiohttp
+
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    timeout = aiohttp.ClientTimeout(total=30)
+    all_results = []
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for request_id, query in enumerate(queries, start=1):
+            try:
+                async with session.post(
+                    PARALLEL_MCP_URL,
+                    json=_parallel_request(query, request_id),
+                    headers=headers,
+                ) as response:
+                    if response.status < 200 or response.status >= 300:
+                        raise ValueError(
+                            f"Parallel returned HTTP status {response.status}"
+                        )
+                    envelope = await response.json(content_type=None)
+                all_results.append({"results": _parallel_results(envelope)})
+            except Exception as e:
+                all_results.append({"error": str(e), "query": query})
+
+    return all_results
 
 
 @research_router.reasoner()
@@ -61,33 +214,11 @@ async def generate_search_queries(
 
 @research_router.reasoner()
 async def execute_search(queries: List[str]) -> dict:
-    """Execute Tavily search for given queries."""
-    try:
-        from tavily import TavilyClient
-    except ImportError:
-        raise ImportError("tavily-python not installed. Run: pip install tavily-python")
-
-    api_key = os.getenv("TAVILY_API_KEY")
-    if not api_key:
-        raise ValueError("TAVILY_API_KEY environment variable not set")
-
-    client = TavilyClient(api_key=api_key)
-
-    # Execute searches in parallel
-    all_results = []
-    for query in queries:
-        try:
-            result = client.search(
-                query=query,
-                search_depth="advanced",
-                max_results=5,
-                include_answer=False,
-                include_raw_content=True,
-            )
-            all_results.append(result)
-        except Exception as e:
-            # Continue with other queries if one fails
-            all_results.append({"error": str(e), "query": query})
+    """Execute web search for given queries using the selected backend."""
+    if _search_provider() == "parallel":
+        all_results = await _execute_parallel_search(queries)
+    else:
+        all_results = _execute_tavily_search(queries)
 
     # Combine results
     combined = {
