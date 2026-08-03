@@ -16,7 +16,8 @@ import (
 // registry search lands. It is seeded from the desktop app's curated list
 // (desktop/src/shared/catalog.ts) — keep the two in sync when adding nodes.
 // `name` MUST equal the node's agentfield-package.yaml `name:` (the registry
-// key after install), which is often not the repo name (SWE-AF → swe-planner).
+// key after install), which is often not the repo name (SWE-AF//go →
+// swe-planner-go).
 type nodeCatalogEntry struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -30,15 +31,8 @@ type nodeCatalogEntry struct {
 // `//<subdir>` source selector stripped, since the docs live at the repo root).
 var nodeCatalog = []nodeCatalogEntry{
 	{
-		Name:        "swe-planner",
-		Description: "Autonomous software-engineering fleet: plan, code, test, and ship production-grade PRs",
-		Source:      "https://github.com/Agent-Field/SWE-AF",
-		Docs:        "https://github.com/Agent-Field/SWE-AF",
-		Language:    "python",
-	},
-	{
 		Name:        "swe-planner-go",
-		Description: "Go port of the SWE fleet: same planning/execution reasoners, one static binary",
+		Description: "Autonomous software-engineering fleet: plan, code, test, and ship production-grade PRs — one static binary",
 		Source:      "https://github.com/Agent-Field/SWE-AF//go",
 		Docs:        "https://github.com/Agent-Field/SWE-AF",
 		Language:    "go",
