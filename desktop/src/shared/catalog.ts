@@ -19,7 +19,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     name: 'swe-planner-go',
     description:
-      'Autonomous software-engineering fleet: plan, code, test, and ship production-grade PRs — one static binary',
+      'Software factory — turn any issue into a production-ready pull request, end to end',
     source: 'https://github.com/Agent-Field/SWE-AF//go',
     language: 'go'
   },
