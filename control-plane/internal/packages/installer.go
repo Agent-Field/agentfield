@@ -816,22 +816,44 @@ func shouldSkipCopy(relPath string, info os.FileInfo) bool {
 	return false
 }
 
-// copyFile copies a single file from src to dst
-func (pi *PackageInstaller) copyFile(src, dst string) error {
+// CopyFile copies a single file from src to dst, preserving its permission
+// bits. Preserving the mode matters because a node may ship an executable it
+// expects to run — a helper binary or a hook script. os.Create would produce
+// 0666&^umask, so such a file would arrive on disk non-executable and fail at
+// spawn time with "permission denied".
+//
+// This is the one implementation: the package installer and the package
+// service both route their file copies through it so the two cannot drift.
+func CopyFile(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	perm := info.Mode().Perm()
+
 	sourceFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer sourceFile.Close()
 
-	destFile, err := os.Create(dst)
+	destFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
 		return err
 	}
 	defer destFile.Close()
 
-	_, err = io.Copy(destFile, sourceFile)
-	return err
+	if _, err := io.Copy(destFile, sourceFile); err != nil {
+		return err
+	}
+	// O_CREATE applies the umask to perm, and an existing dst keeps its old
+	// mode entirely, so set it explicitly.
+	return os.Chmod(dst, perm)
+}
+
+// copyFile copies a single file from src to dst, preserving its mode.
+func (pi *PackageInstaller) copyFile(src, dst string) error {
+	return CopyFile(src, dst)
 }
 
 // installDependencies installs package dependencies

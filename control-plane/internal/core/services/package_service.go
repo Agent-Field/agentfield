@@ -3,7 +3,6 @@ package services
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -545,22 +544,11 @@ func (ps *DefaultPackageService) copyPackage(sourcePath, destPath string) error 
 	})
 }
 
-// copyFile copies a single file from src to dst
+// copyFile copies a single file from src to dst, preserving its mode. Shared
+// with the CLI installer so an executable a node ships stays executable on
+// both install paths.
 func (ps *DefaultPackageService) copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sourceFile.Close()
-
-	destFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	_, err = io.Copy(destFile, sourceFile)
-	return err
+	return packages.CopyFile(src, dst)
 }
 
 // installDependencies installs package dependencies for the node's language
