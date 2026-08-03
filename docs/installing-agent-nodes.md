@@ -223,8 +223,9 @@ dependencies first (in dependency order) before the node itself.
 
 By default `af install <src>` looks for the `agentfield-package.yaml` at the root
 of the source (a git repo or a local directory). When a single repository ships
-more than one installable node — for example a Python node at the root and a Go
-port under `go/` — use `--path` to select the subdirectory to install:
+more than one installable node — for example SWE-AF, whose advertised install is
+the Go node under `go/`, alongside a Python node that also lives at the repo
+root — use `--path` to select the subdirectory to install:
 
 ```bash
 # Install the node whose manifest lives at go/agentfield-package.yaml
