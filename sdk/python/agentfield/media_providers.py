@@ -15,6 +15,7 @@ backends or add new ones without changing agent code.
 import ipaddress
 import re
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import urlparse
 
@@ -695,6 +696,131 @@ class MiniMaxProvider(MediaProvider):
     ) -> MultimodalResponse:
         raise NotImplementedError("minimax does not support audio generation")
 
+    async def clone_voice(
+        self,
+        audio: Union[str, Path, bytes],
+        voice_id: Optional[str] = None,
+        model: Optional[str] = None,
+        purpose: str = "voice_clone",
+        filename: Optional[str] = None,
+        content_type: Optional[str] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """
+        Clone a voice from a reference audio sample via the MiniMax voice_clone
+        endpoint.
+
+        The reference audio is uploaded to the MiniMax file store and then used
+        to create a new voice that can be referenced by ``voice_id`` in later
+        speech calls.
+
+        Args:
+            audio: Reference audio sample, as a file path or raw bytes.
+            voice_id: ID to assign to the newly cloned voice.
+            model: MiniMax speech model used for the clone (defaults to
+                ``speech-2.8-hd``). A ``minimax/`` prefix is stripped.
+            purpose: File upload purpose; ``voice_clone`` or ``prompt_audio``.
+            filename: Name for the uploaded reference audio (inferred from a
+                file path when not provided).
+            content_type: MIME type for the uploaded audio (inferred from the
+                file extension when not provided).
+            **kwargs: Reserved for future use.
+
+        Returns:
+            MultimodalResponse whose ``text`` carries the cloned ``voice_id``
+            and whose ``raw_response`` contains the upload and clone responses.
+
+        Raises:
+            ValueError: If the API key, voice ID, model, audio data, or purpose
+                is invalid.
+            RuntimeError: If either the upload or the clone request fails.
+        """
+        import mimetypes
+        import os
+
+        import aiohttp
+
+        api_key = self._api_key or os.environ.get("MINIMAX_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "MiniMax API key required. Set MINIMAX_API_KEY or pass api_key "
+                "to MiniMaxProvider."
+            )
+        if not voice_id:
+            raise ValueError("MiniMax voice cloning requires a voice_id")
+        if purpose not in {"voice_clone", "prompt_audio"}:
+            raise ValueError(
+                "MiniMax voice cloning purpose must be voice_clone or prompt_audio"
+            )
+        send_model = self._strip_prefix(model or "speech-2.8-hd")
+        if not send_model:
+            raise ValueError("MiniMax voice cloning requires a model")
+
+        if isinstance(audio, (str, Path)):
+            audio_path = Path(audio)
+            audio_data = audio_path.read_bytes()
+            inferred_name = audio_path.name or None
+        elif isinstance(audio, bytes):
+            audio_data = audio
+            inferred_name = None
+        else:
+            raise ValueError("MiniMax voice cloning audio must be a file path or bytes")
+        upload_name = filename or inferred_name
+        if not upload_name:
+            raise ValueError(
+                "MiniMax voice cloning requires a filename for raw audio bytes"
+            )
+        upload_type = (
+            content_type or mimetypes.guess_type(upload_name)[0] or "audio/mpeg"
+        )
+
+        headers = {"Authorization": f"Bearer {api_key}"}
+        timeout = aiohttp.ClientTimeout(total=120.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            upload_form = aiohttp.FormData()
+            upload_form.add_field(
+                "file",
+                audio_data,
+                filename=upload_name,
+                content_type=upload_type,
+            )
+            upload_form.add_field("purpose", purpose)
+            async with session.post(
+                f"{self._base_url}/files/upload",
+                headers=headers,
+                data=upload_form,
+            ) as response:
+                upload_data = await self._read_response(
+                    response, "file upload", service="voice cloning"
+                )
+            file_id = self._extract_file_id(upload_data)
+            if not file_id:
+                raise RuntimeError("MiniMax voice cloning upload returned no file_id")
+
+            clone_form = aiohttp.FormData()
+            clone_form.add_field("file_id", file_id)
+            clone_form.add_field("voice_id", voice_id)
+            clone_form.add_field("model", send_model)
+            async with session.post(
+                f"{self._base_url}/voice_clone",
+                headers=headers,
+                data=clone_form,
+            ) as response:
+                clone_data = await self._read_response(
+                    response, "clone", service="voice cloning"
+                )
+            cloned_voice_id = str(clone_data.get("voice_id") or "")
+            if not cloned_voice_id:
+                raise RuntimeError("MiniMax voice cloning returned no voice_id")
+
+        return MultimodalResponse(
+            text=cloned_voice_id,
+            audio=None,
+            images=[],
+            files=[],
+            raw_response={"upload": upload_data, "clone": clone_data},
+        )
+
     async def generate_music(
         self,
         prompt: str,
@@ -779,28 +905,48 @@ class MiniMaxProvider(MediaProvider):
         return model[len("minimax/") :] if model.startswith("minimax/") else model
 
     @staticmethod
-    def _check_api_response(payload: Dict[str, Any], operation: str) -> None:
+    def _check_api_response(
+        payload: Dict[str, Any], operation: str, service: str = "video"
+    ) -> None:
         base_resp = payload.get("base_resp") or {}
         status_code = base_resp.get("status_code")
         if status_code not in (None, 0):
             status_msg = base_resp.get("status_msg") or "unknown error"
             raise RuntimeError(
-                f"MiniMax video {operation} failed ({status_code}): {status_msg}"
+                f"MiniMax {service} {operation} failed ({status_code}): {status_msg}"
             )
 
-    async def _read_response(self, response: Any, operation: str) -> Dict[str, Any]:
+    async def _read_response(
+        self, response: Any, operation: str, service: str = "video"
+    ) -> Dict[str, Any]:
         if response.status >= 400:
             detail = await response.text()
             raise RuntimeError(
-                f"MiniMax video {operation} failed ({response.status}): {detail[:500]}"
+                f"MiniMax {service} {operation} failed ({response.status}): "
+                f"{detail[:500]}"
             )
         payload = await response.json()
         if not isinstance(payload, dict):
             raise RuntimeError(
-                f"MiniMax video {operation} returned an invalid response"
+                f"MiniMax {service} {operation} returned an invalid response"
             )
-        self._check_api_response(payload, operation)
+        self._check_api_response(payload, operation, service=service)
         return payload
+
+    @staticmethod
+    def _extract_file_id(payload: Dict[str, Any]) -> str:
+        """Extract the uploaded file id from a MiniMax file upload response."""
+        file_info = payload.get("file")
+        if isinstance(file_info, dict):
+            file_id = str(file_info.get("file_id") or "")
+            if file_id:
+                return file_id
+        data = payload.get("data")
+        if isinstance(data, dict):
+            file_id = str(data.get("file_id") or "")
+            if file_id:
+                return file_id
+        return str(payload.get("file_id") or "")
 
     async def generate_video(
         self,
