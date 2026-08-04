@@ -442,6 +442,97 @@ func configureGoProvisionFixture(t *testing.T, archive []byte, checksum string) 
 	return &downloads
 }
 
+func configureGoProvisionServer(t *testing.T, server *httptest.Server) {
+	t.Helper()
+	oldClient, oldIndex, oldBase := goProvisionHTTPClient, goProvisionIndexURL, goProvisionArchiveBaseURL
+	goProvisionHTTPClient = server.Client()
+	goProvisionIndexURL = server.URL + "/index"
+	goProvisionArchiveBaseURL = server.URL + "/"
+	t.Cleanup(func() {
+		goProvisionHTTPClient, goProvisionIndexURL, goProvisionArchiveBaseURL = oldClient, oldIndex, oldBase
+	})
+}
+
+func assertProvisioningUnavailable(t *testing.T) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+
+	goCmd, cached, err := provisionGoToolchain()
+	if err != nil || goCmd != "" || cached {
+		t.Fatalf("provisionGoToolchain() = %q, %v, %v; want empty toolchain without a hard error", goCmd, cached, err)
+	}
+	dir := t.TempDir()
+	writeGoManifest(t, dir, "name: n\nversion: 0.1.0\nlanguage: go\n", "1.21", "")
+	_, err = resolveGoToolchain(dir)
+	if err == nil || !strings.Contains(err.Error(), "Install Go") || !strings.Contains(err.Error(), "https://go.dev/dl/") {
+		t.Fatalf("resolveGoToolchain should retain actionable install-Go guidance, got %v", err)
+	}
+}
+
+// Contract: an unreachable go.dev index is an ordinary availability failure,
+// so resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_IndexUnreachableFallsBackToInstallGuidance(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	configureGoProvisionServer(t, server)
+	server.Close()
+
+	assertProvisioningUnavailable(t)
+}
+
+// Contract: a non-200 index response is an ordinary availability failure, so
+// resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_IndexNonOKFallsBackToInstallGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+	configureGoProvisionServer(t, server)
+
+	assertProvisioningUnavailable(t)
+}
+
+// Contract: malformed index JSON is an ordinary availability failure, so
+// resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_InvalidIndexJSONFallsBackToInstallGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"not valid JSON"`)
+	}))
+	t.Cleanup(server.Close)
+	configureGoProvisionServer(t, server)
+
+	assertProvisioningUnavailable(t)
+}
+
+// Contract: an index without an archive for the host is an ordinary
+// availability failure, so resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_NoHostArchiveFallsBackToInstallGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `[{"version":"go9.9.9","stable":true,"files":[{"os":%q,"arch":%q,"kind":"installer","sha256":"sum"},{"os":"other","arch":"other","kind":"archive","sha256":"sum"}]}]`, runtime.GOOS, runtime.GOARCH)
+	}))
+	t.Cleanup(server.Close)
+	configureGoProvisionServer(t, server)
+
+	assertProvisioningUnavailable(t)
+}
+
+// Contract: a non-200 archive response is an ordinary availability failure,
+// so resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_ArchiveNonOKFallsBackToInstallGuidance(t *testing.T) {
+	filename := fmt.Sprintf("go9.9.9.%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/index" {
+			fmt.Fprintf(w, `[{"version":"go9.9.9","stable":true,"files":[{"filename":%q,"os":%q,"arch":%q,"kind":"archive","sha256":"sum"}]}]`, filename, runtime.GOOS, runtime.GOARCH)
+			return
+		}
+		http.Error(w, "unavailable", http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+	configureGoProvisionServer(t, server)
+
+	assertProvisioningUnavailable(t)
+}
+
 // Contracts: no ambient Go is provisioned, the resulting build succeeds, and
 // a second resolution reuses the completed cache without fetching the archive.
 func TestResolveGoToolchain_ProvisionsAndReusesCache(t *testing.T) {
@@ -498,6 +589,101 @@ func TestProvisionGoToolchain_RejectsTraversalAtomically(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(home, "toolchains", "go9.9.9")); !os.IsNotExist(statErr) {
 		t.Fatalf("failed extraction left final cache: %v", statErr)
+	}
+}
+
+// Contract: a checksum-valid archive missing the Go executable is rejected
+// loudly and never becomes a reusable cached toolchain.
+func TestProvisionGoToolchain_RejectsArchiveMissingGoBinaryAtomically(t *testing.T) {
+	archive := goArchiveFixture(t, map[string]string{"go/README.md": "not a toolchain"})
+	sum := sha256.Sum256(archive)
+	configureGoProvisionFixture(t, archive, hex.EncodeToString(sum[:]))
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+
+	goCmd, cached, err := provisionGoToolchain()
+	if err == nil || !strings.Contains(err.Error(), "does not contain go/bin/"+goBinaryName()) {
+		t.Fatalf("expected missing go/bin/%s hard error, got %q, %v, %v", goBinaryName(), goCmd, cached, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "toolchains", "go9.9.9")); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid archive left a final cache directory: %v", statErr)
+	}
+}
+
+// Contract: failure to query an ambient Go's GOTOOLCHAIN setting means it
+// cannot be trusted to auto-switch to the requested version.
+func TestGoCanAutoSwitch_EnvFailureCannotAutoSwitch(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-go")
+	if goCanAutoSwitch(missing, goVersion{major: 1, minor: 21}) {
+		t.Fatal("goCanAutoSwitch returned true when `go env GOTOOLCHAIN` could not run")
+	}
+}
+
+// Contract: when a Go version cannot be determined, diagnostics still identify
+// the exact binary path rather than displaying an empty or invented version.
+func TestDisplayGoVersion_UnknownVersionFallsBackToBinaryPath(t *testing.T) {
+	goCmd := filepath.Join(t.TempDir(), "unknown-go")
+	if got := displayGoVersion(goCmd); got != goCmd {
+		t.Fatalf("displayGoVersion(%q) = %q; want the binary path", goCmd, got)
+	}
+}
+
+// Contract: archive-name validation rejects empty, absolute, and climbing paths
+// while preserving an ordinary nested archive entry.
+func TestSafeArchiveName_RejectsUnsafeAndAcceptsNested(t *testing.T) {
+	cases := []struct {
+		name    string
+		want    string
+		wantErr bool
+	}{
+		{name: "", wantErr: true},
+		{name: string(filepath.Separator) + "absolute", wantErr: true},
+		{name: "../../outside", wantErr: true},
+		{name: "go/bin/" + goBinaryName(), want: filepath.Join("go", "bin", goBinaryName())},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := safeArchiveName(tc.name)
+			if (err != nil) != tc.wantErr || got != tc.want {
+				t.Fatalf("safeArchiveName(%q) = %q, %v; want %q, error=%v", tc.name, got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Contract: cached Go detection requires a real regular executable that can
+// run, rejecting missing paths, directories, and non-executable files.
+func TestUsableGoBinary_RequiresRunnableRegularExecutable(t *testing.T) {
+	dir := t.TempDir()
+	if usableGoBinary(filepath.Join(dir, "missing")) {
+		t.Fatal("missing path reported as a usable Go binary")
+	}
+	if usableGoBinary(dir) {
+		t.Fatal("directory reported as a usable Go binary")
+	}
+
+	if runtime.GOOS == "windows" {
+		runnable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !usableGoBinary(runnable) {
+			t.Fatalf("running test executable %q should be usable", runnable)
+		}
+		return
+	}
+
+	nonExecutable := filepath.Join(dir, "non-executable-go")
+	if err := os.WriteFile(nonExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if usableGoBinary(nonExecutable) {
+		t.Fatal("regular file without execute permission reported as usable")
+	}
+	runnable := filepath.Join(dir, "runnable-go")
+	writeExecutable(t, runnable, "#!/bin/sh\nexit 0\n")
+	if !usableGoBinary(runnable) {
+		t.Fatal("runnable regular executable reported as unusable")
 	}
 }
 

@@ -168,7 +168,12 @@ func usableGoBinary(path string) bool {
 	return exec.Command(path, "version").Run() == nil
 }
 
-func safeArchivePath(root, name string) (string, error) {
+// safeArchiveName rejects an archive entry whose name is obviously hostile
+// before it ever reaches the filesystem: empty, absolute, or climbing out with
+// "..". This is a fast, legible first gate — it is NOT what makes extraction
+// safe. That guarantee comes from os.Root below, which refuses to resolve any
+// path outside its directory at the syscall level, symlinked parents included.
+func safeArchiveName(name string) (string, error) {
 	if name == "" || filepath.IsAbs(name) {
 		return "", fmt.Errorf("unsafe archive path %q", name)
 	}
@@ -176,12 +181,7 @@ func safeArchivePath(root, name string) (string, error) {
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("unsafe archive path %q", name)
 	}
-	dst := filepath.Join(root, clean)
-	rel, err := filepath.Rel(root, dst)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe archive path %q", name)
-	}
-	return dst, nil
+	return clean, nil
 }
 
 func extractGoArchive(archivePath, dst string) error {
@@ -202,6 +202,14 @@ func extractGoTarGz(archivePath, dst string) error {
 		return err
 	}
 	defer gz.Close()
+	// Every write below goes through this root, which cannot be escaped: it
+	// resolves each path inside dst and refuses "..", absolute paths, and
+	// symlinked parents at the syscall level rather than by string comparison.
+	root, err := os.OpenRoot(dst)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	tr := tar.NewReader(gz)
 	for {
 		h, err := tr.Next()
@@ -211,20 +219,22 @@ func extractGoTarGz(archivePath, dst string) error {
 		if err != nil {
 			return err
 		}
-		path, err := safeArchivePath(dst, h.Name)
+		name, err := safeArchiveName(h.Name)
 		if err != nil {
 			return err
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(path, 0o755); err != nil {
+			if err := root.MkdirAll(name, 0o755); err != nil {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				return err
+			if dir := filepath.Dir(name); dir != "." {
+				if err := root.MkdirAll(dir, 0o755); err != nil {
+					return err
+				}
 			}
-			out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(h.Mode)&0o777)
+			out, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(h.Mode)&0o777)
 			if err != nil {
 				return err
 			}
@@ -250,8 +260,13 @@ func extractGoZip(archivePath, dst string) error {
 		return err
 	}
 	defer zr.Close()
+	root, err := os.OpenRoot(dst)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	for _, f := range zr.File {
-		path, err := safeArchivePath(dst, f.Name)
+		name, err := safeArchiveName(f.Name)
 		if err != nil {
 			return err
 		}
@@ -259,7 +274,7 @@ func extractGoZip(archivePath, dst string) error {
 			return fmt.Errorf("archive links are not allowed: %q", f.Name)
 		}
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(path, 0o755); err != nil {
+			if err := root.MkdirAll(name, 0o755); err != nil {
 				return err
 			}
 			continue
@@ -267,14 +282,16 @@ func extractGoZip(archivePath, dst string) error {
 		if !f.Mode().IsRegular() {
 			return fmt.Errorf("unsupported archive entry %q", f.Name)
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
+		if dir := filepath.Dir(name); dir != "." {
+			if err := root.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
 		}
 		in, err := f.Open()
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode().Perm())
+		out, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode().Perm())
 		if err != nil {
 			in.Close()
 			return err
