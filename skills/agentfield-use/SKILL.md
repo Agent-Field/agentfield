@@ -1,7 +1,7 @@
 ---
 name: agentfield-use
 version: 0.4.0
-description: "Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner-go, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill."
+description: "Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill."
 ---
 
 # Using AgentField agents
@@ -135,7 +135,7 @@ Input kwargs are ALWAYS nested under `"input"` — never raw at the top level.
 **Async — the default for real work.** Returns `202` immediately:
 
 ```bash
-curl -s -X POST http://localhost:8080/api/v1/execute/async/swe-planner-go.plan \
+curl -s -X POST http://localhost:8080/api/v1/execute/async/swe-planner.plan \
   -H 'Content-Type: application/json' \
   -d '{"input": {"task": "add rate limiting to the API"}}'
 # -> {"execution_id":"...", "run_id":"...", "status":"queued", ...}
@@ -145,7 +145,7 @@ curl -s -X POST http://localhost:8080/api/v1/execute/async/swe-planner-go.plan \
 `result` directly):
 
 ```bash
-curl -s -X POST http://localhost:8080/api/v1/execute/swe-planner-go.plan \
+curl -s -X POST http://localhost:8080/api/v1/execute/swe-planner.plan \
   -H 'Content-Type: application/json' \
   -d '{"input": {"task": "..."}}'
 ```

@@ -14,10 +14,10 @@ import type { CatalogEntry } from './types'
 // ports living beside their Python originals are installed). When adding an
 // entry, `name` MUST equal the manifest's `name:` (the registry key after
 // install — how the app detects installed state), which is often NOT the
-// repo name (SWE-AF//go → swe-planner-go).
+// repo name (SWE-AF//go → swe-planner).
 export const CATALOG: CatalogEntry[] = [
   {
-    name: 'swe-planner-go',
+    name: 'swe-planner',
     description:
       'Software factory — turn any issue into a production-ready pull request, end to end',
     source: 'https://github.com/Agent-Field/SWE-AF//go',

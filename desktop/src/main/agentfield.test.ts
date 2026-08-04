@@ -563,16 +563,15 @@ describe('install catalog', () => {
     expect(catalogEntry('definitely-not-real')).toBeUndefined()
   })
 
-  // The SWE fleet is offered as a single install: the Go node, sourced from
-  // the `//go` subdirectory. A re-added root/Python `swe-planner` entry must
-  // fail here rather than quietly reappear in the Install view.
-  it('offers the SWE fleet only as the go-sourced swe-planner-go entry', () => {
-    const goEntry = CATALOG.find((e) => e.name === 'swe-planner-go')
-    expect(goEntry).toBeDefined()
-    expect(goEntry?.source.endsWith('//go')).toBe(true)
-
-    expect(CATALOG.find((e) => e.name === 'swe-planner')).toBeUndefined()
-    expect(CATALOG.filter((e) => e.source.includes('Agent-Field/SWE-AF'))).toHaveLength(1)
+  // The SWE fleet is offered as a single install, named for the product and
+  // sourced from the `//go` subdirectory. A second SWE row — or the old
+  // implementation-suffixed name creeping back in — must fail here rather than
+  // quietly reappear in the Install view.
+  it('offers the SWE fleet as one product-named entry sourced from //go', () => {
+    const sweEntries = CATALOG.filter((e) => e.source.includes('Agent-Field/SWE-AF'))
+    expect(sweEntries).toHaveLength(1)
+    expect(sweEntries[0].name).toBe('swe-planner')
+    expect(sweEntries[0].source.endsWith('//go')).toBe(true)
   })
 })
 

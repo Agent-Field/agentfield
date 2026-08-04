@@ -48,10 +48,10 @@ to them.
 
 ## Example flow
 
-1. `discover_agents` → find `swe-planner-go` and its `build` reasoner.
-2. `get_reasoner_schema` `{ node: "swe-planner-go", reasoner: "build" }` → learn the
+1. `discover_agents` → find `swe-planner` and its `build` reasoner.
+2. `get_reasoner_schema` `{ node: "swe-planner", reasoner: "build" }` → learn the
    input shape.
-3. `execute_reasoner` `{ target: "swe-planner-go.build", input: { goal: "Add JWT auth" } }`
+3. `execute_reasoner` `{ target: "swe-planner.build", input: { goal: "Add JWT auth" } }`
    → `{ run_id: "run_…", status: "accepted" }`.
 4. `wait_run` `{ run_id: "run_…", timeout_seconds: 120 }` → block until the run
    finishes (or `timed_out: true`), then read `result`.

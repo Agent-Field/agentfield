@@ -29,23 +29,24 @@ func TestRunCatalogPrettyEndsWithInstallHint(t *testing.T) {
 	require.NoError(t, runCatalog(&stdout, "pretty"))
 	out := stdout.String()
 	require.Contains(t, out, "af install <source>")
-	require.Contains(t, out, "swe-planner-go")
+	require.Contains(t, out, "swe-planner")
 }
 
-// The SWE fleet ships as exactly one catalog row: the Go node installed from
-// the `//go` source selector. A re-added root/Python `swe-planner` entry must
-// fail here rather than silently reappear in `af catalog`.
+// The SWE fleet ships as exactly one catalog row, named for the product rather
+// than the implementation and installed from the `//go` source selector. A
+// second entry — a re-added root/Python row, or the old implementation-suffixed
+// name creeping back — must fail here rather than reappear in `af catalog`.
 func TestCatalogHasSingleGoSWEEntry(t *testing.T) {
 	var sweEntries []nodeCatalogEntry
 	for _, e := range nodeCatalog {
-		require.NotEqual(t, "swe-planner", e.Name, "SWE fleet must be catalogued only as swe-planner-go")
 		if strings.Contains(e.Source, "Agent-Field/SWE-AF") {
 			sweEntries = append(sweEntries, e)
 		}
 	}
 
 	require.Len(t, sweEntries, 1, "exactly one catalog entry may install from Agent-Field/SWE-AF")
-	require.Equal(t, "swe-planner-go", sweEntries[0].Name)
+	require.Equal(t, "swe-planner", sweEntries[0].Name,
+		"the SWE entry is named for the product, not the implementation")
 	require.True(t, strings.HasSuffix(sweEntries[0].Source, "//go"),
 		"SWE entry source must select the go subdirectory, got %q", sweEntries[0].Source)
 }
