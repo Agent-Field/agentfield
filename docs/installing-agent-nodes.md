@@ -240,12 +240,48 @@ af install ./SWE-AF --path go
 
 The subdirectory must contain its own `agentfield-package.yaml`; that subtree
 becomes the package root that is copied to `~/.agentfield/packages/<name>` and
-installed (a Go node builds relative to it). Because registry entries are keyed by
-the manifest `name`, the root node and a `--path` node from the same repo coexist
-as separate installs. `--path` is a path **relative to the source root**: absolute
-paths and paths that escape the root with `..` are rejected, and a missing manifest
-is reported with the full expected path. A bare `af install <src>` (no `--path`) is
-unchanged — the root manifest is always what you get by default.
+installed (a Go node builds relative to it). Registry entries are keyed by the
+manifest `name`, so a root node and a `--path` node from the same repo coexist as
+separate installs when their names differ — and replace one another when they do
+not. `--path` is a path **relative to the source root**: absolute paths and paths
+that escape the root with `..` are rejected, and a missing manifest is reported
+with the full expected path. A bare `af install <src>` (no `--path`) is unchanged
+— the root manifest is always what you get by default, unless it redirects.
+
+## Retiring or renaming a node: `superseded_by`
+
+A manifest can declare that it has been replaced by another package. Installing
+it then installs that other package instead:
+
+```yaml
+name: my-node
+superseded_by: https://github.com/me/my-repo//v2
+```
+
+The value is any source `af install` accepts — including a `//subdir` selector
+and an `@ref`. This lets you move, rename, or reimplement your node without
+anyone having to learn a new install command, and without AgentField holding a
+list of who redirects where: the redirect lives in your manifest.
+
+What happens on install:
+
+- The redirect is resolved **before** anything is copied, so a redirected
+  install never leaves the superseded package half-installed.
+- If the superseded package is currently installed, the user is warned that it
+  will be replaced, and the successor is installed **first** — a failure leaves
+  what they had exactly as it was.
+- Node-scoped secrets follow: when the successor takes a different name they are
+  copied across before the old package is uninstalled (which would delete that
+  scope); values already set on the successor win. When the successor takes the
+  *same* name — a node renaming itself in place — they are already in the right
+  scope and stay put.
+- Retiring the old package never fails the install. If it cannot be removed you
+  are told how to remove it by hand.
+- Chains are bounded at three hops, so two manifests pointing at each other fail
+  with a clear error instead of looping.
+
+The redirect applies to git installs. A local-path install ignores it, which is
+how you install a superseded package deliberately.
 
 ## Previewing requirements before installing: `af show-requirements`
 
