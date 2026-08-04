@@ -392,6 +392,24 @@ func (gi *GitInstaller) parsePackageMetadata(packagePath string) (*PackageMetada
 }
 
 // updateRegistryWithGit updates the installation registry with Git source info
+// appendSubdirSelector rewrites "https://host/owner/repo[@ref]" into
+// "https://host/owner/repo//subdir[@ref]" so a recorded source round-trips
+// through ParseGitURL. It is needed whenever the subdirectory arrived by the
+// --path flag (or the install API, which splits the selector off before
+// calling): without it the registry records the REPO ROOT, and the next update
+// installs whatever lives there instead of the package that is installed.
+func appendSubdirSelector(url, subdir string) string {
+	subdir = strings.Trim(strings.TrimSpace(subdir), "/")
+	if subdir == "" {
+		return url
+	}
+	base, ref := url, ""
+	if at := strings.LastIndex(url, "@"); at > strings.LastIndex(url, "/") {
+		base, ref = url[:at], url[at:]
+	}
+	return base + "//" + subdir + ref
+}
+
 func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *GitPackageInfo, sourcePath, destPath string) error {
 	registryPath := filepath.Join(gi.AgentFieldHome, "installed.yaml")
 
@@ -422,6 +440,13 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 	// any @ref and //subdir the user gave. (Appending the ref again used to
 	// produce doubled "…@main@main" entries.)
 	sourcePathStr := info.URL
+	// …except when the subdirectory came from --path (or the install API, which
+	// splits `//subdir` off the URL before calling). Then info.URL is the bare
+	// repo and the selector has to be put back, or this records a source that
+	// resolves to the repo root and the next update installs a different package.
+	if strings.TrimSpace(info.Subdir) == "" && strings.TrimSpace(gi.Subdir) != "" {
+		sourcePathStr = appendSubdirSelector(sourcePathStr, gi.Subdir)
+	}
 
 	// Add/update package entry with Git information
 	registry.Installed[metadata.Name] = InstalledPackage{
