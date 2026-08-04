@@ -195,6 +195,182 @@ func TestInstallFromGit_SupersededCycleIsBounded(t *testing.T) {
 	}
 }
 
+// writeMarkedSubdirPackage writes a subdirectory package that shares the root
+// manifest's name — the shape a node takes when it renames itself in place —
+// carrying a marker file so a test can tell whose files ended up installed.
+func writeMarkedSubdirPackage(t *testing.T, dir, name, marker string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "name: " + name + "\nversion: 2.0.0\nentrypoint:\n  start: bin/" + name + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "agentfield-package.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, marker), []byte("successor\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Contract: a successor that carries the SAME name as the package it retires
+// replaces it in place. The redirect already warned the user, so it must not
+// fail with "already installed (use --force)" — the case a node hits when it
+// renames itself to the name its predecessor held.
+func TestInstallFromGit_SupersededSameNameReplacesInPlace(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	writeTestPackage(t, repo, supersededRoot)
+	writeMarkedSubdirPackage(t, filepath.Join(repo, "go"), "dual-node", "successor.txt")
+	setupFakeGit(t, "copy", repo, false)
+
+	oldDir := seedInstalled(t, home, "dual-node")
+	if err := os.WriteFile(filepath.Join(oldDir, "predecessor.txt"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (&GitInstaller{AgentFieldHome: home}).
+		InstallFromGit("https://gitlab.com/acme/dual", false); err != nil {
+		t.Fatalf("same-name supersede must not need --force: %v", err)
+	}
+
+	registry := readRegistryFile(t, filepath.Join(home, "installed.yaml"))
+	pkg, ok := registry.Installed["dual-node"]
+	if !ok {
+		t.Fatalf("the shared name must still be installed, got %v", registry.Installed)
+	}
+	if pkg.Version != "2.0.0" {
+		t.Fatalf("registry still describes the predecessor: version %q", pkg.Version)
+	}
+	if _, err := os.Stat(filepath.Join(oldDir, "successor.txt")); err != nil {
+		t.Fatalf("successor's files are not installed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(oldDir, "predecessor.txt")); !os.IsNotExist(err) {
+		t.Fatalf("predecessor's files must not survive the replace, stat err = %v", err)
+	}
+}
+
+// Contract: node-scoped secrets survive a same-name replace. They never move —
+// the scope name is unchanged — so the risk is the retire path deleting them.
+func TestInstallFromGit_SupersededSameNameKeepsNodeScopedSecrets(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	writeTestPackage(t, repo, supersededRoot)
+	writeMarkedSubdirPackage(t, filepath.Join(repo, "go"), "dual-node", "successor.txt")
+	setupFakeGit(t, "copy", repo, false)
+
+	seedInstalled(t, home, "dual-node")
+	store, err := NewSecretStore(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("dual-node", "KEPT", "node-value"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (&GitInstaller{AgentFieldHome: home}).
+		InstallFromGit("https://gitlab.com/acme/dual", false); err != nil {
+		t.Fatalf("InstallFromGit: %v", err)
+	}
+
+	after, err := NewSecretStore(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := after.load("dual-node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["KEPT"] != "node-value" {
+		t.Fatalf("node-scoped secret lost in an in-place replace: %v", values)
+	}
+}
+
+// Contract: an install that fails after the destination has been cleared puts
+// the previously installed package back. Without this a replace that dies in
+// the dependency step — a missing toolchain is enough — leaves the user with
+// neither their old node nor a working new one.
+func TestInstallFromGit_FailedReinstallRestoresPreviousPackage(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	// language: typescript with no package.json fails in installDependencies,
+	// which runs after the destination has already been cleared and copied.
+	writeTestPackage(t, repo, "name: solo-node\nversion: 2.0.0\nlanguage: typescript\n")
+	setupFakeGit(t, "copy", repo, false)
+
+	oldDir := seedInstalled(t, home, "solo-node")
+	if err := os.WriteFile(filepath.Join(oldDir, "predecessor.txt"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := (&GitInstaller{AgentFieldHome: home}).
+		InstallFromGit("https://gitlab.com/acme/solo", true)
+	if err == nil {
+		t.Fatal("expected the install to fail in the dependency step")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(oldDir, "predecessor.txt")); statErr != nil {
+		t.Fatalf("previously installed package was not restored: %v", statErr)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(home, "packages"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			t.Fatalf("a backup was left behind in packages/: %s", e.Name())
+		}
+	}
+}
+
+// Contract: stashing is a no-op when there is nothing installed yet, and a
+// discarded stash leaves no residue — the first-install path must not be
+// burdened with cleanup that does not apply to it.
+func TestStashExistingPackage(t *testing.T) {
+	home := t.TempDir()
+	missing := filepath.Join(home, "packages", "never-installed")
+	backup, err := stashExistingPackage(missing)
+	if err != nil {
+		t.Fatalf("stashing a missing package must succeed: %v", err)
+	}
+	backup.restore() // must not recreate anything
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("restoring a no-op stash created something, stat err = %v", err)
+	}
+
+	present := filepath.Join(home, "packages", "installed")
+	if err := os.MkdirAll(present, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(present, "keep.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	backup, err = stashExistingPackage(present)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(present); !os.IsNotExist(err) {
+		t.Fatalf("stashing must move the directory aside, stat err = %v", err)
+	}
+	backup.restore()
+	if _, err := os.Stat(filepath.Join(present, "keep.txt")); err != nil {
+		t.Fatalf("restore did not put the package back: %v", err)
+	}
+
+	backup, err = stashExistingPackage(present)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup.discard()
+	entries, err := os.ReadDir(filepath.Join(home, "packages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("discard left residue in packages/: %v", entries)
+	}
+}
+
 // Contract: a source recorded for a --path install round-trips through
 // ParseGitURL back to the same repo AND subdir, so the next update resolves
 // the package that is actually installed rather than the repo root.

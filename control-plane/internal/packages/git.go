@@ -236,10 +236,21 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	// Install using existing flow
 	destPath := filepath.Join(gi.AgentFieldHome, "packages", metadata.Name)
 
+	// Reinstalling clears the destination before the replacement is copied,
+	// and long before its dependencies finish building — a missing toolchain
+	// is enough to fail there. Without this the user would be left with
+	// neither the package they had nor a working new one. Set the existing
+	// directory aside instead, and put it back if anything below fails.
+	backup, err := stashExistingPackage(destPath)
+	if err != nil {
+		return err
+	}
+
 	spinner = gi.newSpinner("Setting up environment")
 	spinner.Start()
 	if err := installer.copyPackage(packagePath, destPath); err != nil {
 		spinner.Error("Failed to copy package")
+		backup.restore()
 		return fmt.Errorf("failed to copy package: %w", err)
 	}
 	spinner.Success("Environment configured")
@@ -248,14 +259,17 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	spinner.Start()
 	if err := installer.installDependencies(destPath, metadata); err != nil {
 		spinner.Error("Failed to install dependencies")
+		backup.restore()
 		return fmt.Errorf("failed to install dependencies: %w", err)
 	}
 	spinner.Success("Dependencies installed")
 
 	// Update registry with Git source information
 	if err := gi.updateRegistryWithGit(metadata, info, packagePath, destPath); err != nil {
+		backup.restore()
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
+	backup.discard()
 
 	fmt.Println()
 	fmt.Println(installSummaryPanel(metadata.Name, metadata.Version, info.URL, info.Ref, destPath))
@@ -411,7 +425,6 @@ func (gi *GitInstaller) parsePackageMetadata(packagePath string) (*PackageMetada
 	return installer.parsePackageMetadata(packagePath)
 }
 
-// updateRegistryWithGit updates the installation registry with Git source info
 // followSupersededBy installs the successor a manifest points at, then retires
 // the superseded package when it was already installed. Order matters: the
 // successor is installed FIRST, so a failure leaves the user's existing node
@@ -429,8 +442,9 @@ func (gi *GitInstaller) followSupersededBy(fromName, target string, force bool) 
 	fmt.Println()
 	fmt.Printf("⚠️  %s has been superseded by %s\n", fromName, target)
 	if replacing {
-		fmt.Printf("⚠️  %s is currently installed and WILL BE REPLACED: the successor is installed first,\n", fromName)
-		fmt.Printf("    then %s is stopped and removed. Its node-scoped secrets move to the successor.\n", fromName)
+		fmt.Printf("⚠️  %s is currently installed and WILL BE REPLACED. The successor is installed\n", fromName)
+		fmt.Println("    first and node-scoped secrets are carried over; if that fails, what you")
+		fmt.Println("    have now is left as it is.")
 	}
 	fmt.Println(ui.Muted("  installing the successor instead"))
 	fmt.Println()
@@ -440,7 +454,12 @@ func (gi *GitInstaller) followSupersededBy(fromName, target string, force bool) 
 		Verbose:        gi.Verbose,
 		redirects:      gi.redirects + 1,
 	}
-	if err := successor.InstallFromGit(target, force); err != nil {
+	// A successor may carry the same name as the package it retires — that is
+	// a node renaming itself in place, and it is the shape a rename takes when
+	// the old and new names are meant to converge. The warning above already
+	// said this replaces the current install, so carry that consent into the
+	// successor rather than failing the redirect with "already installed".
+	if err := successor.InstallFromGit(target, force || replacing); err != nil {
 		return fmt.Errorf("installing %s, the successor of %s: %w", target, fromName, err)
 	}
 	gi.installedName = successor.installedName
@@ -466,6 +485,69 @@ func (gi *GitInstaller) retireSuperseded(oldName, newName string) {
 		return
 	}
 	fmt.Printf("✓ Replaced %s with %s\n", oldName, newName)
+}
+
+// packageBackup holds an installed package directory that a reinstall is about
+// to overwrite, so it can be put back if the reinstall fails partway. The zero
+// value is a valid no-op, which is what a first-time install gets.
+type packageBackup struct {
+	original string
+	saved    string
+}
+
+// stashExistingPackage moves an installed package directory aside so a failed
+// reinstall can restore it. A missing directory is not an error — there is
+// simply nothing to protect.
+func stashExistingPackage(destPath string) (*packageBackup, error) {
+	if _, err := os.Stat(destPath); err != nil {
+		if os.IsNotExist(err) {
+			return &packageBackup{}, nil
+		}
+		return nil, fmt.Errorf("failed to inspect %s: %w", destPath, err)
+	}
+	// Dot-prefixed and alongside the original: same filesystem, so the move is
+	// a rename rather than a copy, and it cannot be mistaken for a package.
+	dir, name := filepath.Split(strings.TrimRight(destPath, string(os.PathSeparator)))
+	saved := filepath.Join(dir, "."+name+".previous")
+	// A leftover from an interrupted run would make the rename fail.
+	if err := os.RemoveAll(saved); err != nil {
+		return nil, fmt.Errorf("failed to clear a stale backup at %s: %w", saved, err)
+	}
+	if err := os.Rename(destPath, saved); err != nil {
+		return nil, fmt.Errorf("failed to set the existing package aside: %w", err)
+	}
+	return &packageBackup{original: destPath, saved: saved}, nil
+}
+
+// restore puts the stashed package back, undoing a failed reinstall. It never
+// returns an error: the install is already failing, and the caller's report of
+// why is more useful than a cleanup problem layered on top. A backup that
+// cannot be moved back is still on disk, so say where.
+func (b *packageBackup) restore() {
+	if b == nil || b.saved == "" {
+		return
+	}
+	if err := os.RemoveAll(b.original); err != nil {
+		fmt.Printf("⚠️  Could not clear the failed install at %s: %v\n", b.original, err)
+		fmt.Printf("    your previous version is still on disk at %s\n", b.saved)
+		return
+	}
+	if err := os.Rename(b.saved, b.original); err != nil {
+		fmt.Printf("⚠️  Could not restore your previous version: %v\n", err)
+		fmt.Printf("    it is still on disk at %s\n", b.saved)
+		return
+	}
+	fmt.Printf("  restored the previously installed version at %s\n", b.original)
+	b.saved = ""
+}
+
+// discard drops the stashed copy once the reinstall has succeeded.
+func (b *packageBackup) discard() {
+	if b == nil || b.saved == "" {
+		return
+	}
+	os.RemoveAll(b.saved)
+	b.saved = ""
 }
 
 // migrateNodeScopedSecrets hands node-scoped secrets to the successor before
@@ -518,6 +600,7 @@ func appendSubdirSelector(url, subdir string) string {
 	return base + "//" + subdir + ref
 }
 
+// updateRegistryWithGit updates the installation registry with Git source info
 func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *GitPackageInfo, sourcePath, destPath string) error {
 	registryPath := filepath.Join(gi.AgentFieldHome, "installed.yaml")
 
