@@ -424,3 +424,23 @@ func TestProvisionGoToolchain_DeclinesOnATruncatedDownload(t *testing.T) {
 		t.Fatalf("a truncated download left %d entries cached", len(entries))
 	}
 }
+
+// Contract: a download size is rendered the way a person would say it, and an
+// index that omits the size does not claim "0 B".
+func TestHumanBytes(t *testing.T) {
+	for _, tc := range []struct {
+		in   int64
+		want string
+	}{
+		{0, "unknown size"},
+		{-1, "unknown size"},
+		{512, "512 B"},
+		{2048, "2 KB"},
+		{66041589, "63 MB"},
+		{5 * 1024 * 1024 * 1024, "5 GB"},
+	} {
+		if got := humanBytes(tc.in); got != tc.want {
+			t.Errorf("humanBytes(%d) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

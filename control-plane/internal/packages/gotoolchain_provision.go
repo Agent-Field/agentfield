@@ -37,6 +37,7 @@ type goReleaseFile struct {
 	Arch     string `json:"arch"`
 	Kind     string `json:"kind"`
 	SHA256   string `json:"sha256"`
+	Size     int64  `json:"size"`
 }
 
 // provisionGoToolchain returns an installed Go binary and whether it came from
@@ -61,6 +62,13 @@ func provisionGoToolchain() (goCmd string, cached bool, err error) {
 	if usableGoBinary(goCmd) {
 		return goCmd, true, nil
 	}
+
+	// Say so BEFORE the transfer, not after. This is ~60MB behind an install
+	// spinner that cannot tick during it, so on a slow link the alternative is a
+	// silent minute that reads as a hang — to exactly the users who have no Go
+	// and least expect an install to fetch a compiler.
+	fmt.Printf("%s  Downloading Go %s (%s) — no Go toolchain on this machine\n",
+		clearLine(), strings.TrimPrefix(release.Version, "go"), humanBytes(file.Size))
 
 	resp, err := goProvisionHTTPClient.Get(goProvisionArchiveBaseURL + file.Filename)
 	if err != nil {
@@ -138,6 +146,24 @@ func discoverGoArchive() (goRelease, goReleaseFile, error) {
 		}
 	}
 	return goRelease{}, goReleaseFile{}, fmt.Errorf("no stable Go archive for %s/%s", runtime.GOOS, runtime.GOARCH)
+}
+
+// humanBytes renders a download size the way a user would say it. An index that
+// omits the size yields "unknown size" rather than a misleading "0 B".
+func humanBytes(n int64) string {
+	if n <= 0 {
+		return "unknown size"
+	}
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit && exp < 3; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.0f %cB", float64(n)/float64(div), "KMGT"[exp])
 }
 
 func goBinaryName() string {
