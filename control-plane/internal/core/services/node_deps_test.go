@@ -75,7 +75,7 @@ func TestInstallNodeDependencies_SkipsAlreadyInstalled(t *testing.T) {
 		},
 	})
 
-	err := ps.installNodeDependencies("caller", domain.InstallOptions{})
+	err := ps.installNodeDependencies("caller", domain.InstallOptions{}, map[string]bool{"caller": true})
 	require.NoError(t, err)
 }
 

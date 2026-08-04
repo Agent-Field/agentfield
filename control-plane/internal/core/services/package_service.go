@@ -57,7 +57,7 @@ func (ps *DefaultPackageService) InstallPackageWithResult(source string, options
 	// into recursive dependency installs.
 	depOptions := options
 	depOptions.Path = ""
-	if err := ps.installNodeDependencies(installedName, depOptions); err != nil {
+	if err := ps.installNodeDependencies(installedName, depOptions, map[string]bool{installedName: true}); err != nil {
 		return "", err
 	}
 	return installedName, nil
@@ -96,9 +96,15 @@ func (ps *DefaultPackageService) installedNames() map[string]bool {
 }
 
 // installNodeDependencies installs the node-to-node dependencies declared by
-// packageName, recursively. Already-installed nodes are skipped, which also
-// breaks dependency cycles.
-func (ps *DefaultPackageService) installNodeDependencies(packageName string, options domain.InstallOptions) error {
+// packageName, recursively.
+//
+// `visited` holds every package this install pass has already walked, and it is
+// what terminates a dependency cycle. The already-installed check below cannot
+// do that on its own: it only knows a dependency's name for `af://registry/…`
+// refs, and a forced install — which every update is — reinstalls whatever is
+// already there. So a cycle expressed with bare git URLs or local paths has
+// nothing else stopping it.
+func (ps *DefaultPackageService) installNodeDependencies(packageName string, options domain.InstallOptions, visited map[string]bool) error {
 	registry, err := ps.loadRegistryDirect()
 	if err != nil {
 		return nil // base install already succeeded; don't fail on dep discovery
@@ -123,8 +129,12 @@ func (ps *DefaultPackageService) installNodeDependencies(packageName string, opt
 				fmt.Printf("%s Failed to install node dependency %s: %v\n", ps.statusError(), dep, err)
 				continue
 			}
+			if visited[installedName] {
+				continue // a cycle: this pass has already walked that package
+			}
+			visited[installedName] = true
 			// Recurse for the dependency's own node deps.
-			if err := ps.installNodeDependencies(installedName, options); err != nil {
+			if err := ps.installNodeDependencies(installedName, options, visited); err != nil {
 				return err
 			}
 		}

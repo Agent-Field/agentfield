@@ -15,6 +15,31 @@ import (
 	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
 )
 
+// Contract: an installer that cannot report a name still installs, and the job
+// falls back to inferring the name from the registry. That fallback is the
+// pre-existing behaviour and has to keep working — the authoritative path is an
+// upgrade, not a requirement.
+func TestInstallFallsBackWhenInstallerCannotReportAName(t *testing.T) {
+	inst := &stubInstaller{afterInstall: []domain.InstalledPackage{{Name: "legacy-node"}}}
+	// Embedding in an anonymous struct exposes only `installer`, hiding the
+	// stub's InstallPackageWithResult — so the manager sees an implementation
+	// that cannot report results and must take the fallback.
+	var plain installer = struct{ installer }{inst}
+	manager := newManager(plain, &stubAgentService{}, t.TempDir())
+
+	job, err := manager.StartInstall("https://github.com/owner/repo", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitForJob(t, manager, job.ID)
+	if got.Status != StatusSucceeded {
+		t.Fatalf("job = %#v", got)
+	}
+	if got.PackageName != "legacy-node" {
+		t.Fatalf("package name = %q, want the name inferred from the registry", got.PackageName)
+	}
+}
+
 // Contract: the installer the server actually runs reports the name it
 // installed. `run` reaches that behaviour through a type assertion, which fails
 // *silently* — it falls back to inferring the name from a registry diff, the
