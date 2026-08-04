@@ -193,7 +193,7 @@ are running something"):
 
 ```bash
 curl -s http://localhost:8080/api/v1/executions/active
-# {"count":2,"runs":[{"run_id":"...","target":"pr-af-go.review","root_status":"running",
+# {"count":2,"runs":[{"run_id":"...","target":"pr-af.review","root_status":"running",
 #   "active_executions":4,"total_executions":27,"started_at":"...","latest_activity":"..."}]}
 ```
 
