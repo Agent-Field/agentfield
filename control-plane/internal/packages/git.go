@@ -38,7 +38,19 @@ type GitInstaller struct {
 	// subdirectory becomes the package root that is copied and installed. It
 	// composes with an @ref pin on the URL, which is parsed independently.
 	Subdir string
+
+	// redirects counts how many superseded_by hops led here, bounding a cycle
+	// (A superseded by B, B superseded by A) instead of cloning forever.
+	redirects int
+	// installedName records the package name this installer actually installed.
+	// A superseded_by redirect needs it to hand the old package's node-scoped
+	// secrets to the successor, whose name it cannot know in advance.
+	installedName string
 }
+
+// maxSupersedeRedirects bounds a superseded_by chain. Three is generous for the
+// real case (one hop) and still fails fast on a manifest cycle.
+const maxSupersedeRedirects = 3
 
 // newSpinner creates a new spinner with the given message
 func (gi *GitInstaller) newSpinner(message string) *Spinner {
@@ -202,7 +214,15 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 		return fmt.Errorf("failed to parse package metadata: %w", err)
 	}
 
-	// 4. Use existing installer for the rest
+	// 4. A superseded package installs its successor instead. This runs before
+	// the force check and before anything is copied, so a redirect never
+	// half-installs the package it is redirecting away from.
+	if target := strings.TrimSpace(metadata.SupersededBy); target != "" {
+		return gi.followSupersededBy(metadata.Name, target, force)
+	}
+	gi.installedName = metadata.Name
+
+	// 5. Use existing installer for the rest
 	installer := &PackageInstaller{
 		AgentFieldHome: gi.AgentFieldHome,
 		Verbose:        gi.Verbose,
@@ -392,6 +412,94 @@ func (gi *GitInstaller) parsePackageMetadata(packagePath string) (*PackageMetada
 }
 
 // updateRegistryWithGit updates the installation registry with Git source info
+// followSupersededBy installs the successor a manifest points at, then retires
+// the superseded package when it was already installed. Order matters: the
+// successor is installed FIRST, so a failure leaves the user's existing node
+// exactly as it was rather than with nothing.
+func (gi *GitInstaller) followSupersededBy(fromName, target string, force bool) error {
+	if gi.redirects >= maxSupersedeRedirects {
+		return fmt.Errorf(
+			"superseded_by chain longer than %d hops (at %q → %q) — the manifests most likely point at each other",
+			maxSupersedeRedirects, fromName, target)
+	}
+
+	installer := &PackageInstaller{AgentFieldHome: gi.AgentFieldHome}
+	replacing := installer.isPackageInstalled(fromName)
+
+	fmt.Println()
+	fmt.Printf("⚠️  %s has been superseded by %s\n", fromName, target)
+	if replacing {
+		fmt.Printf("⚠️  %s is currently installed and WILL BE REPLACED: the successor is installed first,\n", fromName)
+		fmt.Printf("    then %s is stopped and removed. Its node-scoped secrets move to the successor.\n", fromName)
+	}
+	fmt.Println(ui.Muted("  installing the successor instead"))
+	fmt.Println()
+
+	successor := &GitInstaller{
+		AgentFieldHome: gi.AgentFieldHome,
+		Verbose:        gi.Verbose,
+		redirects:      gi.redirects + 1,
+	}
+	if err := successor.InstallFromGit(target, force); err != nil {
+		return fmt.Errorf("installing %s, the successor of %s: %w", target, fromName, err)
+	}
+	gi.installedName = successor.installedName
+
+	if !replacing || successor.installedName == fromName {
+		return nil
+	}
+	gi.retireSuperseded(fromName, successor.installedName)
+	return nil
+}
+
+// retireSuperseded removes the old package once its successor is in place. It
+// never fails the install: the successor is already working, so a stubborn
+// leftover is a cleanup chore, not a reason to report failure.
+func (gi *GitInstaller) retireSuperseded(oldName, newName string) {
+	if store, err := NewSecretStore(gi.AgentFieldHome); err == nil {
+		migrateNodeScopedSecrets(store, oldName, newName)
+	}
+	uninstaller := &PackageUninstaller{AgentFieldHome: gi.AgentFieldHome}
+	if err := uninstaller.UninstallPackage(oldName); err != nil {
+		fmt.Printf("⚠️  Could not remove the superseded %s: %v\n", oldName, err)
+		fmt.Printf("    %s is installed and usable; remove the old one with: af uninstall %s\n", newName, oldName)
+		return
+	}
+	fmt.Printf("✓ Replaced %s with %s\n", oldName, newName)
+}
+
+// migrateNodeScopedSecrets hands node-scoped secrets to the successor before
+// the old package is uninstalled, which deletes that scope outright. Without
+// this every `af secrets set KEY --node <old>` value is silently lost in the
+// swap. Global secrets are shared and untouched. A value already set on the
+// successor wins: the user set that one deliberately, and later.
+func migrateNodeScopedSecrets(store *SecretStore, oldName, newName string) {
+	// Read the scope directly rather than via Get, which falls back to the
+	// global scope and would copy shared secrets into the node scope.
+	oldValues, err := store.load(oldName)
+	if err != nil || len(oldValues) == 0 {
+		return
+	}
+	newValues, err := store.load(newName)
+	if err != nil {
+		newValues = map[string]string{}
+	}
+	moved := 0
+	for key, value := range oldValues {
+		if _, exists := newValues[key]; exists {
+			continue
+		}
+		if err := store.Set(newName, key, value); err != nil {
+			fmt.Printf("⚠️  Could not move secret %s to %s: %v\n", key, newName, err)
+			continue
+		}
+		moved++
+	}
+	if moved > 0 {
+		fmt.Printf("  moved %d node-scoped secret(s) from %s to %s\n", moved, oldName, newName)
+	}
+}
+
 // appendSubdirSelector rewrites "https://host/owner/repo[@ref]" into
 // "https://host/owner/repo//subdir[@ref]" so a recorded source round-trips
 // through ParseGitURL. It is needed whenever the subdirectory arrived by the

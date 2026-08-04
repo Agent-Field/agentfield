@@ -115,7 +115,17 @@ type PackageMetadata struct {
 	// at parse time by detection (a go.mod at the package root => "go", otherwise
 	// "python"), so existing Python manifests keep working with no new field. This
 	// is an *additive* optional key: it does NOT bump config_version.
-	Language        string                 `yaml:"language"`
+	Language string `yaml:"language"`
+	// SupersededBy retires this package in favour of another one, named by an
+	// installable source (any string `af install` accepts, including a `//subdir`
+	// selector and an @ref). Installing a superseded package installs the
+	// successor instead, and replaces the old one when it is already present.
+	//
+	// This is how a node author renames or replaces their own node without the
+	// control plane knowing anything about them: the redirect lives in the
+	// package's manifest, not in a table here. Absent means "not superseded",
+	// so this is an *additive* optional key: it does NOT bump config_version.
+	SupersededBy    string                 `yaml:"superseded_by"`
 	Main            string                 `yaml:"main"`
 	Entrypoint      EntrypointConfig       `yaml:"entrypoint"`
 	AgentNode       AgentNodeConfig        `yaml:"agent_node"`
