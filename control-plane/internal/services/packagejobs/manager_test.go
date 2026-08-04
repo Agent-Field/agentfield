@@ -11,8 +11,24 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services"
 	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
 )
+
+// Contract: the installer the server actually runs reports the name it
+// installed. `run` reaches that behaviour through a type assertion, which fails
+// *silently* — it falls back to inferring the name from a registry diff, the
+// very thing that returns nothing for an in-place `superseded_by` replacement.
+// Every other test here uses a stub that satisfies the interface by
+// construction, so only this one would notice a production wiring (a decorator,
+// a swapped implementation) that quietly drops back to the broken path.
+func TestProductionInstallerReportsTheNameItInstalled(t *testing.T) {
+	var service installer = coreservices.NewPackageService(nil, infrastorage.NewFileSystemAdapter(), t.TempDir())
+	if _, ok := service.(resultInstaller); !ok {
+		t.Fatalf("%T cannot report what it installed — install jobs would silently "+
+			"fall back to the registry diff and report no name for an in-place supersede", service)
+	}
+}
 
 type stubInstaller struct {
 	mu           sync.Mutex
