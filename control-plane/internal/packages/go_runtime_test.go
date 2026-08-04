@@ -537,7 +537,7 @@ func TestProvisionGoToolchain_ArchiveNonOKFallsBackToInstallGuidance(t *testing.
 // a second resolution reuses the completed cache without fetching the archive.
 func TestResolveGoToolchain_ProvisionsAndReusesCache(t *testing.T) {
 	archive := goArchiveFixture(t, map[string]string{
-		"go/bin/go": "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'go version go9.9.9 linux/amd64'; exit 0; fi\nif [ \"$1\" = build ]; then prev=''; for a in \"$@\"; do if [ \"$prev\" = -o ]; then echo built > \"$a\"; fi; prev=\"$a\"; done; fi\n",
+		"go/bin/go": "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'go version go1.99.0 linux/amd64'; exit 0; fi\nif [ \"$1\" = build ]; then prev=''; for a in \"$@\"; do if [ \"$prev\" = -o ]; then echo built > \"$a\"; fi; prev=\"$a\"; done; fi\n",
 	})
 	sum := sha256.Sum256(archive)
 	downloads := configureGoProvisionFixture(t, archive, hex.EncodeToString(sum[:]))

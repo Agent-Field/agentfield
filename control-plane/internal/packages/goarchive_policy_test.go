@@ -334,3 +334,93 @@ func TestProvisionGoToolchain_DegradesWhenTheMachineCannotHostIt(t *testing.T) {
 		}
 	})
 }
+
+// Contract: a download that fails its integrity check fails the install. It must
+// NOT degrade into the "install Go yourself" message — that would tell the user
+// their machine is missing a toolchain when what actually happened is that the
+// one we fetched could not be trusted.
+func TestResolveGoToolchain_SurfacesACorruptDownload(t *testing.T) {
+	archive := goArchiveFixture(t, map[string]string{"go/bin/go": "#!/bin/sh\nexit 0\n"})
+	configureGoProvisionFixture(t, archive, strings.Repeat("0", 64)) // wrong checksum
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir()) // no ambient go
+
+	_, err := resolveGoToolchain(t.TempDir())
+	if err == nil {
+		t.Fatal("a corrupt toolchain download must fail the install")
+	}
+	if !strings.Contains(err.Error(), "SHA256 mismatch") {
+		t.Fatalf("error = %v, want the integrity failure, not generic install guidance", err)
+	}
+	if strings.Contains(err.Error(), "no `go` toolchain was found") {
+		t.Fatal("integrity failure was masked as a missing toolchain")
+	}
+}
+
+// Contract: an existing but unwritable toolchains directory declines rather than
+// erroring — the user can still install Go themselves, which the caller's
+// message tells them how to do.
+func TestProvisionGoToolchain_DeclinesWhenTheCacheIsUnwritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	archive := goArchiveFixture(t, map[string]string{"go/bin/go": "#!/bin/sh\nexit 0\n"})
+	sum := sha256.Sum256(archive)
+	configureGoProvisionFixture(t, archive, hex.EncodeToString(sum[:]))
+
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+	toolchains := filepath.Join(home, "toolchains")
+	if err := os.Mkdir(toolchains, 0o555); err != nil { // exists, but nothing can be created in it
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(toolchains, 0o755) })
+
+	goCmd, cached, err := provisionGoToolchain()
+	if err != nil || goCmd != "" || cached {
+		t.Fatalf("goCmd=%q cached=%v err=%v, want a quiet decline", goCmd, cached, err)
+	}
+}
+
+// Contract: a download that dies partway through declines rather than erroring,
+// and leaves nothing cached — the next install retries from scratch instead of
+// finding a truncated archive masquerading as a toolchain.
+func TestProvisionGoToolchain_DeclinesOnATruncatedDownload(t *testing.T) {
+	filename := fmt.Sprintf("go9.9.9.%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/index") {
+			fmt.Fprintf(w, `[{"version":"go9.9.9","stable":true,"files":[{"filename":%q,"os":%q,"arch":%q,"kind":"archive","sha256":%q}]}]`,
+				filename, runtime.GOOS, runtime.GOARCH, strings.Repeat("a", 64))
+			return
+		}
+		// Promise a long body, deliver a few bytes, then drop the connection.
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		fmt.Fprint(buf, "HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\ntruncated")
+		_ = buf.Flush()
+		_ = conn.Close()
+	}))
+	t.Cleanup(srv.Close)
+
+	oldClient, oldIndex, oldBase := goProvisionHTTPClient, goProvisionIndexURL, goProvisionArchiveBaseURL
+	goProvisionHTTPClient = srv.Client()
+	goProvisionIndexURL = srv.URL + "/index"
+	goProvisionArchiveBaseURL = srv.URL + "/"
+	t.Cleanup(func() {
+		goProvisionHTTPClient, goProvisionIndexURL, goProvisionArchiveBaseURL = oldClient, oldIndex, oldBase
+	})
+
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+
+	goCmd, cached, err := provisionGoToolchain()
+	if err != nil || goCmd != "" || cached {
+		t.Fatalf("goCmd=%q cached=%v err=%v, want a quiet decline", goCmd, cached, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(home, "toolchains")); len(entries) != 0 {
+		t.Fatalf("a truncated download left %d entries cached", len(entries))
+	}
+}
