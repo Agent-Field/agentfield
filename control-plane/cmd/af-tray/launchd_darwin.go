@@ -135,7 +135,7 @@ func serverAgentDecision(opts installOptions) (launchdsvc.TakeoverDecision, []by
 			// An unreadable endpoint (auth, older server) reports ok=false and
 			// is treated as not-busy: an install must not be blocked forever by
 			// a probe it cannot interpret.
-			if n, ok := launchdsvc.ActiveExecutionsOn(serverPort(), os.Getenv("AGENTFIELD_API_KEY")); ok {
+			if n, ok := launchdsvc.ActiveExecutions(serverPort(), os.Getenv("AGENTFIELD_API_KEY")); ok {
 				in.ActiveExecutions = n
 			}
 		}

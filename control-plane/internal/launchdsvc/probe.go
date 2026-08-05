@@ -49,19 +49,9 @@ type activeExecutionsResponse struct {
 // is trustworthy. A server that does not answer, or answers with an auth error,
 // reports ok=false — and the caller then treats the server as not-busy rather
 // than blocking an install forever on an unreadable endpoint.
-func ActiveExecutions(port string, apiKey string) (int, bool) {
-	return activeExecutions(port, apiKey)
-}
-
-// ActiveExecutionsOn is the port-typed form used by the install path.
-func ActiveExecutionsOn(port int, apiKey string) (int, bool) {
-	return activeExecutions(fmt.Sprintf("%d", port), apiKey)
-}
-
-func activeExecutions(port, apiKey string) (int, bool) {
+func ActiveExecutions(port int, apiKey string) (int, bool) {
 	client := &http.Client{Timeout: probeTimeout}
-	url := fmt.Sprintf("http://localhost:%s/api/v1/executions/active", port)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodGet, ActiveExecutionsURL(port), nil)
 	if err != nil {
 		return 0, false
 	}

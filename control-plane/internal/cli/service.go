@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"time"
@@ -42,13 +41,9 @@ Examples:
 	return cmd
 }
 
-// requireLaunchd gates the mutating subcommands off macOS.
-func requireLaunchd() error {
-	if !launchdsvc.Supported() {
-		return fmt.Errorf("service management is macOS-only (this is %s)", runtime.GOOS)
-	}
-	return nil
-}
+// agentLoadedFn is the launchd registration probe, indirected so tests can
+// assemble a status without shelling out to launchctl at all.
+var agentLoadedFn = launchdsvc.AgentLoaded
 
 func servicePort() int {
 	if v := os.Getenv("AGENTFIELD_PORT"); v != "" {
@@ -111,13 +106,13 @@ func collectServiceStatus() serviceStatus {
 		st.Program = owner.Program
 	}
 	if st.Supported {
-		st.Loaded = launchdsvc.AgentLoaded(launchdsvc.ServerLabel)
+		st.Loaded = agentLoadedFn(launchdsvc.ServerLabel)
 	}
 	st.Healthy = launchdsvc.ServerHealthy(port)
 	if st.Healthy {
 		st.Version = serviceServerVersion(port)
 		st.ActiveExecutions, st.ActiveKnown =
-			launchdsvc.ActiveExecutionsOn(port, os.Getenv("AGENTFIELD_API_KEY"))
+			launchdsvc.ActiveExecutions(port, os.Getenv("AGENTFIELD_API_KEY"))
 	}
 	return st
 }
@@ -183,14 +178,7 @@ The agent is registered with KeepAlive={SuccessfulExit: false}, so a clean
 shutdown is NOT relaunched — but a plain ` + "`kill`" + ` of the process looks like a
 crash and launchd restarts it. That is why this command exists.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := requireLaunchd(); err != nil {
-				return err
-			}
-			if err := launchdsvc.SignalAgent(launchdsvc.ServerLabel, "SIGTERM"); err != nil {
-				return fmt.Errorf("stop control plane: %w", err)
-			}
-			fmt.Println("Sent SIGTERM to the control plane; it will stay stopped until started again.")
-			return nil
+			return serviceStop()
 		},
 	}
 }
@@ -200,18 +188,7 @@ func newServiceRestartCmd() *cobra.Command {
 		Use:   "restart",
 		Short: "Restart the background control plane onto the installed binary",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := requireLaunchd(); err != nil {
-				return err
-			}
-			plist := launchdsvc.ServerPlistPath(serviceHome())
-			if _, err := os.Stat(plist); err != nil {
-				return fmt.Errorf("no control-plane agent installed at %s", plist)
-			}
-			// Full reload rather than `kickstart -k`: an upgraded binary carries
-			// a new ad-hoc code signature, which launchd refuses to re-exec.
-			launchdsvc.Reload(plist, launchdsvc.ServerLabel)
-			fmt.Println("Control plane restarted.")
-			return nil
+			return serviceRestart()
 		},
 	}
 }
@@ -221,18 +198,7 @@ func newServiceUninstallCmd() *cobra.Command {
 		Use:   "uninstall",
 		Short: "Deregister the control plane and remove the menu-bar app",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := requireLaunchd(); err != nil {
-				return err
-			}
-			home := serviceHome()
-			_ = launchdsvc.Bootout(launchdsvc.TrayLabel)
-			_ = launchdsvc.Bootout(launchdsvc.ServerLabel)
-			_ = os.Remove(launchdsvc.TrayPlistPath(home))
-			_ = os.Remove(launchdsvc.ServerPlistPath(home))
-			_ = os.RemoveAll(filepath.Join(home, "Applications", "AgentField.app"))
-			fmt.Println("Control plane autostart and menu-bar app removed.")
-			fmt.Println("The `af` binary itself is untouched.")
-			return nil
+			return serviceUninstall()
 		},
 	}
 }
