@@ -153,6 +153,21 @@ describe('multimodal helpers comprehensive coverage', () => {
     });
   });
 
+  it('Audio.fromUrl defaults to WAV', async () => {
+    const bytes = Uint8Array.from([10, 11, 12]);
+    const fetchMock = vi.fn(async () => new Response(bytes, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const audio = await Audio.fromUrl('https://example.com/audio.wav');
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith('https://example.com/audio.wav');
+    expect(audio.audio).toEqual({
+      data: Buffer.from(bytes).toString('base64'),
+      format: 'wav',
+    });
+  });
+
   it('Audio.fromUrl reports unsuccessful HTTP responses', async () => {
     vi.stubGlobal(
       'fetch',
