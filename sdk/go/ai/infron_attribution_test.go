@@ -154,6 +154,7 @@ func TestInfronAttributionFallsBackToExistingVars(t *testing.T) {
 	t.Setenv("AGENTFIELD_INFRON_ATTRIBUTION", "")
 	t.Setenv("AGENTFIELD_INFRON_SITE_URL", "")
 	t.Setenv("AGENTFIELD_INFRON_APP_NAME", "")
+	t.Setenv("AGENTFIELD_OPENROUTER_ATTRIBUTION", "")
 	t.Setenv("AGENTFIELD_OPENROUTER_SITE_URL", "https://legacy.example")
 	t.Setenv("AGENTFIELD_OPENROUTER_APP_NAME", "Legacy App")
 
@@ -162,6 +163,27 @@ func TestInfronAttributionFallsBackToExistingVars(t *testing.T) {
 
 	assert.Equal(t, "https://legacy.example", header.Get("HTTP-Referer"))
 	assert.Equal(t, "Legacy App", header.Get("X-Title"))
+}
+
+// The opt-out travels with the inherited values: attribution a deployment
+// suppressed for OpenRouter — often because the site URL names an internal
+// host — must not be sent to a different vendor either. The Infron defaults
+// are used instead.
+func TestInfronAttributionDoesNotInheritOptedOutValues(t *testing.T) {
+	t.Setenv("AGENTFIELD_INFRON_ATTRIBUTION", "")
+	t.Setenv("AGENTFIELD_INFRON_SITE_URL", "")
+	t.Setenv("AGENTFIELD_INFRON_APP_NAME", "")
+	t.Setenv("AGENTFIELD_OPENROUTER_ATTRIBUTION", "false")
+	t.Setenv("AGENTFIELD_OPENROUTER_SITE_URL", "https://internal-tools.corp.example")
+	t.Setenv("AGENTFIELD_OPENROUTER_APP_NAME", "Internal Risk Engine")
+	t.Setenv("OR_SITE_URL", "")
+	t.Setenv("OR_APP_NAME", "")
+
+	header := http.Header{}
+	applyInfronAttributionHeaders(header, "", "")
+
+	assert.Equal(t, defaultInfronSiteURL, header.Get("HTTP-Referer"))
+	assert.Equal(t, defaultInfronAppName, header.Get("X-Title"))
 }
 
 func TestApplyInfronAttributionHeadersDisabled(t *testing.T) {

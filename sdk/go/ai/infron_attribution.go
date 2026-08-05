@@ -45,18 +45,33 @@ func resolveInfronAttribution(siteURL, siteName string) (string, string, bool) {
 		return "", "", false
 	}
 
+	// The OpenRouter-scoped values are honored as fallbacks so a deployment
+	// keeps its declared identity when it moves gateways — but the opt-out
+	// travels with them: values a deployment suppressed for one vendor (often
+	// because they name internal hosts or products) must not be sent to
+	// another.
+	inheritedURL, inheritedName := "", ""
+	if openRouterAttributionEnabled() {
+		inheritedURL = firstNonEmpty(
+			os.Getenv("AGENTFIELD_OPENROUTER_SITE_URL"),
+			os.Getenv("OR_SITE_URL"),
+		)
+		inheritedName = firstNonEmpty(
+			os.Getenv("AGENTFIELD_OPENROUTER_APP_NAME"),
+			os.Getenv("OR_APP_NAME"),
+		)
+	}
+
 	resolvedURL := firstNonEmpty(
 		siteURL,
 		os.Getenv("AGENTFIELD_INFRON_SITE_URL"),
-		os.Getenv("AGENTFIELD_OPENROUTER_SITE_URL"),
-		os.Getenv("OR_SITE_URL"),
+		inheritedURL,
 		defaultInfronSiteURL,
 	)
 	resolvedName := firstNonEmpty(
 		siteName,
 		os.Getenv("AGENTFIELD_INFRON_APP_NAME"),
-		os.Getenv("AGENTFIELD_OPENROUTER_APP_NAME"),
-		os.Getenv("OR_APP_NAME"),
+		inheritedName,
 		defaultInfronAppName,
 	)
 	return resolvedURL, resolvedName, true
