@@ -234,6 +234,65 @@ async def test_minimax_video_validates_credentials_and_duration(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_minimax_video_legacy_forwards_v1_optional_fields(monkeypatch):
+    session = CaptureSession(
+        FakeResponse({"task_id": "task-123", "base_resp": {"status_code": 0}}),
+        [
+            FakeResponse(
+                {
+                    "status": "Success",
+                    "file_id": "file-123",
+                    "base_resp": {"status_code": 0},
+                }
+            ),
+            FakeResponse(
+                {
+                    "file": {
+                        "filename": "result.mp4",
+                        "download_url": "https://cdn.example.com/result.mp4",
+                    },
+                    "base_resp": {"status_code": 0},
+                }
+            ),
+        ],
+    )
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
+
+    provider = MiniMaxProvider(api_key="unit-value")
+    await provider.generate_video(
+        prompt="A landscape",
+        model="minimax/MiniMax-Hailuo-02",
+        duration=6.0,
+        ratio="16:9",
+        callback_url="https://hook.example/cb",
+        aigc_watermark=True,
+        poll_interval=0,
+    )
+
+    assert session.calls[0][2]["json"] == {
+        "model": "MiniMax-Hailuo-02",
+        "prompt": "A landscape",
+        "duration": 6,
+        "ratio": "16:9",
+        "callback_url": "https://hook.example/cb",
+        "aigc_watermark": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_minimax_video_legacy_rejects_h3_structured_content():
+    provider = MiniMaxProvider(api_key="unit-value")
+
+    with pytest.raises(ValueError, match="structured content requires the MiniMax-H3"):
+        await provider.generate_video(
+            "A landscape",
+            model="minimax/MiniMax-Hailuo-02",
+            duration=6.0,
+            content=[{"type": "text", "text": "A landscape"}],
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("resolution", "normalized_resolution", "expected_cost"),
     [("2k", "2K", 0.95), ("768p", "768P", 0.6)],

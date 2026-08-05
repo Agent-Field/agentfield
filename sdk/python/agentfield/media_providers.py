@@ -1813,10 +1813,10 @@ class MiniMaxProvider(MediaProvider):
                 timeout=timeout,
                 kwargs=kwargs,
             )
-        if content is not None or any(
-            value is not None for value in (ratio, callback_url, aigc_watermark)
-        ):
-            raise ValueError("MiniMax v2 request fields require the MiniMax-H3 model")
+        if content is not None:
+            raise ValueError(
+                "MiniMax v2 structured content requires the MiniMax-H3 model"
+            )
 
         body: Dict[str, Any] = {"model": send_model, "prompt": prompt}
         if image_url:
@@ -1827,6 +1827,15 @@ class MiniMaxProvider(MediaProvider):
             body["duration"] = int(duration)
         if resolution:
             body["resolution"] = resolution.upper()
+        # Unlike the H3 path, these are forwarded unvalidated: the v1 API
+        # accepts them directly and pre-H3 releases passed them through
+        # **kwargs verbatim.
+        if ratio is not None:
+            body["ratio"] = ratio
+        if callback_url is not None:
+            body["callback_url"] = callback_url
+        if aigc_watermark is not None:
+            body["aigc_watermark"] = aigc_watermark
         overrides = {**(extra or {}), **kwargs}
         # Validated/normalized above — merging them from extra/kwargs would
         # bypass those checks (e.g. a fractional duration or lowercase
