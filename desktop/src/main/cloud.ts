@@ -1,5 +1,5 @@
 import type { CloudTestResult, DesktopSettings } from '../shared/types'
-import { connect as tlsConnect } from 'node:tls'
+import { connect as netConnect } from 'node:net'
 import { clearCloudConnection, setCloudConnection, setLocalApiKey } from './connection'
 
 export type { CloudTestResult } from '../shared/types'
@@ -87,9 +87,14 @@ function probeFurrow(address: string): Promise<boolean> {
       socket.destroy()
       resolve(available)
     }
-    const socket = tlsConnect({ host: parsed.hostname, port, rejectUnauthorized: false })
+    // Reachability only. A TLS handshake here would have to skip certificate
+    // validation, since furrowd's default certificate is self-signed — and it
+    // would answer no more than a plain connect does. What actually protects
+    // the workspace is furrow's own payload encryption plus the per-run token,
+    // neither of which this probe touches.
+    const socket = netConnect({ host: parsed.hostname, port })
     socket.setTimeout(1500)
-    socket.once('secureConnect', () => finish(true))
+    socket.once('connect', () => finish(true))
     socket.once('timeout', () => finish(false))
     socket.once('error', () => finish(false))
   })
