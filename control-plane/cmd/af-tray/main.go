@@ -48,7 +48,7 @@ func run(args []string) int {
 			return 1
 		}
 	case "install":
-		if err := installDesktop(); err != nil {
+		if err := installDesktopWith(parseInstallOptions(args[1:])); err != nil {
 			fmt.Fprintln(os.Stderr, "af-tray install:", err)
 			return 1
 		}
@@ -68,6 +68,23 @@ func run(args []string) int {
 	return 0
 }
 
+// parseInstallOptions reads the install-mode flags. Unknown arguments are
+// ignored rather than rejected: install.sh may pass flags a newer installer
+// script knows about but an older tray binary does not, and a hands-off
+// `curl … | bash` must not fail on that.
+func parseInstallOptions(args []string) installOptions {
+	var opts installOptions
+	for _, a := range args {
+		switch a {
+		case "--defer-restart":
+			opts.deferRestart = true
+		case "--take-over":
+			opts.takeOver = true
+		}
+	}
+	return opts
+}
+
 func printUsage() {
 	fmt.Print(`af-tray — AgentField menu-bar companion
 
@@ -76,5 +93,9 @@ Usage:
   af-tray install     Install the desktop tray + control-plane autostart (macOS)
   af-tray uninstall   Remove the desktop tray and control-plane autostart
   af-tray version     Print version information
+
+Install flags:
+  --defer-restart   Update files but never restart a running control plane
+  --take-over       Replace a launchd agent registered by a different install
 `)
 }

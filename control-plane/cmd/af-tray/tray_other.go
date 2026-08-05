@@ -18,7 +18,16 @@ func runTray() error {
 	return nil
 }
 
-func installDesktop() error {
+// installOptions mirrors the darwin type so main.go can parse the flags on
+// every platform; off macOS they have nothing to act on.
+type installOptions struct {
+	deferRestart bool
+	takeOver     bool
+}
+
+func installDesktop() error { return installDesktopWith(installOptions{}) }
+
+func installDesktopWith(installOptions) error {
 	fmt.Println("af-tray: desktop tray install is only supported on macOS in this release.")
 	return nil
 }

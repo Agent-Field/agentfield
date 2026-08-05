@@ -116,39 +116,81 @@ func installedGoVersion(goCmd string) (goVersion, bool) {
 	return goVersion{}, false
 }
 
+// goCanAutoSwitch reports whether an older ambient toolchain can honor a newer
+// go.mod by downloading and selecting it itself. Go added this behavior in
+// 1.21; `go env GOTOOLCHAIN` is authoritative because users may pin it to
+// `local`, which explicitly disables switching.
+func goCanAutoSwitch(goCmd string, have goVersion) bool {
+	if !have.atLeast(goVersion{major: 1, minor: 21}) {
+		return false
+	}
+	out, err := exec.Command(goCmd, "env", "GOTOOLCHAIN").Output()
+	if err != nil {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(string(out)), "local")
+}
+
 // resolveGoToolchain locates the `go` toolchain used to build a Go node. It
 // returns:
-//   - (goCmd, nil) when a usable `go` is on PATH (and satisfies the go.mod
-//     directive, if any).
-//   - ("", err) with an actionable message when `go` is absent, or present but
-//     older than the version the module's go.mod requires.
+//   - (goCmd, nil) when a usable `go` is on PATH and either satisfies go.mod or
+//     can auto-switch to the requested toolchain.
+//   - (goCmd, nil) after provisioning and caching an official toolchain.
+//   - ("", err) with an actionable message when neither path is available.
 //
-// Mirrors pyinterp.go's resolveVenvInterpreter: discover, gate on the declared
-// minimum, and explain how to fix a miss rather than failing later inside the
-// raw build.
+// Mirrors pyinterp.go's resolveVenvInterpreter: discover, provision, then
+// explain how to fix a miss rather than failing later inside the raw build.
 func resolveGoToolchain(packagePath string) (string, error) {
 	goCmd := firstOnPath("go")
-	if goCmd == "" {
-		return "", fmt.Errorf(
-			"this agent node is a Go node, but no `go` toolchain was found on PATH.\n" +
-				"Install Go and ensure `go` is on PATH, then run `af install` again:\n" +
-				"  • macOS:   brew install go\n" +
-				"  • Ubuntu:  sudo apt-get install golang-go  (or the official tarball)\n" +
-				"  • or download the installer from https://go.dev/dl/")
-	}
-
 	want := readGoDirective(packagePath)
-	if want != "" {
+	var incapableVersion *goVersion
+	if goCmd != "" && want != "" {
 		wantV, wantOK := parseGoVersion(want)
 		haveV, haveOK := installedGoVersion(goCmd)
 		if wantOK && haveOK && !haveV.atLeast(wantV) {
-			return "", fmt.Errorf(
-				"this agent node requires Go %s or newer (from its go.mod), but `go` on PATH is %s "+
-					"— upgrade Go (https://go.dev/dl/) and run `af install` again",
-				want, haveV)
+			if goCanAutoSwitch(goCmd, haveV) {
+				return goCmd, nil
+			}
+			incapableVersion = &haveV
+			goCmd = ""
 		}
 	}
-	return goCmd, nil
+	if goCmd != "" {
+		return goCmd, nil
+	}
+
+	provisioned, cached, err := provisionGoToolchain()
+	if err != nil {
+		return "", err
+	}
+	if provisioned != "" {
+		verb := "Provisioned"
+		if cached {
+			verb = "Using provisioned"
+		}
+		fmt.Printf("%s  %s Go %s for this agent node\n", clearLine(), verb, displayGoVersion(provisioned))
+		return provisioned, nil
+	}
+	if incapableVersion != nil {
+		return "", fmt.Errorf(
+			"this agent node requires Go %s or newer (from its go.mod), but `go` on PATH is %s "+
+				"— upgrade Go (https://go.dev/dl/) and run `af install` again",
+			want, *incapableVersion)
+	}
+
+	return "", fmt.Errorf(
+		"this agent node is a Go node, but no `go` toolchain was found on PATH.\n" +
+			"Install Go and ensure `go` is on PATH, then run `af install` again:\n" +
+			"  • macOS:   brew install go\n" +
+			"  • Ubuntu:  sudo apt-get install golang-go  (or the official tarball)\n" +
+			"  • or download the installer from https://go.dev/dl/")
+}
+
+func displayGoVersion(goCmd string) string {
+	if v, ok := installedGoVersion(goCmd); ok {
+		return v.String()
+	}
+	return goCmd
 }
 
 // InstallGoDependencies builds a Go agent node at install time so `af run`

@@ -61,6 +61,9 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 		if agent.LifecycleStatus == types.AgentStatusPendingApproval {
 			logger.Logger.Debug().Str("node_id", nodeID).Msg("ignoring status update: agent is pending_approval")
 			now := time.Now().UTC()
+			if statusManager != nil {
+				statusManager.RecordLease(nodeID, now.Add(leaseTTL))
+			}
 			_ = storageProvider.UpdateAgentHeartbeat(ctx, nodeID, agent.Version, now)
 			if presenceManager != nil {
 				presenceManager.Touch(nodeID, agent.Version, now)
@@ -116,6 +119,9 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 		}
 
 		now := time.Now().UTC()
+		if statusManager != nil {
+			statusManager.RecordLease(nodeID, now.Add(leaseTTL))
+		}
 		if err := storageProvider.UpdateAgentHeartbeat(ctx, nodeID, agent.Version, now); err != nil {
 			logger.Logger.Warn().Err(err).Str("node_id", nodeID).Msg("failed to persist heartbeat during status update")
 		}

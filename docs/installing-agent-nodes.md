@@ -142,10 +142,11 @@ order: `requirements.txt`, then `pip install .` for a `pyproject.toml`/`setup.py
 project, then any packages listed under `dependencies.python` in the manifest.
 `af run` uses this venv automatically.
 
-The venv is built with the `python3`/`python` on your `PATH`. If a node declares
-`requires-python` (e.g. `>=3.11`) that your interpreter doesn't satisfy, `pip`
-reports it and install fails — point `af` at a compatible interpreter (e.g. via
-`pyenv`/`PATH`) and reinstall.
+The venv is built with an interpreter that satisfies the node's `requires-python`
+(e.g. `>=3.11`). `af` looks for one in order: the `python3`/`python` on your
+`PATH`, then a `uv`-provisioned interpreter (uv downloads a standalone build if
+needed), then a matching `pyenv` version. Only if none of those yields a
+compatible interpreter does install fail, naming exactly how to get one.
 
 ### Language: Python or Go
 
@@ -164,9 +165,20 @@ entrypoint:
 
 At install time a Go node is **compiled**, not pip-installed:
 
-- The `go` toolchain is discovered on `PATH`. A missing `go` is an actionable
-  error (how to install it); a `go` older than the module's `go.mod` directive is
-  refused with an upgrade hint — the Go analogue of the `requires-python` check.
+- The `go` toolchain is resolved the same way a Python interpreter is: `af` uses
+  the `go` on your `PATH` when it can build the module, and otherwise
+  **provisions one for you** — downloading the official toolchain from
+  [go.dev/dl](https://go.dev/dl/), verifying its published SHA256 before
+  unpacking it, and caching it under `~/.agentfield/toolchains/<version>/` so
+  later installs reuse it. You do not need Go installed to install a Go node.
+  Set `AGENTFIELD_DISABLE_GO_PROVISIONING=1` to turn that off, in environments
+  that must not fetch binaries; install then fails with the same actionable
+  "install Go" message as before.
+- A `go` on `PATH` that is *older* than the module's `go.mod` directive is not
+  refused: since Go 1.21 the toolchain downloads and switches to the requested
+  version itself (`GOTOOLCHAIN=auto`, the default), so `af` lets it. Only a `go`
+  older than 1.21, or one pinned with `GOTOOLCHAIN=local`, falls through to
+  provisioning.
 - With `entrypoint.build` set, `af` runs `go build -o <start> <build>`, leaving a
   runnable binary at the `entrypoint.start` path. `af run` launches that binary
   directly — same `PORT`, health check, secrets, and control-plane env as a
@@ -223,8 +235,9 @@ dependencies first (in dependency order) before the node itself.
 
 By default `af install <src>` looks for the `agentfield-package.yaml` at the root
 of the source (a git repo or a local directory). When a single repository ships
-more than one installable node — for example a Python node at the root and a Go
-port under `go/` — use `--path` to select the subdirectory to install:
+more than one installable node — for example SWE-AF, whose advertised install is
+the Go node under `go/`, alongside a Python node that also lives at the repo
+root — use `--path` to select the subdirectory to install:
 
 ```bash
 # Install the node whose manifest lives at go/agentfield-package.yaml
@@ -239,12 +252,48 @@ af install ./SWE-AF --path go
 
 The subdirectory must contain its own `agentfield-package.yaml`; that subtree
 becomes the package root that is copied to `~/.agentfield/packages/<name>` and
-installed (a Go node builds relative to it). Because registry entries are keyed by
-the manifest `name`, the root node and a `--path` node from the same repo coexist
-as separate installs. `--path` is a path **relative to the source root**: absolute
-paths and paths that escape the root with `..` are rejected, and a missing manifest
-is reported with the full expected path. A bare `af install <src>` (no `--path`) is
-unchanged — the root manifest is always what you get by default.
+installed (a Go node builds relative to it). Registry entries are keyed by the
+manifest `name`, so a root node and a `--path` node from the same repo coexist as
+separate installs when their names differ — and replace one another when they do
+not. `--path` is a path **relative to the source root**: absolute paths and paths
+that escape the root with `..` are rejected, and a missing manifest is reported
+with the full expected path. A bare `af install <src>` (no `--path`) is unchanged
+— the root manifest is always what you get by default, unless it redirects.
+
+## Retiring or renaming a node: `superseded_by`
+
+A manifest can declare that it has been replaced by another package. Installing
+it then installs that other package instead:
+
+```yaml
+name: my-node
+superseded_by: https://github.com/me/my-repo//v2
+```
+
+The value is any source `af install` accepts — including a `//subdir` selector
+and an `@ref`. This lets you move, rename, or reimplement your node without
+anyone having to learn a new install command, and without AgentField holding a
+list of who redirects where: the redirect lives in your manifest.
+
+What happens on install:
+
+- The redirect is resolved **before** anything is copied, so a redirected
+  install never leaves the superseded package half-installed.
+- If the superseded package is currently installed, the user is warned that it
+  will be replaced, and the successor is installed **first** — a failure leaves
+  what they had exactly as it was.
+- Node-scoped secrets follow: when the successor takes a different name they are
+  copied across before the old package is uninstalled (which would delete that
+  scope); values already set on the successor win. When the successor takes the
+  *same* name — a node renaming itself in place — they are already in the right
+  scope and stay put.
+- Retiring the old package never fails the install. If it cannot be removed you
+  are told how to remove it by hand.
+- Chains are bounded at three hops, so two manifests pointing at each other fail
+  with a clear error instead of looping.
+
+The redirect applies to git installs. A local-path install ignores it, which is
+how you install a superseded package deliberately.
 
 ## Previewing requirements before installing: `af show-requirements`
 

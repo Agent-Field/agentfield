@@ -15,8 +15,24 @@ import (
 // offline and gives a harness a curated set of nodes to install before any
 // registry search lands. It is seeded from the desktop app's curated list
 // (desktop/src/shared/catalog.ts) — keep the two in sync when adding nodes.
-// `name` MUST equal the node's agentfield-package.yaml `name:` (the registry
-// key after install), which is often not the repo name (SWE-AF → swe-planner).
+//
+// One row per product, sourced at the bare repo URL. A repo that ships more
+// than one implementation of the same node says which one it wants installed
+// with `superseded_by:` in its root manifest — the redirect that makes
+// `af install <repo>` land on the maintained node (SWE-AF and pr-af both point
+// their root at `//go`). Naming `//go` here would install that same node, but
+// it would skip the redirect, and the redirect is what carries a user who
+// already has the superseded node across: it installs the successor first,
+// migrates node-scoped secrets, and only then retires the old package. So the
+// catalog names the repo and lets the manifest decide.
+//
+// `name` MUST equal the name the package ends up registered under once the
+// install settles — the registry key a harness then passes to `af run`. Note
+// that is the name after any `superseded_by:` redirect resolves, which need
+// not be the `name:` in the manifest at the source: a successor may
+// deliberately take its predecessor's name (an in-place rename), and it may
+// live in a subdirectory this list never names. It is often not the repo name
+// either (SWE-AF → swe-planner).
 type nodeCatalogEntry struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -31,29 +47,15 @@ type nodeCatalogEntry struct {
 var nodeCatalog = []nodeCatalogEntry{
 	{
 		Name:        "swe-planner",
-		Description: "Autonomous software-engineering fleet: plan, code, test, and ship production-grade PRs",
+		Description: "Autonomous software-engineering fleet: plan, code, test, and ship production-grade PRs — one static binary",
 		Source:      "https://github.com/Agent-Field/SWE-AF",
-		Docs:        "https://github.com/Agent-Field/SWE-AF",
-		Language:    "python",
-	},
-	{
-		Name:        "swe-planner-go",
-		Description: "Go port of the SWE fleet: same planning/execution reasoners, one static binary",
-		Source:      "https://github.com/Agent-Field/SWE-AF//go",
 		Docs:        "https://github.com/Agent-Field/SWE-AF",
 		Language:    "go",
 	},
 	{
 		Name:        "pr-af",
-		Description: "Turns a plain task description into a draft pull request on GitHub",
+		Description: "Deep, evidence-backed review of any GitHub pull request — one static binary",
 		Source:      "https://github.com/Agent-Field/pr-af",
-		Docs:        "https://github.com/Agent-Field/pr-af",
-		Language:    "python",
-	},
-	{
-		Name:        "pr-af-go",
-		Description: "Go port of the PR review agent: same reasoners, one static binary",
-		Source:      "https://github.com/Agent-Field/pr-af//go",
 		Docs:        "https://github.com/Agent-Field/pr-af",
 		Language:    "go",
 	},

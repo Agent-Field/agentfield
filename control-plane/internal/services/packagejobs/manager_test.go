@@ -11,12 +11,54 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services"
 	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
 )
+
+// Contract: an installer that cannot report a name still installs, and the job
+// falls back to inferring the name from the registry. That fallback is the
+// pre-existing behaviour and has to keep working — the authoritative path is an
+// upgrade, not a requirement.
+func TestInstallFallsBackWhenInstallerCannotReportAName(t *testing.T) {
+	inst := &stubInstaller{afterInstall: []domain.InstalledPackage{{Name: "legacy-node"}}}
+	// Embedding in an anonymous struct exposes only `installer`, hiding the
+	// stub's InstallPackageWithResult — so the manager sees an implementation
+	// that cannot report results and must take the fallback.
+	var plain installer = struct{ installer }{inst}
+	manager := newManager(plain, &stubAgentService{}, t.TempDir())
+
+	job, err := manager.StartInstall("https://github.com/owner/repo", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitForJob(t, manager, job.ID)
+	if got.Status != StatusSucceeded {
+		t.Fatalf("job = %#v", got)
+	}
+	if got.PackageName != "legacy-node" {
+		t.Fatalf("package name = %q, want the name inferred from the registry", got.PackageName)
+	}
+}
+
+// Contract: the installer the server actually runs reports the name it
+// installed. `run` reaches that behaviour through a type assertion, which fails
+// *silently* — it falls back to inferring the name from a registry diff, the
+// very thing that returns nothing for an in-place `superseded_by` replacement.
+// Every other test here uses a stub that satisfies the interface by
+// construction, so only this one would notice a production wiring (a decorator,
+// a swapped implementation) that quietly drops back to the broken path.
+func TestProductionInstallerReportsTheNameItInstalled(t *testing.T) {
+	var service installer = coreservices.NewPackageService(nil, infrastorage.NewFileSystemAdapter(), t.TempDir())
+	if _, ok := service.(resultInstaller); !ok {
+		t.Fatalf("%T cannot report what it installed — install jobs would silently "+
+			"fall back to the registry diff and report no name for an in-place supersede", service)
+	}
+}
 
 type stubInstaller struct {
 	mu           sync.Mutex
 	installErr   error
+	resultName   string
 	block        <-chan struct{}
 	installed    []domain.InstalledPackage
 	afterInstall []domain.InstalledPackage
@@ -25,6 +67,14 @@ type stubInstaller struct {
 	listErr      error
 	infoErr      error
 	uninstallErr error
+}
+
+func (s *stubInstaller) InstallPackageWithResult(source string, options domain.InstallOptions) (string, error) {
+	err := s.InstallPackage(source, options)
+	if err != nil {
+		return "", err
+	}
+	return s.resultName, nil
 }
 
 func (s *stubInstaller) InstallPackage(_ string, options domain.InstallOptions) error {
@@ -108,7 +158,7 @@ func waitForJob(t *testing.T, manager *Manager, id string) *Job {
 
 // Contract 1: a valid GitHub install succeeds and records its package name.
 func TestInstallSucceedsAndDiscoversPackageName(t *testing.T) {
-	inst := &stubInstaller{afterInstall: []domain.InstalledPackage{{Name: "demo"}}}
+	inst := &stubInstaller{resultName: "demo", afterInstall: []domain.InstalledPackage{{Name: "demo"}}}
 	manager := newManager(inst, &stubAgentService{}, t.TempDir())
 	job, err := manager.StartInstall("https://github.com/owner/repo", false)
 	if err != nil {
@@ -117,6 +167,70 @@ func TestInstallSucceedsAndDiscoversPackageName(t *testing.T) {
 	got := waitForJob(t, manager, job.ID)
 	if got.Status != StatusSucceeded || got.PackageName != "demo" {
 		t.Fatalf("job = %#v", got)
+	}
+}
+
+func TestInstallUsesAuthoritativeNameWhenRegistrySetDoesNotChange(t *testing.T) {
+	inst := &stubInstaller{
+		resultName:   "shared-name",
+		installed:    []domain.InstalledPackage{{Name: "shared-name"}},
+		afterInstall: []domain.InstalledPackage{{Name: "shared-name"}},
+	}
+	manager := newManager(inst, &stubAgentService{}, t.TempDir())
+	job, err := manager.StartInstall("https://github.com/owner/predecessor", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitForJob(t, manager, job.ID)
+	if got.PackageName != "shared-name" {
+		t.Fatalf("package name = %q, want shared-name", got.PackageName)
+	}
+	if got.Lines[len(got.Lines)-1] != "install completed: shared-name" {
+		t.Fatalf("completion line = %q", got.Lines[len(got.Lines)-1])
+	}
+}
+
+func TestInstallUsesRedirectSuccessorName(t *testing.T) {
+	inst := &stubInstaller{
+		resultName:   "successor",
+		afterInstall: []domain.InstalledPackage{{Name: "successor"}},
+	}
+	manager := newManager(inst, &stubAgentService{}, t.TempDir())
+	job, _ := manager.StartInstall("https://github.com/owner/predecessor", false)
+	got := waitForJob(t, manager, job.ID)
+	if got.PackageName != "successor" {
+		t.Fatalf("package name = %q, want successor", got.PackageName)
+	}
+}
+
+func TestInstallIgnoresUnrelatedConcurrentRegistryAddition(t *testing.T) {
+	inst := &stubInstaller{
+		resultName: "job-package",
+		afterInstall: []domain.InstalledPackage{
+			{Name: "unrelated"},
+			{Name: "job-package"},
+		},
+	}
+	manager := newManager(inst, &stubAgentService{}, t.TempDir())
+	job, _ := manager.StartInstall("https://github.com/owner/job", false)
+	got := waitForJob(t, manager, job.ID)
+	if got.PackageName != "job-package" {
+		t.Fatalf("package name = %q, want job-package", got.PackageName)
+	}
+}
+
+func TestFailedInstallReportsNoNameOrCompletion(t *testing.T) {
+	inst := &stubInstaller{resultName: "must-not-leak", installErr: errors.New("boom")}
+	manager := newManager(inst, &stubAgentService{}, t.TempDir())
+	job, _ := manager.StartInstall("https://github.com/owner/broken", false)
+	got := waitForJob(t, manager, job.ID)
+	if got.PackageName != "" {
+		t.Fatalf("failed install package name = %q", got.PackageName)
+	}
+	for _, line := range got.Lines {
+		if strings.HasPrefix(line, "install completed:") {
+			t.Fatalf("failed install claimed completion: %q", line)
+		}
 	}
 }
 
@@ -217,6 +331,41 @@ func TestUpdateStopsForceInstallsAndRestarts(t *testing.T) {
 	}
 	if !inst.lastOptions.Force {
 		t.Fatal("update was not forced")
+	}
+}
+
+// Contract: updating a package whose recorded source redirects (`superseded_by`)
+// to a differently-named successor follows the rename. The old package is gone
+// by the time the install returns, so reporting or restarting the name that went
+// in would name a node that no longer exists.
+func TestUpdateFollowsASupersededRename(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/o/repo\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	inst := &stubInstaller{
+		resultName:   "demo-v2",
+		installed:    []domain.InstalledPackage{{Name: "demo"}},
+		afterInstall: []domain.InstalledPackage{{Name: "demo-v2"}},
+		calls:        &calls,
+	}
+	manager := newManager(inst, &stubAgentService{running: true, calls: &calls}, home)
+	job, err := manager.StartUpdate("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitForJob(t, manager, job.ID)
+	if got.Status != StatusSucceeded {
+		t.Fatalf("job = %#v", got)
+	}
+	if got.PackageName != "demo-v2" {
+		t.Fatalf("package name = %q, want the successor", got.PackageName)
+	}
+	// Stopped under the old name (that is what was running), restarted under
+	// the new one (that is what is now installed).
+	if strings.Join(calls, ",") != "stop:demo,install,start:demo-v2" {
+		t.Fatalf("calls = %v", calls)
 	}
 }
 

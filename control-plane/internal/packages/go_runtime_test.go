@@ -1,8 +1,18 @@
 package packages
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -42,6 +52,7 @@ func stubGo(t *testing.T, version string) {
 	bin := t.TempDir()
 	script := "#!/bin/sh\n" +
 		"if [ \"$1\" = \"version\" ]; then echo \"go version go" + version + " linux/amd64\"; exit 0; fi\n" +
+		"if [ \"$1\" = \"env\" ] && [ \"$2\" = \"GOTOOLCHAIN\" ]; then echo auto; exit 0; fi\n" +
 		"if [ \"$1\" = \"build\" ]; then\n" +
 		"  prev=\"\"\n" +
 		"  for a in \"$@\"; do\n" +
@@ -319,6 +330,7 @@ func TestInstallDependencies_DispatchesGo(t *testing.T) {
 func TestResolveGoToolchain_MissingToolchain(t *testing.T) {
 	empty := t.TempDir() // a PATH with no `go`
 	t.Setenv("PATH", empty)
+	t.Setenv("AGENTFIELD_DISABLE_GO_PROVISIONING", "1")
 	dir := t.TempDir()
 	writeGoManifest(t, dir, "name: n\nversion: 0.1.0\nlanguage: go\n", "1.21", "")
 
@@ -340,6 +352,7 @@ func TestResolveGoToolchain_MissingToolchain(t *testing.T) {
 // with an upgrade hint.
 func TestResolveGoToolchain_TooOld(t *testing.T) {
 	stubGo(t, "1.20.0") // reports 1.20
+	t.Setenv("AGENTFIELD_DISABLE_GO_PROVISIONING", "1")
 	dir := t.TempDir()
 	writeGoManifest(t, dir, "name: n\nversion: 0.1.0\nlanguage: go\n", "1.99", "") // requires 1.99
 
@@ -349,6 +362,389 @@ func TestResolveGoToolchain_TooOld(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "1.99") || !strings.Contains(err.Error(), "1.20") {
 		t.Fatalf("error should name required (1.99) and found (1.20): %v", err)
+	}
+}
+
+// Contract: Go 1.21+ with automatic toolchain selection is allowed to honor a
+// newer go.mod itself instead of triggering AgentField provisioning.
+func TestResolveGoToolchain_AmbientCanAutoSwitch(t *testing.T) {
+	stubGo(t, "1.21.0")
+	dir := t.TempDir()
+	writeGoManifest(t, dir, "name: n\nversion: 0.1.0\nlanguage: go\n", "1.99", "")
+
+	got, err := resolveGoToolchain(dir)
+	if err != nil || got != "go" {
+		t.Fatalf("resolveGoToolchain = %q, %v; want ambient go", got, err)
+	}
+}
+
+func TestResolveGoToolchain_AmbientPinnedLocalFallsThrough(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "go"), "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'go version go1.21.0 linux/amd64'; elif [ \"$1\" = env ]; then echo local; fi\n")
+	t.Setenv("PATH", bin)
+	t.Setenv("AGENTFIELD_DISABLE_GO_PROVISIONING", "1")
+	dir := t.TempDir()
+	writeGoManifest(t, dir, "name: n\nversion: 0.1.0\nlanguage: go\n", "1.99", "")
+
+	_, err := resolveGoToolchain(dir)
+	if err == nil || !strings.Contains(err.Error(), "1.99") {
+		t.Fatalf("pinned-local old Go should be refused: %v", err)
+	}
+}
+
+// goArchiveFixture creates the layout shipped by official Go archives.
+func goArchiveFixture(t *testing.T, entries map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range entries {
+		mode := int64(0o644)
+		if strings.HasSuffix(name, "/bin/go") {
+			mode = 0o755
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func configureGoProvisionFixture(t *testing.T, archive []byte, checksum string) *int {
+	t.Helper()
+	downloads := 0
+	filename := fmt.Sprintf("go9.9.9.%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/index" {
+			fmt.Fprintf(w, `[{"version":"go9.9.9","stable":true,"files":[{"filename":%q,"os":%q,"arch":%q,"kind":"archive","sha256":%q}]}]`, filename, runtime.GOOS, runtime.GOARCH, checksum)
+			return
+		}
+		downloads++
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(server.Close)
+	oldClient, oldIndex, oldBase := goProvisionHTTPClient, goProvisionIndexURL, goProvisionArchiveBaseURL
+	goProvisionHTTPClient = server.Client()
+	goProvisionIndexURL = server.URL + "/index"
+	goProvisionArchiveBaseURL = server.URL + "/"
+	t.Cleanup(func() {
+		goProvisionHTTPClient, goProvisionIndexURL, goProvisionArchiveBaseURL = oldClient, oldIndex, oldBase
+	})
+	return &downloads
+}
+
+func configureGoProvisionServer(t *testing.T, server *httptest.Server) {
+	t.Helper()
+	oldClient, oldIndex, oldBase := goProvisionHTTPClient, goProvisionIndexURL, goProvisionArchiveBaseURL
+	goProvisionHTTPClient = server.Client()
+	goProvisionIndexURL = server.URL + "/index"
+	goProvisionArchiveBaseURL = server.URL + "/"
+	t.Cleanup(func() {
+		goProvisionHTTPClient, goProvisionIndexURL, goProvisionArchiveBaseURL = oldClient, oldIndex, oldBase
+	})
+}
+
+func assertProvisioningUnavailable(t *testing.T) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+
+	goCmd, cached, err := provisionGoToolchain()
+	if err != nil || goCmd != "" || cached {
+		t.Fatalf("provisionGoToolchain() = %q, %v, %v; want empty toolchain without a hard error", goCmd, cached, err)
+	}
+	dir := t.TempDir()
+	writeGoManifest(t, dir, "name: n\nversion: 0.1.0\nlanguage: go\n", "1.21", "")
+	_, err = resolveGoToolchain(dir)
+	if err == nil || !strings.Contains(err.Error(), "Install Go") || !strings.Contains(err.Error(), "https://go.dev/dl/") {
+		t.Fatalf("resolveGoToolchain should retain actionable install-Go guidance, got %v", err)
+	}
+}
+
+// Contract: an unreachable go.dev index is an ordinary availability failure,
+// so resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_IndexUnreachableFallsBackToInstallGuidance(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	configureGoProvisionServer(t, server)
+	server.Close()
+
+	assertProvisioningUnavailable(t)
+}
+
+// Contract: a non-200 index response is an ordinary availability failure, so
+// resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_IndexNonOKFallsBackToInstallGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+	configureGoProvisionServer(t, server)
+
+	assertProvisioningUnavailable(t)
+}
+
+// Contract: malformed index JSON is an ordinary availability failure, so
+// resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_InvalidIndexJSONFallsBackToInstallGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"not valid JSON"`)
+	}))
+	t.Cleanup(server.Close)
+	configureGoProvisionServer(t, server)
+
+	assertProvisioningUnavailable(t)
+}
+
+// Contract: an index without an archive for the host is an ordinary
+// availability failure, so resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_NoHostArchiveFallsBackToInstallGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `[{"version":"go9.9.9","stable":true,"files":[{"os":%q,"arch":%q,"kind":"installer","sha256":"sum"},{"os":"other","arch":"other","kind":"archive","sha256":"sum"}]}]`, runtime.GOOS, runtime.GOARCH)
+	}))
+	t.Cleanup(server.Close)
+	configureGoProvisionServer(t, server)
+
+	assertProvisioningUnavailable(t)
+}
+
+// Contract: a non-200 archive response is an ordinary availability failure,
+// so resolution retains its actionable install-Go guidance.
+func TestProvisionGoToolchain_ArchiveNonOKFallsBackToInstallGuidance(t *testing.T) {
+	filename := fmt.Sprintf("go9.9.9.%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/index" {
+			fmt.Fprintf(w, `[{"version":"go9.9.9","stable":true,"files":[{"filename":%q,"os":%q,"arch":%q,"kind":"archive","sha256":"sum"}]}]`, filename, runtime.GOOS, runtime.GOARCH)
+			return
+		}
+		http.Error(w, "unavailable", http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+	configureGoProvisionServer(t, server)
+
+	assertProvisioningUnavailable(t)
+}
+
+// Contracts: no ambient Go is provisioned, the resulting build succeeds, and
+// a second resolution reuses the completed cache without fetching the archive.
+func TestResolveGoToolchain_ProvisionsAndReusesCache(t *testing.T) {
+	archive := goArchiveFixture(t, map[string]string{
+		"go/bin/go": "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'go version go1.99.0 linux/amd64'; exit 0; fi\nif [ \"$1\" = build ]; then prev=''; for a in \"$@\"; do if [ \"$prev\" = -o ]; then echo built > \"$a\"; fi; prev=\"$a\"; done; fi\n",
+	})
+	sum := sha256.Sum256(archive)
+	downloads := configureGoProvisionFixture(t, archive, hex.EncodeToString(sum[:]))
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	dir := t.TempDir()
+	writeGoManifest(t, dir, "name: n\nversion: 0.1.0\nlanguage: go\nentrypoint:\n  build: .\n  start: bin/node\n", "1.21", "")
+	md, _ := ParsePackageMetadata(dir)
+	if err := InstallGoDependencies(dir, md); err != nil {
+		t.Fatalf("provisioned install failed: %v", err)
+	}
+	if _, err := resolveGoToolchain(dir); err != nil {
+		t.Fatalf("cached resolution failed: %v", err)
+	}
+	if *downloads != 1 {
+		t.Fatalf("archive downloads = %d; want 1", *downloads)
+	}
+}
+
+// Contract: checksum verification is a hard gate before extraction.
+func TestProvisionGoToolchain_RejectsChecksumMismatch(t *testing.T) {
+	archive := goArchiveFixture(t, map[string]string{"go/bin/go": "binary"})
+	configureGoProvisionFixture(t, archive, strings.Repeat("0", 64))
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+	_, _, err := provisionGoToolchain()
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "sha256 mismatch") {
+		t.Fatalf("expected checksum mismatch, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "toolchains", "go9.9.9")); !os.IsNotExist(statErr) {
+		t.Fatalf("mismatched archive created install directory: %v", statErr)
+	}
+}
+
+// Contracts: traversal is rejected without an outside write, and failed
+// extraction leaves no final cache directory that a later run can reuse.
+func TestProvisionGoToolchain_RejectsTraversalAtomically(t *testing.T) {
+	archive := goArchiveFixture(t, map[string]string{"../escaped": "bad", "go/bin/go": "binary"})
+	sum := sha256.Sum256(archive)
+	configureGoProvisionFixture(t, archive, hex.EncodeToString(sum[:]))
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+	_, _, err := provisionGoToolchain()
+	if err == nil || !strings.Contains(err.Error(), "unsafe archive path") {
+		t.Fatalf("expected unsafe path error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "escaped")); !os.IsNotExist(statErr) {
+		t.Fatalf("archive escaped destination: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "toolchains", "go9.9.9")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed extraction left final cache: %v", statErr)
+	}
+}
+
+// Contract: a checksum-valid archive missing the Go executable is rejected
+// loudly and never becomes a reusable cached toolchain.
+func TestProvisionGoToolchain_RejectsArchiveMissingGoBinaryAtomically(t *testing.T) {
+	archive := goArchiveFixture(t, map[string]string{"go/README.md": "not a toolchain"})
+	sum := sha256.Sum256(archive)
+	configureGoProvisionFixture(t, archive, hex.EncodeToString(sum[:]))
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+
+	goCmd, cached, err := provisionGoToolchain()
+	if err == nil || !strings.Contains(err.Error(), "does not contain go/bin/"+goBinaryName()) {
+		t.Fatalf("expected missing go/bin/%s hard error, got %q, %v, %v", goBinaryName(), goCmd, cached, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "toolchains", "go9.9.9")); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid archive left a final cache directory: %v", statErr)
+	}
+}
+
+// Contract: failure to query an ambient Go's GOTOOLCHAIN setting means it
+// cannot be trusted to auto-switch to the requested version.
+func TestGoCanAutoSwitch_EnvFailureCannotAutoSwitch(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-go")
+	if goCanAutoSwitch(missing, goVersion{major: 1, minor: 21}) {
+		t.Fatal("goCanAutoSwitch returned true when `go env GOTOOLCHAIN` could not run")
+	}
+}
+
+// Contract: when a Go version cannot be determined, diagnostics still identify
+// the exact binary path rather than displaying an empty or invented version.
+func TestDisplayGoVersion_UnknownVersionFallsBackToBinaryPath(t *testing.T) {
+	goCmd := filepath.Join(t.TempDir(), "unknown-go")
+	if got := displayGoVersion(goCmd); got != goCmd {
+		t.Fatalf("displayGoVersion(%q) = %q; want the binary path", goCmd, got)
+	}
+}
+
+// Contract: archive-name validation rejects empty, absolute, and climbing paths
+// while preserving an ordinary nested archive entry.
+func TestSafeArchiveName_RejectsUnsafeAndAcceptsNested(t *testing.T) {
+	cases := []struct {
+		name    string
+		want    string
+		wantErr bool
+	}{
+		{name: "", wantErr: true},
+		{name: string(filepath.Separator) + "absolute", wantErr: true},
+		{name: "../../outside", wantErr: true},
+		{name: "go/bin/" + goBinaryName(), want: filepath.Join("go", "bin", goBinaryName())},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := safeArchiveName(tc.name)
+			if (err != nil) != tc.wantErr || got != tc.want {
+				t.Fatalf("safeArchiveName(%q) = %q, %v; want %q, error=%v", tc.name, got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Contract: cached Go detection requires a real regular executable that can
+// run, rejecting missing paths, directories, and non-executable files.
+func TestUsableGoBinary_RequiresRunnableRegularExecutable(t *testing.T) {
+	dir := t.TempDir()
+	if usableGoBinary(filepath.Join(dir, "missing")) {
+		t.Fatal("missing path reported as a usable Go binary")
+	}
+	if usableGoBinary(dir) {
+		t.Fatal("directory reported as a usable Go binary")
+	}
+
+	if runtime.GOOS == "windows" {
+		runnable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !usableGoBinary(runnable) {
+			t.Fatalf("running test executable %q should be usable", runnable)
+		}
+		return
+	}
+
+	nonExecutable := filepath.Join(dir, "non-executable-go")
+	if err := os.WriteFile(nonExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if usableGoBinary(nonExecutable) {
+		t.Fatal("regular file without execute permission reported as usable")
+	}
+	runnable := filepath.Join(dir, "runnable-go")
+	writeExecutable(t, runnable, "#!/bin/sh\nexit 0\n")
+	if !usableGoBinary(runnable) {
+		t.Fatal("runnable regular executable reported as unusable")
+	}
+}
+
+func TestExtractGoZip_SuccessAndTraversalRefusal(t *testing.T) {
+	makeZip := func(name, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "fixture.zip")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		zw := zip.NewWriter(f)
+		h := &zip.FileHeader{Name: name, Method: zip.Store}
+		h.SetMode(0o755)
+		w, err := zw.CreateHeader(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(body))
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	dst := t.TempDir()
+	if err := extractGoArchive(makeZip("go/bin/go.exe", "binary"), dst); err != nil {
+		t.Fatalf("extract valid zip: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "go", "bin", "go.exe")); err != nil || string(got) != "binary" {
+		t.Fatalf("valid zip output = %q, %v", got, err)
+	}
+
+	escapeRoot := t.TempDir()
+	badDst := filepath.Join(escapeRoot, "destination")
+	if err := os.Mkdir(badDst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := extractGoArchive(makeZip("../escaped", "bad"), badDst)
+	if err == nil || !strings.Contains(err.Error(), "unsafe archive path") {
+		t.Fatalf("expected zip traversal refusal, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(escapeRoot, "escaped")); !os.IsNotExist(err) {
+		t.Fatalf("zip traversal wrote outside destination: %v", err)
+	}
+}
+
+func TestDiscoverGoArchive_NoMatchingStableBuild(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[{"version":"go10.0.0","stable":false,"files":[]},{"version":"go9.9.9","stable":true,"files":[{"os":"other","arch":"other","kind":"archive","sha256":"sum"}]}]`)
+	}))
+	defer server.Close()
+	oldClient, oldIndex := goProvisionHTTPClient, goProvisionIndexURL
+	goProvisionHTTPClient, goProvisionIndexURL = server.Client(), server.URL
+	defer func() { goProvisionHTTPClient, goProvisionIndexURL = oldClient, oldIndex }()
+	_, _, err := discoverGoArchive()
+	if err == nil || !strings.Contains(err.Error(), "no stable Go archive") {
+		t.Fatalf("expected no-match error, got %v", err)
 	}
 }
 

@@ -593,6 +593,46 @@ func TestStatusManager_Reconciliation_UsesConfiguredThreshold(t *testing.T) {
 		"Agent past startup grace with fresh heartbeat but still 'starting' should need reconciliation (issue #484)")
 }
 
+func TestStatusManager_Reconciliation_HonorsGrantedLeases(t *testing.T) {
+	provider, _ := setupStatusManagerStorage(t)
+	sm := NewStatusManager(provider, StatusManagerConfig{
+		HeartbeatStaleThreshold: time.Minute,
+	}, nil, nil)
+
+	staleActive := func(id string) *types.AgentNode {
+		return &types.AgentNode{
+			ID:            id,
+			HealthStatus:  types.HealthStatusActive,
+			LastHeartbeat: time.Now().Add(-2 * time.Minute),
+		}
+	}
+
+	t.Run("unexpired lease protects a stale heartbeat", func(t *testing.T) {
+		agent := staleActive("leased-node")
+		sm.RecordLease(agent.ID, time.Now().Add(time.Minute))
+		assert.False(t, sm.needsReconciliation(agent))
+	})
+
+	t.Run("expired lease and grace restore stale reconciliation", func(t *testing.T) {
+		agent := staleActive("expired-lease-node")
+		sm.RecordLease(agent.ID, time.Now().Add(-grantedLeaseGrace-time.Second))
+		assert.True(t, sm.needsReconciliation(agent))
+	})
+
+	t.Run("heartbeat-only node is unchanged", func(t *testing.T) {
+		assert.True(t, sm.needsReconciliation(staleActive("heartbeat-node")))
+	})
+
+	t.Run("renewal overwrites and extends the lease horizon", func(t *testing.T) {
+		agent := staleActive("renewed-node")
+		sm.RecordLease(agent.ID, time.Now().Add(-grantedLeaseGrace-time.Second))
+		assert.True(t, sm.needsReconciliation(agent))
+
+		sm.RecordLease(agent.ID, time.Now().Add(time.Minute))
+		assert.False(t, sm.needsReconciliation(agent))
+	})
+}
+
 // TestStatusManager_StuckStartingIsReconciledToReady reproduces issue #484 end-to-end:
 // an agent registers, sends heartbeats indefinitely with status="starting" (the Python SDK's
 // default, since it never transitions _current_status to READY), and is expected to be
