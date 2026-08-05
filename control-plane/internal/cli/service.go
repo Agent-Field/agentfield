@@ -92,6 +92,7 @@ type serviceStatus struct {
 	Port             int    `json:"port"`
 	Version          string `json:"version,omitempty"`
 	ActiveExecutions int    `json:"active_executions"`
+	StaleExecutions  int    `json:"stale_executions"`
 	ActiveKnown      bool   `json:"active_known"`
 }
 
@@ -111,7 +112,7 @@ func collectServiceStatus() serviceStatus {
 	st.Healthy = launchdsvc.ServerHealthy(port)
 	if st.Healthy {
 		st.Version = serviceServerVersion(port)
-		st.ActiveExecutions, st.ActiveKnown =
+		st.ActiveExecutions, st.StaleExecutions, st.ActiveKnown =
 			launchdsvc.ActiveExecutions(port, os.Getenv("AGENTFIELD_API_KEY"))
 	}
 	return st
@@ -162,7 +163,14 @@ func printServiceStatus(st serviceStatus) {
 	switch {
 	case !st.Healthy:
 	case st.ActiveKnown:
-		fmt.Printf("In flight:     %d workflow(s)\n", st.ActiveExecutions)
+		if st.StaleExecutions > 0 {
+			// Name the wedged runs explicitly: they are why the number here can
+			// look lower than the dashboard's.
+			fmt.Printf("In flight:     %d workflow(s) (plus %d stale, idle >%s)\n",
+				st.ActiveExecutions, st.StaleExecutions, launchdsvc.ActiveWindow())
+		} else {
+			fmt.Printf("In flight:     %d workflow(s)\n", st.ActiveExecutions)
+		}
 	default:
 		fmt.Println("In flight:     unknown (endpoint unreadable — set AGENTFIELD_API_KEY?)")
 	}

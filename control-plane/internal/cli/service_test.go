@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -166,6 +168,14 @@ func TestPrintServiceStatus(t *testing.T) {
 			deny: []string{"version"},
 		},
 		{
+			name: "stale runs are named alongside the live count",
+			st: serviceStatus{
+				Supported: true, Loaded: true, Healthy: true, Port: 8080,
+				ActiveExecutions: 2, StaleExecutions: 1, ActiveKnown: true,
+			},
+			want: []string{"2 workflow(s) (plus 1 stale, idle >"},
+		},
+		{
 			name: "healthy but in-flight count unreadable",
 			st:   serviceStatus{Supported: true, Loaded: true, Healthy: true, Port: 8080},
 			want: []string{"unknown (endpoint unreadable"},
@@ -231,7 +241,15 @@ func TestServiceStatusRunE(t *testing.T) {
 		case "/health":
 			_, _ = w.Write([]byte(`{"status":"healthy","version":"9.9.9"}`))
 		case "/api/v1/executions/active":
-			_, _ = w.Write([]byte(`{"count":4,"runs":[]}`))
+			now := time.Now().UTC().Format(time.RFC3339)
+			old := time.Now().Add(-10 * time.Hour).UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(fmt.Sprintf(
+				`{"count":5,"runs":[{"run_id":"a","latest_activity":%q},`+
+					`{"run_id":"b","latest_activity":%q},`+
+					`{"run_id":"c","latest_activity":%q},`+
+					`{"run_id":"d","latest_activity":%q},`+
+					`{"run_id":"zombie","latest_activity":%q}]}`,
+				now, now, now, now, old)))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -262,7 +280,7 @@ func TestServiceStatusRunE(t *testing.T) {
 				t.Fatalf("status: %v", err)
 			}
 		})
-		for _, want := range []string{"version 9.9.9", "4 workflow(s)", "/opt/demo/bin/agentfield"} {
+		for _, want := range []string{"version 9.9.9", "4 workflow(s) (plus 1 stale, idle >30m0s)", "/opt/demo/bin/agentfield"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("status output missing %q:\n%s", want, out)
 			}
@@ -278,7 +296,7 @@ func TestServiceStatusRunE(t *testing.T) {
 			}
 		})
 		for _, want := range []string{`"healthy": true`, `"version": "9.9.9"`,
-			`"active_executions": 4`, `"active_known": true`} {
+			`"active_executions": 4`, `"stale_executions": 1`, `"active_known": true`} {
 			if !strings.Contains(out, want) {
 				t.Errorf("json output missing %q:\n%s", want, out)
 			}

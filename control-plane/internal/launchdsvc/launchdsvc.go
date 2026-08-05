@@ -138,8 +138,11 @@ type TakeoverInputs struct {
 	LabelLoaded bool
 	// ServerHealthy reports that GET /health answered.
 	ServerHealthy bool
-	// ActiveExecutions is the number of in-flight runs reported by
+	// ActiveExecutions is the number of RECENTLY-ACTIVE in-flight runs from
 	// GET /api/v1/executions/active. Only meaningful when ServerHealthy.
+	// Runs that are listed but have gone quiet are excluded by the probe (see
+	// launchdsvc.ActiveWindow), so a wedged run cannot make this permanently
+	// non-zero and defer every future restart.
 	ActiveExecutions int
 	// Identical reports that the plists we would write are byte-identical to
 	// what is on disk AND the target binary already has the new contents.

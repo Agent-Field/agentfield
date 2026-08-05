@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -14,6 +15,35 @@ import (
 // endpoints are local and answer in milliseconds; a longer wait would only
 // stall `curl … | bash` behind a dead socket.
 const probeTimeout = 1500 * time.Millisecond
+
+// defaultActiveWindow is how recently a run must have done something to count
+// as genuinely in flight.
+//
+// A live workflow touches latest_activity on every reasoner event, so a healthy
+// run refreshes it constantly. A run that has not moved in half an hour is
+// either wedged or was abandoned by a server that died mid-flight — and with
+// execution cleanup disabled it can sit in the active list indefinitely. One
+// such zombie used to make the busy probe permanently true, which meant an
+// upgrade of the SAME install would defer its restart forever and never pick up
+// a new binary.
+const defaultActiveWindow = 30 * time.Minute
+
+// ActiveWindowEnv overrides defaultActiveWindow with a Go duration ("2h").
+const ActiveWindowEnv = "AGENTFIELD_INSTALL_ACTIVE_WINDOW"
+
+// ActiveWindow resolves the freshness window. An unparseable or non-positive
+// value falls back to the default rather than failing an install.
+func ActiveWindow() time.Duration {
+	raw := strings.TrimSpace(os.Getenv(ActiveWindowEnv))
+	if raw == "" {
+		return defaultActiveWindow
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return defaultActiveWindow
+	}
+	return d
+}
 
 // HealthURL / ActiveExecutionsURL address the local control plane.
 func HealthURL(port int) string { return fmt.Sprintf("http://localhost:%d/health", port) }
@@ -39,47 +69,86 @@ func ServerHealthy(port int) bool {
 
 // activeExecutionsResponse is the shape of GET /api/v1/executions/active.
 type activeExecutionsResponse struct {
-	Count int `json:"count"`
-	Runs  []struct {
-		RunID string `json:"run_id"`
-	} `json:"runs"`
+	Count int         `json:"count"`
+	Runs  []activeRun `json:"runs"`
 }
 
-// ActiveExecutions returns the number of in-flight runs, and whether the answer
-// is trustworthy. A server that does not answer, or answers with an auth error,
-// reports ok=false — and the caller then treats the server as not-busy rather
-// than blocking an install forever on an unreadable endpoint.
-func ActiveExecutions(port int, apiKey string) (int, bool) {
+type activeRun struct {
+	RunID          string `json:"run_id"`
+	RootStatus     string `json:"root_status"`
+	StartedAt      string `json:"started_at"`
+	LatestActivity string `json:"latest_activity"`
+}
+
+// fresh reports whether this run has done something inside the window, and is
+// therefore work an install must not interrupt.
+//
+// A missing or unparseable latest_activity counts as FRESH on purpose: the
+// probe exists to protect running work, so an ambiguous timestamp must never be
+// the thing that licenses a restart.
+func (r activeRun) fresh(now time.Time, window time.Duration) bool {
+	stamp := strings.TrimSpace(r.LatestActivity)
+	if stamp == "" {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return true
+	}
+	return now.Sub(t) <= window
+}
+
+// ActiveExecutions reports how many runs are genuinely in flight (fresh), how
+// many are listed but have gone quiet (stale, and therefore ignored), and
+// whether the answer is trustworthy at all. A server that does not answer, or
+// answers with an auth error, reports ok=false — and the caller then treats the
+// server as not-busy rather than blocking an install forever on an unreadable
+// endpoint.
+func ActiveExecutions(port int, apiKey string) (fresh, stale int, ok bool) {
 	client := &http.Client{Timeout: probeTimeout}
 	req, err := http.NewRequest(http.MethodGet, ActiveExecutionsURL(port), nil)
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
 	if apiKey != "" {
 		req.Header.Set("X-API-Key", apiKey)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return 0, false
+		return 0, 0, false
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
 	var parsed activeExecutionsResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return 0, false
+		return 0, 0, false
 	}
-	// count is authoritative; fall back to the run list when it is absent.
-	if parsed.Count > 0 {
-		return parsed.Count, true
+	return splitActiveRuns(parsed, time.Now(), ActiveWindow())
+}
+
+// splitActiveRuns is the pure half of the probe, so the staleness rules are
+// testable without a clock or a socket.
+func splitActiveRuns(parsed activeExecutionsResponse, now time.Time, window time.Duration) (fresh, stale int, ok bool) {
+	for _, run := range parsed.Runs {
+		if run.fresh(now, window) {
+			fresh++
+			continue
+		}
+		stale++
 	}
-	return len(parsed.Runs), true
+	// An older server may report a count without the run detail needed to age
+	// it. Trust the count and treat it as fresh rather than restarting blind.
+	if len(parsed.Runs) == 0 && parsed.Count > 0 {
+		return parsed.Count, 0, true
+	}
+	return fresh, stale, true
 }
 
 // FileSHA256 hashes a file, reporting ok=false when it cannot be read. Used to

@@ -38,7 +38,7 @@ func installDesktop() error { return installDesktopWith(installOptions{}) }
 func installDesktopWith(opts installOptions) error {
 	// Decide about the server agent BEFORE writing anything: a refusal must
 	// leave the other install's files exactly as they were.
-	decision, plistData := serverAgentDecision(opts)
+	decision, plistData, staleRuns := serverAgentDecision(opts)
 	if decision.Action == launchdsvc.ActionRefuse {
 		existing, _ := launchdsvc.ReadPlistOwner(serverPlistPath())
 		return fmt.Errorf(
@@ -95,7 +95,8 @@ func installDesktopWith(opts installOptions) error {
 	case launchdsvc.ActionSkip:
 		fmt.Println("AgentField server: already up to date; leaving it running.")
 	case launchdsvc.ActionWriteOnly:
-		fmt.Printf("AgentField server: %s — not restarting.\n", decision.Reason)
+		fmt.Printf("AgentField server: %s — not restarting.%s\n",
+			decision.Reason, staleSuffix(staleRuns))
 		fmt.Println("  The new version takes effect on the next restart " +
 			"(menu-bar Restart, or `af service restart`).")
 	default:
@@ -112,7 +113,7 @@ func installDesktopWith(opts installOptions) error {
 // serverAgentDecision probes the current server agent and applies the takeover
 // policy. It returns the decision and the plist bytes the install would write,
 // so the caller can both act on the decision and avoid regenerating the plist.
-func serverAgentDecision(opts installOptions) (launchdsvc.TakeoverDecision, []byte) {
+func serverAgentDecision(opts installOptions) (launchdsvc.TakeoverDecision, []byte, int) {
 	want := []byte(serverPlist())
 
 	existing, plistExists := launchdsvc.ReadPlistOwner(serverPlistPath())
@@ -121,6 +122,7 @@ func serverAgentDecision(opts installOptions) (launchdsvc.TakeoverDecision, []by
 		WorkingDirectory: agentfieldDir(),
 	})
 
+	stale := 0
 	in := launchdsvc.TakeoverInputs{
 		PlistExists:  plistExists,
 		SameOwner:    sameOwner,
@@ -135,8 +137,12 @@ func serverAgentDecision(opts installOptions) (launchdsvc.TakeoverDecision, []by
 			// An unreadable endpoint (auth, older server) reports ok=false and
 			// is treated as not-busy: an install must not be blocked forever by
 			// a probe it cannot interpret.
-			if n, ok := launchdsvc.ActiveExecutions(serverPort(), os.Getenv("AGENTFIELD_API_KEY")); ok {
+			// Only runs that have done something recently block a restart;
+			// a wedged run left in the active list forever must not pin an
+			// install to an old binary. See launchdsvc.ActiveWindow.
+			if n, s, ok := launchdsvc.ActiveExecutions(serverPort(), os.Getenv("AGENTFIELD_API_KEY")); ok {
 				in.ActiveExecutions = n
+				stale = s
 			}
 		}
 	}
@@ -146,7 +152,18 @@ func serverAgentDecision(opts installOptions) (launchdsvc.TakeoverDecision, []by
 		launchdsvc.FileHasContents(serverPlistPath(), want) &&
 		trayBundleUpToDate()
 
-	return launchdsvc.DecideTakeover(in), want
+	return launchdsvc.DecideTakeover(in), want, stale
+}
+
+// staleSuffix names runs the probe deliberately ignored, so a user who reads
+// "1 workflow in flight" against a server they believe is idle can see that the
+// harness already discounted the wedged ones.
+func staleSuffix(stale int) string {
+	if stale <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (ignored %d stale run(s) with no activity for over %s)",
+		stale, launchdsvc.ActiveWindow())
 }
 
 // trayBundleUpToDate reports whether the installed tray binary is already the

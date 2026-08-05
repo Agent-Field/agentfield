@@ -3,6 +3,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/launchdsvc"
@@ -47,5 +48,23 @@ func TestTrayPlistRoundTrips(t *testing.T) {
 	owner := launchdsvc.ParsePlistOwner([]byte(trayPlist()))
 	if owner.Program != trayBundleBinaryPath() {
 		t.Errorf("tray Program = %q, want %q", owner.Program, trayBundleBinaryPath())
+	}
+}
+
+// TestStaleSuffix: when the probe discounts wedged runs, the install says so —
+// otherwise "1 workflow in flight" on a server the user believes is idle looks
+// like the harness is simply wrong.
+func TestStaleSuffix(t *testing.T) {
+	if got := staleSuffix(0); got != "" {
+		t.Errorf("staleSuffix(0) = %q, want empty", got)
+	}
+	if got := staleSuffix(-1); got != "" {
+		t.Errorf("staleSuffix(-1) = %q, want empty", got)
+	}
+	got := staleSuffix(2)
+	for _, want := range []string{"ignored 2 stale run(s)", "no activity for over"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("staleSuffix(2) = %q, want it to mention %q", got, want)
+		}
 	}
 }
