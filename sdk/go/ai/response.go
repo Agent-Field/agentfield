@@ -29,12 +29,14 @@ type Response struct {
 // cost tracker reads as "price unknown" rather than "free" — usage is still
 // recorded, but silently with no cost and cost_source "" instead of
 // "provider". An explicit usage.cost always wins; this only fills a gap.
+//
+// The fold only happens into an existing usage block. Synthesizing one for a
+// cost-only body would fabricate zero token counts that downstream consumers
+// read as authoritative — on the streaming path a last-usage-wins accumulator
+// would let such a chunk erase real counts from an earlier chunk.
 func (r *Response) normalizeNativeCost() {
-	if r == nil || r.Cost == nil {
+	if r == nil || r.Cost == nil || r.Usage == nil {
 		return
-	}
-	if r.Usage == nil {
-		r.Usage = &Usage{}
 	}
 	if r.Usage.Cost == nil {
 		cost := *r.Cost
@@ -121,11 +123,8 @@ type StreamChunk struct {
 // normalizeNativeCost folds a top-level chunk cost into Usage.Cost. See
 // Response.normalizeNativeCost.
 func (s *StreamChunk) normalizeNativeCost() {
-	if s == nil || s.Cost == nil {
+	if s == nil || s.Cost == nil || s.Usage == nil {
 		return
-	}
-	if s.Usage == nil {
-		s.Usage = &Usage{}
 	}
 	if s.Usage.Cost == nil {
 		cost := *s.Cost
