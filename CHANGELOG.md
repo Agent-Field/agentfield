@@ -6,6 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.123-rc.1] - 2026-08-05
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 1 update (#871)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [ip-address](https://github.com/beaugunderson/ip-address).
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [ip-address](https://github.com/beaugunderson/ip-address).
+
+
+Updates `ip-address` from 10.2.0 to 10.4.0
+- [Release notes](https://github.com/beaugunderson/ip-address/releases)
+- [Commits](https://github.com/beaugunderson/ip-address/compare/v10.2.0...v10.4.0)
+
+Updates `ip-address` from 10.2.0 to 10.4.0
+- [Release notes](https://github.com/beaugunderson/ip-address/releases)
+- [Commits](https://github.com/beaugunderson/ip-address/compare/v10.2.0...v10.4.0)
+
+---
+updated-dependencies:
+- dependency-name: ip-address
+  dependency-version: 10.4.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: ip-address
+  dependency-version: 10.4.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (5234a61)
+
+- Chore(sdk/python): enable ruff ASYNC lint rules to gate async/blocking hazards (#620) (#812)
+
+Enable ruff's flake8-async (ASYNC) ruleset in pyproject.toml to catch
+blocking calls inside async functions at lint time. This prevents new
+violations from landing while documenting the existing findings as
+per-file-ignores to be fixed in follow-up slices.
+
+Rules now enforced on new code:
+- ASYNC210: blocking HTTP calls (requests.*) in async functions
+- ASYNC230: blocking open() in async functions
+- ASYNC240: blocking os.path / pathlib in async functions
+- ASYNC110: asyncio.sleep in while loop (use asyncio.Event)
+
+Existing violations (6 production files, 5 test files) are suppressed
+via per-file-ignores with a comment referencing #620.
+
+Part of #620. (c53cdfe)
+
+
+
+### Documentation
+
+- Docs(readme): lead the pr-af card with its Code-Review-Bench result (#877)
+
+Swap the pr-af card image for the repo's hero chart (#1 open-source on
+Code-Review-Bench) and rewrite the caption to match. Normalize the link
+to the /github/<slug>/ form used by every other card, and add the
+missing pr-af row to assets/utm-links.csv.
+
+The previous image is kept at assets/examples/agentic-pr-reviewer.png.
+
+Co-authored-by: OG <oktaygoktas@users.noreply.github.com>
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (a851fe3)
+
 ## [0.1.122] - 2026-08-05
 
 ## [0.1.122-rc.1] - 2026-08-05
