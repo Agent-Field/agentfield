@@ -1,0 +1,238 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/launchdsvc"
+	"github.com/spf13/cobra"
+)
+
+// NewServiceCommand creates the `af service` command group, which manages the
+// control plane running under launchd (installed by install.sh / the menu-bar
+// app). It is registered on every platform so `af service` self-documents;
+// off macOS each subcommand reports that launchd is macOS-only.
+func NewServiceCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "service",
+		Short: "Manage the background control plane (macOS launchd)",
+		Long: `Manage the AgentField control plane that runs in the background.
+
+install.sh registers the control plane as a launchd agent so it starts at login
+and restarts if it crashes. Because it is supervised, killing the process does
+not stop it — use these commands (or the menu-bar icon).
+
+Examples:
+  af service status     Show whether it is registered, healthy, and busy
+  af service stop       Graceful shutdown (stays stopped)
+  af service restart    Restart onto the currently installed binary
+  af service uninstall  Deregister it and remove the menu-bar app`,
+	}
+	cmd.AddCommand(newServiceStatusCmd())
+	cmd.AddCommand(newServiceStopCmd())
+	cmd.AddCommand(newServiceRestartCmd())
+	cmd.AddCommand(newServiceUninstallCmd())
+	return cmd
+}
+
+// requireLaunchd gates the mutating subcommands off macOS.
+func requireLaunchd() error {
+	if !launchdsvc.Supported() {
+		return fmt.Errorf("service management is macOS-only (this is %s)", runtime.GOOS)
+	}
+	return nil
+}
+
+func servicePort() int {
+	if v := os.Getenv("AGENTFIELD_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			return p
+		}
+	}
+	return 8080
+}
+
+func serviceHome() string {
+	h, _ := os.UserHomeDir()
+	return h
+}
+
+func newServiceStatusCmd() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show the background control plane's registration, health, and load",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st := collectServiceStatus()
+			if asJSON {
+				out, err := json.MarshalIndent(st, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(out))
+				return nil
+			}
+			printServiceStatus(st)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit machine-readable JSON")
+	return cmd
+}
+
+// serviceStatus is the read-only view of the background control plane.
+type serviceStatus struct {
+	Supported        bool   `json:"supported"`
+	Loaded           bool   `json:"loaded"`
+	PlistPath        string `json:"plist_path"`
+	Program          string `json:"program,omitempty"`
+	Healthy          bool   `json:"healthy"`
+	Port             int    `json:"port"`
+	Version          string `json:"version,omitempty"`
+	ActiveExecutions int    `json:"active_executions"`
+	ActiveKnown      bool   `json:"active_known"`
+}
+
+func collectServiceStatus() serviceStatus {
+	port := servicePort()
+	st := serviceStatus{
+		Supported: launchdsvc.Supported(),
+		Port:      port,
+		PlistPath: launchdsvc.ServerPlistPath(serviceHome()),
+	}
+	if owner, ok := launchdsvc.ReadPlistOwner(st.PlistPath); ok {
+		st.Program = owner.Program
+	}
+	if st.Supported {
+		st.Loaded = launchdsvc.AgentLoaded(launchdsvc.ServerLabel)
+	}
+	st.Healthy = launchdsvc.ServerHealthy(port)
+	if st.Healthy {
+		st.Version = serviceServerVersion(port)
+		st.ActiveExecutions, st.ActiveKnown =
+			launchdsvc.ActiveExecutionsOn(port, os.Getenv("AGENTFIELD_API_KEY"))
+	}
+	return st
+}
+
+// serviceServerVersion reads the version the running server reports. Best
+// effort: an older server without the field simply reports nothing.
+func serviceServerVersion(port int) string {
+	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return ""
+	}
+	var parsed struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return ""
+	}
+	return parsed.Version
+}
+
+func printServiceStatus(st serviceStatus) {
+	if !st.Supported {
+		fmt.Printf("Registration:  not applicable (launchd is macOS-only; this is %s)\n", runtime.GOOS)
+	} else if st.Loaded {
+		fmt.Println("Registration:  loaded (starts at login)")
+	} else {
+		fmt.Println("Registration:  not loaded")
+	}
+	if st.Program != "" {
+		fmt.Printf("Binary:        %s\n", st.Program)
+	}
+	if st.Healthy {
+		if st.Version != "" {
+			fmt.Printf("Health:        responding on :%d (version %s)\n", st.Port, st.Version)
+		} else {
+			fmt.Printf("Health:        responding on :%d\n", st.Port)
+		}
+	} else {
+		fmt.Printf("Health:        not responding on :%d\n", st.Port)
+	}
+	switch {
+	case !st.Healthy:
+	case st.ActiveKnown:
+		fmt.Printf("In flight:     %d workflow(s)\n", st.ActiveExecutions)
+	default:
+		fmt.Println("In flight:     unknown (endpoint unreadable — set AGENTFIELD_API_KEY?)")
+	}
+}
+
+func newServiceStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the background control plane (graceful, stays stopped)",
+		Long: `Send SIGTERM to the launchd-supervised control plane.
+
+The agent is registered with KeepAlive={SuccessfulExit: false}, so a clean
+shutdown is NOT relaunched — but a plain ` + "`kill`" + ` of the process looks like a
+crash and launchd restarts it. That is why this command exists.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireLaunchd(); err != nil {
+				return err
+			}
+			if err := launchdsvc.SignalAgent(launchdsvc.ServerLabel, "SIGTERM"); err != nil {
+				return fmt.Errorf("stop control plane: %w", err)
+			}
+			fmt.Println("Sent SIGTERM to the control plane; it will stay stopped until started again.")
+			return nil
+		},
+	}
+}
+
+func newServiceRestartCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the background control plane onto the installed binary",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireLaunchd(); err != nil {
+				return err
+			}
+			plist := launchdsvc.ServerPlistPath(serviceHome())
+			if _, err := os.Stat(plist); err != nil {
+				return fmt.Errorf("no control-plane agent installed at %s", plist)
+			}
+			// Full reload rather than `kickstart -k`: an upgraded binary carries
+			// a new ad-hoc code signature, which launchd refuses to re-exec.
+			launchdsvc.Reload(plist, launchdsvc.ServerLabel)
+			fmt.Println("Control plane restarted.")
+			return nil
+		},
+	}
+}
+
+func newServiceUninstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall",
+		Short: "Deregister the control plane and remove the menu-bar app",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireLaunchd(); err != nil {
+				return err
+			}
+			home := serviceHome()
+			_ = launchdsvc.Bootout(launchdsvc.TrayLabel)
+			_ = launchdsvc.Bootout(launchdsvc.ServerLabel)
+			_ = os.Remove(launchdsvc.TrayPlistPath(home))
+			_ = os.Remove(launchdsvc.ServerPlistPath(home))
+			_ = os.RemoveAll(filepath.Join(home, "Applications", "AgentField.app"))
+			fmt.Println("Control plane autostart and menu-bar app removed.")
+			fmt.Println("The `af` binary itself is untouched.")
+			return nil
+		},
+	}
+}

@@ -42,6 +42,11 @@ https://github.com/user-attachments/assets/9fb7b1cf-26de-4b9b-9ba2-917252cc26ec
 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
 
+On macOS the installer also registers the control plane to start at login (under
+launchd) and adds a menu-bar icon. Stop it with `af service stop` or the menu-bar
+icon — a plain `kill` looks like a crash and it restarts. `af service status`
+shows health and in-flight work; install with `--no-tray` to skip this entirely.
+
 Then in your coding agent, paste any spec with /agentfield :
 
 ```text
