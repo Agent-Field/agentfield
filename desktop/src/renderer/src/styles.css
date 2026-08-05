@@ -1012,16 +1012,14 @@ section > .section-title {
   cursor: default;
 }
 
-/* Overflow menu */
-.menu-anchor {
-  position: relative;
-}
-
+/* Overflow menu (MenuPopover.tsx). Portaled to body — not clipped by
+   .panel's overflow or re-anchored by .market-card's hover transform.
+   left/top come inline from the trigger rect; the translate keeps the
+   menu's right edge on the trigger's right edge. */
 .menu-popover {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
-  z-index: 40;
+  position: fixed;
+  transform: translateX(-100%);
+  z-index: 100;
   min-width: 160px;
   padding: 4px;
   background: var(--bg-elevated);

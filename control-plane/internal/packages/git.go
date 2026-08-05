@@ -48,6 +48,12 @@ type GitInstaller struct {
 	installedName string
 }
 
+// InstalledName returns the package name installed by the most recent
+// successful InstallFromGit call. Redirects report the final successor name.
+func (gi *GitInstaller) InstalledName() string {
+	return gi.installedName
+}
+
 // maxSupersedeRedirects bounds a superseded_by chain. Three is generous for the
 // real case (one hop) and still fails fast on a manifest cycle.
 const maxSupersedeRedirects = 3

@@ -200,6 +200,58 @@ describe('control-plane installs', () => {
   })
 })
 
+// A manifest declaring `superseded_by:` redirects the install to a successor,
+// which may register under its own name. The control plane reports what it
+// actually installed as the job's package_name; the app must repeat that
+// rather than the name it asked for.
+describe('superseded installs report what actually landed', () => {
+  const landedAs = (name: string): CpClient =>
+    installClient({
+      watchInstallJob: vi.fn(async () => ({
+        id: 'job',
+        source: '',
+        kind: 'install' as const,
+        status: 'succeeded' as const,
+        package_name: name,
+        lines: []
+      }))
+    })
+
+  it('names the node a pasted repo actually installed, not the URL', async () => {
+    expect(
+      await installFromSource('https://github.com/Agent-Field/pr-af', () => {}, {
+        cpClient: landedAs('pr-af')
+      })
+    ).toEqual({ ok: true, message: 'pr-af installed' })
+  })
+
+  it('falls back to the source when the control plane names nothing', async () => {
+    expect(
+      await installFromSource('https://github.com/Agent-Field/pr-af', () => {}, {
+        cpClient: installClient()
+      })
+    ).toEqual({ ok: true, message: 'Installed from https://github.com/Agent-Field/pr-af' })
+  })
+
+  it('names the successor when a catalog install redirects elsewhere', async () => {
+    expect(
+      await installAgent(CATALOG[0].name, () => {}, false, { cpClient: landedAs('successor-node') })
+    ).toEqual({ ok: true, message: 'successor-node installed' })
+  })
+
+  it('reports an update that renamed the node as a replacement', async () => {
+    expect(
+      await updateAgent(CATALOG[0].name, () => {}, { cpClient: landedAs('successor-node') })
+    ).toEqual({ ok: true, message: `${CATALOG[0].name} replaced by successor-node` })
+  })
+
+  it('still reads as a plain update when the name is unchanged', async () => {
+    expect(
+      await updateAgent(CATALOG[0].name, () => {}, { cpClient: landedAs(CATALOG[0].name) })
+    ).toEqual({ ok: true, message: `${CATALOG[0].name} updated` })
+  })
+})
+
 describe('sanitizeInstallOutput', () => {
   it('unwraps zerolog JSON error lines to the underlying error text', () => {
     const line =

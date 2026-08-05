@@ -142,10 +142,11 @@ order: `requirements.txt`, then `pip install .` for a `pyproject.toml`/`setup.py
 project, then any packages listed under `dependencies.python` in the manifest.
 `af run` uses this venv automatically.
 
-The venv is built with the `python3`/`python` on your `PATH`. If a node declares
-`requires-python` (e.g. `>=3.11`) that your interpreter doesn't satisfy, `pip`
-reports it and install fails — point `af` at a compatible interpreter (e.g. via
-`pyenv`/`PATH`) and reinstall.
+The venv is built with an interpreter that satisfies the node's `requires-python`
+(e.g. `>=3.11`). `af` looks for one in order: the `python3`/`python` on your
+`PATH`, then a `uv`-provisioned interpreter (uv downloads a standalone build if
+needed), then a matching `pyenv` version. Only if none of those yields a
+compatible interpreter does install fail, naming exactly how to get one.
 
 ### Language: Python or Go
 
@@ -164,9 +165,20 @@ entrypoint:
 
 At install time a Go node is **compiled**, not pip-installed:
 
-- The `go` toolchain is discovered on `PATH`. A missing `go` is an actionable
-  error (how to install it); a `go` older than the module's `go.mod` directive is
-  refused with an upgrade hint — the Go analogue of the `requires-python` check.
+- The `go` toolchain is resolved the same way a Python interpreter is: `af` uses
+  the `go` on your `PATH` when it can build the module, and otherwise
+  **provisions one for you** — downloading the official toolchain from
+  [go.dev/dl](https://go.dev/dl/), verifying its published SHA256 before
+  unpacking it, and caching it under `~/.agentfield/toolchains/<version>/` so
+  later installs reuse it. You do not need Go installed to install a Go node.
+  Set `AGENTFIELD_DISABLE_GO_PROVISIONING=1` to turn that off, in environments
+  that must not fetch binaries; install then fails with the same actionable
+  "install Go" message as before.
+- A `go` on `PATH` that is *older* than the module's `go.mod` directive is not
+  refused: since Go 1.21 the toolchain downloads and switches to the requested
+  version itself (`GOTOOLCHAIN=auto`, the default), so `af` lets it. Only a `go`
+  older than 1.21, or one pinned with `GOTOOLCHAIN=local`, falls through to
+  provisioning.
 - With `entrypoint.build` set, `af` runs `go build -o <start> <build>`, leaving a
   runnable binary at the `entrypoint.start` path. `af run` launches that binary
   directly — same `PORT`, health check, secrets, and control-plane env as a

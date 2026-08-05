@@ -41,9 +41,12 @@ func TestInstallFromGit_SupersededRedirectsToSuccessor(t *testing.T) {
 	writeSubdirManifest(t, filepath.Join(repo, "go"), "dual-node-go")
 	setupFakeGit(t, "copy", repo, false)
 
-	if err := (&GitInstaller{AgentFieldHome: home}).
-		InstallFromGit("https://gitlab.com/acme/dual", false); err != nil {
+	installer := &GitInstaller{AgentFieldHome: home}
+	if err := installer.InstallFromGit("https://gitlab.com/acme/dual", false); err != nil {
 		t.Fatalf("InstallFromGit: %v", err)
+	}
+	if installer.InstalledName() != "dual-node-go" {
+		t.Fatalf("installed name = %q, want successor", installer.InstalledName())
 	}
 
 	registry := readRegistryFile(t, filepath.Join(home, "installed.yaml"))
@@ -228,12 +231,18 @@ func TestInstallFromGit_SupersededSameNameReplacesInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := (&GitInstaller{AgentFieldHome: home}).
-		InstallFromGit("https://gitlab.com/acme/dual", false); err != nil {
+	installer := &GitInstaller{AgentFieldHome: home}
+	if err := installer.InstallFromGit("https://gitlab.com/acme/dual", false); err != nil {
 		t.Fatalf("same-name supersede must not need --force: %v", err)
+	}
+	if installer.InstalledName() != "dual-node" {
+		t.Fatalf("installed name = %q, want shared name", installer.InstalledName())
 	}
 
 	registry := readRegistryFile(t, filepath.Join(home, "installed.yaml"))
+	if len(registry.Installed) != 1 {
+		t.Fatalf("in-place replacement must leave one registry entry, got %v", registry.Installed)
+	}
 	pkg, ok := registry.Installed["dual-node"]
 	if !ok {
 		t.Fatalf("the shared name must still be installed, got %v", registry.Installed)
@@ -241,11 +250,30 @@ func TestInstallFromGit_SupersededSameNameReplacesInPlace(t *testing.T) {
 	if pkg.Version != "2.0.0" {
 		t.Fatalf("registry still describes the predecessor: version %q", pkg.Version)
 	}
+	if pkg.SourcePath != "https://gitlab.com/acme/dual//go" {
+		t.Fatalf("source path = %q, want successor source", pkg.SourcePath)
+	}
 	if _, err := os.Stat(filepath.Join(oldDir, "successor.txt")); err != nil {
 		t.Fatalf("successor's files are not installed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(oldDir, "predecessor.txt")); !os.IsNotExist(err) {
 		t.Fatalf("predecessor's files must not survive the replace, stat err = %v", err)
+	}
+}
+
+// Contract: a plain install reports the manifest name without a redirect.
+func TestInstallFromGit_PlainInstallReportsManifestName(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	writeTestPackage(t, repo, "name: plain-node\nversion: 1.0.0\n")
+	setupFakeGit(t, "copy", repo, false)
+
+	installer := &GitInstaller{AgentFieldHome: home}
+	if err := installer.InstallFromGit("https://gitlab.com/acme/plain", false); err != nil {
+		t.Fatalf("InstallFromGit: %v", err)
+	}
+	if installer.InstalledName() != "plain-node" {
+		t.Fatalf("installed name = %q, want plain-node", installer.InstalledName())
 	}
 }
 
