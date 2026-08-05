@@ -232,6 +232,7 @@ export interface CloudTestResult {
   healthy: boolean
   authOk: boolean
   installApi: boolean
+  furrowAvailable: boolean
   version?: string
   message: string
 }
@@ -246,6 +247,7 @@ export interface RailwayStatus {
 export interface CloudDeployResult {
   ok: boolean
   url?: string
+  furrowAddress?: string
   message: string
 }
 

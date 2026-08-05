@@ -23,6 +23,7 @@ export interface DeployResult {
   ok: boolean
   url?: string
   apiKey?: string
+  furrowAddress?: string
   message: string
 }
 
@@ -71,7 +72,20 @@ resource "railway_service_domain" "cp" {
   environment_id = railway_project.cp.default_environment.id
   service_id     = railway_service.cp.id
 }
+resource "railway_tcp_proxy" "furrow" {
+  application_port = 8802
+  environment_id   = railway_project.cp.default_environment.id
+  service_id       = railway_service.cp.id
+}
+resource "railway_variable" "furrow_public_addr" {
+  name           = "FURROW_PUBLIC_ADDR"
+  value          = "\${railway_tcp_proxy.furrow.domain}:\${railway_tcp_proxy.furrow.proxy_port}"
+  environment_id = railway_project.cp.default_environment.id
+  service_id     = railway_service.cp.id
+}
 output "url"     { value = "https://\${railway_service_domain.cp.domain}" }
+output "furrow_domain" { value = railway_tcp_proxy.furrow.domain }
+output "furrow_port"   { value = railway_tcp_proxy.furrow.proxy_port }
 output "project_id"     { value = railway_project.cp.id }
 output "environment_id" { value = railway_project.cp.default_environment.id }
 output "service_id"     { value = railway_service.cp.id }
@@ -322,9 +336,19 @@ export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps
     const projectId = values.project_id?.value
     const environmentId = values.environment_id?.value
     const serviceId = values.service_id?.value
+    const furrowDomain = values.furrow_domain?.value
+    const furrowPort = values.furrow_port?.value
     if (typeof url !== 'string' || !url || typeof outputKey !== 'string' || !outputKey ||
         typeof projectId !== 'string' || !projectId || typeof environmentId !== 'string' || !environmentId ||
         typeof serviceId !== 'string' || !serviceId) throw new Error('missing')
+    // Workspace sync is an extra, so its outputs are read separately and never
+    // gate the deploy: a control plane that is up and reachable is a success
+    // even when no furrow address came back with it.
+    const furrowAddress =
+      typeof furrowDomain === 'string' && furrowDomain &&
+      typeof furrowPort === 'number' && Number.isInteger(furrowPort) && furrowPort > 0
+        ? `${furrowDomain}:${furrowPort}`
+        : undefined
     opts.onLine?.('Attaching storage volume…')
     try {
       await ensureVolume(opts.railwayToken, projectId, environmentId, serviceId, deps.fetchImpl ?? fetch)
@@ -333,7 +357,7 @@ export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps
       return { ok: false, message: `Deployed, but attaching the storage volume failed: ${detail}. Re-run deploy to retry.` }
     }
     opts.onLine?.('Storage volume ready')
-    return { ok: true, url, apiKey: outputKey, message: 'AgentField deployed to Railway.' }
+    return { ok: true, url, apiKey: outputKey, furrowAddress, message: 'AgentField deployed to Railway.' }
   } catch {
     return { ok: false, message: 'Deployment completed, but required outputs are missing.' }
   }

@@ -1,4 +1,5 @@
 import type { CloudTestResult, DesktopSettings } from '../shared/types'
+import { connect as tlsConnect } from 'node:tls'
 import { clearCloudConnection, setCloudConnection, setLocalApiKey } from './connection'
 
 export type { CloudTestResult } from '../shared/types'
@@ -51,6 +52,49 @@ function versionFrom(value: unknown): string | undefined {
     : undefined
 }
 
+function furrowAddressFrom(value: unknown): string | undefined {
+  const body = record(value)
+  if (!body) return undefined
+  for (const key of ['furrow_public_addr', 'furrowPublicAddr', 'FURROW_PUBLIC_ADDR']) {
+    if (typeof body[key] === 'string' && body[key] !== '') return body[key] as string
+  }
+  const furrow = record(body.furrow)
+  if (!furrow) return undefined
+  for (const key of ['public_addr', 'publicAddr', 'address']) {
+    if (typeof furrow[key] === 'string' && furrow[key] !== '') return furrow[key] as string
+  }
+  return undefined
+}
+
+function probeFurrow(address: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    let parsed: URL
+    try {
+      parsed = new URL(`tls://${address}`)
+    } catch {
+      resolve(false)
+      return
+    }
+    const port = Number(parsed.port)
+    if (!parsed.hostname || !Number.isInteger(port) || port <= 0 || port > 65535) {
+      resolve(false)
+      return
+    }
+    let settled = false
+    const finish = (available: boolean): void => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      resolve(available)
+    }
+    const socket = tlsConnect({ host: parsed.hostname, port, rejectUnauthorized: false })
+    socket.setTimeout(1500)
+    socket.once('secureConnect', () => finish(true))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+  })
+}
+
 async function jsonBestEffort(response: Response): Promise<unknown> {
   try {
     return await response.json()
@@ -62,7 +106,7 @@ async function jsonBestEffort(response: Response): Promise<unknown> {
 export async function testCloudConnection(
   url: string,
   apiKey: string,
-  deps: { fetchImpl?: typeof fetch } = {}
+  deps: { fetchImpl?: typeof fetch; furrowProbe?: (address: string) => Promise<boolean> } = {}
 ): Promise<CloudTestResult> {
   const normalized = normalizeServerUrl(url)
   if (!normalized) {
@@ -71,6 +115,7 @@ export async function testCloudConnection(
       healthy: false,
       authOk: false,
       installApi: false,
+      furrowAvailable: false,
       message: 'Enter a valid server URL'
     }
   }
@@ -90,6 +135,7 @@ export async function testCloudConnection(
       healthy: false,
       authOk: false,
       installApi: false,
+      furrowAvailable: false,
       message: `Could not reach ${normalized}`
     }
   }
@@ -97,12 +143,14 @@ export async function testCloudConnection(
   const healthBody = await jsonBestEffort(health)
   const healthy = health.ok
   let version = versionFrom(healthBody)
+  const furrowAddress = furrowAddressFrom(healthBody)
   if (!healthy) {
     return {
       ok: false,
       healthy: false,
       authOk: false,
       installApi: false,
+      furrowAvailable: false,
       ...(version ? { version } : {}),
       message: `Control plane at ${normalized} is not healthy`
     }
@@ -121,6 +169,7 @@ export async function testCloudConnection(
       healthy: true,
       authOk: false,
       installApi: false,
+      furrowAvailable: false,
       ...(version ? { version } : {}),
       message: 'Could not verify API access'
     }
@@ -132,6 +181,7 @@ export async function testCloudConnection(
       healthy: true,
       authOk: false,
       installApi: false,
+      furrowAvailable: false,
       ...(version ? { version } : {}),
       message:
         authResponse.status === 401 || authResponse.status === 403
@@ -164,11 +214,21 @@ export async function testCloudConnection(
     }
   }
 
+  let furrowAvailable = false
+  if (furrowAddress) {
+    try {
+      furrowAvailable = await (deps.furrowProbe ?? probeFurrow)(furrowAddress)
+    } catch {
+      furrowAvailable = false
+    }
+  }
+
   return {
     ok: true,
     healthy: true,
     authOk: true,
     installApi,
+    furrowAvailable,
     ...(version ? { version } : {}),
     message: installApi ? 'Connection successful' : 'Connected; install API unavailable'
   }

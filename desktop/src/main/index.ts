@@ -557,7 +557,7 @@ function main(): void {
           await saveSettings(settingsFile(), settings)
           applyConnectionProfile(settings)
         }
-        return { ok: result.ok, url: result.url, message: result.message }
+        return { ok: result.ok, url: result.url, furrowAddress: result.furrowAddress, message: result.message }
       } finally {
         cloudDeployInFlight = false
       }

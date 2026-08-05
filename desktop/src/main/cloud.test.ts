@@ -49,17 +49,18 @@ describe('normalizeServerUrl', () => {
 describe('testCloudConnection', () => {
   it('reports healthy authenticated servers, install support, and health version', async () => {
     const fetchImpl = fakeFetch([
-      json({ status: 'healthy', version: '1.2.3' }),
+      json({ status: 'healthy', version: '1.2.3', furrow_public_addr: 'furrow.example:8802' }),
       json({ packages: [] }),
       json([])
     ])
     await expect(
-      testCloudConnection('cp.example/', 'secret', { fetchImpl })
+      testCloudConnection('cp.example/', 'secret', { fetchImpl, furrowProbe: async () => true })
     ).resolves.toEqual({
       ok: true,
       healthy: true,
       authOk: true,
       installApi: true,
+      furrowAvailable: true,
       version: '1.2.3',
       message: 'Connection successful'
     })
@@ -76,6 +77,7 @@ describe('testCloudConnection', () => {
       healthy: true,
       authOk: false,
       installApi: false,
+      furrowAvailable: false,
       message: 'API key rejected'
     })
   })
@@ -87,6 +89,7 @@ describe('testCloudConnection', () => {
       healthy: false,
       authOk: false,
       installApi: false,
+      furrowAvailable: false,
       message: 'Could not reach https://cp.example'
     })
   })
@@ -105,6 +108,7 @@ describe('testCloudConnection', () => {
       healthy: true,
       authOk: true,
       installApi: false,
+      furrowAvailable: false,
       version: '0.9.0',
       message: 'Connected; install API unavailable'
     })
@@ -120,6 +124,20 @@ describe('testCloudConnection', () => {
     const result = await testCloudConnection('https://cp.example', 'key', { fetchImpl })
     expect(result.ok).toBe(true)
     expect(result).not.toHaveProperty('version')
+  })
+
+  it('keeps a healthy connection when the advertised furrow port is unreachable', async () => {
+    const fetchImpl = fakeFetch([
+      json({ status: 'healthy', furrow_public_addr: 'furrow.example:8802' }),
+      json({ packages: [] }),
+      json([]),
+      json({}, 404)
+    ])
+    const result = await testCloudConnection('https://cp.example', 'key', {
+      fetchImpl,
+      furrowProbe: async () => false
+    })
+    expect(result).toMatchObject({ ok: true, healthy: true, authOk: true, furrowAvailable: false })
   })
 })
 
