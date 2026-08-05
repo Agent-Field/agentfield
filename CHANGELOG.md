@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.6] - 2026-08-05
+
+
+### Other
+
+- Add MiniMax image generation support (#853)
+
+* feat: add MiniMax image generation
+
+* fix(sdk/python): parse MiniMax base64 image responses from image_base64
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (b7613b5)
+
 ## [0.1.124-rc.5] - 2026-08-05
 
 

@@ -745,7 +745,7 @@ class MiniMaxProvider(MediaProvider):
 
     @property
     def supported_modalities(self) -> List[str]:
-        return ["video", "music", "audio"]
+        return ["video", "music", "audio", "image"]
 
     @property
     def video_model_metadata(self) -> Dict[str, Dict[str, Any]]:
@@ -758,9 +758,126 @@ class MiniMaxProvider(MediaProvider):
         model: Optional[str] = None,
         size: str = "1024x1024",
         quality: str = "standard",
+        subject_reference: Optional[Any] = None,
+        aspect_ratio: Optional[str] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        response_format: str = "url",
+        seed: Optional[int] = None,
+        n: Optional[int] = None,
+        prompt_optimizer: Optional[bool] = None,
         **kwargs,
     ) -> MultimodalResponse:
-        raise NotImplementedError("minimax does not support image generation")
+        """Generate images via the MiniMax image_generation endpoint.
+
+        URL responses remain available for 24 hours. ``b64_json`` is accepted
+        as the unified SDK alias for MiniMax's ``base64`` response format.
+        """
+        import os
+
+        import aiohttp
+
+        api_key = self._api_key or os.environ.get("MINIMAX_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "MiniMax API key required. Set MINIMAX_API_KEY or pass api_key "
+                "to MiniMaxProvider."
+            )
+
+        send_model = self._strip_prefix(
+            model if model is not None else "image-01"
+        ).strip()
+        if not send_model:
+            raise ValueError("MiniMax image generation requires a model")
+
+        normalized_format = (
+            "base64" if response_format == "b64_json" else response_format
+        )
+        if normalized_format not in {"url", "base64"}:
+            raise ValueError("MiniMax image response_format must be url or base64")
+
+        body: Dict[str, Any] = {
+            "model": send_model,
+            "prompt": prompt,
+            "response_format": normalized_format,
+        }
+        optional_fields = {
+            "subject_reference": subject_reference,
+            "aspect_ratio": aspect_ratio,
+            "width": width,
+            "height": height,
+            "seed": seed,
+            "n": n,
+            "prompt_optimizer": prompt_optimizer,
+        }
+        body.update(
+            {key: value for key, value in optional_fields.items() if value is not None}
+        )
+
+        if aspect_ratio is None and width is None and height is None and size:
+            size_match = re.fullmatch(r"\s*(\d+)\s*[xX]\s*(\d+)\s*", size)
+            if size_match:
+                body["width"] = int(size_match.group(1))
+                body["height"] = int(size_match.group(2))
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        timeout = aiohttp.ClientTimeout(total=120.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{self._base_url}/image_generation",
+                headers=headers,
+                json=body,
+            ) as response:
+                if response.status >= 400:
+                    detail = await response.text()
+                    raise RuntimeError(
+                        f"MiniMax image generation failed ({response.status}): "
+                        f"{detail[:500]}"
+                    )
+                data = await response.json()
+
+        if not isinstance(data, dict):
+            raise RuntimeError("MiniMax image generation returned an invalid response")
+        base_resp = data.get("base_resp") or {}
+        if not isinstance(base_resp, dict):
+            raise RuntimeError("MiniMax image generation returned an invalid response")
+        status_code = base_resp.get("status_code")
+        if status_code not in (None, 0):
+            status_msg = base_resp.get("status_msg") or "unknown error"
+            raise RuntimeError(
+                f"MiniMax image generation failed ({status_code}): {status_msg}"
+            )
+
+        response_data = data.get("data") or {}
+        if not isinstance(response_data, dict):
+            raise RuntimeError("MiniMax image generation returned an invalid response")
+        response_key = "image_base64" if normalized_format == "base64" else "image_urls"
+        image_values = response_data.get(response_key)
+        if not isinstance(image_values, list):
+            raise RuntimeError(f"MiniMax image generation returned no {response_key}")
+
+        images: List[ImageOutput] = []
+        for value in image_values:
+            if not isinstance(value, str) or not value:
+                continue
+            if normalized_format == "base64":
+                encoded = value.split(",", 1)[1] if value.startswith("data:") else value
+                images.append(ImageOutput(b64_json=encoded))
+            else:
+                images.append(ImageOutput(url=value))
+        if not images:
+            raise RuntimeError("MiniMax image generation returned no images")
+
+        return MultimodalResponse(
+            text=prompt,
+            audio=None,
+            images=images,
+            files=[],
+            raw_response=data,
+        )
 
     async def generate_audio(
         self,
