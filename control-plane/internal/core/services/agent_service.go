@@ -649,74 +649,79 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 		env = append(env, fmt.Sprintf("%s=%s", key, value))
 	}
 
-	// Determine Python path - use virtual environment if available
-	var pythonPath string
-	venvPath := filepath.Join(agentNode.Path, "venv")
-
-	// Check if virtual environment exists (Unix/Linux/macOS)
-	if _, err := os.Stat(filepath.Join(venvPath, "bin", "python")); err == nil {
-		pythonPath = filepath.Join(venvPath, "bin", "python")
-		fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
-
-		// Complete virtual environment activation for Unix/Linux/macOS
-		venvBinPath := filepath.Join(venvPath, "bin")
-
-		// Set VIRTUAL_ENV first (required for proper activation)
-		env = append(env, fmt.Sprintf("VIRTUAL_ENV=%s", venvPath))
-
-		// Prepend virtual environment bin to PATH (critical for package resolution)
-		currentPath := os.Getenv("PATH")
-		env = append(env, fmt.Sprintf("PATH=%s:%s", venvBinPath, currentPath))
-
-		// Unset PYTHONHOME to avoid conflicts with virtual environment
-		env = append(env, "PYTHONHOME=")
-
-		// Set PYTHONPATH to ensure proper module resolution
-		env = append(env, fmt.Sprintf("PYTHONPATH=%s", filepath.Join(venvPath, "lib")))
-
-		fmt.Printf("✅ Virtual environment fully activated with PATH=%s\n", venvBinPath)
-
-	} else if _, err := os.Stat(filepath.Join(venvPath, "Scripts", "python.exe")); err == nil {
-		pythonPath = filepath.Join(venvPath, "Scripts", "python.exe") // Windows
-		fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
-
-		// Complete virtual environment activation for Windows
-		venvScriptsPath := filepath.Join(venvPath, "Scripts")
-
-		// Set VIRTUAL_ENV first (required for proper activation)
-		env = append(env, fmt.Sprintf("VIRTUAL_ENV=%s", venvPath))
-
-		// Prepend virtual environment Scripts to PATH (critical for package resolution)
-		currentPath := os.Getenv("PATH")
-		env = append(env, fmt.Sprintf("PATH=%s;%s", venvScriptsPath, currentPath))
-
-		// Unset PYTHONHOME to avoid conflicts with virtual environment
-		env = append(env, "PYTHONHOME=")
-
-		// Set PYTHONPATH to ensure proper module resolution
-		env = append(env, fmt.Sprintf("PYTHONPATH=%s", filepath.Join(venvPath, "Lib", "site-packages")))
-
-		fmt.Printf("✅ Virtual environment fully activated with PATH=%s\n", venvScriptsPath)
-
-	} else {
-		// Try to find python3 or python
-		if pythonPath = as.findPythonExecutable(); pythonPath == "" {
-			pythonPath = "python" // Final fallback
-		}
-		fmt.Printf("⚠️  Virtual environment not found at %s, using system Python: %s\n", venvPath, pythonPath)
-	}
-
-	// Launch via the manifest entrypoint (e.g. "python -m pr_af.app"). When the
-	// program token is python/python3, substitute the resolved interpreter. A Go
-	// node launches its install-time-built binary; a package-relative binary path
-	// is resolved against the install dir so exec finds it regardless of cwd.
+	// Launch via the manifest entrypoint (e.g. "python -m pr_af.app"), resolving
+	// the launcher for the node's language. A Go node launches its
+	// install-time-built binary; a package-relative binary path is resolved
+	// against the install dir so exec finds it regardless of cwd. Interpreter
+	// resolution lives inside the non-Go branch so a Go node never probes for a
+	// venv it does not have, nor warns about a Python it never runs.
 	startArgs := metadata.StartCommand()
 	command := startArgs[0]
 	args := startArgs[1:]
+
 	if metadata.IsGo() {
 		command = packages.GoBinaryProgram(agentNode.Path, command)
-	} else if command == "python" || command == "python3" {
-		command = pythonPath
+	} else {
+		// Determine Python path - use virtual environment if available
+		var pythonPath string
+		venvPath := filepath.Join(agentNode.Path, "venv")
+
+		// Check if virtual environment exists (Unix/Linux/macOS)
+		if _, err := os.Stat(filepath.Join(venvPath, "bin", "python")); err == nil {
+			pythonPath = filepath.Join(venvPath, "bin", "python")
+			fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
+
+			// Complete virtual environment activation for Unix/Linux/macOS
+			venvBinPath := filepath.Join(venvPath, "bin")
+
+			// Set VIRTUAL_ENV first (required for proper activation)
+			env = append(env, fmt.Sprintf("VIRTUAL_ENV=%s", venvPath))
+
+			// Prepend virtual environment bin to PATH (critical for package resolution)
+			currentPath := os.Getenv("PATH")
+			env = append(env, fmt.Sprintf("PATH=%s:%s", venvBinPath, currentPath))
+
+			// Unset PYTHONHOME to avoid conflicts with virtual environment
+			env = append(env, "PYTHONHOME=")
+
+			// Set PYTHONPATH to ensure proper module resolution
+			env = append(env, fmt.Sprintf("PYTHONPATH=%s", filepath.Join(venvPath, "lib")))
+
+			fmt.Printf("✅ Virtual environment fully activated with PATH=%s\n", venvBinPath)
+
+		} else if _, err := os.Stat(filepath.Join(venvPath, "Scripts", "python.exe")); err == nil {
+			pythonPath = filepath.Join(venvPath, "Scripts", "python.exe") // Windows
+			fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
+
+			// Complete virtual environment activation for Windows
+			venvScriptsPath := filepath.Join(venvPath, "Scripts")
+
+			// Set VIRTUAL_ENV first (required for proper activation)
+			env = append(env, fmt.Sprintf("VIRTUAL_ENV=%s", venvPath))
+
+			// Prepend virtual environment Scripts to PATH (critical for package resolution)
+			currentPath := os.Getenv("PATH")
+			env = append(env, fmt.Sprintf("PATH=%s;%s", venvScriptsPath, currentPath))
+
+			// Unset PYTHONHOME to avoid conflicts with virtual environment
+			env = append(env, "PYTHONHOME=")
+
+			// Set PYTHONPATH to ensure proper module resolution
+			env = append(env, fmt.Sprintf("PYTHONPATH=%s", filepath.Join(venvPath, "Lib", "site-packages")))
+
+			fmt.Printf("✅ Virtual environment fully activated with PATH=%s\n", venvScriptsPath)
+
+		} else {
+			// Try to find python3 or python
+			if pythonPath = as.findPythonExecutable(); pythonPath == "" {
+				pythonPath = "python" // Final fallback
+			}
+			fmt.Printf("⚠️  Virtual environment not found at %s, using system Python: %s\n", venvPath, pythonPath)
+		}
+
+		if command == "python" || command == "python3" {
+			command = pythonPath
+		}
 	}
 
 	return interfaces.ProcessConfig{
