@@ -87,17 +87,39 @@ func isVouchedRewriteEndpoint(baseURL string) bool {
 // rewritten to max_completion_tokens. OpenRouter requests are opted into
 // native usage accounting so responses carry usage.cost.
 func (c *Client) marshalRequest(req *Request) ([]byte, error) {
-	// OpenRouter only reports the native cost of a call when the request
-	// carries {"usage": {"include": true}}; opt in here so both the sync and
-	// streaming paths get provider cost accounting. Requests that already set
-	// Usage explicitly are left alone.
-	if req.Usage == nil && c.config.IsOpenRouter() {
+	// Gateways only report the native cost of a call when the request carries
+	// {"usage": {"include": true}}; opt in here so both the sync and streaming
+	// paths get provider cost accounting. Requests that already set Usage
+	// explicitly are left alone.
+	//
+	// Infron returns that cost at the top level of the body rather than nested
+	// under usage, which Response and StreamChunk normalize on parse (see
+	// normalizeNativeCost).
+	if req.Usage == nil && (c.config.IsOpenRouter() || c.config.IsInfron()) {
 		req.Usage = &RequestUsage{Include: true}
 	}
 
 	model := req.Model
 	if model == "" {
 		model = c.config.Model
+	}
+
+	// The "infron/" prefix is a routing marker for callers that select a
+	// gateway by model string; the gateway itself serves the bare
+	// `<provider>/<model>` id, so it must not reach the wire. Without this,
+	// "infron/moonshotai/kimi-k2.6" is rejected with "No available providers
+	// for model infron/moonshotai/kimi-k2.6".
+	//
+	// Only a non-empty req.Model is rewritten, and only on a copy: the caller's
+	// Request is left untouched, c.config.Model keeps what was configured, and
+	// IsInfron() still reports the truth.
+	if c.config.IsInfron() && req.Model != "" {
+		if stripped := stripInfronPrefix(req.Model); stripped != req.Model {
+			model = stripped
+			shadow := *req
+			shadow.Model = stripped
+			req = &shadow
+		}
 	}
 
 	// If the model needs max_completion_tokens and we have a max_tokens value,

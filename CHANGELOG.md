@@ -6,6 +6,285 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.10] - 2026-08-05
+
+
+### Fixed
+
+- Fix(security): bump fast-uri, postcss, and hono for Dependabot alerts (#883)
+
+Upgrade overrides/lockfiles to clear open npm advisories:
+- fast-uri 3.1.4 → 3.1.5 (GHSA-7p8r-x3mc-p8w7)
+- postcss 8.5.18 → 8.5.25 (GHSA-fxqj-rqcc-2cmp)
+- hono 4.12.32 → 4.12.34 (GHSA-8j4g-w8fx-2239)
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (cd644a8)
+
+## [0.1.124-rc.9] - 2026-08-05
+
+
+### Fixed
+
+- Fix(sdk/go/ai): two follow-ups to the Infron gateway integration (#874) (#884)
+
+* fix(sdk/go/ai): never fabricate zero-token usage from a top-level cost
+
+normalizeNativeCost synthesized an empty Usage{} when a body carried a
+top-level cost without a usage block. On the streaming path every consumer
+accumulates usage last-non-nil-wins, so a cost-only chunk arriving after
+the real usage chunk replaced genuine token counts with zeros — recorded
+downstream as input=0/output=0 with cost_source "provider", an
+authoritative-looking row that has lost its tokens. Fold the cost only
+into a usage block the provider actually sent.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go/ai): don't inherit attribution values past their opt-out
+
+Infron attribution fell back to the OpenRouter-scoped site URL and app
+name but never consulted AGENTFIELD_OPENROUTER_ATTRIBUTION, so values a
+deployment had explicitly suppressed — often internal hostnames or
+product names — were sent to a different vendor on the first Infron
+call. Inherit the values only while OpenRouter attribution is enabled;
+the Infron defaults apply otherwise.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a2dee0b)
+
+## [0.1.124-rc.8] - 2026-08-05
+
+
+### Added
+
+- Feat(sdk/go/ai): support the Infron gateway (#874)
+
+* feat(sdk/go/ai): support the Infron gateway
+
+Infron is an OpenAI-compatible inference gateway that serves the standard
+<provider>/<model> ids, so a model moves across by prefix alone:
+infron/moonshotai/kimi-k2.6 routes the same model the bare id names.
+
+Follows the provider shape already in this package rather than inventing
+a new one:
+
+- infron_attribution.go mirrors the existing attribution helper. Infron
+  accepts the same HTTP-Referer / X-Title pair, and the attribution env
+  vars already configured for the existing gateway are honored as
+  fallbacks, so a deployment that already declares itself as
+  'AgentField AI' keeps that identity after switching gateways.
+- Config gains IsInfron(); DefaultConfig() reads INFRON_API_KEY and
+  points at https://llm.onerouter.pro/v1.
+- client.go attaches attribution on both the sync and streaming paths.
+- marshalRequest opts Infron into native usage accounting and strips the
+  routing-only 'infron/' model prefix before the request goes out
+  (stripInfronPrefix, mirroring the prefix handling on the media path).
+  The gateway serves the bare id, so leaving the prefix on returns 'No
+  available providers for model infron/...'. Only a copy of the Request
+  is rewritten; the caller's Request is untouched.
+
+One real difference is handled rather than papered over: Infron returns
+the native cost at the top level of the body and of the final stream
+chunk, rather than nested under usage. Parsed naively that leaves
+Usage.Cost nil, which the cost tracker reads as 'price unknown' -- usage
+still recorded, but with no cost and an empty cost_source instead of
+'provider'. Response/StreamChunk now carry the top-level field and
+normalizeNativeCost folds it into Usage.Cost, so every existing consumer
+keeps reading one place. An explicit usage.cost always wins.
+
+A gateway key that was already honored before Infron existed keeps
+precedence, so adding an Infron key never reroutes an existing
+deployment.
+
+llm.onerouter.pro is deliberately NOT added to vouchedRewriteDomains:
+max_tokens and max_completion_tokens behaved identically in probing and
+neither could be shown to be enforced, so the conservative legacy
+max_tokens path stays, per the reasoning already in that comment.
+
+* fix(sdk/go/ai): keep OPENAI_API_KEY precedence over INFRON_API_KEY
+
+DefaultConfig applied the Infron block unconditionally, so an environment
+with OPENAI_API_KEY set and INFRON_API_KEY added resolved to the Infron key
+and base URL. That contradicts the guarantee stated in DefaultConfig's own
+doc comment and in ENVIRONMENT_VARIABLES.md, and it matters because spawned
+agent processes inherit the parent environment -- one exported INFRON_API_KEY
+would move every Go agent's traffic and credential to a different gateway.
+
+The existing precedence test cleared OPENAI_API_KEY on its first line, so it
+only exercised the OpenRouter branch and the gap passed CI green. Adds the
+regression test for the OpenAI case plus one pinning that Infron still applies
+when it is the only gateway key set, and names the OpenRouter attribution
+fallback vars in the docs so operators can audit what feeds the gateway.
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (64d27aa)
+
+- Feat: add a Parallel search option to the deep research example (#863)
+
+Signed-off-by: georgeatparallel <george@parallel.ai>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (f721fca)
+
+## [0.1.124-rc.7] - 2026-08-05
+
+
+### Chores
+
+- Chore(deps-dev): bump electron (#882)
+
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [electron](https://github.com/electron/electron).
+
+
+Updates `electron` from 39.8.5 to 39.8.10
+- [Release notes](https://github.com/electron/electron/releases)
+- [Commits](https://github.com/electron/electron/compare/v39.8.5...v39.8.10)
+
+---
+updated-dependencies:
+- dependency-name: electron
+  dependency-version: 39.8.10
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (ed127c1)
+
+- Chore(readme): sync utm-links.csv and guard it in CI (#878)
+
+The CSV is the manifest of every UTM-tagged link in the README, but nothing
+enforced that it stayed in sync, so it drifted across successive README
+rewrites: 8 tracked links had no row, and one row pointed at a link deleted
+in 859174f4.
+
+Sync:
+- add the 8 missing rows (harness-banner, prompt-to-production, full-features,
+  explore-features, see-all-examples, architecture, community-docs,
+  community-examples)
+- drop the stale blog-iam row
+- normalize the one www.agentfield.ai link to the apex domain, so analytics
+  don't fragment by host
+- fix the missing space in the cloudsecurity row name
+
+Guard:
+- scripts/check-utm-links.py fails on a README link with no row, a stale row,
+  a target that disagrees with the README, an untagged agentfield.ai link, or
+  a www. host. Reports the exact row to paste. Stdlib only.
+- .github/workflows/readme-links.yml runs it on PRs touching README.md,
+  the manifest, or the checker.
+
+Co-authored-by: OG <oktaygoktas@users.noreply.github.com>
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (b97e7d2)
+
+
+
+### Fixed
+
+- Fix(security): bump brace-expansion for CVE-2026-14257 (#855)
+
+Override brace-expansion@1 to 1.1.18 and brace-expansion@2 to 2.1.4
+in the web client to close Dependabot alerts for the unbounded
+expansion length DoS (OOM crash) in both package-lock.json and
+pnpm-lock.yaml.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (fa3d376)
+
+## [0.1.124-rc.6] - 2026-08-05
+
+
+### Other
+
+- Add MiniMax image generation support (#853)
+
+* feat: add MiniMax image generation
+
+* fix(sdk/python): parse MiniMax base64 image responses from image_base64
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (b7613b5)
+
+## [0.1.124-rc.5] - 2026-08-05
+
+
+### Other
+
+- Add MiniMax text-to-speech support (#852)
+
+* feat: add MiniMax text-to-speech support
+
+* docs(sdk/python): document MiniMax audio models and cover validation branches
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (63f573b)
+
+## [0.1.124-rc.4] - 2026-08-05
+
+
+### Other
+
+- Add MiniMax H3 video v2 support (#854)
+
+* feat: add MiniMax H3 video v2 support
+
+* fix(sdk/python): correct MiniMax H3 resolutions, pricing, and task enums
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (fd15a67)
+
+## [0.1.124-rc.3] - 2026-08-05
+
+
+### Testing
+
+- Test(typescript): expand multimodal coverage (#846)
+
+* test(typescript): expand multimodal coverage
+
+* test(typescript): cover Audio.fromUrl default format
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (2175312)
+
+## [0.1.124-rc.2] - 2026-08-05
+
+
+### Added
+
+- Feat(typescript): add server-side memory event filters (#838)
+
+Co-authored-by: Jonesxq <239089032+Jonesxq@users.noreply.github.com> (d77f1c2)
+
+
+
+### Fixed
+
+- Fix(desktop): portal overflow menus so panel clipping can't cut them off (#881)
+
+The agents table's "..." dropdown was absolutely positioned inside
+.panel, whose overflow: hidden (rounded-corner clipping) cut the menu
+off at the card's bottom edge — on a short list the last items
+(e.g. Uninstall) were unreachable.
+
+Extract the trigger + popover into a shared MenuPopover component that
+portals the menu to <body> with fixed coordinates from the trigger's
+rect, following the .af-tooltip escape-hatch pattern. Repositions on
+scroll/resize while open. Also migrates InstallPanel's copy of the same
+markup, whose .market-card hover transform would otherwise re-anchor a
+fixed-position descendant.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (3592a7e)
+
 ## [0.1.124-rc.1] - 2026-08-05
 
 
