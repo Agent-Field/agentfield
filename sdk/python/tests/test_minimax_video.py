@@ -120,6 +120,54 @@ async def test_minimax_video_lifecycle_uses_cn_endpoint_and_request_shape(monkey
 
 
 @pytest.mark.asyncio
+async def test_minimax_music_legacy_request_shape(monkeypatch):
+    session = CaptureSession(
+        FakeResponse(
+            {
+                "data": {"audio": "https://cdn.example.com/music.mp3"},
+                "base_resp": {"status_code": 0},
+            }
+        ),
+        [],
+    )
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
+
+    provider = MiniMaxProvider(api_key="unit-value", base_url=MINIMAX_CN_BASE_URL)
+    result = await provider.generate_music(
+        "music prompt",
+        model="music-custom",
+        duration=30,
+        output_format="url",
+        stream=False,
+        sample_rate=48000,
+        bitrate=320000,
+        format="mp3",
+        lyrics="la",
+        aigc_watermark=True,
+    )
+
+    assert session.calls[0][0:2] == (
+        "post",
+        f"{MINIMAX_CN_BASE_URL}/music_generation",
+    )
+    assert session.calls[0][2]["json"] == {
+        "model": "music-custom",
+        "prompt": "music prompt",
+        "output_format": "url",
+        "stream": False,
+        "audio_setting": {
+            "sample_rate": 48000,
+            "bitrate": 320000,
+            "format": "mp3",
+            "duration": 30,
+        },
+        "lyrics": "la",
+        "aigc_watermark": True,
+    }
+    assert result.audio.url == "https://cdn.example.com/music.mp3"
+
+
+@pytest.mark.asyncio
 async def test_minimax_video_checks_api_errors_and_failed_tasks(monkeypatch):
     monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
     error_session = CaptureSession(
@@ -190,7 +238,13 @@ async def test_minimax_video_validates_credentials_and_duration(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_minimax_h3_video_lifecycle_uses_v2_endpoint_and_pricing(monkeypatch):
+@pytest.mark.parametrize(
+    ("resolution", "normalized_resolution", "expected_cost"),
+    [("2k", "2K", 0.95), ("768p", "768P", 0.6)],
+)
+async def test_minimax_h3_video_lifecycle_uses_v2_endpoint_and_pricing(
+    monkeypatch, resolution, normalized_resolution, expected_cost
+):
     session = CaptureSession(
         FakeResponse({"task_id": "task-h3"}),
         [
@@ -201,7 +255,7 @@ async def test_minimax_h3_video_lifecycle_uses_v2_endpoint_and_pricing(monkeypat
                         "model": "MiniMax-H3",
                         "status": "succeeded",
                         "content": {"url": "https://cdn.example.com/h3.mp4"},
-                        "resolution": "2K",
+                        "resolution": normalized_resolution,
                         "duration": 5,
                         "ratio": "16:9",
                         "usage": {
@@ -221,7 +275,7 @@ async def test_minimax_h3_video_lifecycle_uses_v2_endpoint_and_pricing(monkeypat
     result = await provider.generate_video(
         prompt="A city wakes at dawn",
         duration=5,
-        resolution="2k",
+        resolution=resolution,
         ratio="16:9",
         poll_interval=0,
     )
@@ -233,7 +287,7 @@ async def test_minimax_h3_video_lifecycle_uses_v2_endpoint_and_pricing(monkeypat
     assert session.calls[0][2]["json"] == {
         "model": "MiniMax-H3",
         "content": [{"type": "text", "text": "A city wakes at dawn"}],
-        "resolution": "2K",
+        "resolution": normalized_resolution,
         "duration": 5,
         "ratio": "16:9",
     }
@@ -243,8 +297,8 @@ async def test_minimax_h3_video_lifecycle_uses_v2_endpoint_and_pricing(monkeypat
     )
     assert result.files[0].url == "https://cdn.example.com/h3.mp4"
     assert result.videos[0].has_audio is True
-    assert result.videos[0].cost_usd == pytest.approx(0.72)
-    assert result.cost_usd == pytest.approx(0.72)
+    assert result.videos[0].cost_usd == pytest.approx(expected_cost)
+    assert result.cost_usd == pytest.approx(expected_cost)
 
 
 @pytest.mark.asyncio
@@ -336,7 +390,44 @@ def test_minimax_h3_validates_content_duration_resolution_and_ratio(monkeypatch)
         provider._build_h3_request(content=text_content, duration=3, ratio="16:9")
     with pytest.raises(ValueError, match="whole number"):
         provider._build_h3_request(content=text_content, duration=4.5, ratio="16:9")
-    with pytest.raises(ValueError, match="resolution must be 2K"):
+    for resolution in ("768p", "2k"):
+        body = provider._build_h3_request(
+            content=text_content,
+            duration=5,
+            resolution=resolution,
+            ratio="16:9",
+        )
+        assert body["resolution"] == resolution.upper()
+    for resolution in ("720p", "4k"):
+        with pytest.raises(ValueError, match="resolution must be 768P or 2K"):
+            provider._build_h3_request(
+                content=text_content,
+                duration=5,
+                resolution=resolution,
+                ratio="16:9",
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"status": "expired"}, "task status"),
+        ({"task_type": "bogus"}, "task type"),
+    ],
+)
+async def test_minimax_h3_rejects_unsupported_list_filters(kwargs, message):
+    provider = MiniMaxProvider(api_key="unit-value")
+
+    with pytest.raises(ValueError, match=message):
+        await provider.list_video_tasks(**kwargs)
+
+
+def test_minimax_h3_rejects_unsupported_content(monkeypatch):
+    provider = MiniMaxProvider(api_key="unit-value")
+    text_content = [{"type": "text", "text": "A landscape"}]
+
+    with pytest.raises(ValueError, match="resolution must be 768P or 2K"):
         provider._build_h3_request(
             content=text_content,
             duration=5,
@@ -409,19 +500,46 @@ def test_minimax_h3_validates_content_duration_resolution_and_ratio(monkeypatch)
 def test_minimax_h3_exposes_current_model_and_pricing_metadata():
     provider = MiniMaxProvider(api_key="unit-value")
     assert provider.DEFAULT_VIDEO_MODEL == "MiniMax-H3"
+    assert provider.H3_TASK_STATUSES == {
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+    }
+    assert provider.H3_TASK_TYPES == {
+        "generation",
+        "h3_context_ir",
+        "regeneration",
+    }
     metadata = provider.video_model_metadata["MiniMax-H3"]
 
     assert metadata["release_date"] == "2026-07-31"
     assert metadata["api_version"] == "v2"
     assert metadata["input_modalities"] == ["text", "image", "video", "audio"]
     assert metadata["output_modalities"] == ["video", "audio"]
-    assert metadata["resolutions"] == ["2K"]
+    assert metadata["resolutions"] == ["768P", "2K"]
     assert metadata["duration_seconds"] == {"min": 4, "max": 15, "integer": True}
-    assert metadata["pricing"]["global_en"]["output_video"]["rates"]["2K"] == 0.13
+    assert metadata["pricing"]["global_en"]["output_video"]["rates"] == {
+        "768P": 0.08,
+        "2K": 0.13,
+    }
+    assert metadata["pricing"]["global_en"]["input_reference_video"]["rates"] == {
+        "768P": 0.08,
+        "2K": 0.13,
+    }
     assert (
-        metadata["pricing"]["global_en"]["input_reference_video"]["rates"]["2K"] == 0.02
+        metadata["pricing"]["global_en"]["input_reference_images"]["additional_image"]
+        == 0.04
     )
-    assert metadata["pricing"]["cn_zh"]["output_video"]["rates"]["2K"] == 0.8
+    assert metadata["pricing"]["cn_zh"]["output_video"]["rates"] == {
+        "768P": 0.5,
+        "2K": 0.8,
+    }
+    assert metadata["pricing"]["cn_zh"]["input_reference_video"]["rates"] == {
+        "768P": 0.5,
+        "2K": 0.8,
+    }
     assert (
         metadata["pricing"]["cn_zh"]["input_reference_images"]["additional_image"]
         == 0.2

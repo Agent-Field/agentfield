@@ -44,29 +44,35 @@ MINIMAX_H3_VIDEO_METADATA: Dict[str, Any] = {
     ],
     "input_modalities": ["text", "image", "video", "audio"],
     "output_modalities": ["video", "audio"],
-    "resolutions": ["2K"],
+    "resolutions": ["768P", "2K"],
     "duration_seconds": {"min": 4, "max": 15, "integer": True},
     "pricing": {
         "global_en": {
             "currency": "USD",
-            "output_video": {"unit": "second", "rates": {"2K": 0.13}},
+            "output_video": {
+                "unit": "second",
+                "rates": {"768P": 0.08, "2K": 0.13},
+            },
             "input_reference_video": {
                 "unit": "second",
-                "rates": {"2K": 0.02},
+                "rates": {"768P": 0.08, "2K": 0.13},
             },
             "input_reference_audio": {"free": True},
             "input_reference_images": {
                 "unit": "image",
                 "free_count": 5,
-                "additional_image": 0.03,
+                "additional_image": 0.04,
             },
         },
         "cn_zh": {
             "currency": "CNY",
-            "output_video": {"unit": "second", "rates": {"2K": 0.8}},
+            "output_video": {
+                "unit": "second",
+                "rates": {"768P": 0.5, "2K": 0.8},
+            },
             "input_reference_video": {
                 "unit": "second",
-                "rates": {"2K": 0.8},
+                "rates": {"768P": 0.5, "2K": 0.8},
             },
             "input_reference_audio": {"free": True},
             "input_reference_images": {
@@ -716,8 +722,8 @@ class MiniMaxProvider(MediaProvider):
         "succeeded",
         "failed",
         "cancelled",
-        "expired",
     }
+    H3_TASK_TYPES = {"generation", "h3_context_ir", "regeneration"}
     H3_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
 
     def __init__(
@@ -1019,6 +1025,7 @@ class MiniMaxProvider(MediaProvider):
             if file_id:
                 return file_id
         return str(payload.get("file_id") or "")
+
     def _require_api_key(self) -> str:
         import os
 
@@ -1178,8 +1185,8 @@ class MiniMaxProvider(MediaProvider):
                 "MiniMax-H3 video duration must be between 4 and 15 seconds"
             )
         normalized_resolution = str(resolution).upper()
-        if normalized_resolution != "2K":
-            raise ValueError("MiniMax-H3 video resolution must be 2K")
+        if normalized_resolution not in {"768P", "2K"}:
+            raise ValueError("MiniMax-H3 video resolution must be 768P or 2K")
 
         content_info = self._validate_h3_content(content)
         if ratio is not None and ratio not in self.H3_RATIOS:
@@ -1326,6 +1333,8 @@ class MiniMaxProvider(MediaProvider):
         if model is not None:
             params["filter.model"] = self._strip_prefix(model)
         if task_type is not None:
+            if task_type not in self.H3_TASK_TYPES:
+                raise ValueError(f"Unsupported MiniMax-H3 task type: {task_type}")
             params["filter.task_type"] = task_type
 
         async with aiohttp.ClientSession(
@@ -1354,7 +1363,9 @@ class MiniMaxProvider(MediaProvider):
                 "delete",
             )
 
-    def _estimate_h3_cost_usd(self, usage: Dict[str, Any]) -> Optional[float]:
+    def _estimate_h3_cost_usd(
+        self, usage: Dict[str, Any], resolution: str
+    ) -> Optional[float]:
         if urlparse(self._base_url).hostname != "api.minimax.io":
             return None
         pricing = MINIMAX_H3_VIDEO_METADATA["pricing"]["global_en"]
@@ -1363,9 +1374,13 @@ class MiniMaxProvider(MediaProvider):
         image_count = int(
             usage.get("input_image_count") or usage.get("image_count") or 0
         )
-        output_cost = output_seconds * pricing["output_video"]["rates"]["2K"]
+        normalized_resolution = str(resolution).upper()
+        output_cost = (
+            output_seconds * pricing["output_video"]["rates"][normalized_resolution]
+        )
         input_video_cost = (
-            input_seconds * pricing["input_reference_video"]["rates"]["2K"]
+            input_seconds
+            * pricing["input_reference_video"]["rates"][normalized_resolution]
         )
         image_cost = (
             max(image_count - pricing["input_reference_images"]["free_count"], 0)
@@ -1471,7 +1486,7 @@ class MiniMaxProvider(MediaProvider):
         task_resolution = task.get("resolution") or body["resolution"]
         task_ratio = task.get("ratio") or body["ratio"]
         usage = task.get("usage") or {}
-        cost_usd = self._estimate_h3_cost_usd(usage)
+        cost_usd = self._estimate_h3_cost_usd(usage, task_resolution)
         filename = "generated_video.mp4"
         file_output = FileOutput(
             url=video_url,
