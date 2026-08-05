@@ -42,6 +42,12 @@ variable "api_key" {
   type      = string
   sensitive = true
 }
+variable "image" {
+  type = string
+  # Floating fallback for when the release lookup fails; a fresh deploy still
+  # lands on the newest production release at create time.
+  default = "agentfield/control-plane-cloud:latest"
+}
 resource "railway_project" "cp" {
   name         = var.project_name
   workspace_id = var.workspace_id
@@ -49,10 +55,24 @@ resource "railway_project" "cp" {
 resource "railway_service" "cp" {
   name         = "control-plane"
   project_id   = railway_project.cp.id
-  # Tracks the newest production release at deploy time. Railway resolves the
-  # tag once per deploy and never auto-repulls, so existing deployments stay
-  # on whatever "latest" meant when they were created.
-  source_image = "agentfield/control-plane-cloud:latest"
+  # Pinned to the concrete release tag resolved at deploy time. Railway
+  # resolves a floating tag once per deploy and never auto-repulls, and an
+  # unchanged image string is a no-op apply — a ":latest" pin here froze
+  # existing deployments on whatever "latest" meant the day they were
+  # created. With a concrete tag, each new release changes the string, the
+  # change is a diff, and the diff is what redeploys the service: re-running
+  # deploy IS the upgrade path.
+  source_image = var.image
+  # The /data volume is created out-of-band (Railway GraphQL, ensureVolume) so
+  # this module never declares one — but the provider refreshes it into state,
+  # plans the undeclared attribute back to null, and its Update handler treats
+  # that as "delete the volume" (volumeDelete — the data, not a detach). Every
+  # re-apply would silently wipe the control plane's SQLite/BoltDB, secrets,
+  # and installed agents. Ignoring the attribute keeps the refreshed value in
+  # the plan so the delete branch can never fire.
+  lifecycle {
+    ignore_changes = [volume]
+  }
 }
 resource "railway_variable" "api_key" {
   name           = "AGENTFIELD_API_KEY"
@@ -82,6 +102,32 @@ output "api_key" {
 `
 
 const NO_ENGINE = 'Deploy engine not bundled. Install OpenTofu or rebuild AgentField Desktop with the deploy engine.'
+
+const CLOUD_IMAGE_REPO = 'agentfield/control-plane-cloud'
+const CLOUD_IMAGE_LATEST = `${CLOUD_IMAGE_REPO}:latest`
+const DOCKER_HUB_TAGS = `https://hub.docker.com/v2/repositories/${CLOUD_IMAGE_REPO}/tags?page_size=100`
+
+/**
+ * Resolve the concrete release tag "latest" currently points at (release.yml
+ * pushes both on every production release, so they share a digest). Returns
+ * null when Docker Hub is unreachable or the digests don't line up — the
+ * caller falls back to the pin already recorded in state (so a lookup outage
+ * never rewrites a working deployment's image) or, for a fresh deployment,
+ * to the floating tag.
+ */
+export async function resolveCloudImage(fetchImpl: typeof fetch = fetch): Promise<string | null> {
+  try {
+    const response = await fetchImpl(DOCKER_HUB_TAGS, { signal: AbortSignal.timeout(5000) })
+    if (!response.ok) return null
+    const payload = (await response.json()) as { results?: Array<{ name?: string; digest?: string }> }
+    const tags = payload.results ?? []
+    const digest = tags.find((tag) => tag.name === 'latest')?.digest
+    const release = digest ? tags.find((tag) => tag.digest === digest && /^v\d+\.\d+\.\d+$/.test(tag.name ?? '')) : undefined
+    return release?.name ? `${CLOUD_IMAGE_REPO}:${release.name}` : null
+  } catch {
+    return null
+  }
+}
 
 function executableName(): string {
   return process.platform === 'win32' ? 'tofu.exe' : 'tofu'
@@ -157,6 +203,12 @@ function stateWorkspaceId(state: TfState | null): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+function stateSourceImage(state: TfState | null): string | null {
+  const resource = state?.resources?.find((item) => item.type === 'railway_service' && item.name === 'cp')
+  const value = resource?.instances?.[0]?.attributes?.source_image
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
 function writeConfig(workspaceDir: string, binaryDir?: string | null): string | null {
   if (!binaryDir) return null
   const mirror = join(binaryDir, 'providers')
@@ -226,7 +278,7 @@ function runCommand(
   })
 }
 
-function deployEnv(opts: DeployEngineOptions, apiKey: string, subdomain: string, cliConfig: string | null, deps: DeploySpawnDeps): NodeJS.ProcessEnv {
+function deployEnv(opts: DeployEngineOptions, apiKey: string, subdomain: string, cliConfig: string | null, deps: DeploySpawnDeps, image?: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     ...deps.env,
@@ -236,6 +288,7 @@ function deployEnv(opts: DeployEngineOptions, apiKey: string, subdomain: string,
     TF_VAR_subdomain: subdomain,
     TF_VAR_api_key: apiKey,
     TF_IN_AUTOMATION: '1',
+    ...(image ? { TF_VAR_image: image } : {}),
     ...(cliConfig ? { TF_CLI_CONFIG_FILE: cliConfig } : {})
   }
 }
@@ -303,7 +356,12 @@ export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps
   const subdomain = existing ? stateSubdomain(state) : `${projectName}-${randomBytes(2).toString('hex')}`
   if (!subdomain) return { ok: false, message: 'Existing deployment is missing its Railway subdomain.' }
   const cliConfig = writeConfig(opts.workspaceDir, opts.binaryDir)
-  const env = deployEnv(opts, apiKey, subdomain, cliConfig, deps)
+  // Newest release when the lookup succeeds; the deployment's recorded pin
+  // when it doesn't (so an outage never rewrites a working image and forces
+  // a pointless redeploy); the floating tag only for a brand-new deployment.
+  const image = (await resolveCloudImage(deps.fetchImpl ?? fetch)) ?? stateSourceImage(state) ?? CLOUD_IMAGE_LATEST
+  opts.onLine?.(`Deploying ${image}`)
+  const env = deployEnv(opts, apiKey, subdomain, cliConfig, deps, image)
 
   if (!providerReady(opts.workspaceDir)) {
     const init = await runCommand(binary, ['init', '-input=false'], opts.workspaceDir, env, deps, false)
