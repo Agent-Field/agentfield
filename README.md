@@ -484,15 +484,15 @@ Full walkthrough — authoring, installing, and configuring nodes: [Installing a
       <a href="https://agentfield.ai/github/cloudsecurity/?utm_source=github-readme&utm_campaign=github-readme&utm_content=cloudsec&utm_id=github-readme-cloudsec-repo">View project →</a>
     </td>
     <td align="center" width="50%">
-      <a href="https://agentfield.ai/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">
-        <img src="assets/examples/agentic-pr-reviewer.png" alt="Agentic PR Reviewer" />
+      <a href="https://agentfield.ai/github/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">
+        <img src="assets/examples/agentic-pr-reviewer-hero.png" alt="Agentic PR Reviewer — #1 open-source on Code-Review-Bench" />
       </a>
       <br/>
       <b>Agentic PR Reviewer</b>
       <br/>
-      <sub>Builds a custom review strategy for every PR - spawns parallel reviewer agents with runtime-crafted prompts, adversarially challenges its own findings, and posts evidence-grounded inline comments.</sub>
+      <sub>#1 open-source reviewer on Code-Review-Bench - 0.706 golden recall across 42 tools compared, at ~10x lower cost per review. Builds a custom review strategy for every PR, then adversarially challenges its own findings.</sub>
       <br/><br/>
-      <a href="https://agentfield.ai/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">View project →</a>
+      <a href="https://agentfield.ai/github/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">View project →</a>
     </td>
   </tr>
 </table>
