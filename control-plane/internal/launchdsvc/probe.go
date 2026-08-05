@@ -83,19 +83,35 @@ type activeRun struct {
 // fresh reports whether this run has done something inside the window, and is
 // therefore work an install must not interrupt.
 //
-// A missing or unparseable latest_activity counts as FRESH on purpose: the
-// probe exists to protect running work, so an ambiguous timestamp must never be
-// the thing that licenses a restart.
+// The rule when evidence is missing runs toward STALE: this fleet has a
+// history of runs wedged in "running" while doing nothing, and a run that
+// cannot demonstrate liveness must not pin upgrades forever — that is the
+// exact bug the staleness split exists to fix. A run with no usable
+// latest_activity gets one fallback, its start time, so a demonstrably young
+// run (an older server that reports no activity stamps) is still protected;
+// with no usable evidence at all it is assumed stale.
 func (r activeRun) fresh(now time.Time, window time.Duration) bool {
-	stamp := strings.TrimSpace(r.LatestActivity)
+	if t, ok := parseStamp(r.LatestActivity); ok {
+		return now.Sub(t) <= window
+	}
+	if t, ok := parseStamp(r.StartedAt); ok {
+		return now.Sub(t) <= window
+	}
+	return false
+}
+
+// parseStamp parses an RFC3339 timestamp, reporting ok=false for the missing
+// and malformed shapes fresh() must fall back on.
+func parseStamp(stamp string) (time.Time, bool) {
+	stamp = strings.TrimSpace(stamp)
 	if stamp == "" {
-		return true
+		return time.Time{}, false
 	}
 	t, err := time.Parse(time.RFC3339, stamp)
 	if err != nil {
-		return true
+		return time.Time{}, false
 	}
-	return now.Sub(t) <= window
+	return t, true
 }
 
 // ActiveExecutions reports how many runs are genuinely in flight (fresh), how
@@ -144,9 +160,11 @@ func splitActiveRuns(parsed activeExecutionsResponse, now time.Time, window time
 		stale++
 	}
 	// An older server may report a count without the run detail needed to age
-	// it. Trust the count and treat it as fresh rather than restarting blind.
+	// it. Unconfirmable liveness counts as stale (the owner's rule): a count
+	// with no evidence behind it must not pin upgrades, and the stale figure
+	// keeps it visible in the install message and `af service status`.
 	if len(parsed.Runs) == 0 && parsed.Count > 0 {
-		return parsed.Count, 0, true
+		return 0, parsed.Count, true
 	}
 	return fresh, stale, true
 }

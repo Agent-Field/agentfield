@@ -262,26 +262,43 @@ func TestActiveExecutionsStaleness(t *testing.T) {
 			wantFresh: 1, wantStale: 2,
 		},
 		{
-			// Fail-safe: an unreadable timestamp must never license a restart.
-			name:      "missing latest_activity counts as busy",
-			body:      payload(`{"run_id":"x","root_status":"running"}`),
-			wantFresh: 1, wantStale: 0,
+			// Unconfirmable liveness is stale (the owner's rule): the fixture's
+			// started_at is hours old, so with no activity stamp the run cannot
+			// demonstrate it is alive and must not pin an upgrade.
+			name:      "missing latest_activity with an old start is stale",
+			body:      payload(`{"run_id":"x","root_status":"running","started_at":"2026-08-05T02:29:00Z"}`),
+			wantFresh: 0, wantStale: 1,
 		},
 		{
-			name:      "empty latest_activity counts as busy",
+			name:      "empty latest_activity with an old start is stale",
 			body:      payload(run("x", `""`)),
-			wantFresh: 1, wantStale: 0,
+			wantFresh: 0, wantStale: 1,
 		},
 		{
-			name:      "malformed latest_activity counts as busy",
+			name:      "malformed latest_activity with an old start is stale",
 			body:      payload(run("x", `"not-a-timestamp"`)),
+			wantFresh: 0, wantStale: 1,
+		},
+		{
+			// The one fallback before assuming stale: a demonstrably young run
+			// (older server reporting no activity stamps) is still protected.
+			name: "missing latest_activity with a young start is fresh",
+			body: payload(fmt.Sprintf(
+				`{"run_id":"x","root_status":"running","started_at":%s}`,
+				quoted(now.Add(-2*time.Minute)))),
 			wantFresh: 1, wantStale: 0,
 		},
 		{
-			// An older server may report a count with no run detail to age.
-			name:      "count without runs is trusted as fresh",
+			name:      "no usable timestamps at all is stale",
+			body:      payload(`{"run_id":"x","root_status":"running","started_at":"garbage"}`),
+			wantFresh: 0, wantStale: 1,
+		},
+		{
+			// An older server may report a count with no run detail to age it.
+			// No evidence of liveness → stale, kept visible via the stale count.
+			name:      "count without runs is unconfirmable, so stale",
 			body:      `{"count":2,"runs":[]}`,
-			wantFresh: 2, wantStale: 0,
+			wantFresh: 0, wantStale: 2,
 		},
 		{
 			name:      "idle server",
