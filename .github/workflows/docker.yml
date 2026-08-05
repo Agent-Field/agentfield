@@ -85,4 +85,8 @@ jobs:
             echo "Required checks failed"
             exit 1
           fi
+          if [ "${{ needs.control-plane-cloud-image.result }}" != "success" ]; then
+            echo "Required checks failed"
+            exit 1
+          fi
           echo "All required checks passed successfully"
