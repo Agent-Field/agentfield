@@ -79,12 +79,12 @@ resource "railway_tcp_proxy" "furrow" {
 }
 resource "railway_variable" "furrow_public_addr" {
   name           = "FURROW_PUBLIC_ADDR"
-  value          = "\${railway_tcp_proxy.furrow.domain}:\${railway_tcp_proxy.furrow.proxy_port}"
+  value          = "\${trimsuffix(railway_tcp_proxy.furrow.domain, ".")}:\${railway_tcp_proxy.furrow.proxy_port}"
   environment_id = railway_project.cp.default_environment.id
   service_id     = railway_service.cp.id
 }
 output "url"     { value = "https://\${railway_service_domain.cp.domain}" }
-output "furrow_domain" { value = railway_tcp_proxy.furrow.domain }
+output "furrow_domain" { value = trimsuffix(railway_tcp_proxy.furrow.domain, ".") }
 output "furrow_port"   { value = railway_tcp_proxy.furrow.proxy_port }
 output "project_id"     { value = railway_project.cp.id }
 output "environment_id" { value = railway_project.cp.default_environment.id }

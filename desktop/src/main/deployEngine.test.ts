@@ -78,6 +78,28 @@ describe('deployment module and execution', () => {
     expect((result as { furrowAddress?: string }).furrowAddress).toBeUndefined()
   })
 
+  // The Railway provider hands back the proxy domain as an absolute FQDN on
+  // create ("altaria.proxy.rlwy.net.") but without the trailing dot on refresh.
+  // Interpolating it raw made the very next deploy rewrite FURROW_PUBLIC_ADDR,
+  // and a changed service variable restarts the control plane — so a re-deploy
+  // that should have been a no-op bounced the server. Normalising both places
+  // the domain is read keeps the published address identical across applies.
+  it('normalises the proxy domain so redeploys do not rewrite the address', async () => {
+    const plain = workspace()
+    const fake = harness([
+      {},
+      { stdout: '{"type":"apply_complete","@message":"Apply complete"}\n' },
+      { stdout: outputs({}) }
+    ])
+    await runDeploy(plain.opts, fake.deps)
+    const module = readFileSync(join(plain.opts.workspaceDir, 'main.tf'), 'utf8')
+    for (const line of module.split('\n')) {
+      if (!line.includes('railway_tcp_proxy.furrow.domain')) continue
+      expect(line).toContain('trimsuffix(railway_tcp_proxy.furrow.domain, ".")')
+    }
+    expect(module).toMatch(/railway_tcp_proxy\.furrow\.domain/)
+  })
+
   it('writes the module and a CLI mirror config only when a mirror exists', async () => {
     const withMirror = workspace(true)
     const fake = harness([
@@ -93,7 +115,7 @@ describe('deployment module and execution', () => {
     expect(module).toContain('source_image = "agentfield/control-plane-cloud:latest"')
     expect(module).not.toMatch(/\bvolume\s*=/)
     expect(module).toMatch(/resource "railway_tcp_proxy" "furrow" \{[\s\S]*?application_port = 8802[\s\S]*?environment_id\s*= railway_project\.cp\.default_environment\.id[\s\S]*?service_id\s*= railway_service\.cp\.id[\s\S]*?\}/)
-    expect(module).toMatch(/resource "railway_variable" "furrow_public_addr" \{[\s\S]*?name\s*= "FURROW_PUBLIC_ADDR"[\s\S]*?value\s*= "\$\{railway_tcp_proxy\.furrow\.domain\}:\$\{railway_tcp_proxy\.furrow\.proxy_port\}"[\s\S]*?\}/)
+    expect(module).toMatch(/resource "railway_variable" "furrow_public_addr" \{[\s\S]*?name\s*= "FURROW_PUBLIC_ADDR"[\s\S]*?value\s*= "\$\{trimsuffix\(railway_tcp_proxy\.furrow\.domain, "\."\)\}:\$\{railway_tcp_proxy\.furrow\.proxy_port\}"[\s\S]*?\}/)
     expect(module).toContain('output "project_id"')
     expect(module).toContain('output "environment_id"')
     expect(module).toContain('output "service_id"')
