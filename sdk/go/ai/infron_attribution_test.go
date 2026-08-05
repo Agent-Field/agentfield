@@ -98,6 +98,41 @@ func TestDefaultConfigExistingGatewayWinsOverInfron(t *testing.T) {
 	assert.True(t, cfg.IsOpenRouter())
 }
 
+// The guarantee in DefaultConfig's doc comment is that adding INFRON_API_KEY to
+// an already-configured environment never reroutes it. OPENAI_API_KEY is such
+// an environment, and it is the case the OpenRouter test above cannot cover
+// because it clears the key. Agent processes inherit the parent environment, so
+// a single exported INFRON_API_KEY reaching this branch would move every Go
+// agent's traffic — and its credential — to a different gateway.
+func TestDefaultConfigExistingOpenAIKeyWinsOverInfron(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "existing-openai-key")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("INFRON_API_KEY", "infron-key")
+	t.Setenv("AI_BASE_URL", "")
+	t.Setenv("AI_MODEL", "")
+
+	cfg := DefaultConfig()
+
+	assert.Equal(t, "existing-openai-key", cfg.APIKey)
+	assert.Equal(t, "https://api.openai.com/v1", cfg.BaseURL)
+	assert.False(t, cfg.IsInfron())
+}
+
+// Infron still applies when it is the only gateway key set.
+func TestDefaultConfigInfronAppliesWhenNoDirectKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("INFRON_API_KEY", "infron-key")
+	t.Setenv("AI_BASE_URL", "")
+	t.Setenv("AI_MODEL", "")
+
+	cfg := DefaultConfig()
+
+	assert.Equal(t, "infron-key", cfg.APIKey)
+	assert.Equal(t, defaultInfronBaseURL, cfg.BaseURL)
+	assert.True(t, cfg.IsInfron())
+}
+
 func TestDefaultConfigInfronAttributionEnvOverrides(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")

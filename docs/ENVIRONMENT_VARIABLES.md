@@ -167,7 +167,7 @@ Explicit SDK config or explicit request headers win over env defaults. `AGENTFIE
 
 ### Infron
 
-- `INFRON_API_KEY`: API key for the Infron gateway. When it is the only gateway key set, the Go SDK's `ai.DefaultConfig()` points at `https://llm.onerouter.pro/v1`. A gateway key already configured above keeps precedence, so adding this key never reroutes an existing deployment.
+- `INFRON_API_KEY`: API key for the Infron gateway. When it is the only gateway key set, the Go SDK's `ai.DefaultConfig()` points at `https://llm.onerouter.pro/v1` (`onerouter.pro` is the domain Infron serves its gateway from). `OPENAI_API_KEY` and `OPENROUTER_API_KEY` both keep precedence over it, so adding this key never reroutes an existing deployment.
 
 Infron is OpenAI-compatible and serves the standard `<provider>/<model>` ids, so a model moves across by prefix alone (`infron/moonshotai/kimi-k2.6`). The `infron/` prefix is a routing marker only and is stripped before the request is sent, since the gateway serves the bare id.
 
@@ -177,4 +177,4 @@ Attribution is sent as `HTTP-Referer` and `X-Title`:
 - `AGENTFIELD_INFRON_APP_NAME` (default: `AgentField AI`)
 - `AGENTFIELD_INFRON_ATTRIBUTION=false`: Disable Infron attribution headers.
 
-When the `AGENTFIELD_INFRON_*` vars are unset, the attribution values documented above are used as fallbacks, so a deployment that already declares its identity keeps it after switching gateways.
+When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution values are used as fallbacks, so a deployment that already declares its identity keeps it after switching gateways: `AGENTFIELD_OPENROUTER_SITE_URL`, `OR_SITE_URL`, `AGENTFIELD_OPENROUTER_APP_NAME`, `OR_APP_NAME`. If you do not want values configured for OpenRouter sent to Infron, set the `AGENTFIELD_INFRON_*` vars explicitly or disable attribution with `AGENTFIELD_INFRON_ATTRIBUTION=false`.

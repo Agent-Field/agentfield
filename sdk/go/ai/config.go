@@ -8,6 +8,8 @@ import (
 )
 
 // defaultInfronBaseURL is the Infron gateway's OpenAI-compatible endpoint.
+// onerouter.pro is the domain Infron serves its gateway from; the two names
+// refer to the same service, so grepping for either one should land here.
 const defaultInfronBaseURL = "https://llm.onerouter.pro/v1"
 
 // Config holds AI/LLM configuration for making API calls.
@@ -54,8 +56,11 @@ func DefaultConfig() *Config {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	baseURL := "https://api.openai.com/v1"
 
-	// Check for Infron configuration
-	if infronKey := os.Getenv("INFRON_API_KEY"); infronKey != "" {
+	// Check for Infron configuration. Only when no direct-provider key is
+	// already set: an existing OPENAI_API_KEY keeps precedence so that adding
+	// INFRON_API_KEY to a configured environment cannot silently move traffic
+	// (and the credential) to a different gateway.
+	if infronKey := os.Getenv("INFRON_API_KEY"); infronKey != "" && apiKey == "" {
 		apiKey = infronKey
 		baseURL = defaultInfronBaseURL
 	}
