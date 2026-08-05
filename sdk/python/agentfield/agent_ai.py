@@ -1443,16 +1443,21 @@ class AgentAI:
         """
         AI method optimized for audio output generation.
 
-        Automatically detects the model type and uses the appropriate LiteLLM function:
+        Automatically detects the model type and uses the appropriate provider:
+        - For MiniMax TTS models (minimax/speech-2.8-hd, etc.): Uses MiniMax T2A
         - For TTS models (tts-1, tts-1-hd, gpt-4o-mini-tts): Uses litellm.speech()
         - For audio-capable chat models (gpt-4o-audio-preview): Uses litellm.completion() with audio modalities
 
         Args:
             *args: Input arguments (text prompts, etc.)
-            voice: Voice to use for audio generation (alloy, echo, fable, onyx, nova, shimmer)
-            format: Audio format (wav, mp3, etc.)
+            voice: Voice identifier. OpenAI voices include alloy, echo, fable,
+                onyx, nova, and shimmer. MiniMax models require a MiniMax voice ID.
+            format: Audio format. MiniMax supports mp3, wav, flac, and pcm.
             model: Model to use (defaults to tts-1)
-            **kwargs: Additional parameters
+            **kwargs: Additional parameters. MiniMax supports output_format
+                ("hex" or "url"), language_boost, voice_setting,
+                pronunciation_dict, audio_setting, voice_modify, and
+                subtitle_enable. Streaming is not supported.
 
         Returns:
             MultimodalResponse with audio content
@@ -1460,6 +1465,13 @@ class AgentAI:
         Example:
             audio_result = await agent.ai_with_audio("Say hello warmly", voice="alloy")
             audio_result.audio.save("greeting.wav")
+
+            minimax_result = await agent.ai_with_audio(
+                "Say hello warmly",
+                model="minimax/speech-2.8-hd",
+                voice="English_Graceful_Lady",
+                format="mp3",
+            )
         """
         # Use TTS model as default (more reliable than gpt-4o-audio-preview)
         if model is None:
@@ -1932,14 +1944,22 @@ class AgentAI:
         Supported Providers:
         - LiteLLM: OpenAI TTS models like "tts-1", "tts-1-hd", "gpt-4o-mini-tts"
         - Fal.ai: TTS models like "fal-ai/kokoro/..." (custom deployments)
+        - MiniMax: TTS models prefixed with "minimax/", such as
+          "minimax/speech-2.8-hd"
 
         Args:
             text: Text to convert to speech
             model: TTS model to use (defaults to AIConfig.audio_model, typically "tts-1")
-            voice: Voice to use ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
-            format: Audio format ("wav", "mp3", "opus", "aac", "flac", "pcm")
+            voice: Voice identifier. OpenAI voices include "alloy", "echo",
+                "fable", "onyx", "nova", and "shimmer". MiniMax models
+                require a MiniMax voice ID instead of the default "alloy".
+            format: Audio format. MiniMax supports "mp3", "wav", "flac", and
+                "pcm".
             speed: Speech speed multiplier (0.25 to 4.0)
-            **kwargs: Provider-specific parameters
+            **kwargs: Provider-specific parameters. MiniMax supports
+                output_format ("hex" or "url"), language_boost,
+                voice_setting, pronunciation_dict, audio_setting,
+                voice_modify, and subtitle_enable. Streaming is not supported.
 
         Returns:
             MultimodalResponse: Response object with .audio containing AudioOutput.
@@ -1960,6 +1980,16 @@ class AgentAI:
                 model="tts-1-hd",
                 voice="nova",
                 format="mp3"
+            )
+
+            # MiniMax TTS with a MiniMax voice ID
+            result = await app.ai_generate_audio(
+                "Welcome to the presentation.",
+                model="minimax/speech-2.8-hd",
+                voice="English_Graceful_Lady",
+                format="mp3",
+                language_boost="English",
+                output_format="hex",
             )
 
             # Adjust speech speed

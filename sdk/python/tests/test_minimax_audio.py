@@ -18,6 +18,8 @@ class FakeResponse:
         self.status = status
 
     async def json(self):
+        if isinstance(self.payload, Exception):
+            raise self.payload
         return self.payload
 
     async def text(self):
@@ -132,32 +134,91 @@ async def test_minimax_audio_url_output_uses_cn_endpoint_and_default_model(monke
     assert result.audio.format == "flac"
 
 
-@pytest.mark.asyncio
-async def test_minimax_audio_validates_inputs_and_api_errors(monkeypatch):
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    provider = MiniMaxProvider()
-    with pytest.raises(ValueError, match="API key required"):
-        await provider.generate_audio("Audio")
-
-    provider = MiniMaxProvider(api_key="unit-value")
-    with pytest.raises(ValueError, match="format must be"):
-        await provider.generate_audio("Audio", format="aac")
-    with pytest.raises(ValueError, match="streaming TTS"):
-        await provider.generate_audio("Audio", stream=True)
-
-    session = CaptureSession(
-        FakeResponse(
-            {
-                "base_resp": {
-                    "status_code": 1004,
-                    "status_msg": "authentication failed",
+@pytest.mark.parametrize(
+    ("api_key", "kwargs", "response", "error", "message"),
+    [
+        (None, {}, None, ValueError, "API key required"),
+        ("unit-value", {"format": "aac"}, None, ValueError, "format must be"),
+        ("unit-value", {"stream": True}, None, ValueError, "streaming TTS"),
+        (
+            "unit-value",
+            {"output_format": "base64"},
+            None,
+            ValueError,
+            "output_format must be",
+        ),
+        ("unit-value", {"speed": 1.1}, None, ValueError, "speed requires a voice"),
+        (
+            "unit-value",
+            {"voice_setting": {"speed": 1.1}},
+            None,
+            ValueError,
+            "voice_setting requires voice_id",
+        ),
+        ("unit-value", {"model": "minimax/"}, None, ValueError, "requires a model"),
+        (
+            "unit-value",
+            {},
+            FakeResponse({}, status=500),
+            RuntimeError,
+            "failed \\(500\\)",
+        ),
+        (
+            "unit-value",
+            {},
+            FakeResponse(ValueError("malformed JSON")),
+            ValueError,
+            "malformed JSON",
+        ),
+        ("unit-value", {}, FakeResponse([]), RuntimeError, "invalid response"),
+        (
+            "unit-value",
+            {},
+            FakeResponse(
+                {
+                    "base_resp": {
+                        "status_code": 1004,
+                        "status_msg": "authentication failed",
+                    }
                 }
-            }
-        )
-    )
-    monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
-    with pytest.raises(RuntimeError, match="authentication failed"):
-        await provider.generate_audio("Audio")
+            ),
+            RuntimeError,
+            "authentication failed",
+        ),
+        (
+            "unit-value",
+            {},
+            FakeResponse({"data": {"audio": "00", "status": 1}}),
+            RuntimeError,
+            "did not complete",
+        ),
+        (
+            "unit-value",
+            {},
+            FakeResponse({"data": {"status": 2}}),
+            RuntimeError,
+            "returned no audio",
+        ),
+        (
+            "unit-value",
+            {},
+            FakeResponse({"data": {"audio": "not-hex", "status": 2}}),
+            RuntimeError,
+            "invalid hex audio",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_minimax_audio_validates_inputs_and_api_errors(
+    monkeypatch, api_key, kwargs, response, error, message
+):
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    provider = MiniMaxProvider(api_key=api_key)
+    if response is not None:
+        session = CaptureSession(response)
+        monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
+    with pytest.raises(error, match=message):
+        await provider.generate_audio("Audio", **kwargs)
 
 
 @pytest.mark.asyncio
