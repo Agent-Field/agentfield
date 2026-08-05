@@ -231,9 +231,11 @@ Otherwise ignore it silently and work from the result as usual.
 export FURROW_SSH_COMMAND=furrow-dial FURROW_DIAL_TOKEN=<token> FURROW_DIAL_INSECURE=1
 FURROW_RECOVERY_KEY=<key> furrow clone <remote>/<namespace> ./run-workspace --no-watch
 
-# dir: handle (same machine) — clone rejects directory remotes, so pair instead
+# dir: handle (same machine) — clone rejects directory remotes, so pair instead.
+# The path is the handle's remote with the "dir:" prefix removed; don't append
+# anything to it.
 git init -q run-workspace && furrow --repo run-workspace watch --no-daemon
-furrow --repo run-workspace pair <path>/<run_id> --name <namespace> --key <key>
+furrow --repo run-workspace pair <path> --name <namespace> --key <key>
 furrow --repo run-workspace sync --pull --bootstrap
 ```
 
