@@ -231,8 +231,6 @@ async def test_minimax_video_validates_credentials_and_duration(monkeypatch):
             model="minimax/video-model",
             duration=6.5,
         )
-    with pytest.raises(NotImplementedError, match="image generation"):
-        await provider.generate_image("An image")
 
 
 @pytest.mark.asyncio

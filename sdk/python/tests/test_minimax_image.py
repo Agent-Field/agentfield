@@ -99,7 +99,7 @@ async def test_minimax_image_base64_output_uses_cn_endpoint_and_default_model(
         FakeResponse(
             {
                 "base_resp": {"status_code": 0},
-                "data": {"image_urls": [encoded]},
+                "data": {"image_base64": [encoded]},
             }
         )
     )
@@ -132,6 +132,9 @@ async def test_minimax_image_validates_credentials_format_and_api_errors(monkeyp
         await provider.generate_image("An image")
 
     provider = MiniMaxProvider(api_key="unit-value")
+    for model in ("", " ", "minimax/   "):
+        with pytest.raises(ValueError, match="requires a model"):
+            await provider.generate_image("An image", model=model)
     with pytest.raises(ValueError, match="response_format"):
         await provider.generate_image("An image", response_format="binary")
 
@@ -147,6 +150,36 @@ async def test_minimax_image_validates_credentials_format_and_api_errors(monkeyp
     )
     monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
     with pytest.raises(RuntimeError, match="generation rejected"):
+        await provider.generate_image("An image")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        ("not a dictionary", "invalid response"),
+        ({"base_resp": "invalid"}, "invalid response"),
+        ({"data": "invalid"}, "invalid response"),
+        ({"data": {}}, "no image_urls"),
+        ({"data": {"image_urls": []}}, "no images"),
+    ],
+)
+async def test_minimax_image_rejects_invalid_responses(monkeypatch, payload, error):
+    session = CaptureSession(FakeResponse(payload))
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
+    provider = MiniMaxProvider(api_key="unit-value")
+
+    with pytest.raises(RuntimeError, match=error):
+        await provider.generate_image("An image")
+
+
+@pytest.mark.asyncio
+async def test_minimax_image_checks_http_status(monkeypatch):
+    session = CaptureSession(FakeResponse("upstream unavailable", status=503))
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
+    provider = MiniMaxProvider(api_key="unit-value")
+
+    with pytest.raises(RuntimeError, match=r"failed \(503\): upstream unavailable"):
         await provider.generate_image("An image")
 
 

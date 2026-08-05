@@ -784,7 +784,9 @@ class MiniMaxProvider(MediaProvider):
                 "to MiniMaxProvider."
             )
 
-        send_model = self._strip_prefix(model or "image-01")
+        send_model = self._strip_prefix(
+            model if model is not None else "image-01"
+        ).strip()
         if not send_model:
             raise ValueError("MiniMax image generation requires a model")
 
@@ -840,6 +842,8 @@ class MiniMaxProvider(MediaProvider):
         if not isinstance(data, dict):
             raise RuntimeError("MiniMax image generation returned an invalid response")
         base_resp = data.get("base_resp") or {}
+        if not isinstance(base_resp, dict):
+            raise RuntimeError("MiniMax image generation returned an invalid response")
         status_code = base_resp.get("status_code")
         if status_code not in (None, 0):
             status_msg = base_resp.get("status_msg") or "unknown error"
@@ -848,9 +852,12 @@ class MiniMaxProvider(MediaProvider):
             )
 
         response_data = data.get("data") or {}
-        image_values = response_data.get("image_urls")
+        if not isinstance(response_data, dict):
+            raise RuntimeError("MiniMax image generation returned an invalid response")
+        response_key = "image_base64" if normalized_format == "base64" else "image_urls"
+        image_values = response_data.get(response_key)
         if not isinstance(image_values, list):
-            raise RuntimeError("MiniMax image generation returned no image_urls")
+            raise RuntimeError(f"MiniMax image generation returned no {response_key}")
 
         images: List[ImageOutput] = []
         for value in image_values:
