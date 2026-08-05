@@ -67,6 +67,8 @@ jobs:
             node --version
             npm --version
             go version
+            uv --version
+            [ "$(uv python dir)" = /data/uv/python ]
             opencode --version
           '
 

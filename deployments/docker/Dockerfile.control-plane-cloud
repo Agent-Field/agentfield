@@ -77,6 +77,17 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
 COPY --from=go-dist /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH
 
+# uv, so the installer can provision interpreters for nodes whose
+# requires-python the OS python3 (bookworm = 3.11) can't satisfy.
+# Unpinned like opencode below — a frozen minor stops learning about new
+# Python releases; COPY --from is content-addressed, so a new uv release
+# invalidates this layer even under the persistent CI cache.
+# Downloaded interpreters go under /data: venvs on the volume symlink back
+# to them, and an interpreter left in $HOME would vanish with the container
+# on the next deploy, breaking every venv built from it.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+ENV UV_PYTHON_INSTALL_DIR=/data/uv/python
+
 COPY --from=go-builder /app/bin/af /usr/local/bin/af
 COPY --from=go-builder /app/control-plane/config /etc/agentfield/config
 
