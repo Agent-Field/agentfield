@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -77,10 +78,17 @@ func Ensure(opts Options) error {
 	}
 	destination := filepath.Join(home, "bin", "furrow")
 	markerPath := filepath.Join(home, "bin", versionMarker)
-	if info, statErr := os.Stat(destination); statErr == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
-		if installed, readErr := os.ReadFile(markerPath); readErr == nil && strings.TrimSpace(string(installed)) == Version {
-			return nil
-		}
+	binDir := filepath.Dir(destination)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return fmt.Errorf("create furrow bin directory: %w", err)
+	}
+	unlock, err := lockFurrow(filepath.Join(binDir, ".furrow.lock"))
+	if err != nil {
+		return fmt.Errorf("lock furrow installation: %w", err)
+	}
+	defer unlock()
+	if alreadyInstalled(destination, markerPath) {
+		return nil
 	}
 
 	baseURL := strings.TrimRight(opts.BaseURL, "/")
@@ -92,7 +100,14 @@ func Ensure(opts Options) error {
 	}
 	client := opts.Client
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = &http.Client{
+			Transport: &http.Transport{
+				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+			Timeout: 3 * time.Minute,
+		}
 	}
 
 	checksums, err := download(client, baseURL+"/SHA256SUMS")
@@ -112,10 +127,7 @@ func Ensure(opts Options) error {
 		return fmt.Errorf("checksum mismatch for %s", asset)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return fmt.Errorf("create furrow bin directory: %w", err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(destination), ".furrow-*")
+	tmp, err := os.CreateTemp(binDir, ".furrow-*")
 	if err != nil {
 		return fmt.Errorf("create temporary furrow file: %w", err)
 	}
@@ -139,6 +151,15 @@ func Ensure(opts Options) error {
 		return fmt.Errorf("record furrow version: %w", err)
 	}
 	return nil
+}
+
+func alreadyInstalled(destination, markerPath string) bool {
+	info, err := os.Stat(destination)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return false
+	}
+	installed, err := os.ReadFile(markerPath)
+	return err == nil && strings.TrimSpace(string(installed)) == Version
 }
 
 // EnsureBestEffort is the install-path contract: provisioning can emit one

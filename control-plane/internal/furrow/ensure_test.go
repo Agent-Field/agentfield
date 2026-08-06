@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -132,6 +133,61 @@ func TestEnsureRecordsVersionSoTheNextRunSkips(t *testing.T) {
 	}
 }
 
+func TestEnsureConcurrentDownloadsAssetOnce(t *testing.T) {
+	home := t.TempDir()
+	payload := []byte("concurrently installed furrow")
+	sum := sha256.Sum256(payload)
+	var assetRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/SHA256SUMS":
+			fmt.Fprintf(w, "%x  furrow-linux-amd64\n", sum)
+		case "/furrow-linux-amd64":
+			assetRequests.Add(1)
+			_, _ = w.Write(payload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	const ensures = 12
+	errors := make(chan error, ensures)
+	var group sync.WaitGroup
+	for range ensures {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			errors <- Ensure(Options{GOOS: "linux", GOARCH: "amd64", Home: home, BaseURL: server.URL})
+		}()
+	}
+	group.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("Ensure() = %v", err)
+		}
+	}
+
+	binary, err := os.ReadFile(filepath.Join(home, "bin", "furrow"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(binary, payload) {
+		t.Fatalf("binary = %q, want %q", binary, payload)
+	}
+	marker, err := os.ReadFile(filepath.Join(home, "bin", versionMarker))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(marker)) != Version {
+		t.Fatalf("marker = %q, want %q", strings.TrimSpace(string(marker)), Version)
+	}
+	if assetRequests.Load() != 1 {
+		t.Fatalf("asset downloads = %d, want 1", assetRequests.Load())
+	}
+}
+
 func TestEnsureRejectsChecksumMismatchAndWritesNothing(t *testing.T) {
 	home := t.TempDir()
 	server := releaseServer(t, []byte("tampered"), strings.Repeat("0", 64))
@@ -173,7 +229,7 @@ func TestEnsureAtomicRenameFailureLeavesNoPartialFile(t *testing.T) {
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	if len(entries) != 1 || entries[0].Name() != "furrow" || !entries[0].IsDir() {
+	if len(entries) != 2 || entries[0].Name() != ".furrow.lock" || entries[1].Name() != "furrow" || !entries[1].IsDir() {
 		t.Fatalf("partial artifacts left behind: %+v", entries)
 	}
 }
@@ -257,7 +313,7 @@ func assertNoFurrowArtifacts(t *testing.T, home string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
+	if len(entries) != 1 || entries[0].Name() != ".furrow.lock" {
 		t.Fatalf("unexpected artifacts: %+v", entries)
 	}
 }
