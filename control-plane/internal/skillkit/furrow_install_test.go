@@ -22,7 +22,7 @@ func TestInstallAgentfieldUseEnsuresFurrow(t *testing.T) {
 		switch r.URL.Path {
 		case "/SHA256SUMS":
 			for _, asset := range []string{"furrow-linux-amd64", "furrow-darwin-arm64", "furrow-darwin-amd64"} {
-				fmt.Fprintf(w, "%x  %s\n", sum, asset)
+				_, _ = fmt.Fprintf(w, "%x  %s\n", sum, asset)
 			}
 		case "/furrow-linux-amd64", "/furrow-darwin-arm64", "/furrow-darwin-amd64":
 			_, _ = w.Write(payload)

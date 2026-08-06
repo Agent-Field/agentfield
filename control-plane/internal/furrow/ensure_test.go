@@ -141,7 +141,7 @@ func TestEnsureConcurrentDownloadsAssetOnce(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/SHA256SUMS":
-			fmt.Fprintf(w, "%x  furrow-linux-amd64\n", sum)
+			_, _ = fmt.Fprintf(w, "%x  furrow-linux-amd64\n", sum)
 		case "/furrow-linux-amd64":
 			assetRequests.Add(1)
 			_, _ = w.Write(payload)
@@ -274,7 +274,7 @@ func releaseServer(t *testing.T, payload []byte, checksum string) *httptest.Serv
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/SHA256SUMS":
-			fmt.Fprintf(w, "%s  furrow-linux-amd64\n", checksum)
+			_, _ = fmt.Fprintf(w, "%s  furrow-linux-amd64\n", checksum)
 		case "/furrow-linux-amd64":
 			_, _ = w.Write(payload)
 		default:
@@ -293,7 +293,7 @@ func countingReleaseServer(t *testing.T, payload []byte, checksum string, reques
 		requests.Add(1)
 		switch r.URL.Path {
 		case "/SHA256SUMS":
-			fmt.Fprintf(w, "%s  furrow-linux-amd64\n", checksum)
+			_, _ = fmt.Fprintf(w, "%s  furrow-linux-amd64\n", checksum)
 		case "/furrow-linux-amd64":
 			_, _ = w.Write(payload)
 		default:

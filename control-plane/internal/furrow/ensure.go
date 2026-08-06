@@ -86,7 +86,7 @@ func Ensure(opts Options) error {
 	if err != nil {
 		return fmt.Errorf("lock furrow installation: %w", err)
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	if alreadyInstalled(destination, markerPath) {
 		return nil
 	}
@@ -132,7 +132,7 @@ func Ensure(opts Options) error {
 		return fmt.Errorf("create temporary furrow file: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err = tmp.Write(binary); err == nil {
 		err = tmp.Chmod(0o755)
 	}
@@ -166,7 +166,7 @@ func alreadyInstalled(destination, markerPath string) bool {
 // short warning, but can never fail the operation that requested it.
 func EnsureBestEffort(opts Options, warnings io.Writer) error {
 	if err := Ensure(opts); err != nil && warnings != nil {
-		fmt.Fprintf(warnings, "warning: furrow was not installed: %v\n", err)
+		_, _ = fmt.Fprintf(warnings, "warning: furrow was not installed: %v\n", err)
 	}
 	return nil
 }
@@ -190,7 +190,7 @@ func download(client *http.Client, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s", response.Status)
 	}
