@@ -593,6 +593,7 @@ func TestReconcileAliasOrphansSaveFailureLeavesSerializedState(t *testing.T) {
 }
 
 func TestPublicOperationsReconcileAndDryRunsDoNot(t *testing.T) {
+	t.Setenv("AGENTFIELD_SKIP_FURROW", "1")
 	for _, op := range []struct {
 		name string
 		run  func() error

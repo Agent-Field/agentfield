@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/furrow"
 )
 
 // InstallOptions controls how a skill is installed across targets.
@@ -158,6 +160,9 @@ func install(opts InstallOptions, reconcile bool) (*InstallReport, error) {
 		state.Skills[skill.Name] = skillState
 		if err := SaveState(state); err != nil {
 			return nil, fmt.Errorf("save state: %w", err)
+		}
+		if skill.Name == "agentfield-use" {
+			_ = furrow.EnsureBestEffort(furrow.Options{}, os.Stderr)
 		}
 	}
 
