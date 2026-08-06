@@ -61,6 +61,7 @@ describe('testCloudConnection', () => {
       authOk: true,
       installApi: true,
       furrowAvailable: true,
+      furrowReported: true,
       version: '1.2.3',
       message: 'Connection successful'
     })
@@ -138,6 +139,7 @@ describe('testCloudConnection', () => {
       furrowProbe: async () => false
     })
     expect(result).toMatchObject({ ok: true, healthy: true, authOk: true, furrowAvailable: false })
+    expect(result.furrowReported).toBe(true)
   })
 })
 

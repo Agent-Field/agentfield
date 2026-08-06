@@ -27,6 +27,12 @@ export interface DeployResult {
   message: string
 }
 
+export interface CloudImageUpdate {
+  current: string | null
+  latest: string | null
+  updateAvailable: boolean
+}
+
 const MODULE = `terraform {
   required_providers {
     railway = { source = "terraform-community-providers/railway", version = "0.6.2" }
@@ -221,6 +227,20 @@ function stateSourceImage(state: TfState | null): string | null {
   const resource = state?.resources?.find((item) => item.type === 'railway_service' && item.name === 'cp')
   const value = resource?.instances?.[0]?.attributes?.source_image
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+export async function checkCloudImageUpdate(
+  workspaceDir: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<CloudImageUpdate> {
+  const current = stateSourceImage(readState(workspaceDir))
+  if (!current) return { current: null, latest: null, updateAvailable: false }
+  const latest = await resolveCloudImage(fetchImpl)
+  return {
+    current,
+    latest,
+    updateAvailable: latest !== null && latest !== current
+  }
 }
 
 function writeConfig(workspaceDir: string, binaryDir?: string | null): string | null {

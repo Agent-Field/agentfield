@@ -5,7 +5,7 @@ import { delimiter, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync } from 'node:fs'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { generateApiKey, hasDeployment, resolveCloudImage, resolveTofuBinary, runDeploy, runDestroy } from './deployEngine'
+import { checkCloudImageUpdate, generateApiKey, hasDeployment, resolveCloudImage, resolveTofuBinary, runDeploy, runDestroy } from './deployEngine'
 
 type Script = { stdout?: string; stderr?: string; code?: number }
 
@@ -241,6 +241,55 @@ describe('deployment module and execution', () => {
     expect(await runDeploy(fixture.opts, fake.deps)).toEqual({
       ok: false,
       message: 'Deployed, but attaching the storage volume failed: volume denied. Re-run deploy to retry.'
+    })
+  })
+})
+
+describe('cloud image updates', () => {
+  it('compares the image recorded in state with the latest production pin', async () => {
+    const fixture = workspace()
+    mkdirSync(fixture.opts.workspaceDir, { recursive: true })
+    writeFileSync(join(fixture.opts.workspaceDir, 'terraform.tfstate'), deployedState(
+      'prior-key',
+      'agentfield-dead',
+      'agentfield/control-plane-cloud:v0.1.124'
+    ))
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ results: [
+      { name: 'latest', digest: 'sha256:new' },
+      { name: 'v0.1.125', digest: 'sha256:new' }
+    ] }), { status: 200 })) as typeof fetch
+
+    await expect(checkCloudImageUpdate(fixture.opts.workspaceDir, fetchImpl)).resolves.toEqual({
+      current: 'agentfield/control-plane-cloud:v0.1.124',
+      latest: 'agentfield/control-plane-cloud:v0.1.125',
+      updateAvailable: true
+    })
+  })
+
+  it('does not look up a release when deployment state is absent', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch
+    await expect(checkCloudImageUpdate('/does/not/exist', fetchImpl)).resolves.toEqual({
+      current: null,
+      latest: null,
+      updateAvailable: false
+    })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('keeps the current pin and reports no update when lookup fails', async () => {
+    const fixture = workspace()
+    mkdirSync(fixture.opts.workspaceDir, { recursive: true })
+    writeFileSync(join(fixture.opts.workspaceDir, 'terraform.tfstate'), deployedState(
+      'prior-key',
+      'agentfield-dead',
+      'agentfield/control-plane-cloud:v0.1.124'
+    ))
+    const fetchImpl = vi.fn(async () => { throw new Error('offline') }) as typeof fetch
+
+    await expect(checkCloudImageUpdate(fixture.opts.workspaceDir, fetchImpl)).resolves.toEqual({
+      current: 'agentfield/control-plane-cloud:v0.1.124',
+      latest: null,
+      updateAvailable: false
     })
   })
 })

@@ -233,8 +233,16 @@ export interface CloudTestResult {
   authOk: boolean
   installApi: boolean
   furrowAvailable: boolean
+  /** Present only when the server health payload advertised a furrow address. */
+  furrowReported?: boolean
   version?: string
   message: string
+}
+
+export interface CloudImageUpdate {
+  current: string | null
+  latest: string | null
+  updateAvailable: boolean
 }
 
 export interface RailwayStatus {
@@ -335,6 +343,7 @@ export interface AgentFieldApi {
   /** Open the guided Railway deployment flow for a hosted control plane. */
   cloudDeployRailway(): Promise<boolean>
   railwayStatus(): Promise<RailwayStatus>
+  checkCloudImageUpdate(): Promise<CloudImageUpdate>
   railwayLogin(): Promise<{ ok: boolean; message: string; workspaces?: RailwayStatus['workspaces'] }>
   railwayLogout(): Promise<void>
   cloudDeploy(workspaceId: string): Promise<CloudDeployResult>

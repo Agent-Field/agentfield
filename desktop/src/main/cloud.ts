@@ -234,6 +234,7 @@ export async function testCloudConnection(
     authOk: true,
     installApi,
     furrowAvailable,
+    ...(furrowAddress ? { furrowReported: true } : {}),
     ...(version ? { version } : {}),
     message: installApi ? 'Connection successful' : 'Connected; install API unavailable'
   }
