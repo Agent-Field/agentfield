@@ -165,6 +165,47 @@ func TestHealthCheckHandlerHealthy(t *testing.T) {
 	}
 }
 
+func TestHealthCheckHandlerFurrowPublicAddr(t *testing.T) {
+	tests := []struct {
+		name      string
+		address   string
+		wantValue bool
+	}{
+		{name: "set", address: "furrow.example.com:7443", wantValue: true},
+		{name: "empty", address: "", wantValue: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("FURROW_PUBLIC_ADDR", tt.address)
+			gin.SetMode(gin.TestMode)
+			srv := &AgentFieldServer{
+				storageHealthOverride: func(context.Context) gin.H { return gin.H{"status": "healthy"} },
+				cacheHealthOverride:   func(context.Context) gin.H { return gin.H{"status": "healthy"} },
+			}
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			req, _ := http.NewRequest(http.MethodGet, "/health", nil)
+			c.Request = req
+
+			srv.healthCheckHandler(c)
+
+			var payload map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+			got, present := payload["furrow_public_addr"]
+			if present != tt.wantValue {
+				t.Fatalf("furrow_public_addr presence = %v, want %v; payload: %+v", present, tt.wantValue, payload)
+			}
+			if tt.wantValue && got != tt.address {
+				t.Fatalf("furrow_public_addr = %v, want %q", got, tt.address)
+			}
+		})
+	}
+}
+
 func TestHealthCheckHandlerCacheOptional(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	srv := &AgentFieldServer{
