@@ -105,6 +105,10 @@ RUN npm install -g opencode-ai
 # Everything stateful (SQLite, BoltDB, installed.yaml, secrets keyring,
 # agent package dirs) lives under one mount point.
 ENV AGENTFIELD_HOME=/data
+# The furrow client is a laptop-side tool: cloud agents get furrowd vendored
+# by their own packages, and nothing in this container clones workspaces. Any
+# skill install run in here must not pull it from GitHub onto the volume.
+ENV AGENTFIELD_SKIP_FURROW=1
 RUN mkdir -p /data
 
 EXPOSE 8080
