@@ -183,6 +183,7 @@ def test_resolve_options_merges_config_and_overrides_per_call_wins():
         system_prompt="base",
         env={"A": "1"},
         cwd="/tmp/base",
+        aforge_bin="aforge",
         codex_bin="codex",
         gemini_bin="gemini",
         opencode_bin="opencode",
@@ -205,6 +206,7 @@ def test_resolve_options_merges_config_and_overrides_per_call_wins():
     assert resolved["max_budget_usd"] == 2.0
     assert resolved["env"] == {"B": "2"}
     assert resolved["cwd"] == "/tmp/override"
+    assert resolved["aforge_bin"] == "aforge"
 
 
 def test_is_transient_matches_and_rejects_expected_messages():
@@ -397,6 +399,7 @@ async def test_run_resolves_harness_config_defaults_with_per_call_overrides(tmp_
         system_prompt="base system",
         env={"BASE": "1"},
         cwd=str(tmp_path),
+        aforge_bin="aforge",
         codex_bin="codex",
         gemini_bin="gemini",
         opencode_bin="opencode",

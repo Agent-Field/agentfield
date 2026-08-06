@@ -506,6 +506,7 @@ class TestHarnessConfig:
 
     def test_binary_paths_defaults(self):
         hc = HarnessConfig(provider="codex")
+        assert hc.aforge_bin == "aforge"
         assert hc.codex_bin == "codex"
         assert hc.gemini_bin == "gemini"
         assert hc.opencode_bin == "opencode"

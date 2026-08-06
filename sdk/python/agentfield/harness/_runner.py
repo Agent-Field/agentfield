@@ -171,6 +171,7 @@ def _resolve_options(
             "env",
             "cwd",
             "project_dir",
+            "aforge_bin",
             "codex_bin",
             "gemini_bin",
             "opencode_bin",

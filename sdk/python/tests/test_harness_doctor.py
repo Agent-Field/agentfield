@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agentfield.harness import ProviderHealth, harness_doctor
+from agentfield.harness.providers._factory import SUPPORTED_PROVIDERS
 
 
 @pytest.mark.asyncio
@@ -80,6 +81,15 @@ async def test_doctor_does_not_treat_cli_login_as_missing_auth(monkeypatch):
 async def test_doctor_rejects_unknown_provider():
     with pytest.raises(ValueError, match="Unknown harness provider"):
         await harness_doctor(providers=["not-a-provider"])
+
+
+@pytest.mark.asyncio
+async def test_doctor_checks_all_supported_providers_with_no_args(monkeypatch):
+    monkeypatch.setattr("agentfield.harness._doctor.shutil.which", lambda _: None)
+
+    reports = await harness_doctor(env={})
+
+    assert [report.provider for report in reports] == sorted(SUPPORTED_PROVIDERS)
 
 
 @pytest.mark.asyncio
