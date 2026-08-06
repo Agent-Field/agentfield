@@ -210,6 +210,44 @@ Long-running agents can take tens of minutes — poll with backoff (start ~5s,
 settle at ~30s) and tell the user what is in flight. For live progress, stream
 Server-Sent Events from `GET /api/v1/executions/<execution_id>/events`.
 
+### If the result carries a `workspace_handle`, you can read the files
+
+Some agents (SWE-AF) mirror the workspace they are building in, so you can open
+the actual files instead of reasoning from the summary — including uncommitted
+edits and untracked files that no git push would carry. You do not ask whether
+this is available and there is nothing to configure: the handle is in the result
+when it works and absent when it doesn't.
+
+```json
+"workspace_handle": {"v":1, "remote":"ssh://host:port"|"dir:/path",
+                     "namespace":"...", "key":"<64 hex>", "token":"..."}
+```
+
+Use it only if `furrow` is on PATH (and, for an `ssh://` handle, `furrow-dial`).
+Otherwise ignore it silently and work from the result as usual.
+
+```bash
+# ssh:// handle — furrow-dial carries the protocol; nothing else changes
+export FURROW_SSH_COMMAND=furrow-dial FURROW_DIAL_TOKEN=<token> FURROW_DIAL_INSECURE=1
+FURROW_RECOVERY_KEY=<key> furrow clone <remote>/<namespace> ./run-workspace --no-watch
+
+# dir: handle (same machine) — clone rejects directory remotes, so pair instead.
+# The path is the handle's remote with the "dir:" prefix removed; don't append
+# anything to it.
+git init -q run-workspace && furrow --repo run-workspace watch --no-daemon
+furrow --repo run-workspace pair <path> --name <namespace> --key <key>
+furrow --repo run-workspace sync --pull --bootstrap
+```
+
+`furrow --repo run-workspace sync --follow` keeps it current while the run
+works. Read and diff freely. Treat it as a mirror, not a shared drive: it is
+one-writer, and edits go back as a merge (`furrow merge <fork> --check "<cmd>"`),
+so change files between issues or on a fork rather than while the agent writes.
+
+`get_workspace_handle` re-fetches a handle mid-run:
+`POST /api/v1/execute/<agent>.get_workspace_handle` with `{"input":{"run_id":"..."}}`.
+`{"available": false}` means no mirror — carry on without it.
+
 **Several at once:** `POST /api/v1/executions/batch-status` with
 `{"execution_ids": [...]}`. Terminal entries embed the FULL result payload —
 responses can be large (100KB+), so write to a file and parse from there; never
@@ -280,6 +318,9 @@ is enabled), and verify offline with `af verify audit.json`.
 ## Hard rules
 
 - Every call goes through the control plane — never POST to an agent's own port.
+  The one exception is a `workspace_handle`: its `ssh://` endpoint is a furrow
+  transport, not the agent's HTTP port, and the per-run token in the handle is
+  what authorizes it. Reading files there is not an agent call.
 - Kwargs live under `"input"`. Empty input is `{"input": {}}`.
 - Async + poll for anything that might exceed a few seconds; sync is for quick
   lookups only. Independent async calls go out together, not one at a time.
