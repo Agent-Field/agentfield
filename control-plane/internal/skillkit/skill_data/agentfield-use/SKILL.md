@@ -1,6 +1,6 @@
 ---
 name: agentfield-use
-version: 0.4.0
+version: 0.5.0
 description: "Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill."
 ---
 
@@ -223,15 +223,20 @@ when it works and absent when it doesn't.
                      "namespace":"...", "key":"<64 hex>", "token":"..."}
 ```
 
-`furrow` is rarely on PATH. AgentField installs it to `~/.agentfield/bin/`, and a
-node that ships its own copy keeps it inside the installed package. Resolve it
-from those; do not try to install it yourself.
+`furrow` is rarely on PATH. AgentField installs it to `$AGENTFIELD_HOME/bin/`
+(default `~/.agentfield/bin/`), and a node that ships its own copy keeps it
+inside the installed package. Resolve it from those; do not try to install it
+yourself. POSIX sh only — no brace expansion, so the package dirs are spelled
+out.
 
-```bash
+```sh
 os=$(uname -s | tr A-Z a-z)
+af_home=${AGENTFIELD_HOME:-$HOME/.agentfield}
 furrow_bin() {  # $1 = furrow | furrow-dial
   command -v "$1" 2>/dev/null && return
-  for c in ~/.agentfield/bin/"$1" ~/.agentfield/packages/*/{bin,go/bin}/"$1"-"$os"-*; do
+  for c in "$af_home/bin/$1" \
+           "$af_home"/packages/*/bin/"$1"-"$os"-* \
+           "$af_home"/packages/*/go/bin/"$1"-"$os"-*; do
     [ -x "$c" ] && { echo "$c"; return; }
   done
 }
