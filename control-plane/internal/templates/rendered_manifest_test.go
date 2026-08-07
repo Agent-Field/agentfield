@@ -22,9 +22,10 @@ func TestRenderedScaffoldManifestIsInstallable(t *testing.T) {
 	tests := []struct {
 		language string
 		start    string
+		build    string
 	}{
 		{language: "python", start: "python main.py"},
-		{language: "go", start: "go run ."},
+		{language: "go", start: "bin/representative-node", build: "."},
 		{language: "typescript", start: "npm run start"},
 	}
 
@@ -77,6 +78,9 @@ func TestRenderedScaffoldManifestIsInstallable(t *testing.T) {
 			}
 			if metadata.HealthcheckPath() != "/health" || metadata.Entrypoint.Start != tt.start {
 				t.Errorf("healthcheck/start = %q/%q, want /health/%q", metadata.HealthcheckPath(), metadata.Entrypoint.Start, tt.start)
+			}
+			if metadata.Entrypoint.Build != tt.build {
+				t.Errorf("build = %q, want %q", metadata.Entrypoint.Build, tt.build)
 			}
 			if len(metadata.UserEnvironment.Required) != 0 {
 				t.Errorf("required environment = %#v, want explicit empty list", metadata.UserEnvironment.Required)

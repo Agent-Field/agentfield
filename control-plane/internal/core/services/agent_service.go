@@ -3,7 +3,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -832,65 +831,8 @@ func (as *DefaultAgentService) updateRuntimeInfo(agentNodeName string, port, pid
 }
 
 // displayCapabilities fetches and displays agent node capabilities
-func (as *DefaultAgentService) displayCapabilities(agentNode packages.InstalledPackage, port int) error {
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	// Get reasoners
-	reasonersResp, err := client.Get(fmt.Sprintf("http://localhost:%d/reasoners", port))
-	if err != nil {
-		return err
-	}
-	defer reasonersResp.Body.Close()
-
-	var reasonersData map[string]interface{}
-	if err := json.NewDecoder(reasonersResp.Body).Decode(&reasonersData); err != nil {
-		return err
-	}
-
-	// Get skills
-	skillsResp, err := client.Get(fmt.Sprintf("http://localhost:%d/skills", port))
-	if err != nil {
-		return err
-	}
-	defer skillsResp.Body.Close()
-
-	var skillsData map[string]interface{}
-	if err := json.NewDecoder(skillsResp.Body).Decode(&skillsData); err != nil {
-		return err
-	}
-
-	fmt.Printf("\n🌐 Access locally at: http://localhost:%d\n", port)
-	fmt.Printf("📖 Available functions:\n")
-
-	// Display reasoners
-	if reasoners, ok := reasonersData["reasoners"].([]interface{}); ok && len(reasoners) > 0 {
-		fmt.Printf("  🧠 Reasoners: ")
-		var reasonerNames []string
-		for _, reasoner := range reasoners {
-			if r, ok := reasoner.(map[string]interface{}); ok {
-				if id, ok := r["id"].(string); ok {
-					reasonerNames = append(reasonerNames, id)
-				}
-			}
-		}
-		fmt.Printf("%s\n", strings.Join(reasonerNames, ", "))
-	}
-
-	// Display skills
-	if skills, ok := skillsData["skills"].([]interface{}); ok && len(skills) > 0 {
-		fmt.Printf("  🛠️  Skills:    ")
-		var skillNames []string
-		for _, skill := range skills {
-			if s, ok := skill.(map[string]interface{}); ok {
-				if id, ok := s["id"].(string); ok {
-					skillNames = append(skillNames, id)
-				}
-			}
-		}
-		fmt.Printf("%s\n", strings.Join(skillNames, ", "))
-	}
-
-	return nil
+func (as *DefaultAgentService) displayCapabilities(_ packages.InstalledPackage, port int) error {
+	return packages.DisplayCapabilities(port)
 }
 
 // findAgentInRegistry finds an agent in the registry by name, handling name normalization
