@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,61 @@ func TestEnsureWindowsIsNoOp(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "bin", "furrow")); !os.IsNotExist(err) {
 		t.Fatalf("furrow unexpectedly exists: %v", err)
+	}
+}
+
+func TestEnsureDefaultsRuntimePlatform(t *testing.T) {
+	asset, ok := AssetName(runtime.GOOS, runtime.GOARCH)
+	if !ok {
+		t.Skipf("furrow is not supported on %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	home := t.TempDir()
+	payload := []byte("runtime furrow")
+	sum := sha256.Sum256(payload)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/SHA256SUMS":
+			_, _ = fmt.Fprintf(w, "%x  %s\n", sum, asset)
+		case "/" + asset:
+			_, _ = w.Write(payload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	if err := Ensure(Options{Home: home, BaseURL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, "bin", "furrow"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content = %q, want %q", got, payload)
+	}
+}
+
+func TestEnsureFailsWithoutResolvableHome(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("empty HOME behavior is specific to Unix")
+	}
+	t.Setenv("AGENTFIELD_HOME", "")
+	t.Setenv("HOME", "")
+	err := Ensure(Options{GOOS: "linux", GOARCH: "amd64"})
+	if err == nil || !strings.Contains(err.Error(), "home") {
+		t.Fatalf("error = %v, want home resolution failure", err)
+	}
+}
+
+func TestEnsureFailsToCreateBinDirectory(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "bin"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Ensure(Options{GOOS: "linux", GOARCH: "amd64", Home: home})
+	if err == nil || !strings.Contains(err.Error(), "create furrow bin directory") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -208,6 +264,60 @@ func TestEnsureDownloadFailureIsNonFatal(t *testing.T) {
 	}
 	if strings.Count(strings.TrimSpace(warnings.String()), "\n") != 0 {
 		t.Fatalf("warning was not one line: %q", warnings.String())
+	}
+	assertNoFurrowArtifacts(t, home)
+}
+
+func TestEnsureBestEffortAcceptsNilWarnings(t *testing.T) {
+	home := t.TempDir()
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	if err := EnsureBestEffort(Options{GOOS: "linux", GOARCH: "amd64", Home: home, BaseURL: server.URL}, nil); err != nil {
+		t.Fatalf("EnsureBestEffort returned %v", err)
+	}
+}
+
+func TestEnsureRejectsInvalidChecksum(t *testing.T) {
+	home := t.TempDir()
+	server := releaseServer(t, []byte("unused"), "not-a-valid-checksum")
+	err := Ensure(Options{GOOS: "linux", GOARCH: "amd64", Home: home, BaseURL: server.URL})
+	if err == nil || !strings.Contains(err.Error(), "invalid checksum for") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestEnsureRejectsChecksumsMissingTheAsset(t *testing.T) {
+	home := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/SHA256SUMS" {
+			_, _ = fmt.Fprintf(w, "%x  some-other-asset\n", sha256.Sum256([]byte("x")))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+	err := Ensure(Options{GOOS: "linux", GOARCH: "amd64", Home: home, BaseURL: server.URL})
+	if err == nil || !strings.Contains(err.Error(), "checksum missing for") {
+		t.Fatalf("error = %v", err)
+	}
+	assertNoFurrowArtifacts(t, home)
+}
+
+func TestEnsureBinaryDownloadFailureLeavesNoArtifacts(t *testing.T) {
+	home := t.TempDir()
+	payload := []byte("furrow binary")
+	sum := sha256.Sum256(payload)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/SHA256SUMS" {
+			_, _ = fmt.Fprintf(w, "%x  furrow-linux-amd64\n", sum)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+	err := Ensure(Options{GOOS: "linux", GOARCH: "amd64", Home: home, BaseURL: server.URL})
+	if err == nil || !strings.Contains(err.Error(), "download furrow-linux-amd64") {
+		t.Fatalf("error = %v", err)
 	}
 	assertNoFurrowArtifacts(t, home)
 }
