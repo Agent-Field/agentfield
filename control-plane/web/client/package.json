@@ -85,7 +85,7 @@
         "vitest": "^4.1.8"
     },
     "overrides": {
-        "js-yaml": "4.3.0",
+        "js-yaml": "4.3.1",
         "esbuild": "0.28.1",
         "ws": "8.21.0",
         "brace-expansion@1": "1.1.18",
@@ -94,7 +94,7 @@
     },
     "pnpm": {
         "overrides": {
-            "js-yaml": "4.3.0",
+            "js-yaml": "4.3.1",
             "esbuild": "0.28.1",
             "ws": "8.21.0",
             "brace-expansion@1": "1.1.18",
