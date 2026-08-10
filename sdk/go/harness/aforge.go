@@ -94,13 +94,23 @@ func aforgeTaskInput(prompt, systemPrompt string) string {
 }
 
 func parseAforgeEnvelope(stdout string) map[string]any {
+	// Canonical `aforge do --json` output is one object, currently formatted
+	// across multiple lines. Parse that shape before falling back to the
+	// line-oriented form tolerated for wrappers that prepend diagnostics.
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope); err == nil {
+		if _, ok := envelope["deliverable"]; ok {
+			return envelope
+		}
+	}
+
 	lines := strings.Split(stdout, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
 			continue
 		}
-		var envelope map[string]any
+		envelope = nil
 		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
 			continue
 		}

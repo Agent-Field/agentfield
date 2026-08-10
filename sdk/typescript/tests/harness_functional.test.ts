@@ -106,6 +106,7 @@ describe.skipIf(!HAS_AFORGE)('Aforge Functional', () => {
     expect(result.metrics.inputTokens).toBeGreaterThan(0);
     expect(result.metrics.outputTokens).toBeGreaterThan(0);
     expect(result.metrics.totalCostUsd).toBeGreaterThan(0);
+    console.info('aforge metrics', JSON.stringify(result.metrics));
   }, 300_000);
 
   it('schema pipeline writes, parses, and cleans isolated output', async () => {
@@ -121,6 +122,14 @@ describe.skipIf(!HAS_AFORGE)('Aforge Functional', () => {
 
     expect(result.isError).toBe(false);
     expect(result.parsed).toMatchObject({ greeting: 'Hello from Aforge', number: 42 });
+    console.info('aforge schema metrics', JSON.stringify({
+      durationMs: result.durationMs,
+      calls: result.numTurns,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      cacheReadTokens: result.cacheReadTokens,
+      costUsd: result.costUsd,
+    }));
     expect(fs.readdirSync(workDir).filter((name) => name.startsWith('.agentfield-out-'))).toEqual([]);
   }, 300_000);
 });

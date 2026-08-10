@@ -406,6 +406,24 @@ async def test_aforge_parses_last_valid_envelope_after_stray_stdout(
 
 
 @pytest.mark.asyncio
+async def test_aforge_parses_pretty_printed_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_run_cli(
+        cmd, *, env=None, cwd=None, timeout=None, idle_seconds=None, input_text=None
+    ):
+        _ = cmd, env, cwd, timeout, idle_seconds, input_text
+        return json.dumps(json.loads(_envelope("pretty result")), indent=2), "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", fake_run_cli)
+
+    raw = await AforgeProvider().execute("hello", {})
+
+    assert raw.result == "pretty result"
+    assert raw.is_error is False
+
+
+@pytest.mark.asyncio
 async def test_aforge_missing_or_zero_cost_falls_back_to_estimate(
     monkeypatch: pytest.MonkeyPatch,
 ):

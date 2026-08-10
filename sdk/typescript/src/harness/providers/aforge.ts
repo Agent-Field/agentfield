@@ -56,6 +56,18 @@ function stripOpenRouterPrefix(model: string): string {
 }
 
 function parseEnvelope(stdout: string): Record<string, unknown> | undefined {
+  // Canonical `aforge do --json` output is one object, currently formatted
+  // across multiple lines. Parse that shape before falling back to the
+  // line-oriented form tolerated for wrappers that prepend diagnostics.
+  try {
+    const value: unknown = JSON.parse(stdout.trim());
+    if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'deliverable' in value) {
+      return value as Record<string, unknown>;
+    }
+  } catch {
+    // Fall through to the wrapper-compatible line scan.
+  }
+
   const lines = stdout.split('\n').map((line) => line.trim()).filter(Boolean);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     try {

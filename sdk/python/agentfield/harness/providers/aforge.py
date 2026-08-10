@@ -30,6 +30,17 @@ def _strip_openrouter_prefix(model: str) -> str:
 
 def _parse_envelope(stdout: str) -> dict[str, object] | None:
     """Return the last JSON object containing an aforge deliverable."""
+    # Canonical `aforge do --json` output is one object, currently formatted
+    # across multiple lines. Parse that shape before falling back to the
+    # line-oriented form tolerated for wrappers that prepend diagnostics.
+    try:
+        value = json.loads(stdout.strip())
+    except ValueError:
+        pass
+    else:
+        if isinstance(value, dict) and "deliverable" in value:
+            return value
+
     for line in reversed(
         [line.strip() for line in stdout.splitlines() if line.strip()]
     ):

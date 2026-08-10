@@ -148,6 +148,16 @@ describe('aforge provider', () => {
     expect(result.metrics.totalCostUsd).toBeUndefined();
   });
 
+  it('parses the canonical pretty-printed envelope', async () => {
+    const pretty = JSON.stringify(JSON.parse(envelope('pretty result')), null, 2);
+    vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: pretty, stderr: '', exitCode: 0 });
+
+    const result = await new AforgeProvider().execute('hello', {});
+
+    expect(result.result).toBe('pretty result');
+    expect(result.isError).toBe(false);
+  });
+
   it('classifies missing binaries and timeouts', async () => {
     vi.spyOn(cli, 'runCli').mockRejectedValueOnce(new Error('spawn aforge ENOENT'));
     const missing = await new AforgeProvider('aforge-missing').execute('hello', {});

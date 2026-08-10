@@ -38,6 +38,11 @@ func TestAforgeProvider_Integration(t *testing.T) {
 	assert.Greater(t, raw.Metrics.OutputTokens, 0)
 	require.NotNil(t, raw.Metrics.CostUSD)
 	assert.Greater(t, *raw.Metrics.CostUSD, 0.0)
+	t.Logf(
+		"aforge metrics: duration_ms=%d calls=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d cost_usd=%.10f",
+		raw.Metrics.DurationAPIMS, raw.Metrics.NumTurns, raw.Metrics.InputTokens,
+		raw.Metrics.OutputTokens, raw.Metrics.CacheReadTokens, *raw.Metrics.CostUSD,
+	)
 }
 
 func TestAforgeRunner_Integration_Schema(t *testing.T) {
@@ -71,6 +76,12 @@ func TestAforgeRunner_Integration_Schema(t *testing.T) {
 	assert.False(t, result.IsError, result.ErrorMessage)
 	assert.Equal(t, "Hello from Aforge", parsed["greeting"])
 	assert.EqualValues(t, 42, parsed["number"])
+	require.NotNil(t, result.CostUSD)
+	t.Logf(
+		"aforge schema metrics: duration_ms=%d calls=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d cost_usd=%.10f",
+		result.DurationMS, result.NumTurns, result.InputTokens, result.OutputTokens,
+		result.CacheReadTokens, *result.CostUSD,
+	)
 	matches, err := filepath.Glob(filepath.Join(workDir, ".agentfield-out-*"))
 	require.NoError(t, err)
 	assert.Empty(t, matches)

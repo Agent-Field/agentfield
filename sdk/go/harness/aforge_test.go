@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -191,6 +192,22 @@ func TestAforgeProviderParsesLastEnvelopeAndLeavesZeroCostUnknown(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, "real result", raw.Result)
 	assert.Nil(t, raw.Metrics.CostUSD, "zero provider cost remains unknown")
+}
+
+func TestAforgeProviderParsesPrettyPrintedEnvelope(t *testing.T) {
+	p := NewAforgeProvider("aforge")
+	p.runCLI = func(context.Context, []string, map[string]string, string, int, int, []byte) (*CLIResult, error) {
+		var value map[string]any
+		require.NoError(t, json.Unmarshal([]byte(aforgeEnvelope("pretty result", true, "", "")), &value))
+		pretty, err := json.MarshalIndent(value, "", "  ")
+		require.NoError(t, err)
+		return &CLIResult{Stdout: string(pretty), ReturnCode: 0}, nil
+	}
+
+	raw, err := p.Execute(context.Background(), "hello", Options{})
+	require.NoError(t, err)
+	assert.Equal(t, "pretty result", raw.Result)
+	assert.False(t, raw.IsError)
 }
 
 func TestAforgeProviderMissingBinaryAndTimeout(t *testing.T) {
