@@ -6,6 +6,96 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.127-rc.3] - 2026-08-10
+
+
+### Added
+
+- Feat(harness): aforge provider + per-run isolation of the schema output file (#891)
+
+* fix(harness): isolate schema output file in a per-run temp dir for cwd-only runs
+
+With only cwd set, every harness call wrote the fixed
+cwd/.agentfield_output.json, so N concurrent .harness() calls sharing a
+cwd (e.g. pr-af fanning out 8 review dimensions over one checkout)
+overwrote each other's output and cleanup deleted the file from under
+still-running siblings — surfacing as spurious "schema parse failed"
+zero-finding results. Reuse the project_dir strategy unconditionally:
+mkdtemp(".agentfield-out-*") under project_dir or cwd, cleaned up per
+run. Mock providers in the runner tests now learn the output path from
+the prompt suffix, the same way real coding agents do.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(harness): add aforge coding-agent provider
+
+Registers aforge (github.com/Agent-Field/aforge-v2) as a harness
+provider alongside claude-code/codex/gemini/opencode. The provider
+invokes `aforge exec --json -w <root>` with the prompt over stdin, maps
+the JSON envelope (text/stop/usage/turns) onto RawResult/Metrics with
+provider-reported cost, translates model slugs to AFORGE_MODEL (leading
+openrouter/ prefix stripped) and #variant to AFORGE_EXEC_REASONING, and
+treats budget/turn-cap landings that still produced a final message as
+usable results while mapping all other non-zero exits to CRASH. The
+no-progress watchdog is disabled for this provider because aforge only
+writes stdout once, at completion. HarnessConfig grows aforge_bin, which
+is threaded through the runner's options whitelist, the factory, the
+availability spec (probed via `aforge version`, needs OPENROUTER_API_KEY),
+and the doctor.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f2dd31f)
+
+
+
+### Fixed
+
+- Fix(sdk/python): replace bare asyncio.run() with loop-aware helpers (#620) (#899)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* fix(sdk/python): replace bare asyncio.run() with loop-aware helpers (#620)
+
+Bare asyncio.run() raises RuntimeError when called from within an
+already-running event loop (e.g. a sync reasoner dispatched by FastAPI,
+a serverless handler wrapping an async framework, or a destructor on the
+loop thread). This is slice 3 of #620.
+
+New module agentfield/run_async.py provides two helpers:
+- run_coroutine(coro): blocks until result. If a loop is running, runs
+  in a new thread with its own loop so the caller can safely block.
+- fire_and_forget(coro): non-blocking. If a loop is running, creates a
+  task; otherwise spawns a daemon thread.
+
+Applied to all 6 asyncio.run() sites:
+- agent.py handle_serverless: run_coroutine() for async reasoners
+- agent_serverless.py: same pattern
+- agent_cli.py: run_coroutine() (safe for CLI, consistent API)
+- agent.py note(): fire_and_forget() replaces manual loop detection +
+  threading (was 15 lines, now 1 line)
+- agent.py destructor: fire_and_forget() for cleanup
+
+Tests: 9 tests in test_run_async.py covering both loop-running and
+no-loop cases, exception propagation, and fire-and-forget semantics.
+Updated test_agent_core.py to match new dispatch pattern.
+
+Part of #620.
+
+* fix(sdk/python): catch/log exceptions in fire_and_forget daemon thread
+
+Wrap the no-loop fire_and_forget() worker thread with try/except so
+exceptions are logged at debug level rather than leaking as unhandled
+thread exception tracebacks. Addresses @santoshkumarradha's review.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (ce137d1)
+
 ## [0.1.127-rc.2] - 2026-08-10
 
 

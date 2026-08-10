@@ -29,6 +29,7 @@ def test_harness_config_defaults():
     assert cfg.system_prompt is None
     assert cfg.env == {}
     assert cfg.cwd is None
+    assert cfg.aforge_bin == "aforge"
     assert cfg.codex_bin == "codex"
     assert cfg.gemini_bin == "gemini"
     assert cfg.opencode_bin == "opencode"

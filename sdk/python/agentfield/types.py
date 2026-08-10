@@ -276,7 +276,10 @@ class DiscoveryResult:
 class HarnessConfig(BaseModel):
     provider: str = Field(
         ...,
-        description='Coding agent provider: "claude-code" | "codex" | "gemini" | "opencode"',
+        description=(
+            'Coding agent provider: "aforge" | "claude-code" | "codex" | '
+            '"gemini" | "opencode"'
+        ),
     )
     model: str = Field(default="sonnet", description="Default model identifier.")
     max_turns: int = Field(default=30, description="Maximum agent iterations.")
@@ -311,9 +314,9 @@ class HarnessConfig(BaseModel):
         default=None,
         description=(
             "Project directory for the coding agent to explore (e.g. a target "
-            "repository path). Maps to --dir in opencode. When set, cwd is used "
-            "only for output file placement while project_dir controls the "
-            "agent's working context."
+            "repository path). Maps to --dir in opencode. When set, it controls "
+            "the agent's working context and contains the isolated schema output "
+            "directory."
         ),
     )
     codex_bin: str = Field(default="codex", description="Path to codex binary.")
@@ -321,6 +324,7 @@ class HarnessConfig(BaseModel):
     opencode_bin: str = Field(
         default="opencode", description="Path to opencode binary."
     )
+    aforge_bin: str = Field(default="aforge", description="Path to aforge binary.")
     schema_mode: str = Field(
         default="single",
         description=(

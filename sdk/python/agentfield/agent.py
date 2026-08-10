@@ -3734,7 +3734,8 @@ class Agent(FastAPI):
         Args:
             prompt: Task description for the coding agent.
             schema: Pydantic BaseModel class for structured output validation.
-            provider: Override provider ("claude-code", "codex", "gemini", "opencode").
+            provider: Override provider ("aforge", "claude-code", "codex", "gemini",
+                "opencode").
             model: Override model identifier.
             max_turns: Maximum agent iterations.
             max_budget_usd: Cost cap in USD.
@@ -3743,15 +3744,16 @@ class Agent(FastAPI):
             system_prompt: System prompt for the agent.
             env: Environment variables for the agent.
             cwd: Working directory for the agent process. When ``project_dir`` is
-                not set, this is also the agent's root and where the schema output
-                file is placed.
+                not set, this is also the agent's root; schema output is isolated
+                in a per-run temporary directory underneath it.
             project_dir: Root directory the agent may read and write (maps to the
                 provider's project-root flag, e.g. opencode ``--dir``, codex
                 ``-C``, or the process cwd for gemini/claude). Set this when the
                 agent must read files across a shared repo while ``cwd`` points at
-                a nested task directory. The schema output file is then placed in
-                an isolated temp dir *under* ``project_dir`` so the provider never
-                rejects it as an external-directory write.
+                a nested task directory. Schema output is placed in an isolated
+                temp dir under the effective root so the provider never rejects
+                it as an external-directory write and concurrent runs do not
+                collide.
             schema_mode: How schema output is produced. "single" (default) asks
                 for one Write of the whole object. "incremental" builds it one
                 top-level field at a time and recovers by patching only the
