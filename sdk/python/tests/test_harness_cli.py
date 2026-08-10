@@ -338,3 +338,90 @@ async def test_run_cli_feeds_input_text_via_stdin():
         b"a prompt too large for a cmd.exe command line"
     )
     process.stdin.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Bounded output capture (AGENTFIELD_HARNESS_MAX_OUTPUT_BYTES)
+# ---------------------------------------------------------------------------
+
+
+def test_bounded_chunks_is_byte_identical_below_cap():
+    from agentfield.harness._cli import _BoundedChunks
+
+    buf = _BoundedChunks(1024)
+    buf.append(b"hello ")
+    buf.append(b"world")
+    assert buf.joined() == b"hello world"
+    assert buf.dropped_bytes == 0
+
+
+def test_bounded_chunks_keeps_head_and_tail_above_cap():
+    from agentfield.harness._cli import _BoundedChunks
+
+    buf = _BoundedChunks(1000)
+    for i in range(100):
+        buf.append(f"chunk-{i:04d}-".encode() + b"x" * 90)
+    joined = buf.joined()
+    assert buf.dropped_bytes > 0
+    assert joined.startswith(b"chunk-0000-")
+    assert joined.rstrip().endswith(b"x")
+    assert b"chunk-0099-" in joined
+    assert b"[agentfield: output truncated," in joined
+    assert len(joined) <= 1000 + 200  # cap + marker + one-chunk slack
+
+
+def test_bounded_chunks_retains_newest_chunk_even_when_oversized():
+    from agentfield.harness._cli import _BoundedChunks
+
+    buf = _BoundedChunks(100)
+    buf.append(b"a" * 500)
+    buf.append(b"FINAL" * 100)
+    assert b"FINAL" in buf.joined()
+
+
+def test_bounded_chunks_cap_disabled_when_nonpositive():
+    from agentfield.harness._cli import _BoundedChunks
+
+    buf = _BoundedChunks(0)
+    payload = b"y" * 100_000
+    buf.append(payload)
+    buf.append(payload)
+    assert buf.joined() == payload + payload
+    assert buf.dropped_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_run_cli_truncation_preserves_final_jsonl_events(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_HARNESS_MAX_OUTPUT_BYTES", "4096")
+    filler = [(b'{"type":"text","text":"' + b"x" * 200 + b'"}\n') for _ in range(200)]
+    final = b'{"type":"result","result":"the final answer"}\n'
+    process = MagicMock()
+    process.stdout = _stream_reader(filler + [final])
+    process.stderr = _stream_reader([])
+    process.returncode = 0
+    process.wait = AsyncMock(return_value=0)
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+        stdout, stderr, returncode = await run_cli(["opencode", "run"], timeout=5)
+
+    assert returncode == 0
+    assert "[agentfield: output truncated," in stdout
+    events = parse_jsonl(stdout)
+    assert {"type": "result", "result": "the final answer"} in events
+    assert extract_final_text(events) == "the final answer"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_no_truncation_below_cap(monkeypatch):
+    monkeypatch.delenv("AGENTFIELD_HARNESS_MAX_OUTPUT_BYTES", raising=False)
+    payload = b'{"type":"result","result":"ok"}\n'
+    process = MagicMock()
+    process.stdout = _stream_reader([payload])
+    process.stderr = _stream_reader([])
+    process.returncode = 0
+    process.wait = AsyncMock(return_value=0)
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+        stdout, _, _ = await run_cli(["opencode", "run"], timeout=5)
+
+    assert stdout == payload.decode()
