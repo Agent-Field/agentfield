@@ -4,8 +4,11 @@ import {
   type ControlPlaneStartDeps,
   SERVER_LABEL,
   planControlPlaneLaunch,
+  runAgentAction,
+  uninstallAgent,
   startControlPlane
 } from './agents'
+import { CpApiError, type CpClient } from './cpClient'
 
 const HEALTHY: ControlPlaneStatus = {
   reachable: true,
@@ -47,6 +50,84 @@ describe('planControlPlaneLaunch', () => {
 
   it('direct-spawns for a non-default port — launchd only serves 8080', () => {
     expect(planControlPlaneLaunch('darwin', true, 9091)).toBe('spawn')
+  })
+})
+
+function managementClient(overrides: Partial<CpClient> = {}): CpClient {
+  return {
+    startAgent: vi.fn(async (agent_id) => ({ agent_id, status: 'running', pid: 1, port: 2, started_at: '', log_file: '', message: 'started', endpoints: { health: '', reasoners: '', skills: '' } })),
+    stopAgent: vi.fn(async (agent_id) => ({ agent_id, status: 'stopped', message: 'stopped' })),
+    hasInstallApi: vi.fn(async () => true),
+    uninstallPackage: vi.fn(async (package_id) => ({ package_id, status: 'uninstalled' })),
+    ...overrides
+  } as unknown as CpClient
+}
+
+describe('HTTP agent management', () => {
+  it.each(['start', 'stop'] as const)('%s returns the existing result shape', async (action) => {
+    const result = await runAgentAction(action, 'agent', { cpClient: managementClient() })
+    expect(result).toEqual({ ok: true, message: action === 'start' ? 'started' : 'stopped' })
+  })
+
+  it('restart stops then starts through the client', async () => {
+    const client = managementClient()
+    expect(await runAgentAction('restart', 'agent', { cpClient: client })).toEqual({ ok: true, message: 'started' })
+    expect(client.stopAgent).toHaveBeenCalledBefore(vi.mocked(client.startAgent))
+  })
+
+  it('restart does not start when stopping fails', async () => {
+    const client = managementClient({
+      stopAgent: vi.fn(async () => {
+        throw new CpApiError({ status: 500, message: 'could not stop' })
+      })
+    })
+
+    expect(await runAgentAction('restart', 'agent', { cpClient: client })).toEqual({
+      ok: false,
+      message: 'could not stop'
+    })
+    expect(client.startAgent).not.toHaveBeenCalled()
+  })
+
+  it('maps server and unreachable errors', async () => {
+    const server = managementClient({ startAgent: vi.fn(async () => { throw new CpApiError({ status: 400, message: 'configuration missing' }) }) })
+    expect(await runAgentAction('start', 'agent', { cpClient: server })).toEqual({ ok: false, message: 'configuration missing' })
+    const offline = managementClient({ startAgent: vi.fn(async () => { throw new TypeError('fetch failed') }) })
+    expect((await runAgentAction('start', 'agent', { cpClient: offline })).message).toMatch(/start the control plane/i)
+  })
+
+  it('uninstalls without pre-stopping and detects an old control plane', async () => {
+    const client = managementClient()
+    expect(await uninstallAgent('agent', { cpClient: client })).toEqual({ ok: true, message: 'uninstalled' })
+    expect(client.stopAgent).not.toHaveBeenCalled()
+    const old = managementClient({ hasInstallApi: vi.fn(async () => false) })
+    expect((await uninstallAgent('agent', { cpClient: old })).message).toMatch(/update AgentField CLI/)
+  })
+
+  it('maps a mid-flight uninstall 404 to the old-control-plane message', async () => {
+    const client = managementClient({
+      uninstallPackage: vi.fn(async () => {
+        throw new CpApiError({ status: 404, message: 'route not found' })
+      })
+    })
+
+    expect(await uninstallAgent('agent', { cpClient: client })).toEqual({
+      ok: false,
+      message: 'Control plane update required — update AgentField CLI'
+    })
+  })
+
+  it('maps an offline uninstall to the management fallback message', async () => {
+    const client = managementClient({
+      uninstallPackage: vi.fn(async () => {
+        throw new TypeError('fetch failed')
+      })
+    })
+
+    expect(await uninstallAgent('agent', { cpClient: client })).toEqual({
+      ok: false,
+      message: 'Could not reach the control plane — start the control plane and try again'
+    })
   })
 })
 

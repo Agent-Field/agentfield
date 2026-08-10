@@ -5,6 +5,8 @@
 /* --- tokens ------------------------------------------------------------------ */
 
 :root {
+  /* Native widgets (select popups, scrollbars) follow the app theme. */
+  color-scheme: light;
   /* Surfaces — cool neutral, chroma toward accent hue (~250) */
   --bg: oklch(0.97 0.005 250);
   --bg-elevated: oklch(1 0 0);
@@ -55,9 +57,9 @@
 
   /* Type */
   --font-sans:
-    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui,
-    sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+        -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable",
+        "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --text-brand: 13.5px;
   --text-title: 19px;
   --text-section: 12px;
@@ -90,6 +92,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
+    color-scheme: dark;
     --bg: oklch(0.19 0.01 250);
     --bg-elevated: oklch(0.22 0.012 250);
     --sidebar: oklch(0.14 0.012 250);
@@ -114,12 +117,12 @@
 }
 
 /* Solid surfaces off macOS — panel translucency must not depend on vibrancy. */
-body:not([data-platform='darwin']) {
+body:not([data-platform="darwin"]) {
   --panel: var(--bg-elevated);
 }
 
 @media (prefers-color-scheme: dark) {
-  body:not([data-platform='darwin']) {
+    body:not([data-platform="darwin"]) {
     --panel: var(--bg-elevated);
   }
 }
@@ -148,11 +151,11 @@ body {
   user-select: text;
 }
 
-body[data-platform='darwin'] {
+body[data-platform="darwin"] {
   background: transparent;
 }
 
-body[data-platform='darwin'] .sidebar {
+body[data-platform="darwin"] .sidebar {
   background: transparent;
 }
 
@@ -213,7 +216,7 @@ code,
   padding: 14px 10px;
 }
 
-body[data-platform='darwin'] .sidebar {
+body[data-platform="darwin"] .sidebar {
   padding-top: 48px;
 }
 
@@ -313,6 +316,27 @@ body[data-platform='darwin'] .sidebar {
   opacity: 0.75;
 }
 
+.nav-item-label {
+  min-width: 0;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.nav-item-tag {
+  flex: none;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--hairline));
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 10px;
+  font-weight: var(--weight-chip);
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .nav-item:hover {
   background: var(--pill);
   color: var(--text);
@@ -352,7 +376,7 @@ body[data-platform='darwin'] .sidebar {
 
 /* macOS: vibrancy is the sidebar's material only — the canvas stays solid so
    system blur never bleeds under content (§3.6). */
-body[data-platform='darwin'] .main {
+body[data-platform="darwin"] .main {
   background: var(--bg);
 }
 
@@ -988,16 +1012,14 @@ section > .section-title {
   cursor: default;
 }
 
-/* Overflow menu */
-.menu-anchor {
-  position: relative;
-}
-
+/* Overflow menu (MenuPopover.tsx). Portaled to body — not clipped by
+   .panel's overflow or re-anchored by .market-card's hover transform.
+   left/top come inline from the trigger rect; the translate keeps the
+   menu's right edge on the trigger's right edge. */
 .menu-popover {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
-  z-index: 40;
+  position: fixed;
+  transform: translateX(-100%);
+  z-index: 100;
   min-width: 160px;
   padding: 4px;
   background: var(--bg-elevated);
@@ -1239,6 +1261,296 @@ section > .section-title {
   margin-bottom: 0;
 }
 
+.cloud-input {
+  width: 100%;
+  min-height: 32px;
+}
+
+.cloud-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cloud-form {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cloud-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cloud-field .row-sub {
+  white-space: normal;
+  margin-bottom: var(--space-2);
+}
+
+.cloud-input-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.cloud-key-row {
+  position: relative;
+}
+
+.cloud-key-row .cloud-input {
+  padding-right: 62px;
+}
+
+.cloud-key-toggle {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  min-width: 54px;
+  transform: translateY(-50%);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.cloud-key-toggle:active:not(:disabled) {
+  transform: translateY(-50%) scale(0.985);
+}
+
+.cloud-status-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--neutral);
+}
+
+.cloud-status-dot.connected {
+  background: var(--ok);
+}
+
+.cloud-status-title {
+  line-height: 1.45;
+}
+
+.cloud-status-strip {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+}
+
+.cloud-tabs {
+    align-self: flex-start;
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    margin-left: 4px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-pill);
+    background: var(--empty-surface);
+}
+
+.cloud-tab {
+    border: 0;
+    border-radius: var(--radius-pill);
+    padding: 5px 14px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--text-chip);
+    font-weight: var(--weight-chip);
+    cursor: pointer;
+}
+
+.cloud-tab:hover {
+    color: var(--text);
+    background: var(--pill);
+}
+
+.cloud-tab.active {
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+}
+
+@media (prefers-color-scheme: dark) {
+    .cloud-tab.active {
+        color: var(--accent);
+    }
+}
+
+.cloud-spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in oklch, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: cloud-spin 0.8s linear infinite;
+}
+
+@keyframes cloud-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.callout.success {
+  background: color-mix(in oklch, var(--ok) 10%, transparent);
+  color: var(--ok);
+}
+
+.callout.warning {
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.cloud-confirmation {
+  font-weight: var(--weight-body);
+}
+
+.cloud-result {
+  display: block;
+}
+
+.cloud-result-heading {
+  font-weight: var(--weight-body);
+}
+
+.cloud-checks {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-1);
+  font-size: 11.5px;
+}
+
+.cloud-checks li {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: baseline;
+  column-gap: var(--space-1);
+  color: var(--text-secondary);
+}
+
+.cloud-check-icon {
+  text-align: center;
+  font-weight: 700;
+}
+
+.cloud-checks .passed .cloud-check-icon {
+  color: var(--ok);
+}
+
+.cloud-checks .warning .cloud-check-icon {
+  color: var(--warn);
+}
+
+.cloud-checks .failed .cloud-check-icon {
+  color: var(--danger);
+}
+
+.cloud-checks .pending .cloud-check-icon {
+  color: var(--neutral);
+}
+
+.cloud-railway {
+  padding: var(--space-4);
+}
+
+.cloud-railway-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.cloud-guided-state {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+}
+
+.cloud-progress-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.cloud-railway-copy,
+.cloud-railway-footnote {
+  white-space: normal;
+}
+
+.cloud-railway-heading {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cloud-engine-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.cloud-link-button {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cloud-link-button.danger,
+.action-button.danger {
+  color: var(--danger);
+}
+
+.cloud-workspace-field,
+.cloud-destroy-confirm {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cloud-deploy-log {
+  width: 100%;
+  max-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  border-radius: var(--radius-control);
+  background: var(--empty-surface);
+}
+
+.cloud-railway-footnote {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.cloud-steps {
+  margin: var(--space-2) 0 var(--space-3);
+  padding-left: var(--space-5);
+  color: var(--text-secondary);
+  font-size: var(--text-secondary-size);
+}
+
+.cloud-steps li + li {
+  margin-top: var(--space-1);
+}
+
 .switch {
   -webkit-app-region: no-drag;
   position: relative;
@@ -1428,7 +1740,8 @@ section > .section-title {
   background: currentColor;
   opacity: var(--dot-rest);
   transform: scale(0.72);
-  animation: dot-field-flow var(--dot-duration) cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    animation: dot-field-flow var(--dot-duration) cubic-bezier(0.4, 0, 0.2, 1)
+        infinite;
   animation-delay: var(--dot-delay);
 }
 
@@ -1633,6 +1946,17 @@ code {
     animation: none;
     border-top-color: color-mix(in oklch, var(--ok) 30%, transparent);
     opacity: 0.85;
+  }
+
+  .cloud-spinner {
+    animation: none;
+    border-color: transparent;
+  }
+
+  .cloud-spinner::after {
+        content: "…";
+    display: block;
+    transform: translate(-1px, -8px);
   }
 
   .view-content {
@@ -2145,4 +2469,11 @@ a.action-button {
     animation: none;
     background: var(--pill);
   }
+}
+
+/* Native select popup: explicit colors so options stay readable even where
+   the platform ignores color-scheme for the dropdown list. */
+select.env-input option {
+  background: var(--bg-elevated);
+  color: var(--text);
 }

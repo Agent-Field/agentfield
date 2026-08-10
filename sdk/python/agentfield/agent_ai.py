@@ -366,6 +366,7 @@ class AgentAI:
         self._initialization_complete = False
         self._rate_limiter = None
         self._fal_provider_instance = None
+        self._minimax_provider_instance = None
         self._openrouter_provider_instance = None
         self._media_router_instance = None
 
@@ -400,12 +401,27 @@ class AgentAI:
         return self._openrouter_provider_instance
 
     @property
+    def _minimax_provider(self):
+        """Lazy-initialized MiniMax media provider."""
+        if self._minimax_provider_instance is None:
+            from agentfield.media_providers import MiniMaxProvider
+
+            config = self.agent.ai_config
+            api_key = getattr(config, "minimax_api_key", None)
+            base_url = getattr(config, "minimax_base_url", None)
+            self._minimax_provider_instance = MiniMaxProvider(
+                api_key=api_key if isinstance(api_key, str) else None,
+                base_url=base_url if isinstance(base_url, str) else None,
+            )
+        return self._minimax_provider_instance
+
+    @property
     def _media_router(self):
         """
         Lazy-initialized MediaRouter for prefix-based provider dispatch.
 
         Returns:
-            MediaRouter: Configured router with fal, openrouter, and litellm providers
+            MediaRouter: Configured router with registered media providers
         """
         if self._media_router_instance is None:
             from agentfield.media_providers import LiteLLMProvider
@@ -414,6 +430,7 @@ class AgentAI:
             router = MediaRouter()
             router.register("fal-ai/", self._fal_provider)
             router.register("fal/", self._fal_provider)
+            router.register("minimax/", self._minimax_provider)
             router.register("openrouter/", self._openrouter_provider)
             router.register("", LiteLLMProvider())  # catch-all fallback
             self._media_router_instance = router
@@ -1426,16 +1443,21 @@ class AgentAI:
         """
         AI method optimized for audio output generation.
 
-        Automatically detects the model type and uses the appropriate LiteLLM function:
+        Automatically detects the model type and uses the appropriate provider:
+        - For MiniMax TTS models (minimax/speech-2.8-hd, etc.): Uses MiniMax T2A
         - For TTS models (tts-1, tts-1-hd, gpt-4o-mini-tts): Uses litellm.speech()
         - For audio-capable chat models (gpt-4o-audio-preview): Uses litellm.completion() with audio modalities
 
         Args:
             *args: Input arguments (text prompts, etc.)
-            voice: Voice to use for audio generation (alloy, echo, fable, onyx, nova, shimmer)
-            format: Audio format (wav, mp3, etc.)
+            voice: Voice identifier. OpenAI voices include alloy, echo, fable,
+                onyx, nova, and shimmer. MiniMax models require a MiniMax voice ID.
+            format: Audio format. MiniMax supports mp3, wav, flac, and pcm.
             model: Model to use (defaults to tts-1)
-            **kwargs: Additional parameters
+            **kwargs: Additional parameters. MiniMax supports output_format
+                ("hex" or "url"), language_boost, voice_setting,
+                pronunciation_dict, audio_setting, voice_modify, and
+                subtitle_enable. Streaming is not supported.
 
         Returns:
             MultimodalResponse with audio content
@@ -1443,12 +1465,32 @@ class AgentAI:
         Example:
             audio_result = await agent.ai_with_audio("Say hello warmly", voice="alloy")
             audio_result.audio.save("greeting.wav")
+
+            minimax_result = await agent.ai_with_audio(
+                "Say hello warmly",
+                model="minimax/speech-2.8-hd",
+                voice="English_Graceful_Lady",
+                format="mp3",
+            )
         """
         # Use TTS model as default (more reliable than gpt-4o-audio-preview)
         if model is None:
             model = (
                 self.agent.ai_config.audio_model
             )  # Use configured audio model (defaults to tts-1)
+
+        if model.startswith("minimax/"):
+            provider = self._media_router.resolve(model, "audio")
+            text_input = " ".join(str(arg) for arg in args if isinstance(arg, str))
+            if not text_input:
+                text_input = "Hello, this is a test audio message."
+            return await provider.generate_audio(
+                text=text_input,
+                model=model,
+                voice=voice,
+                format=format,
+                **kwargs,
+            )
 
         # Try media router for fal models
         try:
@@ -1902,14 +1944,22 @@ class AgentAI:
         Supported Providers:
         - LiteLLM: OpenAI TTS models like "tts-1", "tts-1-hd", "gpt-4o-mini-tts"
         - Fal.ai: TTS models like "fal-ai/kokoro/..." (custom deployments)
+        - MiniMax: TTS models prefixed with "minimax/", such as
+          "minimax/speech-2.8-hd"
 
         Args:
             text: Text to convert to speech
             model: TTS model to use (defaults to AIConfig.audio_model, typically "tts-1")
-            voice: Voice to use ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
-            format: Audio format ("wav", "mp3", "opus", "aac", "flac", "pcm")
+            voice: Voice identifier. OpenAI voices include "alloy", "echo",
+                "fable", "onyx", "nova", and "shimmer". MiniMax models
+                require a MiniMax voice ID instead of the default "alloy".
+            format: Audio format. MiniMax supports "mp3", "wav", "flac", and
+                "pcm".
             speed: Speech speed multiplier (0.25 to 4.0)
-            **kwargs: Provider-specific parameters
+            **kwargs: Provider-specific parameters. MiniMax supports
+                output_format ("hex" or "url"), language_boost,
+                voice_setting, pronunciation_dict, audio_setting,
+                voice_modify, and subtitle_enable. Streaming is not supported.
 
         Returns:
             MultimodalResponse: Response object with .audio containing AudioOutput.
@@ -1930,6 +1980,16 @@ class AgentAI:
                 model="tts-1-hd",
                 voice="nova",
                 format="mp3"
+            )
+
+            # MiniMax TTS with a MiniMax voice ID
+            result = await app.ai_generate_audio(
+                "Welcome to the presentation.",
+                model="minimax/speech-2.8-hd",
+                voice="English_Graceful_Lady",
+                format="mp3",
+                language_boost="English",
+                output_format="hex",
             )
 
             # Adjust speech speed
@@ -2003,10 +2063,11 @@ class AgentAI:
         """
         Generate video from text or image.
 
-        This method generates videos using Fal.ai's video generation models.
-        Supports both text-to-video and image-to-video generation.
+        Routes video generation requests by model prefix. MiniMax models use
+        the ``minimax/`` prefix and support text-to-video and image-to-video.
 
         Supported Providers:
+        - MiniMax: Models prefixed with "minimax/"
         - Fal.ai: Models like "fal-ai/minimax-video/image-to-video",
           "fal-ai/kling-video/v1/standard/text-to-video",
           "fal-ai/luma-dream-machine"

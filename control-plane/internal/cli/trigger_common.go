@@ -332,6 +332,16 @@ func makeRequest(ctx context.Context, method, path string, body interface{}, acc
 		}
 		return nil, controlPlaneUnreachableError(err)
 	}
+
+	// A 401 is never something the caller can recover from by inspecting the
+	// body: the request needs a credential the CLI did not send. Convert it
+	// here so every command that goes through makeRequest tells the user how
+	// to fix it instead of printing a bare status code.
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		resp.Body.Close()
+		return nil, authRequiredError(server, body)
+	}
 	return resp, nil
 }
 

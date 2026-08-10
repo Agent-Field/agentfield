@@ -16,8 +16,11 @@ import pytest
 
 from agentfield.agent_ai import AgentAI
 from agentfield.media_providers import (
+    MINIMAX_CN_BASE_URL,
+    MINIMAX_GLOBAL_BASE_URL,
     FalProvider,
     LiteLLMProvider,
+    MiniMaxProvider,
     OpenRouterProvider,
     MediaProvider,
     get_provider,
@@ -262,6 +265,89 @@ class TestFalProvider:
         )
 
         assert result.text == "Hello world, this is a test."
+
+
+class _MiniMaxResponse:
+    def __init__(self, payload):
+        self.status = 200
+        self.payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def json(self):
+        return self.payload
+
+
+class _MiniMaxSession:
+    def __init__(self, payload):
+        self.payload = payload
+        self.request = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def post(self, endpoint, **kwargs):
+        self.request = (endpoint, kwargs)
+        return _MiniMaxResponse(self.payload)
+
+
+class TestMiniMaxProvider:
+    @pytest.mark.asyncio
+    async def test_generate_music_url_output(self, monkeypatch):
+        monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
+        session = _MiniMaxSession(
+            {
+                "base_resp": {"status_code": 0},
+                "data": {"audio": "https://example.test/music.mp3"},
+            }
+        )
+        provider = MiniMaxProvider(api_key="test-key")
+
+        with patch("aiohttp.ClientSession", return_value=session):
+            result = await provider.generate_music("ambient piano", output_format="url")
+
+        assert result.audio.url == "https://example.test/music.mp3"
+        assert result.audio.data is None
+        assert session.request[1]["json"]["output_format"] == "url"
+        assert session.request[0] == f"{MINIMAX_GLOBAL_BASE_URL}/music_generation"
+
+    @pytest.mark.asyncio
+    async def test_generate_music_hex_output_uses_audiooutput_base64_contract(self):
+        audio_bytes = b"minimax-music"
+        session = _MiniMaxSession(
+            {"base_resp": {"status_code": 0}, "data": {"audio": audio_bytes.hex()}}
+        )
+        provider = MiniMaxProvider(api_key="test-key")
+
+        with patch("aiohttp.ClientSession", return_value=session):
+            result = await provider.generate_music("ambient piano", output_format="hex")
+
+        assert result.audio.url is None
+        assert result.audio.get_bytes() == audio_bytes
+        assert session.request[1]["json"]["output_format"] == "hex"
+
+    @pytest.mark.asyncio
+    async def test_generate_music_uses_configured_base_url(self, monkeypatch):
+        monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
+        session = _MiniMaxSession(
+            {
+                "base_resp": {"status_code": 0},
+                "data": {"audio": "https://example.test/m.mp3"},
+            }
+        )
+        provider = MiniMaxProvider(api_key="test-key", base_url=MINIMAX_CN_BASE_URL)
+
+        with patch("aiohttp.ClientSession", return_value=session):
+            await provider.generate_music("ambient piano", output_format="url")
+
+        assert session.request[0] == f"{MINIMAX_CN_BASE_URL}/music_generation"
 
 
 # =============================================================================

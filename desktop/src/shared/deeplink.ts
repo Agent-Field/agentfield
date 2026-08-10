@@ -8,7 +8,7 @@
 export const DEEP_LINK_SCHEME = 'agentfield'
 
 /** The app's views, also the vocabulary of deep-link targets. */
-export const VIEWS = ['home', 'install', 'agents', 'activity', 'settings'] as const
+export const VIEWS = ['home', 'install', 'agents', 'activity', 'settings', 'cloud'] as const
 export type View = (typeof VIEWS)[number]
 
 /** Pre-IA rename hosts that still open the app on the successor view. */

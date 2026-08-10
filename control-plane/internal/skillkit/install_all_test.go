@@ -8,6 +8,7 @@ import "testing"
 // catalog entry. Uses the codex marker-block target so no symlink-only path is
 // required and everything lands under an isolated temp HOME.
 func TestInstallAllInstallsEveryCatalogSkill(t *testing.T) {
+	t.Setenv("AGENTFIELD_SKIP_FURROW", "1")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("AGENTFIELD_HOME", home)

@@ -170,6 +170,8 @@ export interface CliStatus {
  * moment Claude/Codex/anything asks.
  */
 export interface DesktopSettings {
+  /** Remote control-plane profile. The API key remains in main-process settings. */
+  cloud: { enabled: boolean; serverUrl: string; apiKey: string }
   /** Launch the app when you log in (starts hidden, in the tray). */
   openAtLogin: boolean
   /** Follow the OS appearance, or explicitly force the light/dark palette. */
@@ -182,6 +184,14 @@ export interface DesktopSettings {
    * plane there and reports a conflict instead of silently moving elsewhere.
    */
   controlPlanePort: number | null
+  /**
+   * API key for the LOCAL control plane, or '' when it needs none. A local
+   * server started without AGENTFIELD_API_KEY authenticates this app by its
+   * loopback address, so this stays empty for almost everyone; set it when
+   * you run your own server with authentication enabled. Like cloud.apiKey,
+   * the value lives in main-process settings on this computer.
+   */
+  localApiKey: string
   /**
    * The port of the control plane this app last started or adopted. App-
    * managed, not a user preference: it lets a restarted app rediscover a
@@ -215,6 +225,38 @@ export interface DesktopSettings {
   starPrompt: 'pending' | 'done'
   /** ISO timestamp until which the star prompt is snoozed (Later = +7 days). null = not snoozed. */
   starPromptSnoozedUntil: string | null
+}
+
+export interface CloudTestResult {
+  ok: boolean
+  healthy: boolean
+  authOk: boolean
+  installApi: boolean
+  furrowAvailable: boolean
+  /** Present only when the server health payload advertised a furrow address. */
+  furrowReported?: boolean
+  version?: string
+  message: string
+}
+
+export interface CloudImageUpdate {
+  current: string | null
+  latest: string | null
+  updateAvailable: boolean
+}
+
+export interface RailwayStatus {
+  loggedIn: boolean
+  engineAvailable: boolean
+  hasDeployment: boolean
+  workspaces: Array<{ id: string; name: string }>
+}
+
+export interface CloudDeployResult {
+  ok: boolean
+  url?: string
+  furrowAddress?: string
+  message: string
 }
 
 /** A newer app release found on GitHub (the desktop app's update channel). */
@@ -297,6 +339,16 @@ export interface AgentFieldSnapshot {
 
 /** Surface exposed on window.agentfield by the preload script. */
 export interface AgentFieldApi {
+  cloudTest(url: string, apiKey: string): Promise<CloudTestResult>
+  /** Open the guided Railway deployment flow for a hosted control plane. */
+  cloudDeployRailway(): Promise<boolean>
+  railwayStatus(): Promise<RailwayStatus>
+  checkCloudImageUpdate(): Promise<CloudImageUpdate>
+  railwayLogin(): Promise<{ ok: boolean; message: string; workspaces?: RailwayStatus['workspaces'] }>
+  railwayLogout(): Promise<void>
+  cloudDeploy(workspaceId: string): Promise<CloudDeployResult>
+  cloudDestroy(): Promise<{ ok: boolean; message: string }>
+  onCloudDeployProgress(listener: (line: string) => void): () => void
   getSnapshot(): Promise<AgentFieldSnapshot>
   getCatalog(): Promise<CatalogEntry[]>
   /** Install a catalog entry by name. Resolves when `af install` exits. */

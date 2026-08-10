@@ -42,17 +42,19 @@ const ICONS: Record<View, string> = {
   install: 'M12 3v12M7 10l5 5l5-5M4 21h16',
   agents: 'M12 8V4H8M2 14h2M20 14h2M15 13v2M9 13v2M16 20H8a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2z',
   activity: 'M3 12h4l3-8l4 16l3-8h4',
+  cloud: 'M17.5 19H7a5 5 0 1 1 1.2-9.85A6 6 0 0 1 19.7 11.2A4 4 0 0 1 17.5 19z',
   settings: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6'
 }
 
 // Nav v2 (DESIGN.md §2.1): 4 items. Installing is an action on the Agents
 // library ("+ Add agent"), not a place — `install` stays a valid deep-link
 // View that App maps to Agents with add-mode open.
-const NAV: Array<{ id: View; label: string }> = [
+const NAV: Array<{ id: View; label: string; tag?: string }> = [
   { id: 'home', label: 'Home' },
   { id: 'agents', label: 'Agents' },
   { id: 'activity', label: 'Activity' },
-  { id: 'settings', label: 'Settings' }
+  { id: 'settings', label: 'Settings' },
+  { id: 'cloud', label: 'Remote', tag: 'Beta' }
 ]
 
 // UI-furniture spring (DESIGN.md §5.1) — fast, settles with no felt overshoot.
@@ -116,7 +118,8 @@ export function Sidebar({
                   />
                 ))}
               <Icon d={ICONS[item.id]} />
-              {item.label}
+              <span className="nav-item-label">{item.label}</span>
+              {item.tag && <span className="nav-item-tag">{item.tag}</span>}
             </button>
           )
         })}

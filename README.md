@@ -42,6 +42,11 @@ https://github.com/user-attachments/assets/9fb7b1cf-26de-4b9b-9ba2-917252cc26ec
 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
 
+On macOS the installer also registers the control plane to start at login (under
+launchd) and adds a menu-bar icon. Stop it with `af service stop` or the menu-bar
+icon — a plain `kill` looks like a crash and it restarts. `af service status`
+shows health and in-flight work; install with `--no-tray` to skip this entirely.
+
 Then in your coding agent, paste any spec with /agentfield :
 
 ```text
@@ -411,12 +416,12 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 Each of these is a real, installable agent node. With a control plane running, drop any of them into your setup with a single command — `af install <repo-url>` clones the repo, isolates its dependencies, and registers the node. You're prompted once for shared secrets like `OPENROUTER_API_KEY` (stored encrypted and reused across every node), then the node's reasoners are callable over REST or with `af call`:
 
 ```bash
-af install https://github.com/Agent-Field/SWE-AF              # autonomous engineering team  → node: swe-planner
+af install https://github.com/Agent-Field/SWE-AF             # autonomous engineering team   → node: swe-planner
 af install https://github.com/Agent-Field/sec-af             # security auditor              → node: sec-af
 af install https://github.com/Agent-Field/cloudsecurity-af   # cloud / IaC security scanner  → node: cloudsecurity
 af install https://github.com/Agent-Field/pr-af              # agentic code review           → node: pr-af
 
-af run swe-planner                                           # start a node (prompts once for required secrets)
+af run swe-planner                                          # start a node (prompts once for required secrets)
 af call swe-planner.build --in '{"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}'
 ```
 
@@ -484,20 +489,20 @@ Full walkthrough — authoring, installing, and configuring nodes: [Installing a
       <a href="https://agentfield.ai/github/cloudsecurity/?utm_source=github-readme&utm_campaign=github-readme&utm_content=cloudsec&utm_id=github-readme-cloudsec-repo">View project →</a>
     </td>
     <td align="center" width="50%">
-      <a href="https://agentfield.ai/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">
-        <img src="assets/examples/agentic-pr-reviewer.png" alt="Agentic PR Reviewer" />
+      <a href="https://agentfield.ai/github/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">
+        <img src="assets/examples/agentic-pr-reviewer-hero.png" alt="Agentic PR Reviewer — #1 open-source on Code-Review-Bench" />
       </a>
       <br/>
       <b>Agentic PR Reviewer</b>
       <br/>
-      <sub>Builds a custom review strategy for every PR - spawns parallel reviewer agents with runtime-crafted prompts, adversarially challenges its own findings, and posts evidence-grounded inline comments.</sub>
+      <sub>#1 open-source reviewer on Code-Review-Bench - 0.706 golden recall across 42 tools compared, at ~10x lower cost per review. Builds a custom review strategy for every PR, then adversarially challenges its own findings.</sub>
       <br/><br/>
-      <a href="https://agentfield.ai/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">View project →</a>
+      <a href="https://agentfield.ai/github/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">View project →</a>
     </td>
   </tr>
 </table>
 
-[See all examples →](https://www.agentfield.ai/examples?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-see-all-examples)
+[See all examples →](https://agentfield.ai/examples?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-see-all-examples)
 
 Built something with AgentField? [Submit your project to be featured on the examples page](https://github.com/Agent-Field/agentfield/issues/new?template=community-project.md).
 

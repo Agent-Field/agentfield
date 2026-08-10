@@ -52,7 +52,7 @@ read this skill first`,
 	},
 	{
 		Name:        "agentfield-use",
-		Version:     "0.4.0",
+		Version:     "0.5.0",
 		Description: "Discover and call agents already running on a local AgentField control plane. Zero-setup MCP endpoint at <server>/mcp, health check, capability discovery, ranked reasoner search (af agent search), concurrent sync/async execution, load-aware pacing (meta.load), in-flight visibility (af ps / executions/active), wedged-run triage (cancel-tree), sessions, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
 		EmbedRoot:   "skill_data/agentfield-use",
 		EntryFile:   "SKILL.md",

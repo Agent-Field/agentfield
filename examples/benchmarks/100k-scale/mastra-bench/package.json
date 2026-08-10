@@ -16,11 +16,11 @@
   },
   "overrides": {
     "js-yaml": "4.3.0",
-    "fast-uri": "3.1.4",
+    "fast-uri": "3.1.5",
     "body-parser": "2.3.0",
     "@ai-sdk/provider-utils": "^4.0.27",
     "@ai-sdk/provider-utils-v5": "npm:@ai-sdk/provider-utils@^4.0.27",
-    "hono": "4.12.32",
+    "hono": "4.12.34",
     "@hono/node-server": "2.0.12"
   }
 }

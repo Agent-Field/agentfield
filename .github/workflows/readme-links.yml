@@ -1,0 +1,51 @@
+name: README Links
+
+# assets/utm-links.csv is the manifest of every UTM-tagged link in README.md —
+# marketing reads it to audit campaign coverage. Nothing enforced that it stayed
+# in sync with the README, so it drifted across successive README rewrites: eight
+# tracked links were missing from the manifest and one row pointed at a link that
+# had been deleted months earlier.
+#
+# This job is the guard. It runs on any PR that touches the README, the manifest,
+# or the checker itself, and fails with the exact rows to add or delete.
+#
+# Run the same check locally:  python3 scripts/check-utm-links.py
+
+on:
+  pull_request:
+    paths:
+      - "README.md"
+      - "assets/utm-links.csv"
+      - "scripts/check-utm-links.py"
+      - ".github/workflows/readme-links.yml"
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "assets/utm-links.csv"
+      - "scripts/check-utm-links.py"
+      - ".github/workflows/readme-links.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: readme-links-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  utm-links:
+    name: utm-links manifest in sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Stdlib only — no install step needed.
+      - name: Check utm-links.csv against README.md
+        run: python3 scripts/check-utm-links.py

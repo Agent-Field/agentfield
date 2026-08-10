@@ -446,7 +446,11 @@ Example:
 
 			fmt.Println()
 			fmt.Println("Test it:")
-			fmt.Printf("  curl -X POST http://localhost:8080/api/v1/execute/%s.demo_echo \\\n", nodeID)
+			reasonerName := "demo_echo"
+			if language == "go" {
+				reasonerName = "echo"
+			}
+			fmt.Printf("  curl -X POST http://localhost:8080/api/v1/execute/%s.%s \\\n", nodeID, reasonerName)
 			fmt.Println("    -H \"Content-Type: application/json\" \\")
 			fmt.Println("    -d '{\"input\": {\"message\": \"Hello!\"}}'")
 			fmt.Println()

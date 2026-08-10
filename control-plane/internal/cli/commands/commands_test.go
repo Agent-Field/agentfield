@@ -160,6 +160,14 @@ func TestInstallCommand_MetadataAndExecute(t *testing.T) {
 			wantInstallRun: 1,
 		},
 		{
+			name:           "success with subdirectory path",
+			args:           []string{"pkg-monorepo", "--path", "go", "--force"},
+			wantSource:     "pkg-monorepo",
+			wantOptions:    domain.InstallOptions{Force: true, Verbose: false, Path: "go"},
+			wantListCalls:  0,
+			wantInstallRun: 1,
+		},
+		{
 			name:           "verbose continues when listing packages fails",
 			args:           []string{"pkg-c", "--verbose"},
 			wantSource:     "pkg-c",

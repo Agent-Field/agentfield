@@ -3,6 +3,7 @@ import type { ReactElement } from 'react'
 import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import type { AgentEnvReport, AgentFieldSnapshot, SnapshotAgent } from '../../../shared/types'
 import { EnvEditor } from './EnvEditor'
+import { MenuPopover } from './MenuPopover'
 import { SkeletonRows } from './Skeleton'
 import { EmptyState } from './EmptyMark'
 
@@ -259,49 +260,38 @@ function AgentRow({
                   Keys
                 </button>
               )}
-              <div className="menu-anchor">
+              <MenuPopover
+                open={menuOpen}
+                onToggle={onToggleMenu}
+                disabled={rowBusy}
+                ariaLabel="More actions"
+              >
+                {(running || agent.badge === 'unknown') && (
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => onAction('restart')}
+                  >
+                    Restart
+                  </button>
+                )}
                 <button
-                  className="action-button icon"
-                  aria-label="More actions"
-                  aria-expanded={menuOpen}
-                  disabled={rowBusy}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onToggleMenu()
+                  className="menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    void window.agentfield.openWebUI('/ui/')
                   }}
                 >
-                  ⋯
+                  Open in Web UI
                 </button>
-                {menuOpen && (
-                  <div className="menu-popover" role="menu">
-                    {(running || agent.badge === 'unknown') && (
-                      <button
-                        className="menu-item"
-                        role="menuitem"
-                        onClick={() => onAction('restart')}
-                      >
-                        Restart
-                      </button>
-                    )}
-                    <button
-                      className="menu-item"
-                      role="menuitem"
-                      onClick={() => {
-                        void window.agentfield.openWebUI('/ui/')
-                      }}
-                    >
-                      Open in Web UI
-                    </button>
-                    <button
-                      className="menu-item danger"
-                      role="menuitem"
-                      onClick={onConfirmUninstall}
-                    >
-                      Uninstall
-                    </button>
-                  </div>
-                )}
-              </div>
+                <button
+                  className="menu-item danger"
+                  role="menuitem"
+                  onClick={onConfirmUninstall}
+                >
+                  Uninstall
+                </button>
+              </MenuPopover>
             </div>
           )}
         </div>

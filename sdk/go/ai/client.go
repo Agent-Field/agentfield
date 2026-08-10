@@ -110,9 +110,12 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 
-	// Add OpenRouter-specific headers if applicable
-	if c.config.IsOpenRouter() {
+	// Add gateway-specific attribution headers if applicable
+	switch {
+	case c.config.IsOpenRouter():
 		applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+	case c.config.IsInfron():
+		applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 	}
 
 	// Execute request
@@ -142,6 +145,7 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
+	response.normalizeNativeCost()
 
 	return &response, nil
 }
@@ -207,9 +211,12 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		httpReq.Header.Set("Accept", "text/event-stream")
 
-		// Add OpenRouter-specific headers if applicable
-		if c.config.IsOpenRouter() {
+		// Add gateway-specific attribution headers if applicable
+		switch {
+		case c.config.IsOpenRouter():
 			applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+		case c.config.IsInfron():
+			applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 		}
 
 		// Execute request
@@ -288,6 +295,7 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 				if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 					continue // Skip malformed chunks
 				}
+				chunk.normalizeNativeCost()
 
 				return chunk, nil
 			}

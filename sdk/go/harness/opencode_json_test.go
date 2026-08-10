@@ -51,6 +51,39 @@ func TestOpenCode_JSONEventsParsed(t *testing.T) {
 	assert.Contains(t, joined, "run --format json")
 }
 
+func TestOpenCode_SumsPartNestedTokenUsage(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"step_finish","part":{"cost":0.01,"tokens":{"input":123,"output":456,"reasoning":78,"cache":{"read":9,"write":10}}}}`,
+		`{"type":"step_finish","part":{"cost":0.02}}`,
+		`{"type":"text","part":{"text":"done"}}`,
+		`{"type":"step_finish","part":{"cost":0.03,"tokens":{"input":7,"output":8,"reasoning":2,"cache":{"read":3,"write":4}}}}`,
+	}, "\n")
+
+	raw, err := fakeOpenCode(stream, "", 0, nil).Execute(context.Background(), "prompt", Options{})
+	require.NoError(t, err)
+
+	assert.Equal(t, 130, raw.Metrics.InputTokens)
+	assert.Equal(t, 544, raw.Metrics.OutputTokens)
+	assert.Equal(t, 12, raw.Metrics.CacheReadTokens)
+	assert.Equal(t, 14, raw.Metrics.CacheCreationTokens)
+}
+
+func TestOpenCode_TokenUsageFallsBackWithoutPartTokens(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"step_finish","part":{"cost":0.01}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":12,"cached_input_tokens":13,"cache_creation_input_tokens":14}}`,
+		`{"type":"result","result":"done"}`,
+	}, "\n")
+
+	raw, err := fakeOpenCode(stream, "", 0, nil).Execute(context.Background(), "prompt", Options{})
+	require.NoError(t, err)
+
+	assert.Equal(t, 11, raw.Metrics.InputTokens)
+	assert.Equal(t, 12, raw.Metrics.OutputTokens)
+	assert.Equal(t, 13, raw.Metrics.CacheReadTokens)
+	assert.Equal(t, 14, raw.Metrics.CacheCreationTokens)
+}
+
 // TestOpenCode_ToolUseTurnFallback verifies the turn count falls back to
 // tool_use events when there are no step markers, and that cost is nil when no
 // step_finish carried a cost.

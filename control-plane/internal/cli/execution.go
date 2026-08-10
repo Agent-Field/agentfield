@@ -232,8 +232,13 @@ func runExecutionAction(cfg executionActionConfig) (map[string]any, error) {
 	if cfg.withReason || cfg.withBody {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if cfg.opts.token != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.opts.token)
+	// --token / AGENTFIELD_TOKEN stays authoritative for callers already using
+	// it; otherwise fall back to the API key every other command sends, so a
+	// stored credential covers these endpoints too.
+	if token := strings.TrimSpace(cfg.opts.token); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else if key := strings.TrimSpace(GetAPIKey()); key != "" {
+		req.Header.Set("X-API-Key", key)
 	}
 
 	resp, err := client.Do(req)

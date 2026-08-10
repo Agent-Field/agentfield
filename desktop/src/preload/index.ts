@@ -24,6 +24,19 @@ const api: AgentFieldApi = {
   revokeSecret: (key, scope) => ipcRenderer.invoke('agentfield:secrets-revoke', key, scope),
   getSettings: () => ipcRenderer.invoke('agentfield:settings-get'),
   setSettings: (patch) => ipcRenderer.invoke('agentfield:settings-set', patch),
+  cloudTest: (url, apiKey) => ipcRenderer.invoke('agentfield:cloud-test', url, apiKey),
+  cloudDeployRailway: () => ipcRenderer.invoke('agentfield:cloud-deploy-railway'),
+  railwayStatus: () => ipcRenderer.invoke('agentfield:railway-status'),
+  checkCloudImageUpdate: () => ipcRenderer.invoke('agentfield:cloud-image-update'),
+  railwayLogin: () => ipcRenderer.invoke('agentfield:railway-login'),
+  railwayLogout: () => ipcRenderer.invoke('agentfield:railway-logout'),
+  cloudDeploy: (workspaceId) => ipcRenderer.invoke('agentfield:cloud-deploy', workspaceId),
+  cloudDestroy: () => ipcRenderer.invoke('agentfield:cloud-destroy'),
+  onCloudDeployProgress: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, line: string) => listener(line)
+    ipcRenderer.on('agentfield:cloud-deploy-progress', wrapped)
+    return () => ipcRenderer.removeListener('agentfield:cloud-deploy-progress', wrapped)
+  },
   getCliStatus: () => ipcRenderer.invoke('agentfield:cli-status'),
   updateCli: () => ipcRenderer.invoke('agentfield:cli-update'),
   getAppUpdateStatus: () => ipcRenderer.invoke('agentfield:app-update-get'),

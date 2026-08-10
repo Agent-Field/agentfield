@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -194,6 +195,25 @@ func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "failed to open log file") {
 		t.Fatalf("expected log file error, got %v", err)
+	}
+}
+
+func TestDisplayCapabilitiesUsesDiscoveryDocument(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/discover" {
+			t.Errorf("unexpected legacy capability request: %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"reasoners":[{"id":"echo"}],"skills":[]}`))
+	}))
+	defer server.Close()
+
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	runner := &AgentNodeRunner{}
+	if err := runner.displayCapabilities(InstalledPackage{Name: "go-demo"}, port); err != nil {
+		t.Fatalf("displayCapabilities: %v", err)
 	}
 }
 

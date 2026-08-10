@@ -12,6 +12,7 @@
     "test": "vitest run",
     "icons": "electron scripts/make-icons.mjs",
     "bundle-cli": "node scripts/bundle-cli.mjs",
+    "fetch:deploy-engine": "node scripts/fetch-deploy-engine.mjs",
     "dist": "npm run build && electron-builder",
     "dist:dir": "npm run build && electron-builder --dir"
   },
@@ -39,6 +40,10 @@
           "af.exe",
           "af-tray"
         ]
+      },
+      {
+        "from": "vendor/deploy-engine",
+        "to": "bin/deploy-engine"
       }
     ],
     "directories": {
@@ -52,7 +57,10 @@
         "dmg",
         "zip"
       ],
-      "darkModeSupport": true
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true
     },
     "win": {
       "target": [
@@ -67,7 +75,7 @@
   },
   "dependencies": {
     "@lobehub/icons-static-svg": "^1.94.0",
-    "js-yaml": "^4.3.0",
+    "js-yaml": "^4.3.1",
     "motion": "^12.42.2"
   },
   "devDependencies": {
@@ -76,7 +84,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^39.8.5",
+    "electron": "^39.8.10",
     "electron-builder": "^26.15.3",
     "electron-vite": "^3.1.0",
     "react": "^18.3.1",
@@ -86,8 +94,11 @@
     "vitest": "^3.0.5"
   },
   "overrides": {
-    "fast-uri": "3.1.4",
-    "postcss": "8.5.18"
+    "fast-uri": "3.1.5",
+    "postcss": "8.5.25",
+    "undici": "6.28.0",
+    "brace-expansion@1": "1.1.18",
+    "brace-expansion@2": "2.1.4",
+    "brace-expansion@5": "5.0.9"
   }
 }
-

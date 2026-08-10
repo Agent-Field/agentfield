@@ -368,6 +368,12 @@ func checkControlPlane(url string) ControlPlaneStatus {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(url, "/")+"/api/v1/health", nil)
+	// Health is public today, but a control plane can be fronted by something
+	// that is not; send the same credential as every other CLI request so a
+	// reachable control plane never reports as unreachable.
+	if key := strings.TrimSpace(GetAPIKey()); key != "" {
+		req.Header.Set("X-API-Key", key)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err == nil {
 		defer resp.Body.Close()

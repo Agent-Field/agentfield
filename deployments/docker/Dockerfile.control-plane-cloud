@@ -1,0 +1,117 @@
+# Cloud variant of the control-plane image: includes the toolchains the
+# HTTP install API needs to install and run agent nodes inside the same
+# container (git clone, python venv + pip, node/npm, go build), plus the
+# full `af` CLI for interactive administration (e.g. `railway ssh`).
+#
+# The default Dockerfile.control-plane stays distroless for deployments
+# where agents run elsewhere; this image trades size for a box that can
+# host the control plane AND its agents — the single-container topology
+# used by cloud deploys (Railway template, VM installs).
+#
+# Runs as root: cloud platforms (Railway) mount volumes root-owned, and
+# agent installs write venvs/binaries under $AGENTFIELD_HOME=/data.
+
+# bookworm-slim (glibc) instead of alpine (musl): Vite's lightningcss
+# optional native binding is flaky under npm ci on musl when the lockfile
+# lacks libc metadata, which intermittently breaks `vite build` in CI.
+FROM --platform=$BUILDPLATFORM node:20-bookworm-slim AS ui-builder
+WORKDIR /app/web
+
+COPY control-plane/web/client/package*.json ./
+RUN npm ci
+COPY control-plane/web/client/ .
+# See Dockerfile.control-plane for why vite runs without the tsc precheck.
+RUN npx vite build
+
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS go-builder
+WORKDIR /app
+
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    gcc-aarch64-linux-gnu \
+    libc6-dev-arm64-cross \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY control-plane/go.mod control-plane/go.sum ./control-plane/
+COPY control-plane/third_party/ ./control-plane/third_party/
+RUN cd control-plane && go mod download
+
+COPY control-plane/ ./control-plane/
+COPY --from=ui-builder /app/web/dist ./control-plane/web/client/dist
+
+# Build the unified `af` binary (CLI + server in one, embedded UI). The
+# container entrypoint runs `af server`; `railway ssh` users get the full
+# CLI (af list / secrets / logs) against the same $AGENTFIELD_HOME.
+RUN cd control-plane && \
+    if [ "${TARGETARCH}" = "arm64" ]; then export CC=aarch64-linux-gnu-gcc; else export CC=gcc; fi && \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags "embedded sqlite_fts5" -o /app/bin/af ./cmd/af
+
+# Toolchain donors — same arch as the runtime stage (no --platform pin).
+FROM node:22-bookworm-slim AS node-dist
+FROM golang:1.25-bookworm AS go-dist
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    python3 \
+    python3-pip \
+    python3-venv \
+    tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node runtime for TypeScript/JavaScript agent nodes.
+COPY --from=node-dist /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-dist /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+# Go toolchain for Go agent nodes (built at install time).
+COPY --from=go-dist /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:$PATH
+
+# uv, so the installer can provision interpreters for nodes whose
+# requires-python the OS python3 (bookworm = 3.11) can't satisfy.
+# Unpinned like opencode below — a frozen minor stops learning about new
+# Python releases; COPY --from is content-addressed, so a new uv release
+# invalidates this layer even under the persistent CI cache.
+# Downloaded interpreters go under /data: venvs on the volume symlink back
+# to them, and an interpreter left in $HOME would vanish with the container
+# on the next deploy, breaking every venv built from it.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+ENV UV_PYTHON_INSTALL_DIR=/data/uv/python
+
+COPY --from=go-builder /app/bin/af /usr/local/bin/af
+COPY --from=go-builder /app/control-plane/config /etc/agentfield/config
+
+# opencode coding harness, so agent nodes can do LLM work out of the box
+# (SWE-AF-style agents spawn a harness CLI; without one, every LLM role
+# fails at spawn on a fresh cloud deploy). OpenRouter-compatible — pairs
+# with the OPENROUTER_API_KEY most cloud deployers configure.
+# Unpinned so each release ships the current harness — and deliberately
+# placed AFTER the `af` COPY: release.yml builds with a persistent layer
+# cache (type=gha), and any earlier position would restore this layer from
+# cache and freeze whatever version the first build resolved. The `af`
+# binary changes every release, so everything after it rebuilds fresh.
+RUN npm install -g opencode-ai
+
+# Everything stateful (SQLite, BoltDB, installed.yaml, secrets keyring,
+# agent package dirs) lives under one mount point.
+ENV AGENTFIELD_HOME=/data
+# The furrow client is a laptop-side tool: cloud agents get furrowd vendored
+# by their own packages, and nothing in this container clones workspaces. Any
+# skill install run in here must not pull it from GitHub onto the volume.
+ENV AGENTFIELD_SKIP_FURROW=1
+RUN mkdir -p /data
+
+EXPOSE 8080
+
+# tini reaps the agent child processes the control plane spawns.
+ENTRYPOINT ["tini", "--", "af", "server"]

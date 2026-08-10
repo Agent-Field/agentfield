@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -37,7 +38,25 @@ type GitInstaller struct {
 	// subdirectory becomes the package root that is copied and installed. It
 	// composes with an @ref pin on the URL, which is parsed independently.
 	Subdir string
+
+	// redirects counts how many superseded_by hops led here, bounding a cycle
+	// (A superseded by B, B superseded by A) instead of cloning forever.
+	redirects int
+	// installedName records the package name this installer actually installed.
+	// A superseded_by redirect needs it to hand the old package's node-scoped
+	// secrets to the successor, whose name it cannot know in advance.
+	installedName string
 }
+
+// InstalledName returns the package name installed by the most recent
+// successful InstallFromGit call. Redirects report the final successor name.
+func (gi *GitInstaller) InstalledName() string {
+	return gi.installedName
+}
+
+// maxSupersedeRedirects bounds a superseded_by chain. Three is generous for the
+// real case (one hop) and still fails fast on a manifest cycle.
+const maxSupersedeRedirects = 3
 
 // newSpinner creates a new spinner with the given message
 func (gi *GitInstaller) newSpinner(message string) *Spinner {
@@ -201,7 +220,15 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 		return fmt.Errorf("failed to parse package metadata: %w", err)
 	}
 
-	// 4. Use existing installer for the rest
+	// 4. A superseded package installs its successor instead. This runs before
+	// the force check and before anything is copied, so a redirect never
+	// half-installs the package it is redirecting away from.
+	if target := strings.TrimSpace(metadata.SupersededBy); target != "" {
+		return gi.followSupersededBy(metadata.Name, target, force)
+	}
+	gi.installedName = metadata.Name
+
+	// 5. Use existing installer for the rest
 	installer := &PackageInstaller{
 		AgentFieldHome: gi.AgentFieldHome,
 		Verbose:        gi.Verbose,
@@ -215,10 +242,21 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	// Install using existing flow
 	destPath := filepath.Join(gi.AgentFieldHome, "packages", metadata.Name)
 
+	// Reinstalling clears the destination before the replacement is copied,
+	// and long before its dependencies finish building — a missing toolchain
+	// is enough to fail there. Without this the user would be left with
+	// neither the package they had nor a working new one. Set the existing
+	// directory aside instead, and put it back if anything below fails.
+	backup, err := stashExistingPackage(destPath)
+	if err != nil {
+		return err
+	}
+
 	spinner = gi.newSpinner("Setting up environment")
 	spinner.Start()
 	if err := installer.copyPackage(packagePath, destPath); err != nil {
 		spinner.Error("Failed to copy package")
+		backup.restore()
 		return fmt.Errorf("failed to copy package: %w", err)
 	}
 	spinner.Success("Environment configured")
@@ -227,14 +265,17 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	spinner.Start()
 	if err := installer.installDependencies(destPath, metadata); err != nil {
 		spinner.Error("Failed to install dependencies")
+		backup.restore()
 		return fmt.Errorf("failed to install dependencies: %w", err)
 	}
 	spinner.Success("Dependencies installed")
 
 	// Update registry with Git source information
 	if err := gi.updateRegistryWithGit(metadata, info, packagePath, destPath); err != nil {
+		backup.restore()
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
+	backup.discard()
 
 	fmt.Println()
 	fmt.Println(installSummaryPanel(metadata.Name, metadata.Version, info.URL, info.Ref, destPath))
@@ -248,30 +289,48 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	return nil
 }
 
+// safeGitRefPattern matches refs (branches, tags, commits) that cannot be
+// mistaken for git options: they must start with an alphanumeric character.
+// Ref values can originate from user input (CLI args or the HTTP install
+// API), so anything option-like could otherwise smuggle flags such as
+// --upload-pack into the git invocation.
+var safeGitRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+
+// validateCloneArgs rejects ref/URL values that git would parse as options
+// rather than positional arguments.
+func validateCloneArgs(info *GitPackageInfo) error {
+	if info.Ref != "" && !safeGitRefPattern.MatchString(info.Ref) {
+		return fmt.Errorf("invalid git ref %q: must start with an alphanumeric character and contain only [A-Za-z0-9._/-]", info.Ref)
+	}
+	if strings.HasPrefix(info.CloneURL, "-") {
+		return fmt.Errorf("invalid clone URL %q: must not start with '-'", info.CloneURL)
+	}
+	return nil
+}
+
 // cloneRepository clones the Git repository with optimizations
 func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
+	if err := validateCloneArgs(info); err != nil {
+		return "", err
+	}
+
 	// Create temporary directory
 	tempDir, err := os.MkdirTemp("", "agentfield-git-install-")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
-	// Build git clone command with optimizations
-	args := []string{"clone"}
-
-	// Shallow clone for efficiency (only latest commit)
-	args = append(args, "--depth", "1")
-
-	// Clone specific branch/tag if specified
-	if info.Ref != "" {
-		args = append(args, "--branch", info.Ref)
+	// Fixed-shape invocations: the user-influenced values (ref, clone URL)
+	// only ever occupy option-value or post-"--" positional slots, so git can
+	// never parse them as flags. The ref is re-validated inline against the
+	// anchored safeGitRefPattern immediately before use.
+	var cmd *exec.Cmd
+	if ref := info.Ref; ref != "" && safeGitRefPattern.MatchString(ref) {
+		cmd = exec.Command("git", "clone", "--depth", "1", "--branch", ref, "--", info.CloneURL, tempDir)
+	} else {
+		cmd = exec.Command("git", "clone", "--depth", "1", "--", info.CloneURL, tempDir)
 	}
-
-	// Add URLs
-	args = append(args, info.CloneURL, tempDir)
-
-	// Execute git clone
-	cmd := exec.Command("git", args...)
+	args := cmd.Args[1:]
 
 	// Capture both stdout and stderr for better error messages
 	var stdout, stderr bytes.Buffer
@@ -372,6 +431,181 @@ func (gi *GitInstaller) parsePackageMetadata(packagePath string) (*PackageMetada
 	return installer.parsePackageMetadata(packagePath)
 }
 
+// followSupersededBy installs the successor a manifest points at, then retires
+// the superseded package when it was already installed. Order matters: the
+// successor is installed FIRST, so a failure leaves the user's existing node
+// exactly as it was rather than with nothing.
+func (gi *GitInstaller) followSupersededBy(fromName, target string, force bool) error {
+	if gi.redirects >= maxSupersedeRedirects {
+		return fmt.Errorf(
+			"superseded_by chain longer than %d hops (at %q → %q) — the manifests most likely point at each other",
+			maxSupersedeRedirects, fromName, target)
+	}
+
+	installer := &PackageInstaller{AgentFieldHome: gi.AgentFieldHome}
+	replacing := installer.isPackageInstalled(fromName)
+
+	fmt.Println()
+	fmt.Printf("⚠️  %s has been superseded by %s\n", fromName, target)
+	if replacing {
+		fmt.Printf("⚠️  %s is currently installed and WILL BE REPLACED. The successor is installed\n", fromName)
+		fmt.Println("    first and node-scoped secrets are carried over; if that fails, what you")
+		fmt.Println("    have now is left as it is.")
+	}
+	fmt.Println(ui.Muted("  installing the successor instead"))
+	fmt.Println()
+
+	successor := &GitInstaller{
+		AgentFieldHome: gi.AgentFieldHome,
+		Verbose:        gi.Verbose,
+		redirects:      gi.redirects + 1,
+	}
+	// A successor may carry the same name as the package it retires — that is
+	// a node renaming itself in place, and it is the shape a rename takes when
+	// the old and new names are meant to converge. The warning above already
+	// said this replaces the current install, so carry that consent into the
+	// successor rather than failing the redirect with "already installed".
+	if err := successor.InstallFromGit(target, force || replacing); err != nil {
+		return fmt.Errorf("installing %s, the successor of %s: %w", target, fromName, err)
+	}
+	gi.installedName = successor.installedName
+
+	if !replacing || successor.installedName == fromName {
+		return nil
+	}
+	gi.retireSuperseded(fromName, successor.installedName)
+	return nil
+}
+
+// retireSuperseded removes the old package once its successor is in place. It
+// never fails the install: the successor is already working, so a stubborn
+// leftover is a cleanup chore, not a reason to report failure.
+func (gi *GitInstaller) retireSuperseded(oldName, newName string) {
+	if store, err := NewSecretStore(gi.AgentFieldHome); err == nil {
+		migrateNodeScopedSecrets(store, oldName, newName)
+	}
+	uninstaller := &PackageUninstaller{AgentFieldHome: gi.AgentFieldHome}
+	if err := uninstaller.UninstallPackage(oldName); err != nil {
+		fmt.Printf("⚠️  Could not remove the superseded %s: %v\n", oldName, err)
+		fmt.Printf("    %s is installed and usable; remove the old one with: af uninstall %s\n", newName, oldName)
+		return
+	}
+	fmt.Printf("✓ Replaced %s with %s\n", oldName, newName)
+}
+
+// packageBackup holds an installed package directory that a reinstall is about
+// to overwrite, so it can be put back if the reinstall fails partway. The zero
+// value is a valid no-op, which is what a first-time install gets.
+type packageBackup struct {
+	original string
+	saved    string
+}
+
+// stashExistingPackage moves an installed package directory aside so a failed
+// reinstall can restore it. A missing directory is not an error — there is
+// simply nothing to protect.
+func stashExistingPackage(destPath string) (*packageBackup, error) {
+	if _, err := os.Stat(destPath); err != nil {
+		if os.IsNotExist(err) {
+			return &packageBackup{}, nil
+		}
+		return nil, fmt.Errorf("failed to inspect %s: %w", destPath, err)
+	}
+	// Dot-prefixed and alongside the original: same filesystem, so the move is
+	// a rename rather than a copy, and it cannot be mistaken for a package.
+	dir, name := filepath.Split(strings.TrimRight(destPath, string(os.PathSeparator)))
+	saved := filepath.Join(dir, "."+name+".previous")
+	// A leftover from an interrupted run would make the rename fail.
+	if err := os.RemoveAll(saved); err != nil {
+		return nil, fmt.Errorf("failed to clear a stale backup at %s: %w", saved, err)
+	}
+	if err := os.Rename(destPath, saved); err != nil {
+		return nil, fmt.Errorf("failed to set the existing package aside: %w", err)
+	}
+	return &packageBackup{original: destPath, saved: saved}, nil
+}
+
+// restore puts the stashed package back, undoing a failed reinstall. It never
+// returns an error: the install is already failing, and the caller's report of
+// why is more useful than a cleanup problem layered on top. A backup that
+// cannot be moved back is still on disk, so say where.
+func (b *packageBackup) restore() {
+	if b == nil || b.saved == "" {
+		return
+	}
+	if err := os.RemoveAll(b.original); err != nil {
+		fmt.Printf("⚠️  Could not clear the failed install at %s: %v\n", b.original, err)
+		fmt.Printf("    your previous version is still on disk at %s\n", b.saved)
+		return
+	}
+	if err := os.Rename(b.saved, b.original); err != nil {
+		fmt.Printf("⚠️  Could not restore your previous version: %v\n", err)
+		fmt.Printf("    it is still on disk at %s\n", b.saved)
+		return
+	}
+	fmt.Printf("  restored the previously installed version at %s\n", b.original)
+	b.saved = ""
+}
+
+// discard drops the stashed copy once the reinstall has succeeded.
+func (b *packageBackup) discard() {
+	if b == nil || b.saved == "" {
+		return
+	}
+	os.RemoveAll(b.saved)
+	b.saved = ""
+}
+
+// migrateNodeScopedSecrets hands node-scoped secrets to the successor before
+// the old package is uninstalled, which deletes that scope outright. Without
+// this every `af secrets set KEY --node <old>` value is silently lost in the
+// swap. Global secrets are shared and untouched. A value already set on the
+// successor wins: the user set that one deliberately, and later.
+func migrateNodeScopedSecrets(store *SecretStore, oldName, newName string) {
+	// Read the scope directly rather than via Get, which falls back to the
+	// global scope and would copy shared secrets into the node scope.
+	oldValues, err := store.load(oldName)
+	if err != nil || len(oldValues) == 0 {
+		return
+	}
+	newValues, err := store.load(newName)
+	if err != nil {
+		newValues = map[string]string{}
+	}
+	moved := 0
+	for key, value := range oldValues {
+		if _, exists := newValues[key]; exists {
+			continue
+		}
+		if err := store.Set(newName, key, value); err != nil {
+			fmt.Printf("⚠️  Could not move secret %s to %s: %v\n", key, newName, err)
+			continue
+		}
+		moved++
+	}
+	if moved > 0 {
+		fmt.Printf("  moved %d node-scoped secret(s) from %s to %s\n", moved, oldName, newName)
+	}
+}
+
+// appendSubdirSelector rewrites "https://host/owner/repo[@ref]" into
+// "https://host/owner/repo//subdir[@ref]" so a recorded source round-trips
+// through ParseGitURL. It is needed whenever the subdirectory arrived by the
+// --path flag (or the install API, which splits the selector off before
+// calling): without it the registry records the REPO ROOT, and the next update
+// installs whatever lives there instead of the package that is installed.
+func appendSubdirSelector(url, subdir string) string {
+	subdir = strings.Trim(strings.TrimSpace(subdir), "/")
+	if subdir == "" {
+		return url
+	}
+	base, ref := url, ""
+	if at := strings.LastIndex(url, "@"); at > strings.LastIndex(url, "/") {
+		base, ref = url[:at], url[at:]
+	}
+	return base + "//" + subdir + ref
+}
+
 // updateRegistryWithGit updates the installation registry with Git source info
 func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *GitPackageInfo, sourcePath, destPath string) error {
 	registryPath := filepath.Join(gi.AgentFieldHome, "installed.yaml")
@@ -403,6 +637,13 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 	// any @ref and //subdir the user gave. (Appending the ref again used to
 	// produce doubled "…@main@main" entries.)
 	sourcePathStr := info.URL
+	// …except when the subdirectory came from --path (or the install API, which
+	// splits `//subdir` off the URL before calling). Then info.URL is the bare
+	// repo and the selector has to be put back, or this records a source that
+	// resolves to the repo root and the next update installs a different package.
+	if strings.TrimSpace(info.Subdir) == "" && strings.TrimSpace(gi.Subdir) != "" {
+		sourcePathStr = appendSubdirSelector(sourcePathStr, gi.Subdir)
+	}
 
 	// Add/update package entry with Git information
 	registry.Installed[metadata.Name] = InstalledPackage{

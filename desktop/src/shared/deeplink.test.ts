@@ -8,6 +8,7 @@ describe('parseDeepLink', () => {
     expect(parseDeepLink('agentfield://agents')).toBe('agents')
     expect(parseDeepLink('agentfield://activity')).toBe('activity')
     expect(parseDeepLink('agentfield://settings')).toBe('settings')
+    expect(parseDeepLink('agentfield://cloud')).toBe('cloud')
   })
 
   it('migrates legacy dashboard and secrets hosts', () => {
@@ -57,7 +58,7 @@ describe('deepLinkFromArgv', () => {
 
 describe('isView', () => {
   it('accepts exactly the app views', () => {
-    for (const v of ['home', 'install', 'agents', 'activity', 'settings']) {
+    for (const v of ['home', 'install', 'agents', 'activity', 'settings', 'cloud']) {
       expect(isView(v)).toBe(true)
     }
     expect(isView('dashboard')).toBe(false)

@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+// defaultInfronBaseURL is the Infron gateway's OpenAI-compatible endpoint.
+// onerouter.pro is the domain Infron serves its gateway from; the two names
+// refer to the same service, so grepping for either one should land here.
+const defaultInfronBaseURL = "https://llm.onerouter.pro/v1"
+
 // Config holds AI/LLM configuration for making API calls.
 type Config struct {
 	// API Key for OpenAI or OpenRouter
@@ -15,6 +20,7 @@ type Config struct {
 	// BaseURL can be either OpenAI or OpenRouter endpoint
 	// Default: https://api.openai.com/v1
 	// OpenRouter: https://openrouter.ai/api/v1
+	// Infron: https://llm.onerouter.pro/v1
 	BaseURL string
 
 	// Default model to use (e.g., "gpt-4o", "openai/gpt-4o" for OpenRouter)
@@ -39,11 +45,25 @@ type Config struct {
 // DefaultConfig returns a Config with sensible defaults.
 // It reads from environment variables:
 // - OPENAI_API_KEY or OPENROUTER_API_KEY
+// - INFRON_API_KEY
 // - AI_BASE_URL (defaults to OpenAI)
 // - AI_MODEL (defaults to gpt-4o)
+//
+// A gateway key that was already honored before Infron existed keeps
+// precedence, so adding an Infron key to an existing environment never
+// silently reroutes it.
 func DefaultConfig() *Config {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	baseURL := "https://api.openai.com/v1"
+
+	// Check for Infron configuration. Only when no direct-provider key is
+	// already set: an existing OPENAI_API_KEY keeps precedence so that adding
+	// INFRON_API_KEY to a configured environment cannot silently move traffic
+	// (and the credential) to a different gateway.
+	if infronKey := os.Getenv("INFRON_API_KEY"); infronKey != "" && apiKey == "" {
+		apiKey = infronKey
+		baseURL = defaultInfronBaseURL
+	}
 
 	// Check for OpenRouter configuration
 	if routerKey := os.Getenv("OPENROUTER_API_KEY"); routerKey != "" {
@@ -69,8 +89,11 @@ func DefaultConfig() *Config {
 		MaxTokens:   4096,
 		Timeout:     30 * time.Second,
 	}
-	if cfg.IsOpenRouter() {
+	switch {
+	case cfg.IsOpenRouter():
 		cfg.SiteURL, cfg.SiteName, _ = resolveOpenRouterAttribution("", "")
+	case cfg.IsInfron():
+		cfg.SiteURL, cfg.SiteName, _ = resolveInfronAttribution("", "")
 	}
 	return cfg
 }
@@ -93,4 +116,15 @@ func (c *Config) Validate() error {
 func (c *Config) IsOpenRouter() bool {
 	return strings.Contains(strings.ToLower(c.BaseURL), "openrouter.ai") ||
 		strings.HasPrefix(strings.ToLower(c.Model), "openrouter/")
+}
+
+// IsInfron returns true if the base URL is for the Infron gateway.
+//
+// This is checked last everywhere it is used: the gateways this package
+// already supported serve the same `<provider>/<model>` ids, so an explicit
+// "infron/" prefix is the only thing that distinguishes Infron by model alone,
+// and a config that matches both keeps its previous meaning.
+func (c *Config) IsInfron() bool {
+	return strings.Contains(strings.ToLower(c.BaseURL), "onerouter.pro") ||
+		strings.HasPrefix(strings.ToLower(c.Model), infronModelPrefix)
 }

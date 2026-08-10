@@ -1,17 +1,10 @@
-// TODO(af-cli): this module currently reads ~/.agentfield/installed.yaml directly;
-// a sibling branch is adding `af list -o json` — swap readInstalledAgents() to shell
-// out to that once it lands, so the CLI stays the single source of truth for
-// registry parsing.
-//
 // This is THE single data-access module for AgentField Desktop. Everything that
 // touches the AgentField installation (~/.agentfield) or the control plane HTTP
 // API lives here and nowhere else. It deliberately does NOT import from
 // 'electron' so it stays unit-testable under plain vitest.
 
-import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import yaml from 'js-yaml'
 import type {
   AgentBadge,
   AgentFieldSnapshot,
@@ -26,6 +19,8 @@ import type {
 } from '../shared/types'
 
 import { DEFAULT_CONTROL_PLANE_PORT, baseUrlForPort } from './ports'
+import { createCpClient, isInstalledPackage, type CpClient, type PackageInfo } from './cpClient'
+import * as connection from './connection'
 
 export const DEFAULT_BASE_URL = baseUrlForPort(DEFAULT_CONTROL_PLANE_PORT)
 
@@ -36,14 +31,12 @@ export const DEFAULT_BASE_URL = baseUrlForPort(DEFAULT_CONTROL_PLANE_PORT)
 // the tray, open-web-ui, AGENTFIELD_SERVER for spawned `af` — reads it via
 // getBaseUrl() so nothing in the app hard-codes 8080.
 
-let activeBaseUrl = DEFAULT_BASE_URL
-
 export function getBaseUrl(): string {
-  return activeBaseUrl
+  return connection.getBaseUrl()
 }
 
 export function setActiveControlPlanePort(port: number): void {
-  activeBaseUrl = baseUrlForPort(port)
+  connection.setLocalPort(port)
 }
 
 const HTTP_TIMEOUT_MS = 3000
@@ -65,6 +58,13 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+function authHeaders(): Headers {
+  const headers = new Headers()
+  const apiKey = connection.getApiKey()
+  if (apiKey !== null) headers.set('X-API-Key', apiKey)
+  return headers
+}
+
 /**
  * Probe GET {baseUrl}/health.
  *  - 200 {"status":"healthy",...}   -> { reachable: true, recognized: true,  healthy: true }
@@ -82,6 +82,7 @@ export async function checkControlPlane(
 ): Promise<ControlPlaneStatus> {
   try {
     const res = await fetchImpl(`${baseUrl}/health`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     })
     let raw: unknown
@@ -107,57 +108,34 @@ export async function checkControlPlane(
   }
 }
 
-function toInstalledAgent(key: string, entry: unknown): InstalledAgent {
-  const record = isRecord(entry) ? entry : {}
-  const runtime = isRecord(record.runtime) ? record.runtime : {}
+export function packageToInstalledAgent(pkg: PackageInfo): InstalledAgent {
   return {
-    name: typeof record.name === 'string' && record.name !== '' ? record.name : key,
-    version: typeof record.version === 'string' ? record.version : '',
-    description: typeof record.description === 'string' ? record.description : '',
-    language: typeof record.language === 'string' ? record.language : undefined,
-    status: typeof record.status === 'string' ? record.status : 'unknown',
-    path: typeof record.path === 'string' && record.path !== '' ? record.path : null,
-    port: typeof runtime.port === 'number' ? runtime.port : null,
-    pid: typeof runtime.pid === 'number' ? runtime.pid : null
+    name: pkg.name,
+    version: pkg.version,
+    description: pkg.description,
+    status: pkg.install_status ?? pkg.status,
+    path: pkg.install_path || null,
+    port: pkg.port ?? null,
+    pid: pkg.process_id ?? null
   }
 }
 
 /**
- * Read <homeDir>/installed.yaml (the local agent-node registry).
- *  - Missing file or missing ~/.agentfield dir -> { exists: false, agents: [] }
- *    (graceful empty state, NOT an error).
- *  - Malformed YAML -> error surfaced as a string in the result; never throws,
- *    so nothing blows up across the IPC boundary.
+ * Read installed packages through the control-plane API. Failures are surfaced
+ * as strings so nothing throws across the IPC boundary.
  */
 export async function readInstalledAgents(
-  homeDir: string = getAgentFieldHome()
+  cpClient: CpClient = createCpClient()
 ): Promise<RegistryResult> {
-  const registryPath = path.join(homeDir, 'installed.yaml')
-  let text: string
   try {
-    text = await fs.readFile(registryPath, 'utf8')
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT' || code === 'ENOTDIR') {
-      return { exists: false, agents: [] }
-    }
-    return { exists: false, agents: [], error: errorMessage(err) }
-  }
-
-  let doc: unknown
-  try {
-    doc = yaml.load(text)
-  } catch (err) {
+    const response = await cpClient.listPackages()
     return {
       exists: true,
-      agents: [],
-      error: `Failed to parse ${registryPath}: ${errorMessage(err)}`
+      agents: response.packages.filter(isInstalledPackage).map(packageToInstalledAgent)
     }
+  } catch (err) {
+    return { exists: false, agents: [], error: errorMessage(err) }
   }
-
-  const installed = isRecord(doc) && isRecord(doc.installed) ? doc.installed : {}
-  const agents = Object.entries(installed).map(([key, entry]) => toInstalledAgent(key, entry))
-  return { exists: true, agents }
 }
 
 /**
@@ -177,13 +155,16 @@ export async function fetchControlPlaneNodes(
 ): Promise<Map<string, string> | null> {
   try {
     const res = await fetchImpl(`${baseUrl}/api/v1/nodes?show_all=true`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     })
     if (!res.ok) return null
     const body: unknown = await res.json()
-    if (!isRecord(body) || !Array.isArray(body.nodes)) return null
+    if (!isRecord(body) || !('nodes' in body)) return null
+    const nodes = body.nodes ?? []
+    if (!Array.isArray(nodes)) return null
     const health = new Map<string, string>()
-    for (const node of body.nodes) {
+    for (const node of nodes) {
       if (!isRecord(node) || typeof node.id !== 'string' || node.id === '') continue
       health.set(node.id, typeof node.health_status === 'string' ? node.health_status : 'unknown')
     }
@@ -199,8 +180,9 @@ export async function fetchControlPlaneNodes(
  * `nodeHealth` is the node's health_status on the control plane, or null when
  * it is not registered there at all.
  *
- * CP view unavailable — trust the registry:
- *   'running' -> 'running' | 'stopped' -> 'stopped' | other/absent -> 'unknown'
+ * CP view unavailable — trust affirmative registry lifecycle states:
+ *   'running' -> 'running' | 'stopped' -> 'stopped'
+ *   'installed' / other / absent -> 'unknown'
  * CP view available — cross-check. Registration presence (not health) proves
  * a running registry entry is live, so transient health dips cannot flicker
  * the badge; health only matters for stopped entries, where an ACTIVE node
@@ -210,6 +192,8 @@ export async function fetchControlPlaneNodes(
  *   registry stopped + health active           -> 'unknown'  (conflict)
  *   registry stopped + otherwise               -> 'stopped'  (stopped nodes stay
  *                                                  registered as inactive/unknown)
+ *   registry installed + health active         -> 'running'  (live evidence)
+ *   registry installed + otherwise             -> 'stopped'  (on disk, not live)
  *   other/absent registry status               -> 'unknown'
  */
 export function deriveAgentBadge(
@@ -227,6 +211,9 @@ export function deriveAgentBadge(
   }
   if (registryStatus === 'stopped') {
     return nodeHealth === 'active' ? 'unknown' : 'stopped'
+  }
+  if (registryStatus === 'installed') {
+    return nodeHealth === 'active' ? 'running' : 'stopped'
   }
   return 'unknown'
 }
@@ -266,12 +253,14 @@ export async function fetchExecutions(
   try {
     const res = await fetchImpl(
       `${baseUrl}/api/ui/v2/workflow-runs?page=1&page_size=25&sort_by=updated_at&sort_order=desc`,
-      { signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) }
+      { headers: authHeaders(), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) }
     )
     if (!res.ok) return null
     const body: unknown = await res.json()
-    if (!isRecord(body) || !Array.isArray(body.runs)) return null
-    const summaries = body.runs
+    if (!isRecord(body) || !('runs' in body)) return null
+    const runs = body.runs ?? []
+    if (!Array.isArray(runs)) return null
+    const summaries = runs
       .filter(isRecord)
       .map(toExecutionSummary)
       .filter((s): s is ExecutionSummary => s !== null)
@@ -294,6 +283,7 @@ export async function fetchDashboardMetrics(
 ): Promise<DashboardMetrics | null> {
   try {
     const res = await fetchImpl(`${baseUrl}/api/ui/v1/dashboard/summary`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     })
     if (!res.ok) return null
@@ -335,11 +325,12 @@ function parseUsageGroups(value: unknown): UsageGroup[] {
  * the whole Home. Never throws across IPC.
  */
 export async function fetchUsageStats(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<UsageStats | null> {
   try {
     const res = await fetchImpl(`${baseUrl}/api/ui/v1/usage/stats?window=24h`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     })
     if (res.status === 404 || res.status === 401 || res.status === 403) return null
@@ -361,8 +352,8 @@ export async function fetchUsageStats(
 
 export interface SnapshotOptions {
   baseUrl?: string
-  homeDir?: string
   fetchImpl?: FetchLike
+  cpClient?: CpClient
 }
 
 /**
@@ -375,7 +366,7 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
 
   const [controlPlane, registry] = await Promise.all([
     checkControlPlane(baseUrl, fetchImpl),
-    readInstalledAgents(options.homeDir)
+    readInstalledAgents(options.cpClient)
   ])
 
   // Only consult a recognized control plane; an unrelated service on the

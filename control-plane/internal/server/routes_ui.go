@@ -11,6 +11,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/agentic"
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	client "github.com/Agent-Field/agentfield/control-plane/web/client"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +48,13 @@ func (s *AgentFieldServer) registerUIAPI() {
 		return
 	}
 
+	// Endpoints that install code or handle credentials need a trusted caller:
+	// the control plane listens on every interface, and without an API key the
+	// global auth middleware lets anyone through. See middleware.PrivilegedAccess.
+	privileged := middleware.PrivilegedAccess(middleware.AuthConfig{
+		APIKey: s.config.API.Auth.APIKey,
+	})
+
 	uiAPI := s.Router.Group("/api/ui/v1")
 	{
 		// Agents management group - All agent-related operations
@@ -56,6 +64,16 @@ func (s *AgentFieldServer) registerUIAPI() {
 			packagesHandler := ui.NewPackageHandler(s.storage)
 			agents.GET("/packages", packagesHandler.ListPackagesHandler)
 			agents.GET("/packages/:packageId/details", packagesHandler.GetPackageDetailsHandler)
+
+			// Package install/update/uninstall endpoints (async jobs).
+			// Installing runs git clone plus the package's own build and
+			// dependency steps, so these are privileged.
+			installHandler := ui.NewPackageInstallHandler(s.packageJobs)
+			agents.POST("/packages/install", privileged, installHandler.InstallPackageHandler)
+			agents.GET("/packages/install/jobs", privileged, installHandler.ListInstallJobsHandler)
+			agents.GET("/packages/install/jobs/:jobId", privileged, installHandler.GetInstallJobHandler)
+			agents.POST("/packages/:packageId/uninstall", privileged, installHandler.UninstallPackageHandler)
+			agents.POST("/packages/:packageId/update", privileged, installHandler.UpdatePackageHandler)
 
 			// Agent lifecycle management endpoints
 			lifecycleHandler := ui.NewLifecycleHandler(s.storage, s.agentService)
@@ -71,18 +89,31 @@ func (s *AgentFieldServer) registerUIAPI() {
 			agents.POST("/:agentId/stop", lifecycleHandler.StopAgentHandler)
 			agents.POST("/:agentId/reconcile", lifecycleHandler.ReconcileAgentHandler)
 
-			// Configuration endpoints
+			// Configuration endpoints. The stored configuration carries
+			// encrypted fields, so reads and writes are privileged; the schema
+			// only describes which keys exist and stays open.
 			configHandler := ui.NewConfigHandler(s.storage)
 			agents.GET("/:agentId/config/schema", configHandler.GetConfigSchemaHandler)
-			agents.GET("/:agentId/config", configHandler.GetConfigHandler)
-			agents.POST("/:agentId/config", configHandler.SetConfigHandler)
+			agents.GET("/:agentId/config", privileged, configHandler.GetConfigHandler)
+			agents.POST("/:agentId/config", privileged, configHandler.SetConfigHandler)
 
-			// Environment file endpoints
+			// Encrypted secret store endpoints (the store RunAgent injects from)
+			secretsHandler := ui.NewAgentSecretsHandler(s.storage, s.agentfieldHome)
+			agents.GET("/:agentId/secrets", privileged, secretsHandler.ListAgentSecretsHandler)
+			agents.PUT("/:agentId/secrets", privileged, secretsHandler.SetAgentSecretHandler)
+			agents.DELETE("/:agentId/secrets/:key", privileged, secretsHandler.DeleteAgentSecretHandler)
+			// Store-wide secret references (key + scope, never values),
+			// mirroring `af secrets ls` for management UIs.
+			uiAPI.GET("/secrets", privileged, secretsHandler.ListAllSecretsHandler)
+
+			// Environment file endpoints. GetEnvHandler returns real values for
+			// anything the manifest does not mark secret, so reads are
+			// privileged too, not just writes.
 			envHandler := ui.NewEnvHandler(s.storage, s.agentService, s.agentfieldHome)
-			agents.GET("/:agentId/env", envHandler.GetEnvHandler)
-			agents.PUT("/:agentId/env", envHandler.PutEnvHandler)
-			agents.PATCH("/:agentId/env", envHandler.PatchEnvHandler)
-			agents.DELETE("/:agentId/env/:key", envHandler.DeleteEnvVarHandler)
+			agents.GET("/:agentId/env", privileged, envHandler.GetEnvHandler)
+			agents.PUT("/:agentId/env", privileged, envHandler.PutEnvHandler)
+			agents.PATCH("/:agentId/env", privileged, envHandler.PatchEnvHandler)
+			agents.DELETE("/:agentId/env/:key", privileged, envHandler.DeleteEnvVarHandler)
 
 			// Agent execution history endpoints
 			agentExecutionHandler := ui.NewExecutionHandler(s.storage, s.payloadStore, s.webhookDispatcher)

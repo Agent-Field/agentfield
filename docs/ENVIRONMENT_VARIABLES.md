@@ -45,6 +45,30 @@ If set, the control plane requires an API key for most endpoints.
 
 - `AGENTFIELD_API_KEY` or `AGENTFIELD_API_AUTH_API_KEY`: API key checked by the control plane.
 
+It is optional only for a control plane used from the machine it runs on. The
+endpoints that install packages or read and write credentials — package
+install/update/uninstall, the secret store, agent `env` and agent `config` —
+additionally require the caller to be on the local host while no key is set, and
+refuse everything else with `401`. That covers the default single-user setup
+without a key, and means any other topology needs one:
+
+- another machine on the network, including a browser on your laptop pointed at
+  a control plane running on a server
+- a container, where a client on the host reaches the server through a bridge
+  network rather than loopback
+- anything behind a reverse proxy or tunnel
+
+The reverse-proxy case needs a key for a different reason than the others: the
+check looks at the connection's real peer address, so if the proxy runs on the
+same host as the control plane, every forwarded request already looks local and
+the restriction protects nothing. Forwarded headers such as `X-Forwarded-For`
+are deliberately ignored here — trusting them would let any caller claim to be
+local — so a proxied deployment must set a key.
+
+Clients send the key as the `X-API-Key` header (or `Authorization: Bearer`). For
+the CLI, `af auth login` stores it and every later command sends it
+automatically.
+
 ### UI
 
 - `AGENTFIELD_UI_ENABLED` (default: `true`)
@@ -123,6 +147,13 @@ The same concept applies to **Docker**:
 
 Many Python examples also require model provider credentials (for example `OPENAI_API_KEY`), depending on the `AIConfig` you choose.
 
+### MiniMax video generation
+
+- `MINIMAX_API_KEY`: API key used by the Python SDK's MiniMax media provider.
+- `MINIMAX_BASE_URL` (optional): API base URL. Defaults to `https://api.minimax.io/v1`; use `https://api.minimaxi.com/v1` for the China endpoint.
+
+MiniMax video models are routed with the `minimax/` model prefix. The model suffix is sent unchanged to the video generation API.
+
 ### OpenRouter attribution
 
 OpenRouter attribution is request metadata, not authentication. AgentField SDKs send these as `HTTP-Referer`, `X-OpenRouter-Title`, and `X-Title` for OpenRouter requests.
@@ -133,3 +164,17 @@ OpenRouter attribution is request metadata, not authentication. AgentField SDKs 
 - `AGENTFIELD_OPENROUTER_ATTRIBUTION=false`: Disable OpenRouter attribution headers/env propagation.
 
 Explicit SDK config or explicit request headers win over env defaults. `AGENTFIELD_API_KEY`, SDK `api_key` / `apiKey`, Go `WithAPIKey`, and the `X-API-Key` header are only for AgentField control-plane authentication and are not used for OpenRouter attribution.
+
+### Infron
+
+- `INFRON_API_KEY`: API key for the Infron gateway. When it is the only gateway key set, the Go SDK's `ai.DefaultConfig()` points at `https://llm.onerouter.pro/v1` (`onerouter.pro` is the domain Infron serves its gateway from). `OPENAI_API_KEY` and `OPENROUTER_API_KEY` both keep precedence over it, so adding this key never reroutes an existing deployment.
+
+Infron is OpenAI-compatible and serves the standard `<provider>/<model>` ids, so a model moves across by prefix alone (`infron/moonshotai/kimi-k2.6`). The `infron/` prefix is a routing marker only and is stripped before the request is sent, since the gateway serves the bare id.
+
+Attribution is sent as `HTTP-Referer` and `X-Title`:
+
+- `AGENTFIELD_INFRON_SITE_URL` (default: `https://agentfield.ai`)
+- `AGENTFIELD_INFRON_APP_NAME` (default: `AgentField AI`)
+- `AGENTFIELD_INFRON_ATTRIBUTION=false`: Disable Infron attribution headers.
+
+When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution values are used as fallbacks, so a deployment that already declares its identity keeps it after switching gateways: `AGENTFIELD_OPENROUTER_SITE_URL`, `OR_SITE_URL`, `AGENTFIELD_OPENROUTER_APP_NAME`, `OR_APP_NAME`. The opt-out travels with them: when `AGENTFIELD_OPENROUTER_ATTRIBUTION=false`, these values are not inherited and the Infron defaults apply instead. To control Infron attribution specifically, set the `AGENTFIELD_INFRON_*` vars explicitly or disable it with `AGENTFIELD_INFRON_ATTRIBUTION=false`.

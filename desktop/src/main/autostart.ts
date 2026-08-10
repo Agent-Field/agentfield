@@ -20,7 +20,7 @@ import type {
   DesktopSettings,
   SnapshotAgent
 } from '../shared/types'
-import { checkControlPlane, getSnapshot, setActiveControlPlanePort } from './agentfield'
+import { checkControlPlane, getBaseUrl, getSnapshot, setActiveControlPlanePort } from './agentfield'
 import { runAgentAction, startControlPlane } from './agents'
 import { DEFAULT_CONTROL_PLANE_PORT, baseUrlForPort, pickFreePort } from './ports'
 
@@ -128,8 +128,20 @@ export function planControlPlaneBoot(
 export async function runAutostart(
   settings: DesktopSettings,
   log: (message: string) => void,
-  persistPort: (port: number) => Promise<void> = async () => {}
+  persistPort: (port: number) => Promise<void> = async () => {},
+  deps: { checkControlPlane?: typeof checkControlPlane; getBaseUrl?: typeof getBaseUrl } = {}
 ): Promise<void> {
+  if (settings.cloud.enabled) {
+    const baseUrl = (deps.getBaseUrl ?? getBaseUrl)()
+    const status = await (deps.checkControlPlane ?? checkControlPlane)()
+    log(
+      status.reachable
+        ? `autostart: remote control plane reachable at ${baseUrl}`
+        : `autostart: remote control plane unreachable at ${baseUrl}`
+    )
+    return
+  }
+
   const probes: PortProbe[] = []
   for (const port of controlPlanePortCandidates(settings)) {
     probes.push({ port, status: await checkControlPlane(baseUrlForPort(port)) })

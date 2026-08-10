@@ -12,13 +12,9 @@
 // every accepted value begins with "https://github.com/" it can never be read
 // as a CLI flag when passed as one argv element to spawn (no shell).
 
-import { spawn } from 'node:child_process'
 import { catalogEntry } from '../shared/catalog'
 import type { InstallResult } from '../shared/types'
-import { readInstalledAgents } from './agentfield'
-import { runAgentAction } from './agents'
-import { getCliCommand } from './cli'
-import { childEnv } from './env'
+import { CpApiError, createCpClient, type CpClient, type InstallJob } from './cpClient'
 
 // CSI sequences (colors, cursor movement, erase-line spinner frames) and OSC
 // sequences (terminal titles), per ECMA-48. Written with \u escapes so no
@@ -69,65 +65,69 @@ export function sanitizeInstallOutput(chunk: string): string[] {
  * `af install --force`, the CLI's reinstall-in-place (package dir and binary
  * are replaced; the registry entry and secrets are untouched).
  */
+export interface InstallerDeps {
+  cpClient: CpClient
+}
+
+/** Pure catalog lookup retained for callers/tests that need to preview an install. */
 export function installCommand(
   name: string,
   force = false
-): { command: string; args: string[] } | null {
+): { command: 'control-plane'; args: string[] } | null {
   const entry = catalogEntry(name)
   if (!entry) return null
-  // spawn() without a shell; the command is whatever CLI resolution picked
-  // (managed copy, PATH `af`, or the app's bundled binary — see main/cli.ts).
-  const args = ['install', entry.source]
-  if (force) args.push('--force')
-  return { command: getCliCommand(), args }
+  return { command: 'control-plane', args: force ? ['install', entry.source, '--force'] : ['install', entry.source] }
 }
 
-/**
- * Spawn `af <args>` (no shell), forward sanitized output lines to onLine as
- * they arrive, and resolve (never reject) with the outcome. `successMessage`
- * is produced lazily so a caller can name whatever it just installed. Shared
- * by installAgent and installFromSource so the spawn/stream/close logic lives
- * in exactly one place.
- */
-function runInstall(
-  command: string,
-  args: string[],
-  onLine: (line: string) => void,
-  successMessage: () => string
-): Promise<InstallResult> {
-  return new Promise((resolve) => {
-    let lastLine = ''
-    const forward = (chunk: Buffer) => {
-      for (const line of sanitizeInstallOutput(chunk.toString('utf8'))) {
-        // Spinner frames repeat the same text many times a second; only
-        // forward changes so the IPC channel stays quiet.
-        if (line !== lastLine) {
-          lastLine = line
-          onLine(line)
-        }
-      }
-    }
+function defaultInstallerDeps(): InstallerDeps {
+  return { cpClient: createCpClient() }
+}
 
-    const child = spawn(command, args, { windowsHide: true, env: childEnv() })
-    child.stdout.on('data', forward)
-    child.stderr.on('data', forward)
-    child.on('error', (err: NodeJS.ErrnoException) => {
-      resolve({
-        ok: false,
-        message:
-          err.code === 'ENOENT'
-            ? 'The AgentField CLI (af) was not found on PATH. Install it first: https://agentfield.ai/docs'
-            : `Failed to run af install: ${err.message}`
-      })
-    })
-    child.on('close', (code) => {
-      resolve(
-        code === 0
-          ? { ok: true, message: successMessage() }
-          : { ok: false, message: lastLine || `af install exited with code ${code}` }
-      )
-    })
-  })
+const UPDATE_REQUIRED = 'Control plane update required — update AgentField CLI'
+
+/**
+ * The name the control plane says it actually installed, or null when it
+ * doesn't say. This is NOT always the name that went in: a manifest declaring
+ * `superseded_by:` redirects the install to a successor, which may carry its
+ * own name. Reporting the job's answer rather than the request's is what keeps
+ * the app honest about what the user now has.
+ */
+function installedName(job: InstallJob): string | null {
+  const name = job.package_name?.trim()
+  return name ? name : null
+}
+
+async function runInstall(
+  source: string,
+  onLine: (line: string) => void,
+  successMessage: (job: InstallJob) => string,
+  deps: InstallerDeps,
+  force?: boolean
+): Promise<InstallResult> {
+  try {
+    if (!(await deps.cpClient.hasInstallApi())) {
+      return { ok: false, message: UPDATE_REQUIRED }
+    }
+    const { job_id } = await deps.cpClient.installPackage(source, force)
+    const job = await deps.cpClient.watchInstallJob(job_id, onLine)
+    return job.status === 'succeeded'
+      ? { ok: true, message: successMessage(job) }
+      : { ok: false, message: job.error || job.lines.at(-1) || 'Install failed' }
+  } catch (err) {
+    if (err instanceof CpApiError && err.status === 404) {
+      return { ok: false, message: UPDATE_REQUIRED }
+    }
+    if (err instanceof CpApiError && err.status === 409) {
+      return { ok: false, message: err.message || 'Another install is already running' }
+    }
+    return {
+      ok: false,
+      message:
+        err instanceof CpApiError
+          ? err.message
+          : 'Could not reach the control plane — start the control plane and try again'
+    }
+  }
 }
 
 /**
@@ -137,13 +137,24 @@ function runInstall(
 export function installAgent(
   name: string,
   onLine: (line: string) => void,
-  force = false
+  force = false,
+  deps: InstallerDeps = defaultInstallerDeps()
 ): Promise<InstallResult> {
-  const cmd = installCommand(name, force)
-  if (!cmd) {
+  const entry = catalogEntry(name)
+  if (!entry) {
     return Promise.resolve({ ok: false, message: `"${name}" is not in the install catalog` })
   }
-  return runInstall(cmd.command, cmd.args, onLine, () => `${name} installed`)
+  // Name what landed, not what was asked for. They agree for every catalog
+  // entry (that is the invariant catalog.ts documents), so a disagreement here
+  // means the row has drifted from the manifest it redirects to — better said
+  // out loud than papered over with the row's own label.
+  return runInstall(
+    entry.source,
+    onLine,
+    (job) => `${installedName(job) ?? name} installed`,
+    deps,
+    force
+  )
 }
 
 // The one host we install from. Every accepted source starts with this literal
@@ -204,7 +215,8 @@ export function parseRepoSource(input: string): string | null {
  */
 export function installFromSource(
   source: string,
-  onLine: (line: string) => void
+  onLine: (line: string) => void,
+  deps: InstallerDeps = defaultInstallerDeps()
 ): Promise<InstallResult> {
   const normalized = parseRepoSource(source)
   if (!normalized) {
@@ -213,7 +225,15 @@ export function installFromSource(
       message: 'Enter a GitHub repository URL, e.g. https://github.com/org/repo (or …/repo//subdir)'
     })
   }
-  return runInstall(getCliCommand(), ['install', normalized], onLine, () => `Installed from ${normalized}`)
+  return runInstall(
+    normalized,
+    onLine,
+    (job) => {
+      const name = installedName(job)
+      return name ? `${name} installed` : `Installed from ${normalized}`
+    },
+    deps
+  )
 }
 
 /**
@@ -226,46 +246,41 @@ export function installFromSource(
  */
 export async function updateAgent(
   name: string,
-  onLine: (line: string) => void
+  onLine: (line: string) => void,
+  deps: InstallerDeps = defaultInstallerDeps()
 ): Promise<InstallResult> {
   const entry = catalogEntry(name)
   if (!entry) {
     return { ok: false, message: `"${name}" is not in the install catalog` }
   }
-  const registry = await readInstalledAgents()
-  const installed = registry.agents.find((agent) => agent.name === name)
-  if (!installed) {
-    return { ok: false, message: `"${name}" is not installed — install it first` }
-  }
-
-  // The package binary cannot be replaced while its process runs (Windows
-  // locks running executables), so a running agent is stopped first.
-  const wasRunning = installed.status === 'running'
-  if (wasRunning) {
-    onLine(`Stopping ${name}…`)
-    const stopped = await runAgentAction('stop', name)
-    if (!stopped.ok) {
-      return { ok: false, message: `could not stop ${name}: ${stopped.message}` }
+  try {
+    if (!(await deps.cpClient.hasInstallApi())) {
+      return { ok: false, message: UPDATE_REQUIRED }
+    }
+    onLine(`Updating ${name}…`)
+    const { job_id } = await deps.cpClient.updatePackage(name)
+    const job = await deps.cpClient.watchInstallJob(job_id, onLine)
+    if (job.status !== 'succeeded') {
+      return { ok: false, message: job.error || job.lines.at(-1) || `Failed to update ${name}` }
+    }
+    // An update reinstalls from the recorded source, so it can hit a
+    // `superseded_by:` redirect and come back as a different node. Saying
+    // "<old> updated" would then name something that no longer exists.
+    const landed = installedName(job)
+    return {
+      ok: true,
+      message: landed && landed !== name ? `${name} replaced by ${landed}` : `${name} updated`
+    }
+  } catch (err) {
+    if (err instanceof CpApiError && err.status === 404) {
+      return { ok: false, message: UPDATE_REQUIRED }
+    }
+    return {
+      ok: false,
+      message:
+        err instanceof CpApiError
+          ? err.message
+          : 'Could not reach the control plane — start the control plane and try again'
     }
   }
-
-  onLine(`Updating ${name}…`)
-  const result = await installAgent(name, onLine, true)
-  if (!result.ok) {
-    // Be explicit about the state we are leaving behind: the agent was
-    // stopped for an update that then failed, and nothing restarted it.
-    return wasRunning
-      ? { ok: false, message: `${result.message} — ${name} was stopped and has not been restarted` }
-      : result
-  }
-
-  if (wasRunning) {
-    onLine(`Restarting ${name}…`)
-    const started = await runAgentAction('start', name)
-    if (!started.ok) {
-      return { ok: false, message: `${name} updated but failed to restart: ${started.message}` }
-    }
-    return { ok: true, message: `${name} updated and restarted` }
-  }
-  return { ok: true, message: `${name} updated` }
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/knowledgebase"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagejobs"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/all" // register first-party trigger Sources
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
@@ -56,6 +57,7 @@ type AgentFieldServer struct {
 	statusManager         *services.StatusManager // Add StatusManager for unified status management
 	agentService          interfaces.AgentService // Add AgentService for lifecycle management
 	agentClient           interfaces.AgentClient  // Add AgentClient for agent communication
+	packageJobs           *packagejobs.Manager    // Async package install/update jobs
 	config                *config.Config
 	storageHealthOverride func(context.Context) gin.H
 	cacheHealthOverride   func(context.Context) gin.H
@@ -153,6 +155,14 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 	// Create AgentService
 	agentService := coreservices.NewAgentService(processManager, portManager, registryStorage, agentClient, agentfieldHome)
+
+	// Async package install/update job manager (HTTP install API)
+	packageJobs := packagejobs.NewManager(registryStorage, agentfieldHome, agentService)
+	// Sync the DB immediately after API-driven registry mutations so clients
+	// read their own writes; the fsnotify watcher covers CLI-driven changes.
+	packageJobs.SetOnRegistryChange(func() {
+		_ = SyncPackagesFromRegistry(agentfieldHome, storageProvider)
+	})
 
 	// Initialize StatusManager for unified status management
 	statusManagerConfig := services.StatusManagerConfig{
@@ -508,6 +518,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		statusManager:          statusManager,
 		agentService:           agentService,
 		agentClient:            agentClient,
+		packageJobs:            packageJobs,
 		config:                 cfg,
 		keystoreService:        keystoreService,
 		didService:             didService,

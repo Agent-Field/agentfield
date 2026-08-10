@@ -1,12 +1,16 @@
 import { join, resolve } from 'node:path'
-import { BrowserWindow, Menu, app, ipcMain, nativeTheme, shell } from 'electron'
+import { existsSync } from 'node:fs'
+import { BrowserWindow, Menu, app, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
 import { CATALOG } from '../shared/catalog'
+import { RAILWAY_TEMPLATE_URL } from '../shared/cloudLinks'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type { DesktopSettings } from '../shared/types'
 import { spawn } from 'node:child_process'
 import { getBaseUrl, getSnapshot, setActiveControlPlanePort } from './agentfield'
 import { type AgentAction, runAgentAction, startControlPlane, uninstallAgent } from './agents'
 import { runAutostart } from './autostart'
+import { testCloudConnection, applyConnectionProfile } from './cloud'
+import { isCloudActive } from './connection'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { childEnv, initUserPath } from './env'
 import { installAgent, installFromSource, updateAgent } from './installer'
@@ -22,6 +26,15 @@ import { pickFreePort } from './ports'
 import { setupTray } from './tray'
 import { syncTrayCompanion } from './tray-companion'
 import { AppUpdater } from './updates'
+import {
+  getFreshAccessToken,
+  isLoggedIn,
+  listWorkspaces,
+  loginWithRailway,
+  logout,
+  type RailwayAuthDeps
+} from './railwayAuth'
+import { checkCloudImageUpdate, hasDeployment, resolveTofuBinary, runDeploy, runDestroy } from './deployEngine'
 import appIcon from '../../resources/icon.png?asset'
 
 const isMac = process.platform === 'darwin'
@@ -178,10 +191,36 @@ function registerDeepLinks(): void {
 }
 
 let installInFlight = false
+let cloudDeployInFlight = false
 let settings: DesktopSettings
 
 function settingsFile(): string {
   return join(app.getPath('userData'), 'settings.json')
+}
+
+function authDeps(): RailwayAuthDeps {
+  const encrypted = safeStorage.isEncryptionAvailable()
+  if (!encrypted) console.warn('Railway token encryption unavailable; token storage is unencrypted')
+  return {
+    codec: encrypted
+      ? {
+          encrypt: (plain) => safeStorage.encryptString(plain).toString('base64'),
+          decrypt: (blob) => safeStorage.decryptString(Buffer.from(blob, 'base64'))
+        }
+      : { encrypt: (plain) => plain, decrypt: (blob) => blob },
+    storePath: join(app.getPath('userData'), 'railway-auth.json'),
+    openUrl: (url) => shell.openExternal(url).then(() => undefined)
+  }
+}
+
+function deployPaths(): { workspaceDir: string; binaryDir: string | null } {
+  const candidate = app.isPackaged
+    ? join(process.resourcesPath, 'bin', 'deploy-engine')
+    : join(app.getAppPath(), 'vendor', 'deploy-engine')
+  return {
+    workspaceDir: join(app.getPath('userData'), 'cloud-deploy'),
+    binaryDir: existsSync(candidate) ? candidate : null
+  }
 }
 
 // The af CLI shipped inside the app package (see build.extraResources). In
@@ -275,6 +314,7 @@ function main(): void {
   app.whenReady().then(async () => {
     installAppMenu()
     settings = await loadSettings(settingsFile())
+    applyConnectionProfile(settings)
     nativeTheme.themeSource = settings.appearance
     applyLoginItem(settings)
 
@@ -289,6 +329,8 @@ function main(): void {
     // with no AgentField at all this provisions the bundled CLI, so a
     // desktop-app-only install still gets a working `af`.
     await initializeCli(bundledCliPath())
+    // Skills and the furrow client belong to local coding agents even when
+    // their control plane and workspaces are remote.
     if (settings.installSkills) syncSkills()
 
     // macOS only: provision + install the af-tray menu-bar companion so a
@@ -375,6 +417,12 @@ function main(): void {
       return runAgentAction(action as AgentAction, name)
     })
     ipcMain.handle('agentfield:start-control-plane', async () => {
+      if (isCloudActive()) {
+        return {
+          ok: false,
+          message: 'Cloud control plane active — local server management is disabled'
+        }
+      }
       const port = settings.controlPlanePort ?? (await pickFreePort())
       setActiveControlPlanePort(port)
       const result = await startControlPlane(port)
@@ -460,6 +508,85 @@ function main(): void {
     // checks from Settings still work anywhere.
     if (app.isPackaged) updater.startAutoCheck()
     ipcMain.handle('agentfield:settings-get', () => settings)
+    ipcMain.handle('agentfield:cloud-test', (_event, url: string, apiKey: string) =>
+      testCloudConnection(url, apiKey)
+    )
+    ipcMain.handle('agentfield:cloud-deploy-railway', () =>
+      shell.openExternal(RAILWAY_TEMPLATE_URL)
+    )
+    ipcMain.handle('agentfield:railway-status', async () => {
+      const deps = authDeps()
+      const { workspaceDir, binaryDir } = deployPaths()
+      const token = isLoggedIn(deps) ? await getFreshAccessToken(deps) : null
+      return {
+        loggedIn: token !== null,
+        engineAvailable: resolveTofuBinary(binaryDir) !== null,
+        hasDeployment: hasDeployment(workspaceDir),
+        workspaces: token ? await listWorkspaces(token) : []
+      }
+    })
+    ipcMain.handle('agentfield:cloud-image-update', () => {
+      const { workspaceDir } = deployPaths()
+      return checkCloudImageUpdate(workspaceDir)
+    })
+    ipcMain.handle('agentfield:railway-login', async () => {
+      const deps = authDeps()
+      const result = await loginWithRailway(deps)
+      if (!result.ok) return result
+      const token = await getFreshAccessToken(deps)
+      return { ...result, workspaces: token ? await listWorkspaces(token) : [] }
+    })
+    ipcMain.handle('agentfield:railway-logout', () => logout(authDeps()))
+    ipcMain.handle('agentfield:cloud-deploy', async (event, workspaceId: unknown) => {
+      if (typeof workspaceId !== 'string' || workspaceId === '') {
+        return { ok: false, message: 'Choose a Railway workspace first' }
+      }
+      if (cloudDeployInFlight) return { ok: false, message: 'A cloud deployment is already running' }
+      cloudDeployInFlight = true
+      try {
+        const token = await getFreshAccessToken(authDeps())
+        if (!token) return { ok: false, message: 'Sign in with Railway first' }
+        const result = await runDeploy({
+          railwayToken: token,
+          workspaceId,
+          ...deployPaths(),
+          onLine: (line) => {
+            if (!event.sender.isDestroyed()) {
+              event.sender.send('agentfield:cloud-deploy-progress', line)
+            }
+          }
+        })
+        if (result.ok && result.url && result.apiKey) {
+          settings = mergeSettings(settings, {
+            cloud: { enabled: true, serverUrl: result.url, apiKey: result.apiKey }
+          })
+          await saveSettings(settingsFile(), settings)
+          applyConnectionProfile(settings)
+        }
+        return { ok: result.ok, url: result.url, furrowAddress: result.furrowAddress, message: result.message }
+      } finally {
+        cloudDeployInFlight = false
+      }
+    })
+    ipcMain.handle('agentfield:cloud-destroy', async () => {
+      if (cloudDeployInFlight) return { ok: false, message: 'A cloud deployment is already running' }
+      cloudDeployInFlight = true
+      try {
+        const token = await getFreshAccessToken(authDeps())
+        if (!token) return { ok: false, message: 'Sign in with Railway first' }
+        const result = await runDestroy({ railwayToken: token, workspaceId: '', ...deployPaths() })
+        if (result.ok) {
+          settings = mergeSettings(settings, {
+            cloud: { ...settings.cloud, enabled: false }
+          })
+          await saveSettings(settingsFile(), settings)
+          applyConnectionProfile(settings)
+        }
+        return result
+      } finally {
+        cloudDeployInFlight = false
+      }
+    })
     ipcMain.handle('agentfield:settings-set', async (_event, patch: unknown) => {
       const prev = settings
       settings = mergeSettings(settings, patch)
@@ -470,6 +597,7 @@ function main(): void {
       // macOS: reflect a flipped tray toggle (install ↔ uninstall) right away.
       if (settings.trayCompanion !== prev.trayCompanion) syncTray(settings.trayCompanion)
       await saveSettings(settingsFile(), settings)
+      applyConnectionProfile(settings)
       return settings
     })
 

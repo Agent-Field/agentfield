@@ -233,6 +233,33 @@ func TestClient_WithBearerToken(t *testing.T) {
 	assert.Equal(t, "Bearer my-secret-token", receivedAuth)
 }
 
+// A control plane running with an API key rejects DID registration without it,
+// which would leave an otherwise healthy agent with no identity.
+func TestClient_WithAPIKey(t *testing.T) {
+	var receivedKey, receivedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedKey = r.Header.Get("X-API-Key")
+		receivedAuth = r.Header.Get("Authorization")
+		resp := RegistrationResponse{
+			Success: true,
+			IdentityPackage: DIDIdentityPackage{
+				AgentDID: DIDIdentity{DID: "did:web:test"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, WithAPIKey("my-api-key"))
+	_, err := c.RegisterAgent(context.Background(), RegistrationRequest{AgentNodeID: "test"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "my-api-key", receivedKey)
+	// The API key is a distinct credential and must not be sent as a bearer token.
+	assert.Empty(t, receivedAuth)
+}
+
 func TestClient_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Never respond — client should cancel

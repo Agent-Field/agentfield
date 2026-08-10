@@ -76,7 +76,7 @@
         "eslint-plugin-react-refresh": "^0.4.19",
         "globals": "^16.0.0",
         "jsdom": "^26.1.0",
-        "postcss": "^8.5.18",
+        "postcss": "^8.5.25",
         "tailwindcss": "^3.4.17",
         "tailwindcss-cli": "^0.1.2",
         "typescript": "~5.8.3",
@@ -88,8 +88,8 @@
         "js-yaml": "4.3.0",
         "esbuild": "0.28.1",
         "ws": "8.21.0",
-        "brace-expansion@1": "1.1.16",
-        "brace-expansion@2": "2.1.2",
+        "brace-expansion@1": "1.1.18",
+        "brace-expansion@2": "2.1.4",
         "postcss": "$postcss"
     },
     "pnpm": {
@@ -97,9 +97,9 @@
             "js-yaml": "4.3.0",
             "esbuild": "0.28.1",
             "ws": "8.21.0",
-            "brace-expansion@1": "1.1.16",
-            "brace-expansion@2": "2.1.2",
-            "postcss": "8.5.18"
+            "brace-expansion@1": "1.1.18",
+            "brace-expansion@2": "2.1.4",
+            "postcss": "8.5.25"
         }
     }
 }

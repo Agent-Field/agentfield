@@ -4,6 +4,7 @@ import {
   autostartAgentPlan,
   controlPlanePortCandidates,
   planControlPlaneBoot,
+  runAutostart,
   type PortProbe
 } from './autostart'
 
@@ -20,12 +21,44 @@ function agent(name: string, badge: SnapshotAgent['badge']): SnapshotAgent {
   }
 }
 
+describe('runAutostart cloud mode', () => {
+  it('only checks and reports the active remote control plane', async () => {
+    let checks = 0
+    let persisted = 0
+    const logs: string[] = []
+    await runAutostart(
+      settings({
+        cloud: { enabled: true, serverUrl: 'https://cloud.example', apiKey: 'secret' },
+        autostartAgents: ['must-not-start']
+      }),
+      (line) => logs.push(line),
+      async () => {
+        persisted++
+      },
+      {
+        getBaseUrl: () => 'https://cloud.example',
+        checkControlPlane: async () => {
+          checks++
+          return { reachable: true, recognized: true, healthy: true }
+        }
+      }
+    )
+    expect(checks).toBe(1)
+    expect(persisted).toBe(0)
+    expect(logs).toEqual([
+      'autostart: remote control plane reachable at https://cloud.example'
+    ])
+  })
+})
+
 function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
   return {
+    cloud: { enabled: false, serverUrl: '', apiKey: '' },
     openAtLogin: false,
     appearance: 'system',
     autostartControlPlane: true,
     controlPlanePort: null,
+    localApiKey: '',
     lastControlPlanePort: null,
     autostartAgents: [],
     installSkills: true,

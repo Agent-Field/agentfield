@@ -691,7 +691,7 @@ func defaultCodeForStatus(statusCode int) string {
 func defaultHintForStatus(statusCode int) string {
 	switch statusCode {
 	case http.StatusUnauthorized:
-		return "Provide a valid API key with --api-key or AGENTFIELD_API_KEY."
+		return "Provide a valid API key with --api-key or AGENTFIELD_API_KEY, or store one with `af auth login`."
 	case http.StatusForbidden:
 		return "API key is valid but lacks required permissions for this endpoint."
 	case http.StatusNotFound:

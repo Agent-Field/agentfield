@@ -357,6 +357,14 @@ type Config struct {
 	// an Authorization: Bearer <token> header on control-plane requests.
 	Token string
 
+	// APIKey authenticates control-plane requests via the X-API-Key header.
+	// Optional. Defaults to the AGENTFIELD_API_KEY environment variable, which
+	// `af run` exports for the agents it starts, so an agent registers against
+	// an authenticated control plane without carrying the key in its code.
+	// Unlike Token this is only ever sent outbound; it is not used to validate
+	// incoming requests.
+	APIKey string
+
 	// DeploymentType describes how the agent runs (affects execution behavior).
 	// Optional. Default: "long_running". Common values: "long_running",
 	// "serverless". Use a descriptive string for custom modes.
@@ -560,6 +568,9 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.TeamID == "" {
 		cfg.TeamID = "default"
 	}
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		cfg.APIKey = strings.TrimSpace(os.Getenv("AGENTFIELD_API_KEY"))
+	}
 	if cfg.ListenAddress == "" {
 		cfg.ListenAddress = ":8001"
 	}
@@ -629,12 +640,22 @@ func New(cfg Config) (*Agent, error) {
 		if refreshInterval <= 0 {
 			refreshInterval = 5 * time.Minute
 		}
-		a.localVerifier = NewLocalVerifier(cfg.AgentFieldURL, refreshInterval, cfg.Token)
+		// NewLocalVerifier sends its third argument as X-API-Key. Prefer the
+		// dedicated APIKey, falling back to Token so existing callers that
+		// used it as the key keep working.
+		verifierKey := strings.TrimSpace(cfg.APIKey)
+		if verifierKey == "" {
+			verifierKey = cfg.Token
+		}
+		a.localVerifier = NewLocalVerifier(cfg.AgentFieldURL, refreshInterval, verifierKey)
 		cfg.Logger.Printf("Local verification enabled (refresh every %s)", refreshInterval)
 	}
 
 	if strings.TrimSpace(cfg.AgentFieldURL) != "" {
 		opts := []client.Option{client.WithHTTPClient(httpClient), client.WithBearerToken(cfg.Token)}
+		if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
+			opts = append(opts, client.WithAPIKey(apiKey))
+		}
 		if cfg.DID != "" && cfg.PrivateKeyJWK != "" {
 			opts = append(opts, client.WithDIDAuth(cfg.DID, cfg.PrivateKeyJWK))
 		}
@@ -1617,6 +1638,26 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	}
 }
 
+// applyControlPlaneAuth sets the auth headers a control plane accepts on a
+// request this package builds by hand.
+//
+// Everything that goes through the shared client (sdk/go/client) already gets
+// these — see client.do. A handful of paths construct their own *http.Request
+// and have to mirror it, or a control plane running with an API key rejects
+// them with 401. Token and APIKey are separate settings and either may be set
+// alone, so both headers are applied independently.
+func (a *Agent) applyControlPlaneAuth(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if token := strings.TrimSpace(a.cfg.Token); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if apiKey := strings.TrimSpace(a.cfg.APIKey); apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+}
+
 func (a *Agent) sendExecutionStatus(executionID string, payload map[string]any) error {
 	base := strings.TrimSpace(a.cfg.AgentFieldURL)
 	if executionID == "" || base == "" {
@@ -1642,9 +1683,7 @@ func (a *Agent) postExecutionStatus(ctx context.Context, callbackURL string, pay
 		req.Header.Set("Content-Type", "application/json")
 
 		// Include API auth headers (Bearer token / API key)
-		if a.cfg.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
-		}
+		a.applyControlPlaneAuth(req)
 
 		// Sign request with DID auth headers if configured
 		if a.client != nil {
@@ -1913,9 +1952,7 @@ func (a *Agent) applyCallHeaders(req *http.Request, execCtx ExecutionContext, ru
 	// Include caller agent identity for permission middleware
 	req.Header.Set("X-Caller-Agent-ID", a.cfg.NodeID)
 
-	if a.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
-	}
+	a.applyControlPlaneAuth(req)
 }
 
 // submitAsyncExecution POSTs to /api/v1/execute/async/{target} and returns the
@@ -2435,9 +2472,7 @@ func (a *Agent) sendWorkflowEvent(event types.WorkflowExecutionEvent) error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if a.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
-	}
+	a.applyControlPlaneAuth(req)
 
 	// Sign request with DID auth headers if configured
 	if a.client != nil {

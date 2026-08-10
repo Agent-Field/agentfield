@@ -8,6 +8,7 @@ import { AgentsPanel } from './components/AgentsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
 import { InstallPanel } from './components/InstallPanel'
 import { SettingsPanel } from './components/SettingsPanel'
+import { CloudPanel } from './components/CloudPanel'
 import { StarBanner } from './components/StarBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 
@@ -43,11 +44,12 @@ const VIEW_TITLES: Record<View, string> = {
   install: 'Agents',
   agents: 'Agents',
   activity: 'Activity',
-  settings: 'Settings'
+  settings: 'Settings',
+  cloud: 'Remote'
 }
 
-// ⌘1–⌘4 (Ctrl on Win/Linux) in nav order (DESIGN.md §4.17).
-const SHORTCUT_VIEWS: View[] = ['home', 'agents', 'activity', 'settings']
+// ⌘1–⌘5 (Ctrl on Win/Linux) in nav order (DESIGN.md §4.17).
+const SHORTCUT_VIEWS: View[] = ['home', 'agents', 'activity', 'settings', 'cloud']
 
 /** True when the keystroke belongs to a text control, not the app. */
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -281,6 +283,7 @@ export default function App() {
                 />
               )}
               {view === 'settings' && <SettingsPanel agents={snapshot?.registry.agents ?? []} />}
+              {view === 'cloud' && <CloudPanel />}
             </m.div>
           </AnimatePresence>
         </div>

@@ -266,7 +266,10 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 	}
 	raw.Metrics.NumTurns = numTurns
 	raw.Metrics.CostUSD = costFromEvents(events)
-	tokens := extractTokenUsage(events)
+	tokens, foundTokens := tokenUsageFromOpenCodeEvents(events)
+	if !foundTokens {
+		tokens = extractTokenUsage(events)
+	}
 	raw.Metrics.InputTokens = tokens.inputTokens
 	raw.Metrics.OutputTokens = tokens.outputTokens
 	raw.Metrics.CacheReadTokens = tokens.cacheReadTokens
@@ -424,6 +427,36 @@ func costFromEvents(events []map[string]any) *float64 {
 		return nil
 	}
 	return &total
+}
+
+// tokenUsageFromOpenCodeEvents sums token counts from opencode's per-step
+// step_finish.part.tokens objects. The boolean reports whether any step carried
+// a tokens object, allowing callers to fall back to generic event usage shapes
+// when opencode did not report part-level tokens at all.
+func tokenUsageFromOpenCodeEvents(events []map[string]any) (tokenUsage, bool) {
+	var total tokenUsage
+	found := false
+	for _, event := range events {
+		if t, _ := event["type"].(string); t != "step_finish" {
+			continue
+		}
+		part, ok := event["part"].(map[string]any)
+		if !ok {
+			continue
+		}
+		tokens, ok := part["tokens"].(map[string]any)
+		if !ok {
+			continue
+		}
+		found = true
+		total.inputTokens += intField(tokens, "input")
+		total.outputTokens += intField(tokens, "output") + intField(tokens, "reasoning")
+		if cache, ok := tokens["cache"].(map[string]any); ok {
+			total.cacheReadTokens += intField(cache, "read")
+			total.cacheCreationTokens += intField(cache, "write")
+		}
+	}
+	return total, found
 }
 
 // extractOpenCodeEventError pulls a meaningful failure message from an in-band

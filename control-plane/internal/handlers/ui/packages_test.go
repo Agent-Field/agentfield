@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
@@ -127,6 +128,52 @@ func TestListPackagesHandler(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "failed to list packages", response.Error)
 
+		mockStorage.AssertExpectations(t)
+	})
+
+	t.Run("preserves install status and installed timestamp wire fields", func(t *testing.T) {
+		installedAt := time.Date(2026, time.July, 29, 23, 45, 12, 0, time.FixedZone("test", -4*60*60))
+		statuses := []types.PackageStatus{
+			types.PackageStatusInstalled,
+			types.PackageStatusRunning,
+			types.PackageStatusStopped,
+			types.PackageStatusUninstalled,
+			types.PackageStatus("catalog"),
+		}
+		rows := make([]*types.AgentPackage, 0, len(statuses)+1)
+		for i, status := range statuses {
+			rows = append(rows, &types.AgentPackage{
+				ID:          "package-" + string(rune('a'+i)),
+				Name:        string(status),
+				Status:      status,
+				InstalledAt: installedAt,
+			})
+		}
+		rows = append(rows, &types.AgentPackage{
+			ID:     "package-zero-time",
+			Name:   "zero time",
+			Status: types.PackageStatusInstalled,
+		})
+
+		router, mockStorage, _ := setupRouterAndServices()
+		mockStorage.On("QueryAgentPackages", mock.AnythingOfType("context.Context"), mock.AnythingOfType("types.PackageFilters")).Return(rows, nil).Once()
+
+		req, _ := http.NewRequest(http.MethodGet, "/api/ui/v1/agents/packages", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response struct {
+			Packages []map[string]interface{} `json:"packages"`
+		}
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.Len(t, response.Packages, len(rows))
+		for i, status := range statuses {
+			assert.Equal(t, string(status), response.Packages[i]["install_status"])
+			assert.Equal(t, "2026-07-30T03:45:12Z", response.Packages[i]["installed_at"])
+		}
+		assert.Equal(t, string(types.PackageStatusInstalled), response.Packages[len(statuses)]["install_status"])
+		assert.NotContains(t, response.Packages[len(statuses)], "installed_at")
 		mockStorage.AssertExpectations(t)
 	})
 }

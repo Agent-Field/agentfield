@@ -67,8 +67,12 @@ func newRegisterServerlessCommand() *cobra.Command {
 				return fmt.Errorf("build request: %w", err)
 			}
 			req.Header.Set("Content-Type", "application/json")
-			if opts.token != "" {
-				req.Header.Set("Authorization", "Bearer "+opts.token)
+			// --token / AGENTFIELD_TOKEN stays authoritative; otherwise fall
+			// back to the API key every other command sends.
+			if token := strings.TrimSpace(opts.token); token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			} else if key := strings.TrimSpace(GetAPIKey()); key != "" {
+				req.Header.Set("X-API-Key", key)
 			}
 
 			resp, err := client.Do(req)

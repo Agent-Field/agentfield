@@ -1,127 +1,89 @@
-// Agent + control-plane lifecycle seam: shells out to the af CLI (the single
-// contract — the app never reimplements start/stop). No electron imports so
-// the module stays unit-testable.
-//
-// CLI semantics this leans on (control-plane/internal/cli):
-//   - `af run <name>` spawns the agent detached, waits for its local /health,
-//     and exits — the agent survives the CLI (and this app) exiting.
-//   - `af stop <name>` shuts down gracefully (HTTP /shutdown, then signal,
-//     then force) and flips the registry entry to stopped.
-//   - there is no `af restart` — restart here is stop-then-run.
-//   - `af server` always blocks, so the control plane is spawned detached
-//     with its output appended to ~/.agentfield/logs/control-plane.log.
+// Agent lifecycle uses the control-plane HTTP API. The only CLI path retained
+// here is the detached `af server` bootstrap.
 
 import { spawn } from 'node:child_process'
 import { closeSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentActionResult, ControlPlaneStatus } from '../shared/types'
-import { checkControlPlane, getAgentFieldHome, getBaseUrl, readInstalledAgents } from './agentfield'
+import { checkControlPlane, getAgentFieldHome } from './agentfield'
 import { getCliCommand } from './cli'
 import { childEnv } from './env'
 import { DEFAULT_CONTROL_PLANE_PORT, baseUrlForPort } from './ports'
-import { sanitizeInstallOutput } from './installer'
+import { CpApiError, createCpClient, type CpClient } from './cpClient'
 import type { RunResult } from './tray-companion'
 
 export type AgentAction = 'start' | 'stop' | 'restart'
 
-/** How long one `af run`/`af stop` may take (run waits ≤30s for readiness). */
-const CLI_TIMEOUT_MS = 90_000
-
 const MISSING_CLI_MESSAGE =
   'The AgentField CLI (af) was not found on PATH. Install it first: https://agentfield.ai/docs'
 
-/** Run one af verb to completion, capturing the last meaningful output line. */
-function runCli(args: string[], timeoutMs = CLI_TIMEOUT_MS): Promise<AgentActionResult> {
-  return new Promise((resolve) => {
-    let lastLine = ''
-    let settled = false
-    const done = (result: AgentActionResult) => {
-      if (!settled) {
-        settled = true
-        resolve(result)
-      }
-    }
+export interface AgentManagementDeps {
+  cpClient: CpClient
+}
 
-    // Point af at the control plane this app is driving. The active base URL
-    // can be a non-default port (user-configured, or auto-picked when 8080
-    // was taken) — without this, `af run` would register agents against
-    // whatever the user's own AGENTFIELD_SERVER / default 8080 resolves to,
-    // and the app would never see them.
-    const child = spawn(getCliCommand(), args, {
-      windowsHide: true,
-      env: childEnv({ AGENTFIELD_SERVER: getBaseUrl() })
-    })
-    const timer = setTimeout(() => {
-      child.kill()
-      done({ ok: false, message: `af ${args.join(' ')} timed out` })
-    }, timeoutMs)
+function defaultAgentManagementDeps(): AgentManagementDeps {
+  return { cpClient: createCpClient() }
+}
 
-    const collect = (chunk: Buffer) => {
-      const lines = sanitizeInstallOutput(chunk.toString('utf8'))
-      if (lines.length > 0) lastLine = lines[lines.length - 1]
-    }
-    child.stdout.on('data', collect)
-    child.stderr.on('data', collect)
-    child.on('error', (err: NodeJS.ErrnoException) => {
-      clearTimeout(timer)
-      done({
-        ok: false,
-        message: err.code === 'ENOENT' ? MISSING_CLI_MESSAGE : `Failed to run af: ${err.message}`
-      })
-    })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      done(
-        code === 0
-          ? { ok: true, message: lastLine }
-          : { ok: false, message: lastLine || `af ${args.join(' ')} exited with code ${code}` }
-      )
-    })
-  })
+function managementError(err: unknown): AgentActionResult {
+  if (err instanceof CpApiError) return { ok: false, message: err.message }
+  return {
+    ok: false,
+    message: 'Could not reach the control plane — start the control plane and try again'
+  }
 }
 
 /**
- * Start / stop / restart an installed agent by registry name. The name is
- * validated against ~/.agentfield/installed.yaml — the renderer only ever
- * supplies names, and unknown ones are refused rather than handed to a shell.
+ * Start / stop / restart an installed agent through the control plane.
  */
 export async function runAgentAction(
   action: AgentAction,
-  name: string
+  name: string,
+  deps: AgentManagementDeps = defaultAgentManagementDeps()
 ): Promise<AgentActionResult> {
-  const registry = await readInstalledAgents()
-  if (!registry.agents.some((agent) => agent.name === name)) {
-    return { ok: false, message: `"${name}" is not an installed agent` }
-  }
-
-  switch (action) {
-    case 'start':
-      return runCli(['run', name])
-    case 'stop':
-      return runCli(['stop', name])
-    case 'restart': {
-      // `af stop` exits cleanly when the agent is already stopped, so a
-      // restart of a wedged ("unknown") agent degrades to a plain start.
-      const stopped = await runCli(['stop', name])
-      if (!stopped.ok) return stopped
-      return runCli(['run', name])
+  try {
+    switch (action) {
+      case 'start': {
+        const result = await deps.cpClient.startAgent(name)
+        return { ok: true, message: result.message }
+      }
+      case 'stop': {
+        const result = await deps.cpClient.stopAgent(name)
+        return { ok: true, message: result.message }
+      }
+      case 'restart': {
+        await deps.cpClient.stopAgent(name)
+        const result = await deps.cpClient.startAgent(name)
+        return { ok: true, message: result.message }
+      }
     }
+  } catch (err) {
+    return managementError(err)
   }
 }
 
 /**
- * Uninstall an installed agent: graceful stop first (a stopped agent's stop
- * is a no-op), then `af uninstall --force`, which removes the package dir,
- * the registry entry, and the node-scoped secrets. Names are validated
- * against the registry like every other verb.
+ * Uninstall an installed agent. The server owns stopping a running package.
  */
-export async function uninstallAgent(name: string): Promise<AgentActionResult> {
-  const registry = await readInstalledAgents()
-  if (!registry.agents.some((agent) => agent.name === name)) {
-    return { ok: false, message: `"${name}" is not an installed agent` }
+export async function uninstallAgent(
+  name: string,
+  deps: AgentManagementDeps = defaultAgentManagementDeps()
+): Promise<AgentActionResult> {
+  try {
+    if (!(await deps.cpClient.hasInstallApi())) {
+      return {
+        ok: false,
+        message: 'Control plane update required — update AgentField CLI'
+      }
+    }
+    const result = await deps.cpClient.uninstallPackage(name)
+    return { ok: true, message: result.status }
+  } catch (err) {
+    if (err instanceof CpApiError && err.status === 404) {
+      return { ok: false, message: 'Control plane update required — update AgentField CLI' }
+    }
+    return managementError(err)
   }
-  await runCli(['stop', name])
-  return runCli(['uninstall', name, '--force'])
 }
 
 /** launchd label af-tray registers for the control-plane server agent (see af-tray shared.go). */

@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"fmt"
+	// "fmt" // Uncomment with analyze_sentiment below.
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
-	"github.com/Agent-Field/agentfield/sdk/go/ai"
+	// "github.com/Agent-Field/agentfield/sdk/go/ai" // Uncomment with analyze_sentiment below.
 )
 
 func registerReasoners(app *agent.Agent) {
@@ -24,7 +24,7 @@ func registerReasoners(app *agent.Agent) {
 		}, nil
 	})
 
-	// 🔧 Uncomment when AI is configured in main.go:
+	// 🔧 Uncomment the AI imports and this block when AI is configured in main.go:
 	//
 	// AI-powered sentiment analysis
 	//

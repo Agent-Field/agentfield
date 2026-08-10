@@ -4,6 +4,13 @@ import { MemoryClientBase, MemoryRequestOptions } from './MemoryClient.js';
 
 export type MemoryEventHandler = (event: MemoryChangeEvent) => Promise<void> | void;
 
+export interface MemoryEventSubscriptionOptions {
+  /** Memory key glob patterns to filter on the server. */
+  patterns?: string[];
+  scope?: MemoryRequestOptions['scope'];
+  scopeId?: string;
+}
+
 export interface MemoryEventHistoryOptions extends MemoryRequestOptions {
   patterns?: string[],
   since?: Date,
@@ -20,6 +27,7 @@ export class MemoryEventClient extends MemoryClientBase {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readonly headers: Record<string, string>;
   private readonly apiKey?: string;
+  private subscriptionOptions: MemoryEventSubscriptionOptions = {};
 
   constructor(baseUrl: string, headers?: Record<string, string | number | boolean | undefined>, apiKey?: string) {
     super(baseUrl, headers);
@@ -28,8 +36,13 @@ export class MemoryEventClient extends MemoryClientBase {
     this.apiKey = apiKey;
   }
 
-  start() {
+  /** Starts the event stream with optional server-side filters. */
+  start(options: MemoryEventSubscriptionOptions = {}) {
     if (this.ws) return;
+    this.subscriptionOptions = {
+      ...options,
+      patterns: options.patterns ? [...options.patterns] : undefined
+    };
     this.connect();
   }
 
@@ -62,7 +75,7 @@ export class MemoryEventClient extends MemoryClientBase {
     this.cleanup();
     this.reconnectPending = false;
 
-    this.ws = new WebSocket(this.url, { headers: this.headers });
+    this.ws = new WebSocket(this.buildWebSocketUrl(), { headers: this.headers });
 
     this.ws.on('open', () => {
       this.reconnectDelay = 1000;
@@ -97,6 +110,24 @@ export class MemoryEventClient extends MemoryClientBase {
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
       this.connect();
     }, this.reconnectDelay);
+  }
+
+  private buildWebSocketUrl() {
+    const params = new URLSearchParams();
+    const { patterns, scope, scopeId } = this.subscriptionOptions;
+
+    if (patterns && patterns.length > 0) {
+      params.set('patterns', patterns.join(','));
+    }
+    if (scope) {
+      params.set('scope', scope);
+    }
+    if (scopeId) {
+      params.set('scope_id', scopeId);
+    }
+
+    const query = params.toString();
+    return query ? `${this.url}?${query}` : this.url;
   }
 
   private buildForwardHeaders(headers: Record<string, any>): Record<string, string> {

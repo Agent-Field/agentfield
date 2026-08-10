@@ -128,3 +128,28 @@ func TestGitInstallerErrorsWithoutGit(t *testing.T) {
 		t.Fatalf("expected cloneRepository failure, got %v", err)
 	}
 }
+
+func TestValidateCloneArgsRejectsOptionLikeValues(t *testing.T) {
+	cases := []struct {
+		name    string
+		info    GitPackageInfo
+		wantErr bool
+	}{
+		{"clean https url", GitPackageInfo{CloneURL: "https://github.com/o/r"}, false},
+		{"clean url with ref", GitPackageInfo{CloneURL: "https://github.com/o/r", Ref: "v1.2.3"}, false},
+		{"flag-like url", GitPackageInfo{CloneURL: "--upload-pack=touch /tmp/pwned"}, true},
+		{"flag-like ref", GitPackageInfo{CloneURL: "https://github.com/o/r", Ref: "--upload-pack=evil"}, true},
+		{"dash ref", GitPackageInfo{CloneURL: "https://github.com/o/r", Ref: "-b"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateCloneArgs(&tc.info)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}

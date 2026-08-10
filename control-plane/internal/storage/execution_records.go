@@ -1102,6 +1102,16 @@ func parseTimeString(value string) (time.Time, error) {
 // INVARIANT: callers must ensure updated_at is bumped on every meaningful execution activity.
 // If updated_at is not maintained, active executions may be incorrectly reaped.
 // Uses COALESCE(updated_at, created_at, started_at) to handle rows where updated_at may be NULL.
+//
+// An execution that is merely BLOCKED ON A CHILD is not stale, so rows with a
+// non-terminal child are skipped. A parent's own updated_at stops moving while
+// it waits, so without this a long child call — one agent doing many minutes of
+// work in a single request — reaps its whole ancestor chain even though real
+// work is happening. Deliberately no recency test on the child: the chain
+// unwinds bottom-up instead. If work genuinely stops, the leaf goes stale and
+// is reaped first, which makes its parent childless and eligible on the next
+// sweep, and so on up. Nothing is stuck forever; it just takes one sweep per
+// level.
 func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
 	if limit <= 0 {
 		return 0, nil
@@ -1115,9 +1125,14 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 	db := ls.requireSQLDB()
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
-		FROM executions
+		FROM executions e
 		WHERE status IN ('running', 'pending', 'queued')
 		  AND COALESCE(updated_at, created_at, started_at) <= ?
+		  AND NOT EXISTS (
+		      SELECT 1 FROM executions c
+		      WHERE c.parent_execution_id = e.execution_id
+		        AND c.status IN ('running', 'pending', 'queued')
+		  )
 		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {
@@ -1208,7 +1223,8 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 // when their updated_at timestamp exceeds the staleAfter threshold. This catches orphaned
 // child executions whose parent failed without cascading cancellation.
 //
-// See MarkStaleExecutions for the updated_at invariant and COALESCE fallback rationale.
+// See MarkStaleExecutions for the updated_at invariant, the COALESCE fallback
+// rationale, and why a row with a non-terminal child is skipped rather than reaped.
 func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
 	if limit <= 0 {
 		return 0, nil
@@ -1222,10 +1238,15 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	db := ls.requireSQLDB()
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
-		FROM workflow_executions
+		FROM workflow_executions w
 		WHERE status IN ('running', 'pending', 'queued', 'waiting')
 		  AND COALESCE(updated_at, created_at, started_at) <= ?
 		  AND COALESCE(approval_status, '') != 'pending'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM workflow_executions c
+		      WHERE c.parent_execution_id = w.execution_id
+		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
+		  )
 		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {

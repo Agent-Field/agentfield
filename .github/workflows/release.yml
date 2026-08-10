@@ -158,7 +158,7 @@ jobs:
             version="${EXISTING_VERSION}"
             tag="v${version}"
             git fetch --tags origin "refs/tags/${tag}:refs/tags/${tag}" --depth=1
-            release_sha="$(git rev-parse "${tag}")"
+            release_sha="$(git rev-list -n 1 "${tag}")"
           else
             if [ "${ENVIRONMENT}" = "staging" ]; then
               # Staging: Always create prerelease version
@@ -182,6 +182,23 @@ jobs:
             git push origin "HEAD:${REF_NAME}"
             git push origin "${tag}"
             release_sha="$(git rev-parse HEAD)"
+          fi
+
+          # sdk/go is a nested Go module. Go resolves its versions from tags
+          # prefixed with the module subdirectory, not from the repository's
+          # root vX.Y.Z tag. The generated Go scaffold pins this exact version,
+          # so publish the matching nested tag before release artifacts are
+          # built and users can run `af init`.
+          sdk_go_tag="sdk/go/${tag}"
+          if git show-ref --verify --quiet "refs/tags/${sdk_go_tag}"; then
+            sdk_go_sha="$(git rev-list -n 1 "${sdk_go_tag}")"
+            if [ "${sdk_go_sha}" != "${release_sha}" ]; then
+              echo "${sdk_go_tag} already points to ${sdk_go_sha}, expected ${release_sha}" >&2
+              exit 1
+            fi
+          else
+            git tag -a "${sdk_go_tag}" "${release_sha}" -m "Go SDK ${tag}"
+            git push origin "${sdk_go_tag}"
           fi
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -217,6 +234,15 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: control-plane/go.sum
+
+      - name: Verify Go SDK module release
+        if: matrix.label == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="v${{ needs.prepare.outputs.version }}"
+          resolved="$(GOPROXY=direct GONOSUMDB=github.com/Agent-Field/agentfield/sdk/go go list -m -f '{{.Version}}' "github.com/Agent-Field/agentfield/sdk/go@${version}")"
+          test "${resolved}" = "${version}"
 
       - name: Install cross-compilers
         if: matrix.label == 'linux'
@@ -472,9 +498,11 @@ jobs:
           if [ "${ENVIRONMENT}" = "staging" ]; then
             # Staging: use staging-X.Y.Z-rc.N prefix
             echo "tags=${image}:staging-${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "cloud_tags=${image}-cloud:staging-${VERSION}" >> "$GITHUB_OUTPUT"
           else
             # Production: version tag + latest
             echo "tags=${image}:${TAG_NAME},${image}:latest" >> "$GITHUB_OUTPUT"
+            echo "cloud_tags=${image}-cloud:${TAG_NAME},${image}-cloud:latest" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up Docker Buildx
@@ -500,6 +528,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push control plane cloud image
+        if: needs.prepare.outputs.publish_docker == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployments/docker/Dockerfile.control-plane-cloud
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.docker_meta.outputs.cloud_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Attach Python artifacts to GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -508,13 +548,16 @@ jobs:
             sdk/python/dist/*.whl
             sdk/python/dist/*.tar.gz
 
-  # Desktop installers — unsigned for now (signing/notarization is a known
-  # follow-up): DMG + zip on macOS (Apple Silicon), NSIS .exe on Windows
-  # (x64), attached to the same release as the CLI binaries so users download
-  # whichever they want. Runs for staging (RC prereleases) and production
-  # alike. The bundled af CLI is built from the release commit with the
-  # embedded web UI + sqlite FTS (parity with build-single-binary.sh), so the
-  # installed app is fully self-contained on a fresh machine.
+  # Desktop installers — DMG + zip on macOS (Apple Silicon), NSIS .exe on
+  # Windows (x64), attached to the same release as the CLI binaries so users
+  # download whichever they want. Runs for staging (RC prereleases) and
+  # production alike. The bundled af CLI is built from the release commit with
+  # the embedded web UI + sqlite FTS (parity with build-single-binary.sh), so
+  # the installed app is fully self-contained on a fresh machine.
+  #
+  # macOS builds are Developer ID signed + notarized via the CSC_LINK /
+  # CSC_KEY_PASSWORD / APPLE_* secrets. Windows builds are still unsigned
+  # (Authenticode is a separate follow-up).
   desktop-installers:
     needs:
       - prepare
@@ -530,9 +573,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
-    env:
-      # No signing identities in CI yet; package unsigned.
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - name: Checkout release commit
         uses: actions/checkout@v4
@@ -584,9 +624,147 @@ jobs:
           AF_CLI_VERSION: ${{ needs.prepare.outputs.tag_name }}
         run: npm run bundle-cli -- full
 
-      - name: Build installers
+      # One-click Railway deploy needs OpenTofu + the Railway provider in
+      # vendor/deploy-engine so extraResources can pack them into the app.
+      - name: Fetch deploy engine (OpenTofu + Railway provider)
         working-directory: desktop
+        run: npm run fetch:deploy-engine
+
+      # electron-builder silently skips a missing extraResources source, so a
+      # broken or removed fetch would ship installers whose Remote tab says
+      # "one-click deploy isn't bundled" (every build up to v0.1.118 did).
+      # Fail the release here instead of degrading the artifact.
+      - name: Assert deploy engine is bundled
+        working-directory: desktop
+        shell: bash
+        # Plain file tests only: this step runs under bash -e -o pipefail,
+        # where an `ls existing missing | grep` pipeline reports the missing
+        # arg's exit status even when the other file exists (the v0.1.119
+        # false positive that blocked the macOS DMG).
+        run: |
+          if [ ! -f vendor/deploy-engine/tofu ] && [ ! -f vendor/deploy-engine/tofu.exe ]; then
+            echo "::error::vendor/deploy-engine has no tofu binary; run fetch:deploy-engine"
+            exit 1
+          fi
+          if [ ! -d vendor/deploy-engine/providers ]; then
+            echo "::error::vendor/deploy-engine/providers mirror is missing; offline provider install would fail"
+            exit 1
+          fi
+
+      # electron-builder signs every Mach-O in the bundle (including the
+      # bundled af/af-tray) with the Developer ID cert + hardened runtime,
+      # then notarizes and staples the .app before packing DMG/zip from it.
+      # Missing secrets degrade the artifact instead of blocking the release:
+      # no CSC_LINK → unsigned (ad-hoc) build, no APPLE_APP_SPECIFIC_PASSWORD
+      # → signed but un-notarized build, each with a workflow warning.
+      #
+      # Do NOT set CSC_IDENTITY_AUTO_DISCOVERY=false for this step. It reads as
+      # "don't guess an identity from the keychain", but electron-builder treats
+      # it as "skip code signing entirely" even when CSC_LINK is supplied — the
+      # app then gets ad-hoc signed, and notarization of an unsigned app comes
+      # back Invalid. That is what happened to v0.1.118-rc.10, which shipped
+      # without its macOS DMG. Providing CSC_LINK is already explicit, so
+      # nothing is auto-discovered here.
+      - name: Build installers (macOS, signed + notarized)
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ] || [ -z "$APPLE_ID" ] \
+            || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::warning::signing/notarization secrets incomplete; producing an unsigned build"
+            # Partial APPLE_* env makes electron-builder hard-fail, and an
+            # unsigned app can never notarize; drop the set entirely so it
+            # degrades to a skip-with-warning instead. Auto-discovery stays off
+            # so an unsigned build cannot silently pick up a keychain identity.
+            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          npm run dist
+
+      - name: Build installers (Windows)
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        env:
+          # Windows releases are unsigned; keep electron-builder from picking up
+          # any identity that happens to be on the runner.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run dist
+
+      # The .app inside the DMG is already notarized + stapled; notarizing and
+      # stapling the DMG container as well makes the download pass Gatekeeper
+      # even offline. Then hard-verify what is about to ship: a signing or
+      # notarization regression must fail the release here, not on users'
+      # machines.
+      - name: Notarize DMG + verify Gatekeeper acceptance (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Same condition as the build step above. If they disagree, an
+          # incomplete secret set produces an unsigned app here and then fails
+          # the release on a notarization rejection instead of degrading to a
+          # warning.
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ] || [ -z "$APPLE_ID" ] \
+            || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::warning::signing/notarization secrets incomplete; skipping DMG notarization and Gatekeeper verification"
+            exit 0
+          fi
+          shopt -s nullglob
+          dmgs=(desktop/release/*.dmg)
+          if [ ${#dmgs[@]} -eq 0 ]; then
+            echo "no dmg found under desktop/release" >&2
+            exit 1
+          fi
+          for dmg in "${dmgs[@]}"; do
+            # `notarytool submit --wait` exits 0 even when Apple answers
+            # Invalid, so the status has to be read out of the output rather
+            # than inferred from the exit code. rc.10 sailed past this point and
+            # only failed later in `stapler`, which reports a ticket lookup
+            # error instead of the actual rejection.
+            submit_log="$(mktemp)"
+            # `|| true` so that a hard notarytool failure still reaches the
+            # status check below and gets its reason printed, rather than
+            # tripping `set -e` with no explanation.
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait 2>&1 | tee "$submit_log" || true
+            status="$(sed -n 's/^ *status: *//p' "$submit_log" | tail -1)"
+            if [ "$status" != "Accepted" ]; then
+              echo "::error::notarization of $dmg returned '${status:-unknown}'; Apple's report follows"
+              submission_id="$(sed -n 's/^ *id: *//p' "$submit_log" | head -1)"
+              if [ -n "$submission_id" ]; then
+                xcrun notarytool log "$submission_id" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" || true
+              fi
+              exit 1
+            fi
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+          done
+          apps=(desktop/release/mac*/*.app)
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "no packed .app found under desktop/release" >&2
+            exit 1
+          fi
+          for app in "${apps[@]}"; do
+            xcrun stapler validate "$app"
+            spctl --assess --type execute -vv "$app"
+          done
 
       - name: Attach installers to the release
         shell: bash
