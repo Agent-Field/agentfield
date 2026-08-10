@@ -5,7 +5,8 @@ description: {{yamlQuote (printf "Run the %s Go AgentField scaffold locally." .P
 author: {{yamlQuote .AuthorName}}
 language: go
 entrypoint:
-  start: go run .
+  build: .
+  start: bin/{{.NodeID}}
   healthcheck: /health
 agent_node:
   node_id: {{yamlQuote .NodeID}}

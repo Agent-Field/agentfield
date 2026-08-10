@@ -1,6 +1,6 @@
 ---
 name: agentfield-use
-version: 0.4.0
+version: 0.5.0
 description: "Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill."
 ---
 
@@ -193,7 +193,7 @@ are running something"):
 
 ```bash
 curl -s http://localhost:8080/api/v1/executions/active
-# {"count":2,"runs":[{"run_id":"...","target":"pr-af-go.review","root_status":"running",
+# {"count":2,"runs":[{"run_id":"...","target":"pr-af.review","root_status":"running",
 #   "active_executions":4,"total_executions":27,"started_at":"...","latest_activity":"..."}]}
 ```
 
@@ -209,6 +209,65 @@ curl -s http://localhost:8080/api/v1/executions/<execution_id>
 Long-running agents can take tens of minutes — poll with backoff (start ~5s,
 settle at ~30s) and tell the user what is in flight. For live progress, stream
 Server-Sent Events from `GET /api/v1/executions/<execution_id>/events`.
+
+### If the result carries a `workspace_handle`, you can read the files
+
+Some agents (SWE-AF) mirror the workspace they are building in, so you can open
+the actual files instead of reasoning from the summary — including uncommitted
+edits and untracked files that no git push would carry. You do not ask whether
+this is available and there is nothing to configure: the handle is in the result
+when it works and absent when it doesn't.
+
+```json
+"workspace_handle": {"v":1, "remote":"ssh://host:port"|"dir:/path",
+                     "namespace":"...", "key":"<64 hex>", "token":"..."}
+```
+
+`furrow` is rarely on PATH. AgentField installs it to `$AGENTFIELD_HOME/bin/`
+(default `~/.agentfield/bin/`), and a node that ships its own copy keeps it
+inside the installed package. Resolve it from those; do not try to install it
+yourself. POSIX sh only — no brace expansion, so the package dirs are spelled
+out.
+
+```sh
+os=$(uname -s | tr A-Z a-z)
+af_home=${AGENTFIELD_HOME:-$HOME/.agentfield}
+furrow_bin() {  # $1 = furrow | furrow-dial
+  command -v "$1" 2>/dev/null && return
+  for c in "$af_home/bin/$1" \
+           "$af_home"/packages/*/bin/"$1"-"$os"-* \
+           "$af_home"/packages/*/go/bin/"$1"-"$os"-*; do
+    [ -x "$c" ] && { echo "$c"; return; }
+  done
+}
+FURROW=$(furrow_bin furrow) DIAL=$(furrow_bin furrow-dial)
+```
+
+A `dir:` handle needs only `$FURROW`; an `ssh://` handle needs `$DIAL` too. If
+either is missing, say so plainly and carry on from the result — the mirror is
+fine, this machine just has no client for it.
+
+```bash
+# ssh:// handle — furrow-dial carries the protocol; nothing else changes
+export FURROW_SSH_COMMAND="$DIAL" FURROW_DIAL_TOKEN=<token> FURROW_DIAL_INSECURE=1
+FURROW_RECOVERY_KEY=<key> "$FURROW" clone <remote>/<namespace> ./run-workspace --no-watch
+
+# dir: handle (same machine) — clone rejects directory remotes, so pair instead.
+# The path is the handle's remote with the "dir:" prefix removed; don't append
+# anything to it.
+git init -q run-workspace && "$FURROW" --repo run-workspace watch --no-daemon
+"$FURROW" --repo run-workspace pair <path> --name <namespace> --key <key>
+"$FURROW" --repo run-workspace sync --pull --bootstrap
+```
+
+`"$FURROW" --repo run-workspace sync --follow` keeps it current while the run
+works. Read and diff freely. Treat it as a mirror, not a shared drive: it is
+one-writer, and edits go back as a merge (`furrow merge <fork> --check "<cmd>"`),
+so change files between issues or on a fork rather than while the agent writes.
+
+`get_workspace_handle` re-fetches a handle mid-run:
+`POST /api/v1/execute/<agent>.get_workspace_handle` with `{"input":{"run_id":"..."}}`.
+`{"available": false}` means no mirror — carry on without it.
 
 **Several at once:** `POST /api/v1/executions/batch-status` with
 `{"execution_ids": [...]}`. Terminal entries embed the FULL result payload —
@@ -280,6 +339,9 @@ is enabled), and verify offline with `af verify audit.json`.
 ## Hard rules
 
 - Every call goes through the control plane — never POST to an agent's own port.
+  The one exception is a `workspace_handle`: its `ssh://` endpoint is a furrow
+  transport, not the agent's HTTP port, and the per-run token in the handle is
+  what authorizes it. Reading files there is not an agent call.
 - Kwargs live under `"input"`. Empty input is `{"input": {}}`.
 - Async + poll for anything that might exceed a few seconds; sync is for quick
   lookups only. Independent async calls go out together, not one at a time.

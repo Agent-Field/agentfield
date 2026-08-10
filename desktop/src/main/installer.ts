@@ -14,7 +14,7 @@
 
 import { catalogEntry } from '../shared/catalog'
 import type { InstallResult } from '../shared/types'
-import { CpApiError, createCpClient, type CpClient } from './cpClient'
+import { CpApiError, createCpClient, type CpClient, type InstallJob } from './cpClient'
 
 // CSI sequences (colors, cursor movement, erase-line spinner frames) and OSC
 // sequences (terminal titles), per ECMA-48. Written with \u escapes so no
@@ -85,10 +85,22 @@ function defaultInstallerDeps(): InstallerDeps {
 
 const UPDATE_REQUIRED = 'Control plane update required — update AgentField CLI'
 
+/**
+ * The name the control plane says it actually installed, or null when it
+ * doesn't say. This is NOT always the name that went in: a manifest declaring
+ * `superseded_by:` redirects the install to a successor, which may carry its
+ * own name. Reporting the job's answer rather than the request's is what keeps
+ * the app honest about what the user now has.
+ */
+function installedName(job: InstallJob): string | null {
+  const name = job.package_name?.trim()
+  return name ? name : null
+}
+
 async function runInstall(
   source: string,
   onLine: (line: string) => void,
-  successMessage: () => string,
+  successMessage: (job: InstallJob) => string,
   deps: InstallerDeps,
   force?: boolean
 ): Promise<InstallResult> {
@@ -99,7 +111,7 @@ async function runInstall(
     const { job_id } = await deps.cpClient.installPackage(source, force)
     const job = await deps.cpClient.watchInstallJob(job_id, onLine)
     return job.status === 'succeeded'
-      ? { ok: true, message: successMessage() }
+      ? { ok: true, message: successMessage(job) }
       : { ok: false, message: job.error || job.lines.at(-1) || 'Install failed' }
   } catch (err) {
     if (err instanceof CpApiError && err.status === 404) {
@@ -132,7 +144,17 @@ export function installAgent(
   if (!entry) {
     return Promise.resolve({ ok: false, message: `"${name}" is not in the install catalog` })
   }
-  return runInstall(entry.source, onLine, () => `${name} installed`, deps, force)
+  // Name what landed, not what was asked for. They agree for every catalog
+  // entry (that is the invariant catalog.ts documents), so a disagreement here
+  // means the row has drifted from the manifest it redirects to — better said
+  // out loud than papered over with the row's own label.
+  return runInstall(
+    entry.source,
+    onLine,
+    (job) => `${installedName(job) ?? name} installed`,
+    deps,
+    force
+  )
 }
 
 // The one host we install from. Every accepted source starts with this literal
@@ -203,7 +225,15 @@ export function installFromSource(
       message: 'Enter a GitHub repository URL, e.g. https://github.com/org/repo (or …/repo//subdir)'
     })
   }
-  return runInstall(normalized, onLine, () => `Installed from ${normalized}`, deps)
+  return runInstall(
+    normalized,
+    onLine,
+    (job) => {
+      const name = installedName(job)
+      return name ? `${name} installed` : `Installed from ${normalized}`
+    },
+    deps
+  )
 }
 
 /**
@@ -230,9 +260,17 @@ export async function updateAgent(
     onLine(`Updating ${name}…`)
     const { job_id } = await deps.cpClient.updatePackage(name)
     const job = await deps.cpClient.watchInstallJob(job_id, onLine)
-    return job.status === 'succeeded'
-      ? { ok: true, message: `${name} updated` }
-      : { ok: false, message: job.error || job.lines.at(-1) || `Failed to update ${name}` }
+    if (job.status !== 'succeeded') {
+      return { ok: false, message: job.error || job.lines.at(-1) || `Failed to update ${name}` }
+    }
+    // An update reinstalls from the recorded source, so it can hit a
+    // `superseded_by:` redirect and come back as a different node. Saying
+    // "<old> updated" would then name something that no longer exists.
+    const landed = installedName(job)
+    return {
+      ok: true,
+      message: landed && landed !== name ? `${name} replaced by ${landed}` : `${name} updated`
+    }
   } catch (err) {
     if (err instanceof CpApiError && err.status === 404) {
       return { ok: false, message: UPDATE_REQUIRED }

@@ -186,8 +186,14 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 	// query since the control plane keys executions by node_id, which may differ
 	// from the registry install name.
 	queryID := agentNodeName
-	if md, err := packages.ParsePackageMetadata(agentNode.Path); err == nil && md.AgentNode.NodeID != "" {
-		queryID = md.AgentNode.NodeID
+	httpShutdownSupported := true
+	if md, err := packages.ParsePackageMetadata(agentNode.Path); err == nil {
+		if md.AgentNode.NodeID != "" {
+			queryID = md.AgentNode.NodeID
+		}
+		// The Go SDK shuts down cleanly on SIGINT/SIGTERM and does not expose
+		// the legacy Python /shutdown route. Skip a guaranteed 404.
+		httpShutdownSupported = !md.IsGo()
 	}
 	if !as.confirmStopWithRunningExecutions(queryID) {
 		as.Outcome = "aborted"
@@ -197,7 +203,7 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 
 	// Try HTTP shutdown first if port is available
 	httpShutdownSuccess := false
-	if agentNode.Runtime.Port != nil {
+	if httpShutdownSupported && agentNode.Runtime.Port != nil {
 		as.printf("🛑 Attempting graceful HTTP shutdown for agent %s on port %d\n", agentNodeName, *agentNode.Runtime.Port)
 
 		// Construct agent base URL
@@ -239,7 +245,11 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 
 	// If HTTP shutdown failed or not available, fall back to process signals
 	if !httpShutdownSuccess {
-		as.printf("🔄 Falling back to process signal shutdown for agent %s\n", agentNodeName)
+		if httpShutdownSupported {
+			as.printf("🔄 Falling back to process signal shutdown for agent %s\n", agentNodeName)
+		} else {
+			as.printf("🛑 Sending graceful process signal to agent %s\n", agentNodeName)
+		}
 
 		// Ask for graceful shutdown (SIGINT on Unix, taskkill on Windows).
 		// A process that exits between the aliveness check above and the

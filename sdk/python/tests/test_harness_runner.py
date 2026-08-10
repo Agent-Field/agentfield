@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +17,6 @@ from agentfield.harness._runner import (
     _is_transient,
     _resolve_options,
 )
-from agentfield.harness._schema import get_output_path
 
 
 class DemoSchema(BaseModel):
@@ -45,7 +46,9 @@ class FileWritingProvider(MockProvider):
         self.payload = payload
 
     async def execute(self, prompt: str, options: dict) -> RawResult:
-        output_path = get_output_path(str(options.get("cwd", ".")))
+        match = re.search(r"(\S*\.agentfield_output\.json)", prompt)
+        assert match, "schema prompt suffix must name the output file path"
+        output_path = match.group(1)
         with open(output_path, "w", encoding="utf-8") as file_obj:
             file_obj.write(self.payload)
         return await super().execute(prompt, options)
@@ -115,6 +118,60 @@ async def test_run_with_project_dir_places_output_under_project_dir(tmp_path):
     assert list(root.glob(".agentfield-out-*")) == []
 
 
+@pytest.mark.asyncio
+async def test_concurrent_runs_with_same_cwd_use_isolated_output_files(tmp_path):
+    """Concurrent harness runs sharing a cwd must not share an output file."""
+
+    class ConcurrentFileWritingProvider:
+        def __init__(self) -> None:
+            self.output_paths: list[str] = []
+            self.ready = asyncio.Event()
+
+        async def execute(self, prompt: str, options: dict) -> RawResult:
+            match = re.search(r"(\S*\.agentfield_output\.json)", prompt)
+            assert match, "schema prompt suffix must name the output file path"
+            output_path = match.group(1)
+            self.output_paths.append(output_path)
+
+            name = "first" if prompt.startswith("first request") else "second"
+            count = 1 if name == "first" else 2
+            with open(output_path, "w", encoding="utf-8") as file_obj:
+                json.dump({"name": name, "count": count}, file_obj)
+
+            if len(self.output_paths) == 2:
+                self.ready.set()
+            await self.ready.wait()
+            return RawResult(result="ok")
+
+    provider = ConcurrentFileWritingProvider()
+    runner = HarnessRunner()
+    with patch("agentfield.harness._runner.build_provider", return_value=provider):
+        first, second = await asyncio.gather(
+            runner.run(
+                "first request",
+                provider="codex",
+                schema=DemoSchema,
+                cwd=str(tmp_path),
+            ),
+            runner.run(
+                "second request",
+                provider="codex",
+                schema=DemoSchema,
+                cwd=str(tmp_path),
+            ),
+        )
+
+    assert len(provider.output_paths) == 2
+    assert provider.output_paths[0] != provider.output_paths[1]
+    assert all(tmp_path in Path(path).parents for path in provider.output_paths)
+    assert first.is_error is False
+    assert first.parsed == DemoSchema(name="first", count=1)
+    assert second.is_error is False
+    assert second.parsed == DemoSchema(name="second", count=2)
+    assert list(tmp_path.glob(".agentfield-out-*")) == []
+    assert not (tmp_path / ".agentfield_output.json").exists()
+
+
 def test_resolve_options_merges_config_and_overrides_per_call_wins():
     config = SimpleNamespace(
         provider="codex",
@@ -126,6 +183,7 @@ def test_resolve_options_merges_config_and_overrides_per_call_wins():
         system_prompt="base",
         env={"A": "1"},
         cwd="/tmp/base",
+        aforge_bin="aforge",
         codex_bin="codex",
         gemini_bin="gemini",
         opencode_bin="opencode",
@@ -148,6 +206,7 @@ def test_resolve_options_merges_config_and_overrides_per_call_wins():
     assert resolved["max_budget_usd"] == 2.0
     assert resolved["env"] == {"B": "2"}
     assert resolved["cwd"] == "/tmp/override"
+    assert resolved["aforge_bin"] == "aforge"
 
 
 def test_is_transient_matches_and_rejects_expected_messages():
@@ -196,7 +255,9 @@ async def test_run_with_schema_injects_prompt_suffix_and_parses_output(tmp_path)
 
     assert provider.last_prompt is not None
     assert "OUTPUT REQUIREMENTS" in provider.last_prompt
-    assert get_output_path(str(tmp_path)) in provider.last_prompt
+    match = re.search(r"(\S*\.agentfield_output\.json)", provider.last_prompt)
+    assert match, "schema prompt suffix must name the output file path"
+    assert match.group(1).startswith(str(tmp_path))
     assert result.is_error is False
     assert isinstance(result.parsed, DemoSchema)
     assert result.parsed.name == "ok"
@@ -338,6 +399,7 @@ async def test_run_resolves_harness_config_defaults_with_per_call_overrides(tmp_
         system_prompt="base system",
         env={"BASE": "1"},
         cwd=str(tmp_path),
+        aforge_bin="aforge",
         codex_bin="codex",
         gemini_bin="gemini",
         opencode_bin="opencode",
@@ -413,7 +475,9 @@ async def test_schema_retry_accumulates_cost(tmp_path, monkeypatch):
         async def execute(self, prompt: str, options: dict) -> RawResult:
             nonlocal call_count
             call_count += 1
-            output_path = get_output_path(str(options.get("cwd", ".")))
+            match = re.search(r"(\S*\.agentfield_output\.json)", prompt)
+            assert match, "schema prompt suffix must name the output file path"
+            output_path = match.group(1)
             if call_count == 1:
                 # First attempt: write invalid JSON (missing 'count')
                 with open(output_path, "w") as f:
@@ -463,7 +527,9 @@ async def test_schema_retry_preserves_original_goal_in_prompt(tmp_path, monkeypa
     class BadJsonCapturingProvider(MockProvider):
         async def execute(self, prompt, options):
             prompts.append(prompt)
-            output_path = get_output_path(str(options.get("cwd", ".")))
+            match = re.search(r"(\S*\.agentfield_output\.json)", prompt)
+            assert match, "schema prompt suffix must name the output file path"
+            output_path = match.group(1)
             with open(output_path, "w", encoding="utf-8") as file_obj:
                 file_obj.write(
                     '{"name": "ok"}'

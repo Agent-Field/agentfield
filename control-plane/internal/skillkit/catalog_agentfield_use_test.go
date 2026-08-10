@@ -89,8 +89,8 @@ func TestAgentfieldUseSourceFallbackContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse source frontmatter: %v", err)
 	}
-	if frontmatter.Name != "agentfield-use" || frontmatter.Version != "0.4.0" {
-		t.Fatalf("source frontmatter = %+v, want name=agentfield-use version=0.4.0", frontmatter)
+	if frontmatter.Name != "agentfield-use" || frontmatter.Version != "0.5.0" {
+		t.Fatalf("source frontmatter = %+v, want name=agentfield-use version=0.5.0", frontmatter)
 	}
 
 	// The offer is available only after coverage is conclusively checked, it

@@ -23,7 +23,14 @@ export interface DeployResult {
   ok: boolean
   url?: string
   apiKey?: string
+  furrowAddress?: string
   message: string
+}
+
+export interface CloudImageUpdate {
+  current: string | null
+  latest: string | null
+  updateAvailable: boolean
 }
 
 const MODULE = `terraform {
@@ -42,6 +49,12 @@ variable "api_key" {
   type      = string
   sensitive = true
 }
+variable "image" {
+  type = string
+  # Floating fallback for when the release lookup fails; a fresh deploy still
+  # lands on the newest production release at create time.
+  default = "agentfield/control-plane-cloud:latest"
+}
 resource "railway_project" "cp" {
   name         = var.project_name
   workspace_id = var.workspace_id
@@ -49,10 +62,24 @@ resource "railway_project" "cp" {
 resource "railway_service" "cp" {
   name         = "control-plane"
   project_id   = railway_project.cp.id
-  # Tracks the newest production release at deploy time. Railway resolves the
-  # tag once per deploy and never auto-repulls, so existing deployments stay
-  # on whatever "latest" meant when they were created.
-  source_image = "agentfield/control-plane-cloud:latest"
+  # Pinned to the concrete release tag resolved at deploy time. Railway
+  # resolves a floating tag once per deploy and never auto-repulls, and an
+  # unchanged image string is a no-op apply — a ":latest" pin here froze
+  # existing deployments on whatever "latest" meant the day they were
+  # created. With a concrete tag, each new release changes the string, the
+  # change is a diff, and the diff is what redeploys the service: re-running
+  # deploy IS the upgrade path.
+  source_image = var.image
+  # The /data volume is created out-of-band (Railway GraphQL, ensureVolume) so
+  # this module never declares one — but the provider refreshes it into state,
+  # plans the undeclared attribute back to null, and its Update handler treats
+  # that as "delete the volume" (volumeDelete — the data, not a detach). Every
+  # re-apply would silently wipe the control plane's SQLite/BoltDB, secrets,
+  # and installed agents. Ignoring the attribute keeps the refreshed value in
+  # the plan so the delete branch can never fire.
+  lifecycle {
+    ignore_changes = [volume]
+  }
 }
 resource "railway_variable" "api_key" {
   name           = "AGENTFIELD_API_KEY"
@@ -71,7 +98,20 @@ resource "railway_service_domain" "cp" {
   environment_id = railway_project.cp.default_environment.id
   service_id     = railway_service.cp.id
 }
+resource "railway_tcp_proxy" "furrow" {
+  application_port = 8802
+  environment_id   = railway_project.cp.default_environment.id
+  service_id       = railway_service.cp.id
+}
+resource "railway_variable" "furrow_public_addr" {
+  name           = "FURROW_PUBLIC_ADDR"
+  value          = "\${trimsuffix(railway_tcp_proxy.furrow.domain, ".")}:\${railway_tcp_proxy.furrow.proxy_port}"
+  environment_id = railway_project.cp.default_environment.id
+  service_id     = railway_service.cp.id
+}
 output "url"     { value = "https://\${railway_service_domain.cp.domain}" }
+output "furrow_domain" { value = trimsuffix(railway_tcp_proxy.furrow.domain, ".") }
+output "furrow_port"   { value = railway_tcp_proxy.furrow.proxy_port }
 output "project_id"     { value = railway_project.cp.id }
 output "environment_id" { value = railway_project.cp.default_environment.id }
 output "service_id"     { value = railway_service.cp.id }
@@ -82,6 +122,32 @@ output "api_key" {
 `
 
 const NO_ENGINE = 'Deploy engine not bundled. Install OpenTofu or rebuild AgentField Desktop with the deploy engine.'
+
+const CLOUD_IMAGE_REPO = 'agentfield/control-plane-cloud'
+const CLOUD_IMAGE_LATEST = `${CLOUD_IMAGE_REPO}:latest`
+const DOCKER_HUB_TAGS = `https://hub.docker.com/v2/repositories/${CLOUD_IMAGE_REPO}/tags?page_size=100`
+
+/**
+ * Resolve the concrete release tag "latest" currently points at (release.yml
+ * pushes both on every production release, so they share a digest). Returns
+ * null when Docker Hub is unreachable or the digests don't line up — the
+ * caller falls back to the pin already recorded in state (so a lookup outage
+ * never rewrites a working deployment's image) or, for a fresh deployment,
+ * to the floating tag.
+ */
+export async function resolveCloudImage(fetchImpl: typeof fetch = fetch): Promise<string | null> {
+  try {
+    const response = await fetchImpl(DOCKER_HUB_TAGS, { signal: AbortSignal.timeout(5000) })
+    if (!response.ok) return null
+    const payload = (await response.json()) as { results?: Array<{ name?: string; digest?: string }> }
+    const tags = payload.results ?? []
+    const digest = tags.find((tag) => tag.name === 'latest')?.digest
+    const release = digest ? tags.find((tag) => tag.digest === digest && /^v\d+\.\d+\.\d+$/.test(tag.name ?? '')) : undefined
+    return release?.name ? `${CLOUD_IMAGE_REPO}:${release.name}` : null
+  } catch {
+    return null
+  }
+}
 
 function executableName(): string {
   return process.platform === 'win32' ? 'tofu.exe' : 'tofu'
@@ -157,6 +223,26 @@ function stateWorkspaceId(state: TfState | null): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+function stateSourceImage(state: TfState | null): string | null {
+  const resource = state?.resources?.find((item) => item.type === 'railway_service' && item.name === 'cp')
+  const value = resource?.instances?.[0]?.attributes?.source_image
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+export async function checkCloudImageUpdate(
+  workspaceDir: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<CloudImageUpdate> {
+  const current = stateSourceImage(readState(workspaceDir))
+  if (!current) return { current: null, latest: null, updateAvailable: false }
+  const latest = await resolveCloudImage(fetchImpl)
+  return {
+    current,
+    latest,
+    updateAvailable: latest !== null && latest !== current
+  }
+}
+
 function writeConfig(workspaceDir: string, binaryDir?: string | null): string | null {
   if (!binaryDir) return null
   const mirror = join(binaryDir, 'providers')
@@ -226,7 +312,7 @@ function runCommand(
   })
 }
 
-function deployEnv(opts: DeployEngineOptions, apiKey: string, subdomain: string, cliConfig: string | null, deps: DeploySpawnDeps): NodeJS.ProcessEnv {
+function deployEnv(opts: DeployEngineOptions, apiKey: string, subdomain: string, cliConfig: string | null, deps: DeploySpawnDeps, image?: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     ...deps.env,
@@ -236,6 +322,7 @@ function deployEnv(opts: DeployEngineOptions, apiKey: string, subdomain: string,
     TF_VAR_subdomain: subdomain,
     TF_VAR_api_key: apiKey,
     TF_IN_AUTOMATION: '1',
+    ...(image ? { TF_VAR_image: image } : {}),
     ...(cliConfig ? { TF_CLI_CONFIG_FILE: cliConfig } : {})
   }
 }
@@ -303,7 +390,12 @@ export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps
   const subdomain = existing ? stateSubdomain(state) : `${projectName}-${randomBytes(2).toString('hex')}`
   if (!subdomain) return { ok: false, message: 'Existing deployment is missing its Railway subdomain.' }
   const cliConfig = writeConfig(opts.workspaceDir, opts.binaryDir)
-  const env = deployEnv(opts, apiKey, subdomain, cliConfig, deps)
+  // Newest release when the lookup succeeds; the deployment's recorded pin
+  // when it doesn't (so an outage never rewrites a working image and forces
+  // a pointless redeploy); the floating tag only for a brand-new deployment.
+  const image = (await resolveCloudImage(deps.fetchImpl ?? fetch)) ?? stateSourceImage(state) ?? CLOUD_IMAGE_LATEST
+  opts.onLine?.(`Deploying ${image}`)
+  const env = deployEnv(opts, apiKey, subdomain, cliConfig, deps, image)
 
   if (!providerReady(opts.workspaceDir)) {
     const init = await runCommand(binary, ['init', '-input=false'], opts.workspaceDir, env, deps, false)
@@ -322,9 +414,19 @@ export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps
     const projectId = values.project_id?.value
     const environmentId = values.environment_id?.value
     const serviceId = values.service_id?.value
+    const furrowDomain = values.furrow_domain?.value
+    const furrowPort = values.furrow_port?.value
     if (typeof url !== 'string' || !url || typeof outputKey !== 'string' || !outputKey ||
         typeof projectId !== 'string' || !projectId || typeof environmentId !== 'string' || !environmentId ||
         typeof serviceId !== 'string' || !serviceId) throw new Error('missing')
+    // Workspace sync is an extra, so its outputs are read separately and never
+    // gate the deploy: a control plane that is up and reachable is a success
+    // even when no furrow address came back with it.
+    const furrowAddress =
+      typeof furrowDomain === 'string' && furrowDomain &&
+      typeof furrowPort === 'number' && Number.isInteger(furrowPort) && furrowPort > 0
+        ? `${furrowDomain}:${furrowPort}`
+        : undefined
     opts.onLine?.('Attaching storage volume…')
     try {
       await ensureVolume(opts.railwayToken, projectId, environmentId, serviceId, deps.fetchImpl ?? fetch)
@@ -333,7 +435,7 @@ export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps
       return { ok: false, message: `Deployed, but attaching the storage volume failed: ${detail}. Re-run deploy to retry.` }
     }
     opts.onLine?.('Storage volume ready')
-    return { ok: true, url, apiKey: outputKey, message: 'AgentField deployed to Railway.' }
+    return { ok: true, url, apiKey: outputKey, furrowAddress, message: 'AgentField deployed to Railway.' }
   } catch {
     return { ok: false, message: 'Deployment completed, but required outputs are missing.' }
   }

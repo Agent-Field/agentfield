@@ -10,6 +10,11 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 )
 
+// defaultInitialCleanupDelay is how long cleanupLoop waits before its first
+// cleanup pass, giving the server time to finish starting up before the
+// cleanup service touches the database.
+const defaultInitialCleanupDelay = 30 * time.Second
+
 // ExecutionCleanupService manages the background cleanup of old executions
 type ExecutionCleanupService struct {
 	storage   storage.StorageProvider
@@ -18,6 +23,11 @@ type ExecutionCleanupService struct {
 	wg        sync.WaitGroup
 	isRunning bool
 	mu        sync.RWMutex
+
+	// initialDelay is the wait before the first cleanup pass. It is always
+	// defaultInitialCleanupDelay in production; tests shorten it so the
+	// first-pass branch of cleanupLoop is reachable without a 30s sleep.
+	initialDelay time.Duration
 
 	// Metrics
 	totalCleaned    int64
@@ -28,9 +38,10 @@ type ExecutionCleanupService struct {
 // NewExecutionCleanupService creates a new execution cleanup service
 func NewExecutionCleanupService(storage storage.StorageProvider, config config.ExecutionCleanupConfig) *ExecutionCleanupService {
 	return &ExecutionCleanupService{
-		storage:  storage,
-		config:   config,
-		stopChan: make(chan struct{}),
+		storage:      storage,
+		config:       config,
+		stopChan:     make(chan struct{}),
+		initialDelay: defaultInitialCleanupDelay,
 	}
 }
 
@@ -97,7 +108,7 @@ func (ecs *ExecutionCleanupService) cleanupLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	// Run initial cleanup after a short delay
-	initialDelay := time.NewTimer(30 * time.Second)
+	initialDelay := time.NewTimer(ecs.initialDelay)
 	defer initialDelay.Stop()
 
 	for {

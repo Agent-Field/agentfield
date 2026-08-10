@@ -34,7 +34,7 @@ import {
   logout,
   type RailwayAuthDeps
 } from './railwayAuth'
-import { hasDeployment, resolveTofuBinary, runDeploy, runDestroy } from './deployEngine'
+import { checkCloudImageUpdate, hasDeployment, resolveTofuBinary, runDeploy, runDestroy } from './deployEngine'
 import appIcon from '../../resources/icon.png?asset'
 
 const isMac = process.platform === 'darwin'
@@ -329,7 +329,9 @@ function main(): void {
     // with no AgentField at all this provisions the bundled CLI, so a
     // desktop-app-only install still gets a working `af`.
     await initializeCli(bundledCliPath())
-    if (settings.installSkills && !isCloudActive()) syncSkills()
+    // Skills and the furrow client belong to local coding agents even when
+    // their control plane and workspaces are remote.
+    if (settings.installSkills) syncSkills()
 
     // macOS only: provision + install the af-tray menu-bar companion so a
     // desktop-app-only install gets the menu-bar icon. Runs after initializeCli
@@ -523,6 +525,10 @@ function main(): void {
         workspaces: token ? await listWorkspaces(token) : []
       }
     })
+    ipcMain.handle('agentfield:cloud-image-update', () => {
+      const { workspaceDir } = deployPaths()
+      return checkCloudImageUpdate(workspaceDir)
+    })
     ipcMain.handle('agentfield:railway-login', async () => {
       const deps = authDeps()
       const result = await loginWithRailway(deps)
@@ -557,7 +563,7 @@ function main(): void {
           await saveSettings(settingsFile(), settings)
           applyConnectionProfile(settings)
         }
-        return { ok: result.ok, url: result.url, message: result.message }
+        return { ok: result.ok, url: result.url, furrowAddress: result.furrowAddress, message: result.message }
       } finally {
         cloudDeployInFlight = false
       }

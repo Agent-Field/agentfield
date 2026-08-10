@@ -42,6 +42,11 @@ SKILL_MODE="${SKILL_MODE:-all}"
 # TRAY_MODE=none.
 TRAY_MODE="${TRAY_MODE:-auto}"
 
+# Extra flags forwarded to `af-tray install` (see --defer-restart / --take-over).
+# Bash 3.2 (macOS) treats an empty array under `set -u` as unset, so every
+# expansion below uses the +alternate form.
+TRAY_INSTALL_FLAGS=()
+
 # Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -90,6 +95,17 @@ parse_args() {
         TRAY_MODE="none"
         shift
         ;;
+      --defer-restart)
+        # Never restart a control plane that is already running; the newly
+        # installed binary takes effect at the next restart.
+        TRAY_INSTALL_FLAGS+=("--defer-restart")
+        shift
+        ;;
+      --take-over)
+        # Permit replacing a launchd agent registered by a different install.
+        TRAY_INSTALL_FLAGS+=("--take-over")
+        shift
+        ;;
       --help|-h)
         echo "AgentField CLI Installer"
         echo ""
@@ -113,6 +129,10 @@ parse_args() {
         echo "                         not from 'curl … | bash')"
         echo "  --no-tray              Skip the macOS desktop tray / auto-start setup"
         echo "                         (control-plane binary only)"
+        echo "  --defer-restart        Update files but never restart a control"
+        echo "                         plane that is already running"
+        echo "  --take-over            Replace a launchd agent registered by a"
+        echo "                         different AgentField install"
         echo "  --help                 Show this help message"
         echo ""
         echo "Environment variables:"
@@ -663,7 +683,7 @@ install_tray() {
   # skill install is delegated to `af skill install`. Idempotent: safe to re-run
   # on every update, and it force-restarts a stale running tray onto the new
   # binary so a `curl … | bash` update is fully hands-off.
-  if "$INSTALL_DIR/af-tray" install; then
+  if "$INSTALL_DIR/af-tray" install ${TRAY_INSTALL_FLAGS[@]+"${TRAY_INSTALL_FLAGS[@]}"}; then
     print_success "Desktop tray installed — look for the AgentField icon in your menu bar"
   else
     print_warning "Desktop tray setup reported an issue; the control plane is unaffected"
@@ -728,6 +748,17 @@ print_success_message() {
   else
     printf "  3. Initialize your first agent:\n"
     printf "     ${CYAN}agentfield init my-agent${NC}\n"
+  fi
+
+  # The control plane runs under launchd on macOS, which surprises people: a
+  # plain `kill` looks like a crash to launchd and it restarts the process.
+  if [[ "$(uname -s)" == "Darwin" && "$TRAY_MODE" != "none" ]]; then
+    printf "\n"
+    printf "${BOLD}Background control plane:${NC}\n"
+    printf "  The server runs under launchd and starts at login. Stop it with\n"
+    printf "  ${CYAN}%s service stop${NC} or the menu-bar icon — a plain ${CYAN}kill${NC} auto-restarts it.\n" "$SYMLINK_NAME"
+    printf "  ${CYAN}%s service status${NC} shows health and in-flight work; re-run the\n" "$SYMLINK_NAME"
+    printf "  installer with ${CYAN}--no-tray${NC} to skip this setup entirely.\n"
   fi
 
   printf "\n"

@@ -562,6 +562,24 @@ describe('install catalog', () => {
     expect(catalogEntry(CATALOG[0].name)).toEqual(CATALOG[0])
     expect(catalogEntry('definitely-not-real')).toBeUndefined()
   })
+
+  // A repo that ships both a Python node and its Go counterpart is offered as
+  // a single install, named for the product and sourced at the bare repo URL —
+  // the root manifest's `superseded_by:` redirect decides which node lands and
+  // carries an existing install across. A second row for the same repo, or the
+  // old implementation-suffixed name creeping back in, must fail here rather
+  // than quietly reappear in the Install view.
+  it.each([
+    { repo: 'Agent-Field/SWE-AF', name: 'swe-planner', retired: 'swe-planner-go' },
+    { repo: 'Agent-Field/pr-af', name: 'pr-af', retired: 'pr-af-go' }
+  ])('offers $name as one product-named entry sourced at the bare repo', (tc) => {
+    const entries = CATALOG.filter((e) => e.source.includes(tc.repo))
+    expect(entries).toHaveLength(1)
+    expect(entries[0].name).toBe(tc.name)
+    expect(entries[0].source).toBe(`https://github.com/${tc.repo}`)
+    expect(entries[0].language).toBe('go')
+    expect(CATALOG.map((e) => e.name)).not.toContain(tc.retired)
+  })
 })
 
 describe('installCommand', () => {

@@ -2,6 +2,9 @@ package templates
 
 import (
 	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -161,6 +164,64 @@ func TestGetTemplateFiles(t *testing.T) {
 				t.Fatalf("GetTemplateFiles(%q) mapped %d manifests to the scaffold root, want 1", tt.language, manifestCount)
 			}
 		})
+	}
+}
+
+func TestRenderedGoScaffoldBuilds(t *testing.T) {
+	root := t.TempDir()
+	data := TemplateData{
+		ProjectName: "Buildable Go scaffold",
+		GoModule:    "example.com/buildable-go-scaffold",
+		NodeID:      "buildable-go-scaffold",
+		AuthorName:  "AgentField",
+		AgentPort:   8001,
+	}
+
+	files, err := GetTemplateFiles("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for templatePath, destination := range files {
+		tmpl, err := GetTemplate(templatePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rendered bytes.Buffer
+		if err := tmpl.Execute(&rendered, data); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, destination), rendered.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mainContents, err := os.ReadFile(filepath.Join(root, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`envOrDefault("AGENTFIELD_SERVER", "http://localhost:8080")`,
+		`envOrDefault("PORT", "8001")`,
+	} {
+		if !strings.Contains(string(mainContents), want) {
+			t.Fatalf("rendered main.go missing %q:\n%s", want, mainContents)
+		}
+	}
+
+	sdkRoot, err := filepath.Abs("../../../sdk/go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := [][]string{
+		{"mod", "edit", "-replace=github.com/Agent-Field/agentfield/sdk/go=" + sdkRoot},
+		{"build", "-mod=mod", "./..."},
+	}
+	for _, args := range commands {
+		cmd := exec.Command("go", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GOWORK=off")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go %s failed: %v\n%s", strings.Join(args, " "), err, output)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import type { CatalogEntry } from '../../../shared/types'
 import { COMMUNITY_LINKS } from './communityLinks'
+import { MenuPopover } from './MenuPopover'
 import { SkeletonRows } from './Skeleton'
 
 /**
@@ -514,35 +515,24 @@ function FeaturedCard({
           ) : (
             <div className="row-actions">
               <span className="market-installed">✓ Installed</span>
-              <div className="menu-anchor">
+              <MenuPopover
+                open={menuOpen}
+                onToggle={onToggleMenu}
+                disabled={installing}
+                ariaLabel={`More actions for ${entry.name}`}
+              >
                 <button
-                  className="action-button icon"
-                  aria-label={`More actions for ${entry.name}`}
-                  aria-expanded={menuOpen}
-                  disabled={installing}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onToggleMenu()
-                  }}
+                  className="menu-item"
+                  role="menuitem"
+                  title="Reinstall the latest version; a running agent restarts after the update"
+                  onClick={onUpdate}
                 >
-                  ⋯
+                  {busy ? 'Updating…' : 'Update'}
                 </button>
-                {menuOpen && (
-                  <div className="menu-popover" role="menu">
-                    <button
-                      className="menu-item"
-                      role="menuitem"
-                      title="Reinstall the latest version; a running agent restarts after the update"
-                      onClick={onUpdate}
-                    >
-                      {busy ? 'Updating…' : 'Update'}
-                    </button>
-                    <button className="menu-item danger" role="menuitem" onClick={onConfirmUninstall}>
-                      Uninstall
-                    </button>
-                  </div>
-                )}
-              </div>
+                <button className="menu-item danger" role="menuitem" onClick={onConfirmUninstall}>
+                  Uninstall
+                </button>
+              </MenuPopover>
             </div>
           )
         ) : (

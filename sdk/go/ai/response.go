@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Response represents the API response from OpenAI/OpenRouter.
+// Response represents the API response from an OpenAI-compatible endpoint.
 type Response struct {
 	ID      string   `json:"id"`
 	Object  string   `json:"object"`
@@ -14,6 +14,34 @@ type Response struct {
 	Model   string   `json:"model"`
 	Choices []Choice `json:"choices"`
 	Usage   *Usage   `json:"usage,omitempty"`
+
+	// Cost is the provider-native cost when the gateway reports it at the top
+	// level of the response body rather than nested under usage. Infron does
+	// this. Read Usage.Cost instead of this field — normalizeNativeCost folds
+	// one into the other so every consumer has a single place to look.
+	Cost *float64 `json:"cost,omitempty"`
+}
+
+// normalizeNativeCost folds a top-level cost into Usage.Cost so cost tracking
+// works identically across gateways.
+//
+// Without this, an Infron response parses with Usage.Cost == nil, which the
+// cost tracker reads as "price unknown" rather than "free" — usage is still
+// recorded, but silently with no cost and cost_source "" instead of
+// "provider". An explicit usage.cost always wins; this only fills a gap.
+//
+// The fold only happens into an existing usage block. Synthesizing one for a
+// cost-only body would fabricate zero token counts that downstream consumers
+// read as authoritative — on the streaming path a last-usage-wins accumulator
+// would let such a chunk erase real counts from an earlier chunk.
+func (r *Response) normalizeNativeCost() {
+	if r == nil || r.Cost == nil || r.Usage == nil {
+		return
+	}
+	if r.Usage.Cost == nil {
+		cost := *r.Cost
+		r.Usage.Cost = &cost
+	}
 }
 
 // Choice represents a completion choice.
@@ -86,6 +114,22 @@ type StreamChunk struct {
 	// accounting (e.g. OpenRouter with usage.include, OpenAI with
 	// stream_options.include_usage). Nil on ordinary content chunks.
 	Usage *Usage `json:"usage,omitempty"`
+
+	// Cost mirrors Response.Cost for the streaming path: Infron puts the
+	// native cost at the top level of the final chunk. Read Usage.Cost.
+	Cost *float64 `json:"cost,omitempty"`
+}
+
+// normalizeNativeCost folds a top-level chunk cost into Usage.Cost. See
+// Response.normalizeNativeCost.
+func (s *StreamChunk) normalizeNativeCost() {
+	if s == nil || s.Cost == nil || s.Usage == nil {
+		return
+	}
+	if s.Usage.Cost == nil {
+		cost := *s.Cost
+		s.Usage.Cost = &cost
+	}
 }
 
 // StreamDelta represents a delta in a streaming response.

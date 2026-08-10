@@ -67,6 +67,7 @@ from agentfield.types import (
     MemoryConfig,
 )
 from agentfield.multimodal_response import MultimodalResponse
+from agentfield.run_async import run_coroutine, fire_and_forget
 from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.pydantic_utils import convert_function_args, should_convert_args
@@ -1388,7 +1389,7 @@ class Agent(FastAPI):
 
                 # Execute function (sync or async)
                 if asyncio.iscoroutinefunction(func):
-                    result = asyncio.run(func(**input_data))
+                    result = run_coroutine(func(**input_data))
                 else:
                     result = func(**input_data)
 
@@ -3733,7 +3734,8 @@ class Agent(FastAPI):
         Args:
             prompt: Task description for the coding agent.
             schema: Pydantic BaseModel class for structured output validation.
-            provider: Override provider ("claude-code", "codex", "gemini", "opencode").
+            provider: Override provider ("aforge", "claude-code", "codex", "gemini",
+                "opencode").
             model: Override model identifier.
             max_turns: Maximum agent iterations.
             max_budget_usd: Cost cap in USD.
@@ -3742,15 +3744,16 @@ class Agent(FastAPI):
             system_prompt: System prompt for the agent.
             env: Environment variables for the agent.
             cwd: Working directory for the agent process. When ``project_dir`` is
-                not set, this is also the agent's root and where the schema output
-                file is placed.
+                not set, this is also the agent's root; schema output is isolated
+                in a per-run temporary directory underneath it.
             project_dir: Root directory the agent may read and write (maps to the
                 provider's project-root flag, e.g. opencode ``--dir``, codex
                 ``-C``, or the process cwd for gemini/claude). Set this when the
                 agent must read files across a shared repo while ``cwd`` points at
-                a nested task directory. The schema output file is then placed in
-                an isolated temp dir *under* ``project_dir`` so the provider never
-                rejects it as an external-directory write.
+                a nested task directory. Schema output is placed in an isolated
+                temp dir under the effective root so the provider never rejects
+                it as an external-directory write and concurrent runs do not
+                collide.
             schema_mode: How schema output is produced. "single" (default) asks
                 for one Write of the whole object. "incremental" builds it one
                 top-level field at a time and recovers by patching only the
@@ -4767,7 +4770,6 @@ class Agent(FastAPI):
             tags = []
 
         # Fire-and-forget async task
-        import asyncio
 
         async def _send_note():
             try:
@@ -4877,27 +4879,10 @@ class Agent(FastAPI):
 
                     log_debug(f"Failed to send note: {type(e).__name__}: {e}")
 
-        # Create task without awaiting (fire-and-forget)
-        try:
-            # Try to get current event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in an async context, create a task
-                loop.create_task(_send_note())
-            else:
-                # If no loop is running, run in a new thread
-                import threading
-
-                thread = threading.Thread(target=lambda: asyncio.run(_send_note()))
-                thread.daemon = True
-                thread.start()
-        except RuntimeError:
-            # No event loop available, run in a new thread
-            import threading
-
-            thread = threading.Thread(target=lambda: asyncio.run(_send_note()))
-            thread.daemon = True
-            thread.start()
+        # Fire-and-forget: schedule on the running loop if available,
+        # otherwise spawn a daemon thread. Replaces the manual loop
+        # detection + threading that was prone to RuntimeError (#620).
+        fire_and_forget(_send_note())
 
     async def pause(
         self,
@@ -5376,10 +5361,10 @@ class Agent(FastAPI):
                 and self._async_execution_manager
             ):
                 try:
-                    # Try to cleanup async resources in a new event loop
-                    import asyncio
-
-                    asyncio.run(self._cleanup_async_resources())
+                    # Best-effort cleanup: schedule on running loop if one
+                    # exists, otherwise spawn a daemon thread. Never raises
+                    # even if a loop is already running (#620).
+                    fire_and_forget(self._cleanup_async_resources())
                 except Exception:
                     # Ignore async cleanup errors in destructor
                     pass

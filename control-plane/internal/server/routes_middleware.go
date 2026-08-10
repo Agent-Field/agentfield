@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -37,19 +36,9 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 
 	s.Router.Use(cors.New(corsConfig))
 
-	s.Router.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
-		return fmt.Sprintf("%s - [%s] \"%s %s %s %d %s \"%s\" %s\"\n",
-			param.ClientIP,
-			param.TimeStamp.Format(time.RFC1123),
-			param.Method,
-			param.Path,
-			param.Request.Proto,
-			param.StatusCode,
-			param.Latency,
-			param.Request.UserAgent(),
-			param.ErrorMessage,
-		)
-	}))
+	// Structured request logging via the control-plane's zerolog logger,
+	// replacing gin's verbose stdout [GIN] lines (see middleware.GinLogger).
+	s.Router.Use(middleware.GinLogger())
 
 	// Request timeout middleware (1 hour for long-running executions)
 	s.Router.Use(func(c *gin.Context) {

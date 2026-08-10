@@ -3,7 +3,6 @@ package services
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,12 +38,18 @@ func NewPackageService(
 
 // InstallPackage installs a package from the given source
 func (ps *DefaultPackageService) InstallPackage(source string, options domain.InstallOptions) error {
-	// Snapshot installed packages so we can discover what this install adds and
-	// recursively pull in any node-to-node dependencies it declares.
-	before := ps.installedNames()
+	_, err := ps.InstallPackageWithResult(source, options)
+	return err
+}
 
-	if err := ps.installOne(source, options); err != nil {
-		return err
+// InstallPackageWithResult installs a package and reports the package name
+// selected by the installer. For superseded packages this is the final
+// successor, including when it replaces an existing package under the same
+// name.
+func (ps *DefaultPackageService) InstallPackageWithResult(source string, options domain.InstallOptions) (string, error) {
+	installedName, err := ps.installOne(source, options)
+	if err != nil {
+		return "", err
 	}
 
 	// The --path selector targets a subdirectory of THIS source only. Node
@@ -52,11 +57,14 @@ func (ps *DefaultPackageService) InstallPackage(source string, options domain.In
 	// into recursive dependency installs.
 	depOptions := options
 	depOptions.Path = ""
-	return ps.installNodeDependencies(before, depOptions)
+	if err := ps.installNodeDependencies(installedName, depOptions, map[string]bool{installedName: true}); err != nil {
+		return "", err
+	}
+	return installedName, nil
 }
 
 // installOne installs a single package from a git URL or local path.
-func (ps *DefaultPackageService) installOne(source string, options domain.InstallOptions) error {
+func (ps *DefaultPackageService) installOne(source string, options domain.InstallOptions) (string, error) {
 	// Check if it's a Git URL (GitHub, GitLab, Bitbucket, etc.)
 	if packages.IsGitURL(source) {
 		installer := &packages.GitInstaller{
@@ -64,11 +72,14 @@ func (ps *DefaultPackageService) installOne(source string, options domain.Instal
 			Verbose:        options.Verbose,
 			Subdir:         options.Path,
 		}
-		return installer.InstallFromGit(source, options.Force)
+		if err := installer.InstallFromGit(source, options.Force); err != nil {
+			return "", err
+		}
+		return installer.InstalledName(), nil
 	}
 
 	// Handle local package installation
-	return ps.installLocalPackage(source, options.Path, options.Force, options.Verbose)
+	return ps.installLocalPackageWithName(source, options.Path, options.Force, options.Verbose)
 }
 
 // installedNames returns the set of currently-installed package names.
@@ -84,18 +95,24 @@ func (ps *DefaultPackageService) installedNames() map[string]bool {
 	return names
 }
 
-// installNodeDependencies installs the node-to-node dependencies declared by any
-// packages added since `before`, recursively. Already-installed nodes are
-// skipped, which also breaks dependency cycles.
-func (ps *DefaultPackageService) installNodeDependencies(before map[string]bool, options domain.InstallOptions) error {
+// installNodeDependencies installs the node-to-node dependencies declared by
+// packageName, recursively.
+//
+// `visited` holds every package this install pass has already walked, and it is
+// what terminates a dependency cycle. The already-installed check below cannot
+// do that on its own: it only knows a dependency's name for `af://registry/…`
+// refs, and a forced install — which every update is — reinstalls whatever is
+// already there. So a cycle expressed with bare git URLs or local paths has
+// nothing else stopping it.
+func (ps *DefaultPackageService) installNodeDependencies(packageName string, options domain.InstallOptions, visited map[string]bool) error {
 	registry, err := ps.loadRegistryDirect()
 	if err != nil {
 		return nil // base install already succeeded; don't fail on dep discovery
 	}
 
 	for name, pkg := range registry.Installed {
-		if before[name] {
-			continue // not newly installed in this pass
+		if name != packageName {
+			continue
 		}
 		metadata, err := packages.ParsePackageMetadata(pkg.Path)
 		if err != nil {
@@ -107,13 +124,17 @@ func (ps *DefaultPackageService) installNodeDependencies(before map[string]bool,
 				continue // already present — also handles cycles
 			}
 			fmt.Printf("\n%s Installing node dependency: %s\n", ps.blue("→"), dep)
-			snapshot := ps.installedNames()
-			if err := ps.installOne(depSource, options); err != nil {
+			installedName, err := ps.installOne(depSource, options)
+			if err != nil {
 				fmt.Printf("%s Failed to install node dependency %s: %v\n", ps.statusError(), dep, err)
 				continue
 			}
+			if visited[installedName] {
+				continue // a cycle: this pass has already walked that package
+			}
+			visited[installedName] = true
 			// Recurse for the dependency's own node deps.
-			if err := ps.installNodeDependencies(snapshot, options); err != nil {
+			if err := ps.installNodeDependencies(installedName, options, visited); err != nil {
 				return err
 			}
 		}
@@ -146,10 +167,15 @@ func resolveNodeRef(ref string) (source string, name string) {
 // subdirectory is what gets validated, copied, and installed. Resolution happens
 // before any copy or registry mutation, so a bad selector fails cleanly.
 func (ps *DefaultPackageService) installLocalPackage(sourcePath string, subdir string, force bool, verbose bool) error {
+	_, err := ps.installLocalPackageWithName(sourcePath, subdir, force, verbose)
+	return err
+}
+
+func (ps *DefaultPackageService) installLocalPackageWithName(sourcePath string, subdir string, force bool, verbose bool) (string, error) {
 	if strings.TrimSpace(subdir) != "" {
 		resolved, err := packages.ResolvePackageSubdir(sourcePath, subdir)
 		if err != nil {
-			return err
+			return "", err
 		}
 		sourcePath = resolved
 	}
@@ -157,7 +183,7 @@ func (ps *DefaultPackageService) installLocalPackage(sourcePath string, subdir s
 	// Get package name first for better messaging
 	metadata, err := ps.parsePackageMetadata(sourcePath)
 	if err != nil {
-		return fmt.Errorf("failed to parse package metadata: %w", err)
+		return "", fmt.Errorf("failed to parse package metadata: %w", err)
 	}
 
 	fmt.Printf("Installing %s...\n", metadata.Name)
@@ -167,13 +193,13 @@ func (ps *DefaultPackageService) installLocalPackage(sourcePath string, subdir s
 	spinner.Start()
 	if err := ps.validatePackage(sourcePath); err != nil {
 		spinner.Error("Package validation failed")
-		return fmt.Errorf("package validation failed: %w", err)
+		return "", fmt.Errorf("package validation failed: %w", err)
 	}
 	spinner.Success("Package structure validated")
 
 	// 2. Check if already installed
 	if !force && ps.isPackageInstalled(metadata.Name) {
-		return fmt.Errorf("package %s already installed (use --force to reinstall)", metadata.Name)
+		return "", fmt.Errorf("package %s already installed (use --force to reinstall)", metadata.Name)
 	}
 
 	// 3. Copy package to global location
@@ -182,7 +208,7 @@ func (ps *DefaultPackageService) installLocalPackage(sourcePath string, subdir s
 	spinner.Start()
 	if err := ps.copyPackage(sourcePath, destPath); err != nil {
 		spinner.Error("Failed to copy package")
-		return fmt.Errorf("failed to copy package: %w", err)
+		return "", fmt.Errorf("failed to copy package: %w", err)
 	}
 	spinner.Success("Environment configured")
 
@@ -191,13 +217,13 @@ func (ps *DefaultPackageService) installLocalPackage(sourcePath string, subdir s
 	spinner.Start()
 	if err := ps.installDependencies(destPath, metadata); err != nil {
 		spinner.Error("Failed to install dependencies")
-		return fmt.Errorf("failed to install dependencies: %w", err)
+		return "", fmt.Errorf("failed to install dependencies: %w", err)
 	}
 	spinner.Success("Dependencies installed")
 
 	// 5. Update installation registry
 	if err := ps.updateRegistry(metadata, sourcePath, destPath); err != nil {
-		return fmt.Errorf("failed to update registry: %w", err)
+		return "", fmt.Errorf("failed to update registry: %w", err)
 	}
 
 	fmt.Printf("%s Installed %s v%s\n", ps.green(ps.statusSuccess()), ps.bold(metadata.Name), ps.gray(metadata.Version))
@@ -208,7 +234,7 @@ func (ps *DefaultPackageService) installLocalPackage(sourcePath string, subdir s
 
 	fmt.Printf("\n%s %s\n", ps.blue("→"), ps.bold(fmt.Sprintf("Run: af run %s", metadata.Name)))
 
-	return nil
+	return metadata.Name, nil
 }
 
 // UninstallPackage removes an installed package
@@ -545,22 +571,11 @@ func (ps *DefaultPackageService) copyPackage(sourcePath, destPath string) error 
 	})
 }
 
-// copyFile copies a single file from src to dst
+// copyFile copies a single file from src to dst, preserving its mode. Shared
+// with the CLI installer so an executable a node ships stays executable on
+// both install paths.
 func (ps *DefaultPackageService) copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sourceFile.Close()
-
-	destFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	_, err = io.Copy(destFile, sourceFile)
-	return err
+	return packages.CopyFile(src, dst)
 }
 
 // installDependencies installs package dependencies for the node's language

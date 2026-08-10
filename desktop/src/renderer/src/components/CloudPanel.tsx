@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type {
     CloudDeployResult,
+    CloudImageUpdate,
     CloudTestResult,
     DesktopSettings,
     RailwayStatus,
@@ -29,6 +30,8 @@ export function CloudPanel() {
     const [error, setError] = useState<string | null>(null);
     const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
     const [railway, setRailway] = useState<RailwayStatus | null>(null);
+    const [cloudImageUpdate, setCloudImageUpdate] =
+        useState<CloudImageUpdate | null>(null);
     const [railwayBusy, setRailwayBusy] = useState<
         "login" | "deploy" | "destroy" | null
     >(null);
@@ -79,6 +82,17 @@ export function CloudPanel() {
     useEffect(() => {
         if (railway && !railway.engineAvailable) setActiveTab("manual");
     }, [railway?.engineAvailable]);
+
+    useEffect(() => {
+        if (activeTab !== "railway" || !railway?.hasDeployment) {
+            setCloudImageUpdate(null);
+            return;
+        }
+        void window.agentfield
+            .checkCloudImageUpdate()
+            .then(setCloudImageUpdate)
+            .catch(() => setCloudImageUpdate(null));
+    }, [activeTab, railway?.hasDeployment]);
 
     useEffect(() => {
         if (!confirmation) return;
@@ -203,6 +217,11 @@ export function CloudPanel() {
                 setApiKey(next.cloud.apiKey);
             }
             await refreshRailway();
+            setCloudImageUpdate(
+                await window.agentfield
+                    .checkCloudImageUpdate()
+                    .catch(() => null),
+            );
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -225,6 +244,7 @@ export function CloudPanel() {
             setShowDestroy(false);
             setDeleteText("");
             setDeployResult(null);
+            setCloudImageUpdate(null);
             setDestroyed(true);
             await refreshRailway();
         } catch (err) {
@@ -481,6 +501,16 @@ export function CloudPanel() {
                                                 settings.cloud.serverUrl,
                                         )}
                                     </div>
+                                    {cloudImageUpdate?.updateAvailable && (
+                                        <div
+                                            className="callout warning"
+                                            role="status"
+                                        >
+                                            Control plane{" "}
+                                            {cloudImageUpdate.current} →{" "}
+                                            {cloudImageUpdate.latest} available
+                                        </div>
+                                    )}
                                     <div className="cloud-actions">
                                         <button
                                             className="action-button primary"
@@ -491,7 +521,9 @@ export function CloudPanel() {
                                             }
                                             onClick={() => void deploy()}
                                         >
-                                            Re-run deploy
+                                            {cloudImageUpdate?.updateAvailable
+                                                ? "Upgrade & redeploy"
+                                                : "Re-run deploy"}
                                         </button>
                                         <button
                                             className="cloud-link-button danger"
@@ -683,6 +715,16 @@ function CloudTestFeedback({ result }: { result: CloudTestResult }) {
                   : result.authOk
                     ? "failed"
                     : "pending",
+        },
+        {
+            label: result.furrowReported
+                ? "Workspace sync"
+                : "Workspace sync — not reported by this server version",
+            state: result.furrowReported
+                ? result.furrowAvailable
+                    ? "passed"
+                    : "failed"
+                : "pending",
         },
     ];
 

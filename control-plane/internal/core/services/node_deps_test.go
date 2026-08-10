@@ -75,9 +75,7 @@ func TestInstallNodeDependencies_SkipsAlreadyInstalled(t *testing.T) {
 		},
 	})
 
-	// `before` is empty, so both packages count as newly installed; the declared
-	// dep (echo-node) is already installed and must be skipped — no network call.
-	err := ps.installNodeDependencies(map[string]bool{}, domain.InstallOptions{})
+	err := ps.installNodeDependencies("caller", domain.InstallOptions{}, map[string]bool{"caller": true})
 	require.NoError(t, err)
 }
 

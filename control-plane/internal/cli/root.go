@@ -108,6 +108,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 
 	// Add skill command — install/manage AgentField skills across coding agents
 	RootCmd.AddCommand(NewSkillCommand())
+	RootCmd.AddCommand(NewFurrowCommand())
 
 	// Create service container for framework commands
 	cfg := &config.Config{} // Use default config for now
@@ -144,6 +145,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 	RootCmd.AddCommand(NewWaitCommand())
 	RootCmd.AddCommand(NewCatalogCommand())
 	RootCmd.AddCommand(NewShareCommand())
+	RootCmd.AddCommand(NewServiceCommand())
 
 	// Add version command
 	RootCmd.AddCommand(NewVersionCommand(versionInfo))

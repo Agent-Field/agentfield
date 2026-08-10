@@ -19,7 +19,8 @@ A AgentField agent created with `af init`.
    go run .
    ```
 
-   The agent will auto-discover an available port and register with AgentField.
+   The agent listens on port {{.AgentPort}} by default. `af run` assigns an
+   available `PORT` automatically, and the agent registers with AgentField.
 
 ## Test the Agent
 

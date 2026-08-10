@@ -13,6 +13,7 @@ import sys
 from typing import Any, Callable, Dict, List, Optional, get_type_hints
 
 from agentfield.logger import log_error, log_warn
+from agentfield.run_async import run_coroutine
 
 
 class AgentCLI:
@@ -220,7 +221,7 @@ class AgentCLI:
 
             # Call function
             if inspect.iscoroutinefunction(func):
-                result = asyncio.run(func(**kwargs))
+                result = run_coroutine(func(**kwargs))
             else:
                 result = func(**kwargs)
 
