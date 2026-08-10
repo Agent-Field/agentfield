@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -75,4 +76,33 @@ func TestGinLoggerSilentAtInfoLevel(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Empty(t, buf.Bytes(), "no request log should be emitted at info level")
+}
+
+// TestGinLoggerLogsNonOKStatus verifies that when a handler aborts with an
+// error status the status is passed through to the response and still appears
+// in the structured line.
+func TestGinLoggerLogsNonOKStatus(t *testing.T) {
+	buf, restore := captureLogger(t, zerolog.DebugLevel)
+	defer restore()
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(GinLogger())
+	router.GET("/boom", func(c *gin.Context) {
+		_ = c.Error(errors.New("handler exploded"))
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusInternalServerError, recorder.Code)
+
+	var entry map[string]interface{}
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &entry))
+	require.Equal(t, float64(http.StatusInternalServerError), entry["status"])
+	require.Equal(t, "http_request", entry["message"])
+	// the error field is only populated via c.Error(), not AbortWithStatus alone
+	require.Contains(t, entry["error"], "handler exploded")
 }
