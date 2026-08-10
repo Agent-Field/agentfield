@@ -142,7 +142,7 @@ async def fix_issue(issue: dict) -> dict:
 ```
 Agent
 ├── .ai()      → AIConfig      → LiteLLM     → LLM APIs (100+ providers)
-└── .harness() → HarnessConfig → HarnessRunner → Provider → {Claude Code, Codex, Gemini, OpenCode}
+└── .harness() → HarnessConfig → HarnessRunner → Provider → {Aforge, Claude Code, Codex, Gemini, OpenCode}
 ```
 
 ### 3.2 Component Stack

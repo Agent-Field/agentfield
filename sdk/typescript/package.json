@@ -14,7 +14,7 @@
     "dev": "tsup --watch",
     "lint": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
-    "test:functional": "vitest run tests/harness_functional.test.ts --timeout=300000",
+    "test:functional": "vitest run --config vitest.functional.config.ts",
     "test:core": "vitest run --config vitest.config.ts",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "test:coverage:core": "vitest run --config vitest.config.ts --coverage",

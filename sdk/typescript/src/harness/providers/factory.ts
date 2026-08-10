@@ -1,13 +1,17 @@
 import type { HarnessProvider } from './base.js';
 import type { HarnessConfig } from '../types.js';
 
-export const SUPPORTED_PROVIDERS = new Set(['claude-code', 'codex', 'gemini', 'opencode']);
+export const SUPPORTED_PROVIDERS = new Set(['aforge', 'claude-code', 'codex', 'gemini', 'opencode']);
 
 export async function buildProvider(config: HarnessConfig): Promise<HarnessProvider> {
   if (!SUPPORTED_PROVIDERS.has(config.provider)) {
     throw new Error(
       `Unknown harness provider: "${config.provider}". Supported: ${[...SUPPORTED_PROVIDERS].sort().join(', ')}`
     );
+  }
+  if (config.provider === 'aforge') {
+    const { AforgeProvider } = await import('./aforge.js');
+    return new AforgeProvider(config.aforgeBin ?? 'aforge');
   }
   if (config.provider === 'claude-code') {
     const { ClaudeCodeProvider } = await import('./claude.js');

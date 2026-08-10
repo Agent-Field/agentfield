@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { buildPromptSuffix, cleanupTempFiles, getOutputPath, parseAndValidate } from './schema.js';
 import { buildProvider } from './providers/factory.js';
 import type { HarnessProvider } from './providers/base.js';
@@ -41,6 +43,8 @@ type RunnerOptions = Omit<HarnessOptions, 'schema'> & {
   initialDelay?: number;
   maxDelay?: number;
   backoffFactor?: number;
+  projectDir?: string;
+  aforgeBin?: string;
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
@@ -57,16 +61,22 @@ export class HarnessRunner {
       throw new Error("No harness provider specified. Set 'provider' in HarnessConfig or pass it to .harness() call.");
     }
 
-    const cwd = resolved.cwd ?? '.';
     const provider = await this.buildProvider(resolved.provider, resolved);
-    const effectivePrompt = schema === undefined ? prompt : `${prompt}${buildPromptSuffix(schema, cwd)}`;
+    const cwd = resolved.cwd ?? '.';
+    const outputRoot = resolved.projectDir ?? cwd;
+    let outputDir: string | undefined;
+    if (schema !== undefined) {
+      fs.mkdirSync(outputRoot, { recursive: true });
+      outputDir = fs.mkdtempSync(path.join(outputRoot, '.agentfield-out-'));
+    }
+    const effectivePrompt = schema === undefined ? prompt : `${prompt}${buildPromptSuffix(schema, outputDir!)}`;
     const startTime = Date.now();
 
     try {
       const raw = await this.executeWithRetry(provider, effectivePrompt, resolved);
 
       if (schema !== undefined) {
-        return this.handleSchemaOutput(raw, schema, cwd, startTime);
+        return this.handleSchemaOutput(raw, schema, outputDir!, startTime);
       }
 
       return createHarnessResult({
@@ -82,7 +92,8 @@ export class HarnessRunner {
       });
     } finally {
       if (schema !== undefined) {
-        cleanupTempFiles(cwd);
+        cleanupTempFiles(outputDir!);
+        fs.rmSync(outputDir!, { recursive: true, force: true });
       }
     }
   }
@@ -105,6 +116,8 @@ export class HarnessRunner {
         'systemPrompt',
         'env',
         'cwd',
+        'projectDir',
+        'aforgeBin',
         'codexBin',
         'geminiBin',
         'opencodeBin',

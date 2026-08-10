@@ -37,6 +37,39 @@ The extras install Python wrappers. They do not replace the runtime preflight:
 Aforge and Gemini are CLI-only, and Codex or OpenCode may still require a
 separately available executable depending on the wrapper and platform.
 
+### Aforge drop-in usage
+
+Aforge is registered as `aforge` in the Python, Go, and TypeScript SDKs. The
+adapters all invoke the same non-interactive contract: `aforge do --json
+--yes-spend`, send the task over stdin, and map Aforge's usage ledger into
+AgentField turns, token counts, and cost metrics. Install a current aforge-v2
+binary on `PATH`, set `OPENROUTER_API_KEY`, then select the provider:
+
+```python
+result = await app.harness(task, provider="aforge", model="openrouter/z-ai/glm-5.2")
+```
+
+```go
+result, err := harness.NewRunner(harness.Options{Provider: harness.ProviderAforge}).Run(
+    ctx, task, nil, nil, harness.Options{Cwd: repoRoot},
+)
+```
+
+```ts
+const result = await new HarnessRunner().run(task, {
+  provider: 'aforge',
+  model: 'openrouter/z-ai/glm-5.2',
+  cwd: repoRoot,
+});
+```
+
+Set `AFORGE_MAX_CONCURRENT` to cap simultaneous Aforge subprocesses. The
+default is 8. `AGENTFIELD_HARNESS_TIMEOUT_SECONDS` is the outer watchdog; each
+adapter gives Aforge a five-second landing window to emit its exit-2 timeout
+envelope. Schema runs use a unique output directory per invocation so parallel
+benchmark jobs can safely share a checkout. Set `AFORGE_BIN` to an absolute
+path when the unreleased binary is not installed on `PATH`.
+
 ## Model selection and reasoning-effort variants
 
 Every provider accepts a `model` option on `.harness()` calls. The model string

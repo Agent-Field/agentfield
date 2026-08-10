@@ -1,5 +1,5 @@
 export interface HarnessConfig {
-  provider: 'claude-code' | 'codex' | 'gemini' | 'opencode';
+  provider: 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode';
   model?: string;
   /**
    * Provider-specific reasoning-effort variant (e.g. `high`, `minimal`).
@@ -17,6 +17,8 @@ export interface HarnessConfig {
   systemPrompt?: string;
   env?: Record<string, string>;
   cwd?: string;
+  projectDir?: string;
+  aforgeBin?: string;
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
@@ -41,6 +43,8 @@ export interface HarnessOptions {
   systemPrompt?: string;
   env?: Record<string, string>;
   cwd?: string;
+  projectDir?: string;
+  aforgeBin?: string;
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
@@ -70,6 +74,8 @@ export interface RawResult {
   metrics: Metrics;
   isError: boolean;
   errorMessage?: string;
+  failureType?: 'none' | 'crash' | 'timeout' | 'api_error' | 'no_output' | 'schema';
+  returnCode?: number;
 }
 
 export interface HarnessResult {

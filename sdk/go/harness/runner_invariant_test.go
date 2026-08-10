@@ -178,6 +178,7 @@ func TestInvariant_Runner_RepairJSON_ProjectionExtended(t *testing.T) {
 // registered provider name returns a non-nil provider from BuildProvider.
 func TestInvariant_Runner_ProviderFactoryExhaustiveness(t *testing.T) {
 	knownProviders := []string{
+		ProviderAforge,
 		ProviderClaudeCode,
 		ProviderCodex,
 		ProviderGemini,
@@ -310,6 +311,13 @@ func TestInvariant_Runner_BuildProviderWithBinPath(t *testing.T) {
 		provider  string
 		checkPath func(t *testing.T, prov Provider)
 	}{
+		{
+			provider: ProviderAforge,
+			checkPath: func(t *testing.T, prov Provider) {
+				p := prov.(*AforgeProvider)
+				assert.Equal(t, customBinPath, p.BinPath)
+			},
+		},
 		{
 			provider: ProviderClaudeCode,
 			checkPath: func(t *testing.T, prov Provider) {

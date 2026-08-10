@@ -3,6 +3,8 @@ package harness
 import "context"
 
 const (
+	// ProviderAforge is the provider name for the Aforge CLI.
+	ProviderAforge = "aforge"
 	// ProviderOpenCode is the provider name for OpenCode CLI.
 	ProviderOpenCode = "opencode"
 	// ProviderClaudeCode is the provider name for Claude Code CLI.
@@ -23,7 +25,7 @@ type Provider interface {
 // Options control a single harness invocation. Fields are optional;
 // zero values mean "use default".
 type Options struct {
-	// Provider name: "opencode", "claude-code".
+	// Provider name: "aforge", "opencode", "claude-code", "codex", or "gemini".
 	Provider string
 
 	// Model identifier passed to the coding agent. It may carry a
