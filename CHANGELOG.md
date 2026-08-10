@@ -6,6 +6,293 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.127-rc.4] - 2026-08-10
+
+
+### Chores
+
+- Chore(deps): bump js-yaml to 4.3.1 (#898) (5e0da59)
+
+
+
+### Fixed
+
+- Fix(sdk/python): resolve ResultCache cross-loop deadlock (#623) (#799)
+
+* fix(sdk/python): resolve ResultCache cross-loop deadlock (#623)
+
+ResultCache mixed a threading.RLock (for its data) with loop-bound
+asyncio primitives (asyncio.Event for shutdown, asyncio.Task for the
+cleanup loop). When start() and stop() ran on different event loops —
+which happens when the AgentFieldClient's sync and async execution
+paths are mixed (#620) — stop() would raise 'got Future attached to a
+different loop' and could wedge the process waiting on a task it can
+never await.
+
+Fix: make the cache lifecycle loop-aware.
+- Record the event loop the cleanup task/shutdown event are bound to.
+- start() is now idempotent on the same loop and rebinds cleanly when
+  called on a new loop, discarding the stale task via
+  call_soon_threadsafe(task.cancel) on its owning loop — never a
+  cross-loop await.
+- stop() only awaits the cleanup task when on its owning loop; from a
+  different loop it cancels without awaiting. The cache is always
+  cleared regardless (that path only needs the thread lock).
+- Shrink the cleanup loop's critical section so stats logging no longer
+  runs while holding the lock, reducing contention with sync callers.
+
+Adds tests/test_result_cache_deadlock.py covering cross-loop stop,
+idempotent/rebinding start, concurrent sync access during cleanup, and
+the disabled-cache no-op path. result_cache.py coverage: 88% -> 95%.
+
+* fix(test): remove unused pytest import (ruff F401)
+
+* fix(sdk/python): extend loop-aware teardown to manager + connection pool (#623)
+
+Addresses review feedback on #799: the same foreign-loop
+'task.cancel(); await task' hazard that affected ResultCache also lived
+in AsyncExecutionManager.stop() and http_connection_manager
+ConnectionManager.close(). Since client.aclose() flows through
+manager.stop() -> connection_manager.close(), the end-to-end sync/async
+mixing case (#620/#623) still raised 'got Future attached to a different
+loop' one level up, before result_cache.stop() was reached.
+
+Changes:
+- New agentfield/async_lifecycle.py with shared loop-aware teardown
+  helpers: current_running_loop(), cancel_task_cross_loop(),
+  cancel_and_await_if_same_loop(). Single source of truth for the safe
+  pattern.
+- ResultCache refactored to use the shared helpers (behaviour unchanged).
+- AsyncExecutionManager records its owning loop at start(); stop() only
+  awaits background tasks / sets the shutdown Event on that loop, and
+  cancels cross-loop without awaiting otherwise.
+- http_connection_manager ConnectionManager records its owning loop at
+  start(); close() takes the async lock + awaits the session only on the
+  owning loop, and on a foreign loop schedules session/connector close on
+  the owning loop via call_soon_threadsafe without awaiting.
+
+Tests: new tests/test_async_lifecycle_deadlock.py covers cross-loop
+teardown of both components (3 of its 4 checks fail pre-fix on the
+merge-base). Full result_cache + manager + connection suite green
+(110 passed); result_cache.py coverage 98%.
+
+* fix(sdk/python): address review feedback — stop/start race + cross-loop lock (#623)
+
+1. ResultCache.stop(): compare-before-clear so a concurrent start()
+   that installs fresh references between the await and the cleanup
+   doesn't get its new task orphaned.
+
+2. AsyncExecutionManager.stop(): skip the _execution_lock section on
+   cross-loop stop — the lock is bound to the owning loop, taking it
+   from a foreign loop raises the same 'got Future attached to a
+   different loop' error one line below the fix.
+
+* fix(test): prevent flaky pending-task warnings in cross-loop tests
+
+Add time.sleep(0.2) before stopping loops to let scheduled cross-loop
+cancels process, and guard loop.close() against still-running threads.
+Addresses Copilot review feedback on test reliability.
+
+* fix(sdk/python): schedule real teardown on owning loop for cross-loop stop (#623)
+
+Addresses @santoshkumarradha's review: cross-loop stop/close now
+schedules the actual teardown work on the owning loop rather than
+skipping it or mutating state unserialized.
+
+AsyncExecutionManager.stop(): on cross-loop, schedules execution
+cancellation (under _execution_lock) on the owning loop via
+call_soon_threadsafe so active executions are actually terminated
+rather than left dangling.
+
+ConnectionManager._close_cross_loop(): moves _session/_connector
+mutation inside a coroutine scheduled on the owning loop under the
+async lock, so an in-flight get_session() on the owning loop never
+sees half-torn-down state. Only _closed is set immediately (to gate
+new requests); the rest is serialized on the correct loop. (29498e4)
+
+
+
+### Testing
+
+- Test: add coverage for GinLogger middleware (#557) (#895)
+
+* test: add coverage for GinLogger middleware (#557)
+
+* test(middleware): cover aborted-status and error-field logging in GinLogger (#557)
+
+Ports the non-200 case from #896 so that draft can close in favor of this
+one, and additionally asserts the error field is populated via c.Error(),
+a path neither draft covered. Also restores the missing trailing newline.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c3fd728)
+
+## [0.1.127-rc.3] - 2026-08-10
+
+
+### Added
+
+- Feat(harness): aforge provider + per-run isolation of the schema output file (#891)
+
+* fix(harness): isolate schema output file in a per-run temp dir for cwd-only runs
+
+With only cwd set, every harness call wrote the fixed
+cwd/.agentfield_output.json, so N concurrent .harness() calls sharing a
+cwd (e.g. pr-af fanning out 8 review dimensions over one checkout)
+overwrote each other's output and cleanup deleted the file from under
+still-running siblings — surfacing as spurious "schema parse failed"
+zero-finding results. Reuse the project_dir strategy unconditionally:
+mkdtemp(".agentfield-out-*") under project_dir or cwd, cleaned up per
+run. Mock providers in the runner tests now learn the output path from
+the prompt suffix, the same way real coding agents do.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(harness): add aforge coding-agent provider
+
+Registers aforge (github.com/Agent-Field/aforge-v2) as a harness
+provider alongside claude-code/codex/gemini/opencode. The provider
+invokes `aforge exec --json -w <root>` with the prompt over stdin, maps
+the JSON envelope (text/stop/usage/turns) onto RawResult/Metrics with
+provider-reported cost, translates model slugs to AFORGE_MODEL (leading
+openrouter/ prefix stripped) and #variant to AFORGE_EXEC_REASONING, and
+treats budget/turn-cap landings that still produced a final message as
+usable results while mapping all other non-zero exits to CRASH. The
+no-progress watchdog is disabled for this provider because aforge only
+writes stdout once, at completion. HarnessConfig grows aforge_bin, which
+is threaded through the runner's options whitelist, the factory, the
+availability spec (probed via `aforge version`, needs OPENROUTER_API_KEY),
+and the doctor.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f2dd31f)
+
+
+
+### Fixed
+
+- Fix(sdk/python): replace bare asyncio.run() with loop-aware helpers (#620) (#899)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* fix(sdk/python): replace bare asyncio.run() with loop-aware helpers (#620)
+
+Bare asyncio.run() raises RuntimeError when called from within an
+already-running event loop (e.g. a sync reasoner dispatched by FastAPI,
+a serverless handler wrapping an async framework, or a destructor on the
+loop thread). This is slice 3 of #620.
+
+New module agentfield/run_async.py provides two helpers:
+- run_coroutine(coro): blocks until result. If a loop is running, runs
+  in a new thread with its own loop so the caller can safely block.
+- fire_and_forget(coro): non-blocking. If a loop is running, creates a
+  task; otherwise spawns a daemon thread.
+
+Applied to all 6 asyncio.run() sites:
+- agent.py handle_serverless: run_coroutine() for async reasoners
+- agent_serverless.py: same pattern
+- agent_cli.py: run_coroutine() (safe for CLI, consistent API)
+- agent.py note(): fire_and_forget() replaces manual loop detection +
+  threading (was 15 lines, now 1 line)
+- agent.py destructor: fire_and_forget() for cleanup
+
+Tests: 9 tests in test_run_async.py covering both loop-running and
+no-loop cases, exception propagation, and fire-and-forget semantics.
+Updated test_agent_core.py to match new dispatch pattern.
+
+Part of #620.
+
+* fix(sdk/python): catch/log exceptions in fire_and_forget daemon thread
+
+Wrap the no-loop fire_and_forget() worker thread with try/except so
+exceptions are logged at debug level rather than leaking as unhandled
+thread exception tracebacks. Addresses @santoshkumarradha's review.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (ce137d1)
+
+## [0.1.127-rc.2] - 2026-08-10
+
+
+### Fixed
+
+- Fix(control-plane): make the execution cleanup initial delay testable (#897)
+
+cleanupLoop waited on a hardcoded 30 second timer before its first
+cleanup pass. That branch could not be reached by any test without
+sleeping for 30 seconds, so the first-pass path was never exercised.
+
+Move the value to a named constant and hold it in an unexported field
+that the constructor always populates. Production timing is unchanged:
+NewExecutionCleanupService is the only construction site, so every
+instance still gets 30 seconds, and no config or exported API surface
+is added. Tests in this package can shorten the field directly.
+
+A guard test asserts the default is still 30 seconds, so the value is
+now pinned by an assertion rather than left as an implicit assumption.
+
+Adds loop coverage for the initial-cleanup branch, the ticker branch,
+and the RetryStaleWorkflowExecutions error path. Each loop test
+neutralises the other timer so it can only pass for the right reason.
+
+execution_cleanup.go now reports 100% across all seven functions
+(cleanupLoop 84.6% -> 100%, performCleanup 97.9% -> 100%). (53bad8c)
+
+## [0.1.127-rc.1] - 2026-08-07
+
+
+### Other
+
+- Add request logging middleware for #557
+
+Replace gin's verbose stdout [GIN] logger with a structured zerolog
+middleware (middleware.GinLogger) that emits one DEBUG-level line per
+request, keeping default info output free of duplicated, overly verbose
+request logs. (0a0eaa4)
+
+## [0.1.126] - 2026-08-07
+
+## [0.1.126-rc.2] - 2026-08-07
+
+
+### Chores
+
+- Chore(deps): bump js-yaml (#892)
+
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [js-yaml](https://github.com/nodeca/js-yaml).
+
+
+Updates `js-yaml` from 4.3.0 to 4.3.1
+- [Changelog](https://github.com/nodeca/js-yaml/blob/4.3.1/CHANGELOG.md)
+- [Commits](https://github.com/nodeca/js-yaml/compare/4.3.0...4.3.1)
+
+---
+updated-dependencies:
+- dependency-name: js-yaml
+  dependency-version: 4.3.1
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (da525c3)
+
+
+
+### Other
+
+- Fix macOS Go scaffold happy path (#894) (902737b)
+
 ## [0.1.126-rc.1] - 2026-08-07
 
 

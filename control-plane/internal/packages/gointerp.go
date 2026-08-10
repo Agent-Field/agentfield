@@ -230,6 +230,12 @@ func InstallGoDependencies(packagePath string, metadata *PackageMetadata) error 
 	args := []string{"build"}
 	if hasVendorDir(packagePath) {
 		args = append(args, "-mod=vendor")
+	} else {
+		// Freshly generated Go scaffolds intentionally omit go.sum. Let the Go
+		// tool resolve transitive module requirements and write go.mod/go.sum in
+		// the installed package copy before compiling it. Without -mod=mod,
+		// modern Go versions reject the fresh package as needing `go mod tidy`.
+		args = append(args, "-mod=mod")
 	}
 	if outBin != "" {
 		outAbs := filepath.Join(packagePath, outBin)

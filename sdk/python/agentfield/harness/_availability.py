@@ -15,6 +15,14 @@ class ProviderSpec:
 
 
 PROVIDER_SPECS = {
+    "aforge": ProviderSpec(
+        binary="aforge",
+        version_args=("version",),
+        install_command=(
+            "go build -o aforge ./cmd/aforge (https://github.com/Agent-Field/aforge-v2)"
+        ),
+        auth_env_vars=("OPENROUTER_API_KEY",),
+    ),
     "codex": ProviderSpec(
         binary="codex",
         version_args=("--version",),

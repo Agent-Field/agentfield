@@ -17,6 +17,10 @@ from urllib.parse import urljoin
 import aiohttp
 
 from .async_config import AsyncConfig
+from .async_lifecycle import (
+    cancel_and_await_if_same_loop,
+    current_running_loop,
+)
 from .execution_state import ExecuteError, ExecutionPriority, ExecutionState, ExecutionStatus
 from .exceptions import (
     AgentFieldClientError,
@@ -253,6 +257,10 @@ class AsyncExecutionManager:
         self._cleanup_task: Optional[asyncio.Task] = None
         self._metrics_task: Optional[asyncio.Task] = None
         self._event_stream_task: Optional[asyncio.Task] = None
+        # The event loop the background tasks are bound to. Recorded at
+        # start() so stop() can tell whether it's safe to await them or must
+        # cancel cross-loop (mixing threads/asyncio, #620/#623).
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Circuit breaker state
         self._circuit_breaker_failures = 0
@@ -299,6 +307,11 @@ class AsyncExecutionManager:
             self._shutdown_event = asyncio.Event()
         self._shutdown_event.clear()
 
+        # Record the loop these background tasks are bound to so stop() can
+        # tell whether it's safe to await them (same loop) or must cancel
+        # them cross-loop without awaiting (#620/#623).
+        self._loop = current_running_loop()
+
         # Start background tasks
         self._polling_task = asyncio.create_task(self._polling_loop())
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -316,15 +329,26 @@ class AsyncExecutionManager:
     async def stop(self) -> None:
         """
         Stop the execution manager and cleanup all resources.
+
+        Loop-aware: background tasks are only awaited when stop() runs on the
+        loop they were created on. When called from a different loop (the
+        sync/async mixing case in #620/#623), they are cancelled on their
+        owning loop without awaiting to avoid the ``got Future attached to a
+        different loop`` RuntimeError. Downstream component teardown
+        (connection_manager, result_cache) is likewise loop-aware.
         """
         logger.info("Stopping AsyncExecutionManager...")
 
-        # Signal shutdown
-        if self._shutdown_event is None:
-            self._shutdown_event = asyncio.Event()
-        self._shutdown_event.set()
+        current_loop = current_running_loop()
+        owning_loop = self._loop
 
-        # Cancel background tasks
+        # Signal shutdown only when we're on the owning loop — asyncio.Event
+        # is not safe to set from a foreign loop, and the loop-aware cancel
+        # below tears the tasks down regardless.
+        if self._shutdown_event is not None and owning_loop is current_loop:
+            self._shutdown_event.set()
+
+        # Cancel background tasks, awaiting only when safe (same loop).
         tasks_to_cancel = [
             self._polling_task,
             self._cleanup_task,
@@ -333,24 +357,40 @@ class AsyncExecutionManager:
         ]
 
         for task in tasks_to_cancel:
-            if task:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+            await cancel_and_await_if_same_loop(task, owning_loop)
 
         self._polling_task = None
         self._cleanup_task = None
         self._metrics_task = None
         self._event_stream_task = None
+        self._loop = None
 
-        # Cancel all active executions
-        async with self._execution_lock:
-            for execution in self._executions.values():
-                if execution.is_active:
-                    execution.cancel("Manager shutdown")
-                    self._release_capacity_for_execution(execution)
+        # Cancel all active executions. The _execution_lock is an asyncio.Lock
+        # bound to the owning loop — taking it from a foreign loop would raise
+        # "got Future attached to a different loop". On a cross-loop stop we
+        # schedule the cancellation on the owning loop so executions are
+        # actually terminated rather than left dangling.
+        if owning_loop is current_loop:
+            async with self._execution_lock:
+                for execution in self._executions.values():
+                    if execution.is_active:
+                        execution.cancel("Manager shutdown")
+                        self._release_capacity_for_execution(execution)
+        elif owning_loop is not None and not owning_loop.is_closed():
+            # Schedule execution cancellation on the owning loop so it runs
+            # under the correct lock. Fire-and-forget — we can't await it.
+            def _cancel_on_owner():
+                async def _do_cancel():
+                    async with self._execution_lock:
+                        for execution in self._executions.values():
+                            if execution.is_active:
+                                execution.cancel("Manager shutdown (cross-loop)")
+                                self._release_capacity_for_execution(execution)
+                owning_loop.create_task(_do_cancel())
+            try:
+                owning_loop.call_soon_threadsafe(_cancel_on_owner)
+            except Exception:
+                logger.debug("Could not schedule cross-loop execution cancel", exc_info=True)
 
         # Stop components
         await self.connection_manager.close()

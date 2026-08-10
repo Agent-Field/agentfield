@@ -2,6 +2,7 @@ from typing import Optional, Callable
 import time
 from agentfield.execution_context import ExecutionContext
 from agentfield.logger import log_warn
+from agentfield.run_async import run_coroutine
 
 class _AgentServerlessMixin:
     def handle_serverless(
@@ -148,7 +149,7 @@ class _AgentServerlessMixin:
 
                 # Execute function (sync or async)
                 if asyncio.iscoroutinefunction(func):
-                    result = asyncio.run(func(**input_data))
+                    result = run_coroutine(func(**input_data))
                 else:
                     result = func(**input_data)
 

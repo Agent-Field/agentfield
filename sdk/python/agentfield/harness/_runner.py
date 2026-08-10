@@ -171,6 +171,7 @@ def _resolve_options(
             "env",
             "cwd",
             "project_dir",
+            "aforge_bin",
             "codex_bin",
             "gemini_bin",
             "opencode_bin",
@@ -284,22 +285,20 @@ class HarnessRunner:
         # Where the schema output file (.agentfield_output.json) is written and
         # read back. It MUST sit inside the agent's allowed root, or providers
         # like OpenCode reject the write as an external-directory access
-        # (agentfield#684). When project_dir is set, the agent's root is
-        # project_dir (see each provider's --dir / -C handling), which may differ
-        # from cwd — so the output file goes in an isolated temp dir *under*
-        # project_dir, never in a sibling/nested cwd. When project_dir is unset,
-        # cwd is the root and the output file goes directly in cwd (unchanged).
-        # This mirrors the Go SDK runner.
+        # (agentfield#684). Always isolate it in a per-run temp dir under
+        # project_dir, or cwd when project_dir is unset. Besides keeping the file
+        # inside the agent root, this prevents concurrent runs sharing one cwd
+        # from overwriting or deleting each other's fixed output filename.
         resolved_project_dir = options.get("project_dir")
-        temp_output_dir: Optional[str] = None
         if isinstance(resolved_project_dir, str) and resolved_project_dir:
-            os.makedirs(resolved_project_dir, exist_ok=True)
-            temp_output_dir = tempfile.mkdtemp(
-                prefix=".agentfield-out-", dir=resolved_project_dir
-            )
-            output_dir = temp_output_dir
+            base_dir = resolved_project_dir
         else:
-            output_dir = resolved_cwd
+            base_dir = resolved_cwd
+        os.makedirs(base_dir, exist_ok=True)
+        temp_output_dir: Optional[str] = tempfile.mkdtemp(
+            prefix=".agentfield-out-", dir=base_dir
+        )
+        output_dir = temp_output_dir
 
         # schema_mode selects how the agent is asked to produce the output:
         #   "single"      — one Write of the whole object (default, cheapest)

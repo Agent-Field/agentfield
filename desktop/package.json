@@ -75,7 +75,7 @@
   },
   "dependencies": {
     "@lobehub/icons-static-svg": "^1.94.0",
-    "js-yaml": "^4.3.0",
+    "js-yaml": "^4.3.1",
     "motion": "^12.42.2"
   },
   "devDependencies": {

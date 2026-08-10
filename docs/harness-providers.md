@@ -8,6 +8,7 @@ starting a workflow.
 
 | Provider | Python extra | Required CLI | Authentication |
 | --- | --- | --- | --- |
+| `aforge` | None | `aforge` | `OPENROUTER_API_KEY` |
 | Claude Code | `agentfield[harness-claude]` | Bundled by `claude-agent-sdk` | Claude login or `ANTHROPIC_API_KEY` |
 | Codex | `agentfield[harness-codex]` | `codex` | Codex login or `OPENAI_API_KEY` |
 | Gemini | None | `gemini` | Gemini login, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
@@ -20,8 +21,8 @@ pip install 'agentfield[harness-all]'
 ```
 
 The extras install Python wrappers. They do not replace the runtime preflight:
-Gemini is CLI-only, and Codex or OpenCode may still require a separately
-available executable depending on the wrapper and platform.
+Aforge and Gemini are CLI-only, and Codex or OpenCode may still require a
+separately available executable depending on the wrapper and platform.
 
 ## Model selection and reasoning-effort variants
 
@@ -40,6 +41,7 @@ An explicit `variant="high"` keyword wins over the suffix. Per provider:
 
 | Provider | Model flag | Variant handling |
 | --- | --- | --- |
+| `aforge` | `AFORGE_MODEL` env var with a bare OpenRouter slug (a leading `openrouter/` is stripped) | `AFORGE_EXEC_REASONING` (`off`, `low`, `medium`, or `high`) |
 | OpenCode | `-m <model>` | `--variant <v>` (provider-specific effort, e.g. `high`, `max`, `minimal`) |
 | Codex | `-m <model>` | `-c model_reasoning_effort=<v>` |
 | Claude Code | SDK `model` option | No effort control — variant is dropped with a debug log |

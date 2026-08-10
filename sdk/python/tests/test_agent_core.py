@@ -150,21 +150,9 @@ async def test_note_sends_async_request(monkeypatch):
     context = SimpleNamespace(to_headers=lambda: {"X-Workflow-ID": "wf"})
     monkeypatch.setattr(agent, "_get_current_execution_context", lambda: context)
 
-    tasks = []
-
-    class DummyLoop:
-        def is_running(self):
-            return True
-
-        def create_task(self, coro):
-            task = asyncio.ensure_future(coro)
-            tasks.append(task)
-            return task
-
-    monkeypatch.setattr("asyncio.get_event_loop", lambda: DummyLoop())
-
     agent.note("hello", tags=["debug"])
-    await asyncio.gather(*tasks)
+    # fire_and_forget creates a task on the running loop; give it a tick.
+    await asyncio.sleep(0.1)
 
     assert called["url"].startswith("http://agentfield/api/v1")
     assert called["json"]["message"] == "hello"

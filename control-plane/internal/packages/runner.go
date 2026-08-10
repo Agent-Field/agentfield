@@ -336,31 +336,32 @@ func (ar *AgentNodeRunner) waitForAgentNode(port int, healthPath, expectedNodeID
 }
 
 // displayCapabilities fetches and displays agent node capabilities
-func (ar *AgentNodeRunner) displayCapabilities(agentNode InstalledPackage, port int) error {
+func (ar *AgentNodeRunner) displayCapabilities(_ InstalledPackage, port int) error {
+	return DisplayCapabilities(port)
+}
+
+// DisplayCapabilities prints the reasoners and skills served by a running node.
+// It understands both the current /discover contract and legacy split endpoints.
+func DisplayCapabilities(port int) error {
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	// Get reasoners
-	reasonersResp, err := client.Get(fmt.Sprintf("http://localhost:%d/reasoners", port))
-	if err != nil {
-		return err
-	}
-	defer reasonersResp.Body.Close()
-
-	var reasonersData map[string]interface{}
-	if err := json.NewDecoder(reasonersResp.Body).Decode(&reasonersData); err != nil {
-		return err
-	}
-
-	// Get skills
-	skillsResp, err := client.Get(fmt.Sprintf("http://localhost:%d/skills", port))
-	if err != nil {
-		return err
-	}
-	defer skillsResp.Body.Close()
-
-	var skillsData map[string]interface{}
-	if err := json.NewDecoder(skillsResp.Body).Decode(&skillsData); err != nil {
-		return err
+	// Current SDKs expose one discovery document. Older Python nodes expose
+	// separate /reasoners and /skills collections, so fall back to those when
+	// /discover is absent or not JSON.
+	discovery, discoverErr := fetchCapabilityDocument(client, port, "/discover")
+	var reasonersData, skillsData map[string]interface{}
+	if discoverErr == nil {
+		reasonersData, skillsData = discovery, discovery
+	} else {
+		var err error
+		reasonersData, err = fetchCapabilityDocument(client, port, "/reasoners")
+		if err != nil {
+			return fmt.Errorf("discover capabilities: %v; legacy reasoners: %w", discoverErr, err)
+		}
+		skillsData, err = fetchCapabilityDocument(client, port, "/skills")
+		if err != nil {
+			return fmt.Errorf("legacy skills: %w", err)
+		}
 	}
 
 	fmt.Printf("\n🌐 Access locally at: http://localhost:%d\n", port)
@@ -395,6 +396,22 @@ func (ar *AgentNodeRunner) displayCapabilities(agentNode InstalledPackage, port 
 	}
 
 	return nil
+}
+
+func fetchCapabilityDocument(client *http.Client, port int, path string) (map[string]interface{}, error) {
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d%s", port, path))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("GET %s returned %s", path, resp.Status)
+	}
+	var data map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("decode GET %s: %w", path, err)
+	}
+	return data, nil
 }
 
 // updateRuntimeInfo updates the registry with runtime information

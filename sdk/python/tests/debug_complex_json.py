@@ -652,7 +652,7 @@ async def main():
     parser.add_argument(
         "--provider",
         default="claude-code",
-        choices=["claude-code", "codex", "gemini", "opencode"],
+        choices=["aforge", "claude-code", "codex", "gemini", "opencode"],
         help="Harness provider to test",
     )
     parser.add_argument(
