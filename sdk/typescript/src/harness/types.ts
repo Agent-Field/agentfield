@@ -68,13 +68,15 @@ export interface Metrics {
   model?: string;
 }
 
+export type FailureType = 'none' | 'crash' | 'timeout' | 'api_error' | 'no_output' | 'schema';
+
 export interface RawResult {
   result?: string;
   messages: Array<Record<string, unknown>>;
   metrics: Metrics;
   isError: boolean;
   errorMessage?: string;
-  failureType?: 'none' | 'crash' | 'timeout' | 'api_error' | 'no_output' | 'schema';
+  failureType?: FailureType;
   returnCode?: number;
 }
 
@@ -83,6 +85,8 @@ export interface HarnessResult {
   parsed?: unknown;
   isError: boolean;
   errorMessage?: string;
+  failureType?: FailureType;
+  returnCode?: number;
   costUsd?: number;
   numTurns: number;
   durationMs: number;

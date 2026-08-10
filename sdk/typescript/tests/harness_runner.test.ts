@@ -138,6 +138,8 @@ describe('harness runner', () => {
     const provider = new MockProvider([
       createRawResult({
         result: 'done',
+        failureType: 'none',
+        returnCode: 0,
         metrics: createMetrics({ numTurns: 2, totalCostUsd: 0.42, sessionId: 'sess-1' }),
       }),
     ]);
@@ -152,6 +154,8 @@ describe('harness runner', () => {
     expect(result.costUsd).toBe(0.42);
     expect(result.numTurns).toBe(2);
     expect(result.sessionId).toBe('sess-1');
+    expect(result.failureType).toBe('none');
+    expect(result.returnCode).toBe(0);
   });
 
   it('run with schema injects suffix and parses output', async () => {
