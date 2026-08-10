@@ -27,6 +27,11 @@ logger = get_logger(__name__)
 
 T = TypeVar("T")
 
+# Strong references to tasks scheduled by ``fire_and_forget`` on a running
+# loop. asyncio only keeps a weak reference to a task, so without this the
+# task can be garbage-collected mid-flight and silently never complete.
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
 
 def _has_running_loop() -> bool:
     """Return True if there is a running event loop on the current thread."""
@@ -35,6 +40,21 @@ def _has_running_loop() -> bool:
         return True
     except RuntimeError:
         return False
+
+
+def _on_background_task_done(task: asyncio.Task[Any]) -> None:
+    """Release the task reference and retrieve/log any failure quietly.
+
+    Retrieving the exception here is what keeps a failed fire-and-forget
+    task from emitting a noisy ``Task exception was never retrieved``
+    traceback when it is garbage-collected.
+    """
+    _BACKGROUND_TASKS.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug("fire_and_forget background task failed", exc_info=exc)
 
 
 def run_coroutine(coro: Coroutine[Any, Any, T]) -> T:
@@ -89,7 +109,11 @@ def fire_and_forget(coro: Coroutine[Any, Any, Any]) -> None:
     """Schedule a coroutine without waiting for the result.
 
     - **Running loop**: creates a task on the current loop (no new thread).
+      The task is retained until it finishes and its failure (if any) is
+      logged at debug level.
     - **No running loop**: spawns a daemon thread that runs the coroutine.
+      Note that a daemon thread is killed at interpreter exit, so callers
+      that must see the work complete should not use this helper.
 
     Use this for best-effort background work (sending notes, cleanup) where
     the caller doesn't need the result and shouldn't block.
@@ -99,7 +123,9 @@ def fire_and_forget(coro: Coroutine[Any, Any, Any]) -> None:
     """
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(coro)
+        task = loop.create_task(coro)
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_on_background_task_done)
     except RuntimeError:
         # No running loop — run in a background thread with exception
         # handling so failures are logged cleanly rather than surfacing

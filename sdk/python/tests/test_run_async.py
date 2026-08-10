@@ -7,9 +7,12 @@ RuntimeError: asyncio.run() cannot be called from a running event loop).
 """
 
 import asyncio
+import gc
 import threading
 import time
+from types import SimpleNamespace
 
+from agentfield import run_async
 from agentfield.run_async import run_coroutine, fire_and_forget
 
 
@@ -157,3 +160,68 @@ def test_fire_and_forget_with_running_loop_exception_does_not_crash():
 
     result = asyncio.run(main())
     assert result == "loop survived"
+
+
+async def test_fire_and_forget_running_loop_failure_is_logged_not_noisy(monkeypatch):
+    """C3: a failing fire-and-forget coroutine inside a running loop is
+    reported once, at debug level, and never surfaces the asyncio
+    'Task exception was never retrieved' warning."""
+    logged = []
+    monkeypatch.setattr(
+        run_async,
+        "logger",
+        SimpleNamespace(debug=lambda message, **kwargs: logged.append((message, kwargs))),
+    )
+
+    unhandled = []
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+
+    async def fail():
+        raise ValueError("task failure")
+
+    fire_and_forget(fail())
+    await asyncio.sleep(0.1)
+    # Force collection of the finished task: the noisy warning is emitted
+    # from Task.__del__ when nobody retrieved the exception.
+    gc.collect()
+    await asyncio.sleep(0.05)
+
+    assert unhandled == []
+    assert len(logged) == 1
+    message, kwargs = logged[0]
+    assert message == "fire_and_forget background task failed"
+    assert isinstance(kwargs.get("exc_info"), ValueError)
+
+
+async def test_fire_and_forget_running_loop_task_is_retained_until_done():
+    """C4: the scheduled task is referenced by the module while pending (so
+    it can't be garbage-collected mid-flight) and released once it finishes."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = {"value": False}
+
+    async def work():
+        started.set()
+        await release.wait()
+        finished["value"] = True
+
+    before = set(run_async._BACKGROUND_TASKS)
+    fire_and_forget(work())  # caller deliberately keeps no reference
+    await started.wait()
+
+    # Nothing outside the module holds the task at this point, so a
+    # collection here would kill it if the module reference weren't there.
+    gc.collect()
+
+    scheduled = set(run_async._BACKGROUND_TASKS) - before
+    assert len(scheduled) == 1
+    task = next(iter(scheduled))
+    assert not task.done()
+
+    release.set()
+    await asyncio.wait_for(task, timeout=2)
+    await asyncio.sleep(0)
+
+    assert finished["value"] is True
+    assert task not in run_async._BACKGROUND_TASKS
