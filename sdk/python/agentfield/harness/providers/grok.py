@@ -1,11 +1,9 @@
 """Grok Build CLI provider (local `grok` binary).
 
-Invokes headless multi-turn Grok agent sessions via:
-
-    script -q /dev/null grok --output-format json --prompt-file … …
-
-``script`` allocates a PTY: the Grok CLI currently errors with
-``Device not configured (os error 6)`` when started with plain pipes.
+Invokes headless multi-turn Grok agent sessions under a PTY allocated by
+``script(1)`` — the Grok CLI errors with ``Device not configured (os error
+6)`` when started with plain pipes. The exact ``script`` invocation is
+flavor-specific; see :func:`_pty_command`.
 """
 
 from __future__ import annotations
@@ -13,7 +11,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
+import sys
 import tempfile
 import time
 from typing import Any, Dict, List, Optional
@@ -23,6 +23,45 @@ from agentfield.harness._cli import resolve_model_and_variant, run_cli, strip_an
 from agentfield.harness._result import FailureType, Metrics, RawResult
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}\s*$")
+
+
+def _pty_command(cmd: List[str]) -> List[str]:
+    """Wrap ``cmd`` in ``script(1)`` so the child gets a real PTY.
+
+    The two ``script`` flavors take the command to run in mutually
+    incompatible ways, and getting it wrong fails *silently* rather than
+    loudly:
+
+    * BSD/macOS — ``script [options] [file [command ...]]``. The command is
+      trailing argv, already correctly escaped by the OS.
+    * util-linux (Linux) — the only command form is ``-c "<string>"``. Extra
+      positional arguments after the typescript file are **not** treated as a
+      command: ``script`` falls back to spawning ``$SHELL`` interactively, so
+      the wrapped CLI never runs and the process hangs on a shell prompt until
+      the harness idle watchdog kills it. Verified on util-linux 2.37.2 (the
+      Ubuntu 22.04 runner image) for both ``script -q /dev/null grok …`` and
+      the ``--``-separated ``script -q /dev/null -- grok …``.
+
+    ``-e`` is required alongside ``-c``: without it util-linux ``script``
+    exits 0 regardless of the child's status, masking every non-zero grok
+    exit from the returncode handling below.
+
+    The util-linux form runs the command string through a shell, so every
+    argument is passed through :func:`shlex.quote`. grok argv carries
+    caller-controlled text (``--system-prompt-override``, project paths,
+    model ids) that must reach the CLI verbatim and must never be
+    re-interpreted as shell syntax.
+
+    Windows has no ``script(1)`` and no PTY story here, so ``cmd`` is
+    returned unchanged — same as when ``script`` is missing from PATH.
+    """
+    if os.name == "nt" or shutil.which("script") is None:
+        return list(cmd)
+    if sys.platform.startswith("linux"):
+        # -q quiet, -e propagate child exit status, -c command, /dev/null
+        # typescript file; stdout still carries the agent JSON.
+        return ["script", "-q", "-e", "-c", shlex.join(cmd), "/dev/null"]
+    return ["script", "-q", "/dev/null", *cmd]
 
 
 def _permission_mode(options: dict[str, object]) -> str:
@@ -184,11 +223,7 @@ class GrokProvider:
             if isinstance(system_prompt, str) and system_prompt.strip():
                 grok_cmd.extend(["--system-prompt-override", system_prompt])
 
-            if shutil.which("script") is not None:
-                # -q quiet, /dev/null typescript file; stdout still carries agent JSON.
-                cmd = ["script", "-q", "/dev/null", *grok_cmd]
-            else:
-                cmd = grok_cmd
+            cmd = _pty_command(grok_cmd)
 
             env: Dict[str, str] = {}
             env_value = options.get("env")
