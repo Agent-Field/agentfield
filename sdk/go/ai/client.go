@@ -16,8 +16,30 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// ClientOption configures an AI client during construction.
+type ClientOption func(*Client)
+
+// WithHTTPClient uses the supplied HTTP client for AI requests.
+func WithHTTPClient(httpClient *http.Client) ClientOption {
+	return func(c *Client) {
+		if httpClient != nil {
+			c.httpClient = httpClient
+		}
+	}
+}
+
+// WithTransport uses the supplied round tripper while preserving the default
+// HTTP client's timeout and other settings.
+func WithTransport(transport http.RoundTripper) ClientOption {
+	return func(c *Client) {
+		if transport != nil {
+			c.httpClient.Transport = transport
+		}
+	}
+}
+
 // NewClient creates a new AI client with the given configuration.
-func NewClient(config *Config) (*Client, error) {
+func NewClient(config *Config, opts ...ClientOption) (*Client, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
@@ -26,12 +48,20 @@ func NewClient(config *Config) (*Client, error) {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
-	return &Client{
+	client := &Client{
 		config: config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
-	}, nil
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(client)
+		}
+	}
+
+	return client, nil
 }
 
 // Model returns the client's configured default model slug.
