@@ -27,13 +27,22 @@ Resolution order — stop at the first match:
 
 1. **Explicit wins.** The user named a server, or `AGENTFIELD_SERVER` is set in
    the environment → use that.
-2. **Read the desktop cloud config** (first file that exists):
+2. **Read the desktop cloud config.** Check every path that applies to this
+   machine — a file that exists but declares no enabled cloud does NOT end
+   the search:
    - macOS: `~/Library/Application Support/agentfield-desktop/settings.json`
    - Windows: `%APPDATA%/agentfield-desktop/settings.json`
    - Linux: `~/.config/agentfield-desktop/settings.json`
-   If `cloud.enabled` is `true` and `cloud.serverUrl` is non-empty, the cloud
-   is the target: strip any trailing slash from the URL and take `cloud.apiKey`
-   as the key. Health-check it (`GET <url>/health` with `X-API-Key`).
+   - WSL (detect: `grep -qi microsoft /proc/version`): the Linux path above
+     first, then the Windows side, where the desktop app usually lives:
+     `/mnt/c/Users/*/AppData/Roaming/agentfield-desktop/settings.json`.
+     A Linux-side file with no `cloud` key shadowing a Windows file that
+     holds the real cloud config is the common split-brain — the enabled
+     cloud wins, whichever side declares it.
+   The first file declaring `cloud.enabled: true` with a non-empty
+   `cloud.serverUrl` makes the cloud the target: strip any trailing slash
+   from the URL and take `cloud.apiKey` as the key. Health-check it
+   (`GET <url>/health` with `X-API-Key`).
    - Healthy → use the cloud for everything below.
    - Unreachable → **stop and tell the user their cloud control plane is
      configured but not responding.** Do NOT silently fall back to local:
