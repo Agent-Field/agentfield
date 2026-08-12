@@ -1,7 +1,7 @@
 import type { HarnessProvider } from './base.js';
 import type { HarnessConfig } from '../types.js';
 
-export const SUPPORTED_PROVIDERS = new Set(['claude-code', 'codex', 'gemini', 'opencode']);
+export const SUPPORTED_PROVIDERS = new Set(['claude-code', 'codex', 'gemini', 'omp', 'opencode', 'pi']);
 
 export async function buildProvider(config: HarnessConfig): Promise<HarnessProvider> {
   if (!SUPPORTED_PROVIDERS.has(config.provider)) {
@@ -24,6 +24,14 @@ export async function buildProvider(config: HarnessConfig): Promise<HarnessProvi
   if (config.provider === 'opencode') {
     const { OpenCodeProvider } = await import('./opencode.js');
     return new OpenCodeProvider(config.opencodeBin ?? 'opencode');
+  }
+  if (config.provider === 'pi') {
+    const { PiProvider } = await import('./pi.js');
+    return new PiProvider(config.piBin ?? 'pi');
+  }
+  if (config.provider === 'omp') {
+    const { OmpProvider } = await import('./pi.js');
+    return new OmpProvider(config.ompBin ?? 'omp');
   }
   throw new Error(`Provider "${config.provider}" is not yet implemented.`);
 }

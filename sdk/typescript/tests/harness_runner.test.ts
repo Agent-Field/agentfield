@@ -71,6 +71,8 @@ describe('harness runner', () => {
       codexBin: 'codex',
       geminiBin: 'gemini',
       opencodeBin: 'opencode',
+      piBin: 'pi',
+      ompBin: 'omp',
     };
 
     const runner = new HarnessRunner(cfg);
@@ -88,6 +90,8 @@ describe('harness runner', () => {
     expect(options.maxBudgetUsd).toBe(2);
     expect(options.env).toEqual({ B: '2' });
     expect(options.cwd).toBe('/tmp/override');
+    expect(options.piBin).toBe('pi');
+    expect(options.ompBin).toBe('omp');
   });
 
   it('isTransient matches transient errors and rejects non-transient', () => {

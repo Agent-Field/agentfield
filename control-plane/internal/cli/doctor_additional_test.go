@@ -77,6 +77,8 @@ func TestDoctorHelpersAndCommand(t *testing.T) {
 				"codex":       {},
 				"gemini":      {},
 				"opencode":    {},
+				"pi":          {},
+				"omp":         {},
 			},
 			ProviderKeys: map[string]ProviderKey{
 				"openrouter": {EnvVar: "OPENROUTER_API_KEY", Set: true},

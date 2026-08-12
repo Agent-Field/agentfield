@@ -2258,7 +2258,7 @@ class Agent(FastAPI):
             vc_setting = self._effective_component_vc_setting(
                 reasoner_id, self._reasoner_vc_overrides
             )
-            
+
             self._reasoner_registry[reasoner_id] = ReasonerEntry(
                 id=reasoner_id,
                 func=func,
@@ -2303,23 +2303,23 @@ class Agent(FastAPI):
         # Check if this looks like a dispatcher envelope
         if not isinstance(payload_dict, dict):
             return payload_dict, None
-        
+
         if "event" in payload_dict and "_meta" in payload_dict:
             # This is a dispatcher envelope
             event_data = payload_dict.get("event", {})
             meta_data = payload_dict.get("_meta", {})
-            
+
             # Parse metadata into TriggerContext
             try:
                 from datetime import datetime
                 from .triggers import TriggerContext
-                
+
                 received_at_str = meta_data.get("received_at", "")
                 if received_at_str:
                     received_at = datetime.fromisoformat(received_at_str.replace('Z', '+00:00'))
                 else:
                     received_at = datetime.utcnow()
-                
+
                 trigger_ctx = TriggerContext(
                     trigger_id=meta_data.get("trigger_id", ""),
                     source=meta_data.get("source", ""),
@@ -2333,7 +2333,7 @@ class Agent(FastAPI):
             except Exception:
                 # If parsing fails, return raw envelope for compatibility
                 return payload_dict, None
-        
+
         # Not an envelope
         return payload_dict, None
 
@@ -2341,7 +2341,7 @@ class Agent(FastAPI):
         """
         Match trigger context against reasoner bindings and apply transform if found.
         Returns transformed input or original input if no match.
-        
+
         Matching logic:
         1. Find bindings where binding.source == trigger_ctx.source
         2. Check event_type: binding.types empty OR trigger_ctx.event_type matches (exact or prefix)
@@ -2349,21 +2349,21 @@ class Agent(FastAPI):
         4. Apply transform if binding has one
         """
         from .triggers import EventTrigger
-        
+
         if not bindings or not trigger_ctx:
             return input_data
-        
+
         # Find best-matching binding
         best_match = None
         best_specificity = -1  # -1 = no match, 0 = broad (empty types), 1+ = specific
-        
+
         for binding in bindings:
             if not isinstance(binding, EventTrigger):
                 continue
-            
+
             if binding.source != trigger_ctx.source:
                 continue
-            
+
             # Check event_type match
             if binding.types:
                 # binding has specific types — check for match
@@ -2378,12 +2378,12 @@ class Agent(FastAPI):
             else:
                 # binding accepts all types
                 specificity = 0
-            
+
             # This binding matches; is it better than current best?
             if specificity > best_specificity:
                 best_match = binding
                 best_specificity = specificity
-        
+
         # Apply transform if found
         if best_match and best_match.transform:
             try:
@@ -2392,7 +2392,7 @@ class Agent(FastAPI):
                 if self.dev_mode:
                     log_warn(f"Transform failed for {trigger_ctx.source}/{trigger_ctx.event_type}: {e}; using raw input")
                 return input_data
-        
+
         return input_data
 
     async def _execute_reasoner_endpoint(
@@ -3735,7 +3735,7 @@ class Agent(FastAPI):
             prompt: Task description for the coding agent.
             schema: Pydantic BaseModel class for structured output validation.
             provider: Override provider ("aforge", "claude-code", "codex", "gemini",
-                "opencode").
+                "opencode", "pi", "omp").
             model: Override model identifier.
             max_turns: Maximum agent iterations.
             max_budget_usd: Cost cap in USD.

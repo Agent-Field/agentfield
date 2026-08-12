@@ -4,3 +4,4 @@ export { ClaudeCodeProvider } from './claude.js';
 export { CodexProvider } from './codex.js';
 export { GeminiProvider } from './gemini.js';
 export { OpenCodeProvider } from './opencode.js';
+export { PiProvider, OmpProvider } from './pi.js';

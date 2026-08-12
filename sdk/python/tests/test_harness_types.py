@@ -33,6 +33,8 @@ def test_harness_config_defaults():
     assert cfg.codex_bin == "codex"
     assert cfg.gemini_bin == "gemini"
     assert cfg.opencode_bin == "opencode"
+    assert cfg.pi_bin == "pi"
+    assert cfg.omp_bin == "omp"
 
 
 def test_build_provider_raises_for_unknown_provider():

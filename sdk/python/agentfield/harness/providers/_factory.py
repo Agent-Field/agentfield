@@ -6,7 +6,16 @@ if TYPE_CHECKING:
     from agentfield.harness.providers._base import HarnessProvider
     from agentfield.types import HarnessConfig
 
-SUPPORTED_PROVIDERS = {"aforge", "claude-code", "codex", "gemini", "opencode", "grok"}
+SUPPORTED_PROVIDERS = {
+    "aforge",
+    "claude-code",
+    "codex",
+    "gemini",
+    "grok",
+    "omp",
+    "opencode",
+    "pi",
+}
 
 
 def build_provider(config: "HarnessConfig") -> "HarnessProvider":
@@ -38,6 +47,14 @@ def build_provider(config: "HarnessConfig") -> "HarnessProvider":
         return OpenCodeProvider(
             bin_path=getattr(config, "opencode_bin", "opencode"),
         )
+    if provider_name == "pi":
+        from agentfield.harness.providers.pi import PiProvider
+
+        return PiProvider(bin_path=getattr(config, "pi_bin", "pi"))
+    if provider_name == "omp":
+        from agentfield.harness.providers.pi import OMPProvider
+
+        return OMPProvider(bin_path=getattr(config, "omp_bin", "omp"))
     if provider_name == "grok":
         from agentfield.harness.providers.grok import GrokProvider
 

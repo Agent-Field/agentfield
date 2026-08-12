@@ -571,6 +571,8 @@ func TestBuildProvider(t *testing.T) {
 		{"codex", "codex", "*harness.CodexProvider", false},
 		{"gemini", "gemini", "*harness.GeminiProvider", false},
 		{"opencode", "opencode", "*harness.OpenCodeProvider", false},
+		{"pi", "pi", "*harness.PiProvider", false},
+		{"omp", "omp", "*harness.OMPProvider", false},
 		{"unknown", "unknown-agent", "", true},
 	}
 
@@ -589,8 +591,8 @@ func TestBuildProvider(t *testing.T) {
 }
 
 func TestRunner_BuildProvider_UsesFactory(t *testing.T) {
-	// Verify the runner can now build all 4 providers
-	for _, name := range []string{"claude-code", "codex", "gemini", "opencode"} {
+	// Verify the runner can build every provider.
+	for _, name := range []string{"claude-code", "codex", "gemini", "opencode", "pi", "omp"} {
 		t.Run(name, func(t *testing.T) {
 			runner := NewRunner(Options{Provider: name})
 			_, err := runner.Run(context.Background(), "test", nil, nil, Options{})

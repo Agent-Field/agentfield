@@ -55,6 +55,26 @@ func TestHarnessDoctorReturnsErrorForRequestedMissingProvider(t *testing.T) {
 	require.Equal(t, []string{"binary_not_found"}, reports[0].Issues)
 }
 
+func TestHarnessDoctorReportsPiWithOpenRouterAuth(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessTestBinary(t, binDir, "pi", "0.84.1")
+	t.Setenv("PATH", binDir)
+	t.Setenv("OPENROUTER_API_KEY", "configured")
+
+	cmd := NewHarnessCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"doctor", "--provider", "pi", "--json"})
+
+	require.NoError(t, cmd.Execute())
+	var reports []HarnessProviderHealth
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &reports))
+	require.Len(t, reports, 1)
+	require.Equal(t, "pi", reports[0].Provider)
+	require.Equal(t, "configured", reports[0].Auth)
+	require.True(t, reports[0].Usable)
+}
+
 func TestHarnessDoctorClaudeCodeReportsInstalledWrapper(t *testing.T) {
 	binDir := t.TempDir()
 	// Stub interpreter standing in for `python3 -c <probe>`: prints "ok" as the

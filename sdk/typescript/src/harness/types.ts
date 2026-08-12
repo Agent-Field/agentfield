@@ -1,5 +1,5 @@
 export interface HarnessConfig {
-  provider: 'claude-code' | 'codex' | 'gemini' | 'opencode';
+  provider: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
   model?: string;
   /**
    * Provider-specific reasoning-effort variant (e.g. `high`, `minimal`).
@@ -17,9 +17,12 @@ export interface HarnessConfig {
   systemPrompt?: string;
   env?: Record<string, string>;
   cwd?: string;
+  projectDir?: string;
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
+  piBin?: string;
+  ompBin?: string;
 }
 
 export interface HarnessOptions {
@@ -41,9 +44,14 @@ export interface HarnessOptions {
   systemPrompt?: string;
   env?: Record<string, string>;
   cwd?: string;
+  projectDir?: string;
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
+  piBin?: string;
+  ompBin?: string;
+  resumeSessionId?: string;
+  timeout?: number;
   schema?: unknown;
 }
 

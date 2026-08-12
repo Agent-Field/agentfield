@@ -33,6 +33,7 @@ export function runCli(
     cwd?: string;
     timeout?: number;
     idleSeconds?: number;
+    inputText?: string;
   }
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
@@ -44,8 +45,12 @@ export function runCli(
     const proc = spawn(bin, args, {
       env,
       cwd: options?.cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options?.inputText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+
+    if (options?.inputText !== undefined) {
+      proc.stdin?.end(options.inputText);
+    }
 
     let stdout = '';
     let stderr = '';
@@ -54,11 +59,11 @@ export function runCli(
 
     // Both stdout and stderr are drained concurrently via their own 'data'
     // listeners, so a full stderr pipe cannot deadlock the read of stdout.
-    proc.stdout.on('data', (data: Uint8Array | string) => {
+    proc.stdout!.on('data', (data: Uint8Array | string) => {
       stdout += data.toString();
       lastActivity = Date.now();
     });
-    proc.stderr.on('data', (data: Uint8Array | string) => {
+    proc.stderr!.on('data', (data: Uint8Array | string) => {
       stderr += data.toString();
       lastActivity = Date.now();
     });

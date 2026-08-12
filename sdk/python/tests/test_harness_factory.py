@@ -36,6 +36,8 @@ def test_supported_providers_contains_expected_names():
     assert "codex" in SUPPORTED_PROVIDERS
     assert "gemini" in SUPPORTED_PROVIDERS
     assert "opencode" in SUPPORTED_PROVIDERS
+    assert "pi" in SUPPORTED_PROVIDERS
+    assert "omp" in SUPPORTED_PROVIDERS
     assert "grok" in SUPPORTED_PROVIDERS
 
 

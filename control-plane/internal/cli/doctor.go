@@ -89,6 +89,8 @@ var harnessProviders = []struct {
 	{Name: "codex", Binary: "codex", ProbeArgs: []string{"exec", "Say OK"}},
 	{Name: "gemini", Binary: "gemini", ProbeArgs: []string{"-p", "Say OK"}},
 	{Name: "opencode", Binary: "opencode", ProbeArgs: []string{"run", "Say OK"}},
+	{Name: "pi", Binary: "pi", ProbeArgs: []string{"--print", "Say OK"}},
+	{Name: "omp", Binary: "omp", ProbeArgs: []string{"--print", "Say OK"}},
 }
 
 // harnessProbeTimeout bounds a single provider smoke test. Coding-agent CLIs
@@ -119,7 +121,7 @@ func NewDoctorCommand() *cobra.Command {
 		Long: `Doctor inspects the local environment and reports what's available for
 building AgentField multi-reasoner systems:
 
-  • Available harness provider CLIs (claude-code, codex, gemini, opencode)
+  • Available harness provider CLIs (claude-code, codex, gemini, opencode, pi, omp)
   • Provider API keys set in the environment (without leaking values)
   • Docker availability and whether the control-plane image is locally cached
   • Whether a local control plane is reachable

@@ -175,6 +175,8 @@ def _resolve_options(
             "codex_bin",
             "gemini_bin",
             "opencode_bin",
+            "pi_bin",
+            "omp_bin",
             "grok_bin",
             "schema_max_retries",
             "schema_mode",

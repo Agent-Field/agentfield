@@ -44,6 +44,8 @@ type RunnerOptions = Omit<HarnessOptions, 'schema'> & {
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
+  piBin?: string;
+  ompBin?: string;
 };
 
 export class HarnessRunner {
@@ -57,7 +59,7 @@ export class HarnessRunner {
       throw new Error("No harness provider specified. Set 'provider' in HarnessConfig or pass it to .harness() call.");
     }
 
-    const cwd = resolved.cwd ?? '.';
+    const cwd = resolved.projectDir ?? resolved.cwd ?? '.';
     const provider = await this.buildProvider(resolved.provider, resolved);
     const effectivePrompt = schema === undefined ? prompt : `${prompt}${buildPromptSuffix(schema, cwd)}`;
     const startTime = Date.now();
@@ -105,9 +107,12 @@ export class HarnessRunner {
         'systemPrompt',
         'env',
         'cwd',
+        'projectDir',
         'codexBin',
         'geminiBin',
         'opencodeBin',
+        'piBin',
+        'ompBin',
       ] as const) {
         const value = config[key];
         if (value !== undefined && value !== null) {

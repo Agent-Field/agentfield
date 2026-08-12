@@ -80,6 +80,8 @@ func TestRunHarnessProbes_SkipsUndetected(t *testing.T) {
 			"codex":       {Available: false},
 			"gemini":      {Available: false},
 			"opencode":    {Available: false},
+			"pi":          {Available: false},
+			"omp":         {Available: false},
 		},
 	}
 	got := runHarnessProbes(report)

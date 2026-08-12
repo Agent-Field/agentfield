@@ -3,7 +3,7 @@ package harness
 import "fmt"
 
 // BuildProvider creates a Provider instance for the given provider name.
-// Supported providers: "claude-code", "codex", "gemini", "opencode".
+// Supported providers: "claude-code", "codex", "gemini", "opencode", "pi", "omp".
 func BuildProvider(name string, binPath string) (Provider, error) {
 	switch name {
 	case ProviderClaudeCode:
@@ -14,10 +14,14 @@ func BuildProvider(name string, binPath string) (Provider, error) {
 		return NewGeminiProvider(binPath), nil
 	case ProviderOpenCode:
 		return NewOpenCodeProvider(binPath, ""), nil
+	case ProviderPi:
+		return NewPiProvider(binPath), nil
+	case ProviderOMP:
+		return NewOMPProvider(binPath), nil
 	default:
 		return nil, fmt.Errorf(
-			"unknown harness provider: %q (supported: %s, %s, %s, %s)",
-			name, ProviderClaudeCode, ProviderCodex, ProviderGemini, ProviderOpenCode,
+			"unknown harness provider: %q (supported: %s, %s, %s, %s, %s, %s)",
+			name, ProviderClaudeCode, ProviderCodex, ProviderGemini, ProviderOpenCode, ProviderPi, ProviderOMP,
 		)
 	}
 }

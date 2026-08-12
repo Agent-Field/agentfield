@@ -13,6 +13,8 @@ starting a workflow.
 | Codex | `agentfield[harness-codex]` | `codex` | Codex login or `OPENAI_API_KEY` |
 | Gemini | None | `gemini` | Gemini login, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
 | OpenCode | `agentfield[harness-opencode]` | `opencode` | Provider credentials configured in OpenCode |
+| Pi | None | `pi` | Provider login or API key such as `OPENROUTER_API_KEY` |
+| OMP (Oh My Pi) | None | `omp` | Provider login or API key such as `OPENROUTER_API_KEY` |
 
 Install every Python wrapper with:
 
@@ -23,6 +25,13 @@ pip install 'agentfield[harness-all]'
 The extras install Python wrappers. They do not replace the runtime preflight:
 Aforge and Gemini are CLI-only, and Codex or OpenCode may still require a
 separately available executable depending on the wrapper and platform.
+
+Install Pi or OMP directly from their official distributions:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+curl -fsSL https://omp.sh/install | sh
+```
 
 ## Model selection and reasoning-effort variants
 
@@ -39,6 +48,10 @@ result = await app.harness(
 
 An explicit `variant="high"` keyword wins over the suffix. Per provider:
 
+Pi and OMP accept the same OpenRouter model strings in every SDK, for example
+`openrouter/minimax/minimax-m2.7` or
+`openrouter/google/gemini-2.5-flash#low`.
+
 | Provider | Model flag | Variant handling |
 | --- | --- | --- |
 | `aforge` | `AFORGE_MODEL` env var with a bare OpenRouter slug (a leading `openrouter/` is stripped) | `AFORGE_EXEC_REASONING` (`off`, `low`, `medium`, or `high`) |
@@ -46,6 +59,8 @@ An explicit `variant="high"` keyword wins over the suffix. Per provider:
 | Codex | `-m <model>` | `-c model_reasoning_effort=<v>` |
 | Claude Code | SDK `model` option | No effort control — variant is dropped with a debug log |
 | Gemini | `-m <model>` | No effort control — variant is dropped |
+| Pi | `--model <model>` | `--thinking <v>` |
+| OMP | `--model <model>` | `--thinking <v>` |
 
 The `#` separator is safe in model ids: `:` belongs to OpenRouter suffixes like
 `:free`, and `@` to Vertex-style ids, but no provider uses `#`.
@@ -55,7 +70,7 @@ The `#` separator is safe in model ids: `:` belongs to OpenRouter suffixes like
 Check selected providers in a container or CI job before any paid run:
 
 ```bash
-af harness doctor --provider codex,opencode --json
+af harness doctor --provider codex,opencode,pi,omp --json
 ```
 
 The command exits non-zero if a requested provider is missing, its version
@@ -65,7 +80,7 @@ CI can archive the report when the command fails.
 Python applications can use the same preflight data:
 
 ```python
-reports = await app.harness_doctor(providers=["codex", "opencode"])
+reports = await app.harness_doctor(providers=["codex", "opencode", "pi", "omp"])
 for report in reports:
     print(report.provider, report.usable, report.issues)
 ```
@@ -73,6 +88,9 @@ for report in reports:
 The preflight currently ships in the Python SDK and the `af` CLI. Equivalent
 TypeScript and Go SDK APIs are planned follow-ups (see #685) and are not
 available yet.
+
+For a complete Go workflow that fans one task out to Pi and OMP concurrently,
+see `examples/go_agent_nodes/cmd/harness_duo`.
 
 Each report includes the provider name, resolved binary, installed state,
 version, auth state, usability, installation command, recognized auth variables,
