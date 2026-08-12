@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -171,5 +172,100 @@ func TestReasonersHandler_DescriptionIndexed(t *testing.T) {
 	data := resp.Data.(map[string]interface{})
 	results := data["results"].([]interface{})
 	require.Len(t, results, 1)
-	assert.Equal(t, "handler_a", results[0].(map[string]interface{})["reasoner_id"])
+	first := results[0].(map[string]interface{})
+	assert.Equal(t, "handler_a", first["reasoner_id"])
+	// The hit must say what the reasoner does — otherwise the caller needs a
+	// second round trip before it can decide to invoke it.
+	assert.Equal(t, "generates quarterly compliance paperwork", first["description"])
+}
+
+func TestReasonersHandler_RegisteredDescriptionWins(t *testing.T) {
+	// The description the SDK registered on the reasoner takes precedence over
+	// the legacy agent-metadata map, and is searchable.
+	agents := []*types.AgentNode{
+		{
+			ID:           "docs",
+			HealthStatus: types.HealthStatusActive,
+			Reasoners: []types.ReasonerDefinition{
+				{ID: "handler_a", Description: "files quarterly compliance paperwork"},
+			},
+			Metadata: types.AgentMetadata{
+				Custom: map[string]interface{}{
+					"descriptions": map[string]interface{}{
+						"handler_a": "stale legacy text",
+					},
+				},
+			},
+		},
+	}
+	store := new(mockStatusStorage)
+	store.On("ListAgents", mock.Anything, mock.Anything).Return(agents, nil)
+
+	rec, resp := serveReasoners(t, store, "q=compliance")
+	require.Equal(t, http.StatusOK, rec.Code)
+	data := resp.Data.(map[string]interface{})
+	results := data["results"].([]interface{})
+	require.Len(t, results, 1)
+	assert.Equal(t, "files quarterly compliance paperwork", results[0].(map[string]interface{})["description"])
+}
+
+func TestReasonersHandler_DescriptionOmittedWhenAbsent(t *testing.T) {
+	store := new(mockStatusStorage)
+	store.On("ListAgents", mock.Anything, mock.Anything).Return(reasonerTestAgents(), nil)
+
+	rec, resp := serveReasoners(t, store, "q=forecast&agent=weather")
+	require.Equal(t, http.StatusOK, rec.Code)
+	data := resp.Data.(map[string]interface{})
+	results := data["results"].([]interface{})
+	require.Len(t, results, 1)
+	_, present := results[0].(map[string]interface{})["description"]
+	assert.False(t, present, "undescribed reasoners must not carry an empty description key")
+}
+
+func TestReasonersHandler_DescriptionTruncated(t *testing.T) {
+	// Long descriptions are clipped in the result but indexed whole, so a term
+	// past the cap still matches.
+	long := strings.Repeat("a", reasonerSearchMaxDescriptionRunes) + " zebra"
+	agents := []*types.AgentNode{
+		{
+			ID:           "verbose",
+			HealthStatus: types.HealthStatusActive,
+			Reasoners:    []types.ReasonerDefinition{{ID: "handler_a", Description: long}},
+		},
+	}
+	store := new(mockStatusStorage)
+	store.On("ListAgents", mock.Anything, mock.Anything).Return(agents, nil)
+
+	rec, resp := serveReasoners(t, store, "q=zebra")
+	require.Equal(t, http.StatusOK, rec.Code)
+	data := resp.Data.(map[string]interface{})
+	results := data["results"].([]interface{})
+	require.Len(t, results, 1)
+
+	desc := results[0].(map[string]interface{})["description"].(string)
+	assert.Equal(t, reasonerSearchMaxDescriptionRunes+len("..."), len([]rune(desc)))
+	assert.True(t, strings.HasSuffix(desc, "..."))
+	assert.NotContains(t, desc, "zebra")
+}
+
+func TestTruncateRunes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		limit int
+		want  string
+	}{
+		{name: "under limit is untouched", input: "short", limit: 10, want: "short"},
+		{name: "exactly at limit is untouched", input: "abcde", limit: 5, want: "abcde"},
+		{name: "over limit gets an ellipsis", input: "abcdef", limit: 5, want: "abcde..."},
+		{name: "trailing space is dropped before the ellipsis", input: "abcd ef", limit: 5, want: "abcd..."},
+		// Rune-wise, so multi-byte characters are never split.
+		{name: "multi byte counted by rune", input: "héllo wörld", limit: 5, want: "héllo..."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, truncateRunes(tt.input, tt.limit))
+		})
+	}
 }
