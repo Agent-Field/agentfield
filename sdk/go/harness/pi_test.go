@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -127,6 +128,116 @@ func TestPiFamilyPlanModeIsReadOnlyAndResumes(t *testing.T) {
 			require.NoError(t, err)
 			assertFlagValue(t, gotCmd, "--tools", tc.tools)
 			assertFlagValue(t, gotCmd, tc.resumeFlag, "abc123")
+		})
+	}
+}
+
+func TestPiFamilyToolEdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		provider    *piFamilyProvider
+		options     Options
+		wantFlag    string
+		wantNoTools bool
+	}{
+		{
+			name:     "pi plan restores default read-only tools",
+			provider: NewPiProvider("pi").piFamilyProvider,
+			options:  Options{PermissionMode: "plan", Tools: []string{"Write", "Bash"}},
+			wantFlag: "read,grep,find",
+		},
+		{
+			name:     "omp plan restores default read-only tools",
+			provider: NewOMPProvider("omp").piFamilyProvider,
+			options:  Options{PermissionMode: "plan", Tools: []string{"Write", "Bash"}},
+			wantFlag: "read,grep,glob",
+		},
+		{
+			name:        "explicit empty tools disables tools",
+			provider:    NewPiProvider("pi").piFamilyProvider,
+			options:     Options{Tools: []string{}},
+			wantNoTools: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotCmd []string
+			tc.provider.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, _ []byte) (*CLIResult, error) {
+				gotCmd = append([]string(nil), cmd...)
+				return &CLIResult{Stdout: piEventStream}, nil
+			}
+
+			_, err := tc.provider.execute(context.Background(), "inspect", tc.options)
+			require.NoError(t, err)
+			if tc.wantNoTools {
+				assert.Contains(t, gotCmd, "--no-tools")
+				assert.NotContains(t, gotCmd, "--tools")
+				return
+			}
+			assertFlagValue(t, gotCmd, "--tools", tc.wantFlag)
+		})
+	}
+}
+
+func TestPiFamilyExecutionFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		result      *CLIResult
+		runErr      error
+		wantErr     bool
+		failureType FailureType
+		message     string
+	}{
+		{
+			name:        "timeout",
+			runErr:      errors.New("command timed out"),
+			failureType: FailureTimeout,
+			message:     "command timed out",
+		},
+		{
+			name:    "unexpected runner error",
+			runErr:  errors.New("pipe failed"),
+			wantErr: true,
+		},
+		{
+			name:        "nonzero exit without stderr",
+			result:      &CLIResult{ReturnCode: 7},
+			failureType: FailureCrash,
+			message:     "Process exited with code 7.",
+		},
+		{
+			name:        "api error event",
+			result:      &CLIResult{Stdout: `{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"quota exceeded"}}`},
+			failureType: FailureAPIError,
+			message:     "quota exceeded",
+		},
+		{
+			name:        "successful process without assistant output",
+			result:      &CLIResult{Stderr: "empty response"},
+			failureType: FailureNoOutput,
+			message:     "empty response",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := NewPiProvider("pi").piFamilyProvider
+			provider.runCLI = func(context.Context, []string, map[string]string, string, int, []byte) (*CLIResult, error) {
+				return tc.result, tc.runErr
+			}
+
+			raw, err := provider.execute(context.Background(), "inspect", Options{})
+			if tc.wantErr {
+				require.EqualError(t, err, tc.runErr.Error())
+				assert.Nil(t, raw)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, raw)
+			assert.True(t, raw.IsError)
+			assert.Equal(t, tc.failureType, raw.FailureType)
+			assert.Equal(t, tc.message, raw.ErrorMessage)
 		})
 	}
 }
