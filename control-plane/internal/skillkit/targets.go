@@ -12,14 +12,14 @@ import (
 // Each target knows how to detect itself, install, uninstall, and report
 // its current installed version (if any).
 type Target interface {
-	Name() string                                                              // canonical short name, e.g. "claude-code"
-	DisplayName() string                                                       // pretty name for UI, e.g. "Claude Code"
-	Detected() bool                                                            // is this target installed on the user's machine?
-	Method() string                                                            // "symlink", "marker-block", "manual"
-	TargetPath() (string, error)                                               // canonical path the target writes to
-	Install(skill Skill, canonicalCurrentDir string) (InstalledTarget, error)  // performs the install (idempotent)
-	Uninstall() error                                                          // removes the integration
-	Status() (installed bool, version string, err error)                       // currently installed?
+	Name() string                                                             // canonical short name, e.g. "claude-code"
+	DisplayName() string                                                      // pretty name for UI, e.g. "Claude Code"
+	Detected() bool                                                           // is this target installed on the user's machine?
+	Method() string                                                           // "symlink", "marker-block", "manual"
+	TargetPath() (string, error)                                              // canonical path the target writes to
+	Install(skill Skill, canonicalCurrentDir string) (InstalledTarget, error) // performs the install (idempotent)
+	Uninstall() error                                                         // removes the integration
+	Status() (installed bool, version string, err error)                      // currently installed?
 }
 
 // AllTargets returns the registered list of targets in stable order. New

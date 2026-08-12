@@ -156,8 +156,8 @@ func TestInstallAndUninstallBranches(t *testing.T) {
 	origTargets := allTargets
 	t.Cleanup(func() { allTargets = origTargets })
 
-	success := &fakeTarget{name: "success", displayName: "Success", method: "marker-block", detected: true, path: "/tmp/success"}
-	broken := &fakeTarget{name: "broken", displayName: "Broken", method: "marker-block", detected: true, path: "/tmp/broken", uninstallErr: errors.New("nope")}
+	success := &fakeTarget{name: "success", displayName: "Success", method: "marker-block", detected: true, path: fakeTargetPath(t, "success")}
+	broken := &fakeTarget{name: "broken", displayName: "Broken", method: "marker-block", detected: true, path: fakeTargetPath(t, "broken"), uninstallErr: errors.New("nope")}
 	allTargets = []Target{success, broken}
 
 	report, err := Install(InstallOptions{SkillName: Catalog[0].Name, AllRegistered: true})
@@ -205,8 +205,8 @@ func TestInstallAndUninstallBranches(t *testing.T) {
 		origTargets := allTargets
 		t.Cleanup(func() { allTargets = origTargets })
 
-		first := &fakeTarget{name: "alpha", displayName: "Alpha", method: "marker-block", detected: true, path: "/tmp/alpha"}
-		second := &fakeTarget{name: "beta", displayName: "Beta", method: "marker-block", detected: true, path: "/tmp/beta"}
+		first := &fakeTarget{name: "alpha", displayName: "Alpha", method: "marker-block", detected: true, path: fakeTargetPath(t, "alpha")}
+		second := &fakeTarget{name: "beta", displayName: "Beta", method: "marker-block", detected: true, path: fakeTargetPath(t, "beta")}
 		allTargets = []Target{first, second}
 
 		if _, err := Install(InstallOptions{SkillName: Catalog[0].Name, AllRegistered: true}); err != nil {
@@ -233,7 +233,7 @@ func TestInstallExistingStateAndCanonicalFailures(t *testing.T) {
 		origTargets := allTargets
 		t.Cleanup(func() { allTargets = origTargets })
 
-		success := &fakeTarget{name: "success", displayName: "Success", method: "marker-block", detected: true, path: "/tmp/success"}
+		success := &fakeTarget{name: "success", displayName: "Success", method: "marker-block", detected: true, path: fakeTargetPath(t, "success")}
 		allTargets = []Target{success}
 
 		// Seed the state with two historical versions that are definitely
@@ -271,9 +271,9 @@ func TestInstallExistingStateAndCanonicalFailures(t *testing.T) {
 		// Expect: the two seeded versions are still there and the catalog's
 		// current version got merged in.
 		wantContains := map[string]bool{
-			"0.1.0":              false,
-			"9.9.9":              false,
-			Catalog[0].Version:   false,
+			"0.1.0":            false,
+			"9.9.9":            false,
+			Catalog[0].Version: false,
 		}
 		for _, v := range got {
 			if _, ok := wantContains[v]; ok {
@@ -333,7 +333,7 @@ func TestInstallExistingStateAndCanonicalFailures(t *testing.T) {
 		origTargets := allTargets
 		t.Cleanup(func() { allTargets = origTargets })
 
-		success := &fakeTarget{name: "success", displayName: "Success", method: "marker-block", detected: true, path: "/tmp/success"}
+		success := &fakeTarget{name: "success", displayName: "Success", method: "marker-block", detected: true, path: fakeTargetPath(t, "success")}
 		allTargets = []Target{success}
 
 		if _, err := Install(InstallOptions{AllRegistered: true}); err != nil {
@@ -783,6 +783,9 @@ func TestTargetSpecificEdgeCases(t *testing.T) {
 		}
 		cases := []targetCase{
 			{name: "aider", target: aiderTarget{}, path: filepath.Join(home, ".aider.conventions.md")},
+			// Codex installs by symlink now; it stays in this table because its
+			// uninstall still visits the legacy rules file and must tolerate one
+			// holding nothing but the user's own text.
 			{name: "codex", target: codexTarget{}, dir: filepath.Join(home, ".codex"), path: filepath.Join(home, ".codex", "AGENTS.override.md")},
 			{name: "gemini", target: geminiTarget{}, dir: filepath.Join(home, ".gemini"), path: filepath.Join(home, ".gemini", "GEMINI.md")},
 			{name: "opencode", target: opencodeTarget{}, dir: filepath.Join(home, ".config", "opencode"), path: filepath.Join(home, ".config", "opencode", "AGENTS.md")},
