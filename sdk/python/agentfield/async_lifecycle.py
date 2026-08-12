@@ -84,9 +84,17 @@ async def cancel_and_await_if_same_loop(
             pass
         except RuntimeError as exc:
             # A loop-association error can still occur if the task's cleanup
-            # awaits a future created by another loop. Other RuntimeErrors
-            # belong to the task's cleanup and must not be hidden by teardown.
-            if "attached to a different loop" not in str(exc):
+            # awaits something owned by another loop. CPython words this two
+            # ways: "attached to a different loop" for a foreign Future
+            # (asyncio/tasks.py) and "bound to a different event loop" for a
+            # foreign Lock/Event/Condition (asyncio/mixins.py). Other
+            # RuntimeErrors belong to the task's cleanup and must not be
+            # hidden by teardown.
+            msg = str(exc)
+            if (
+                "attached to a different loop" not in msg
+                and "bound to a different event loop" not in msg
+            ):
                 raise
             logger.debug(
                 "Awaiting cancelled task raised a cross-loop RuntimeError",

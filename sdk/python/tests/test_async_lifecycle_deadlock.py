@@ -183,6 +183,47 @@ async def test_cancel_and_await_same_loop_swallows_loop_association_error():
     assert task.done()
 
 
+@pytest.mark.asyncio
+async def test_cancel_and_await_same_loop_swallows_loop_bound_primitive_error():
+    """The asyncio/mixins.py wording of the same error class is absorbed too."""
+    foreign_loop, thread = _run_loop_in_thread()
+    try:
+        foreign_event = asyncio.Event()
+
+        async def bind_to_foreign_loop():
+            # An Event binds to whichever loop first awaits it.
+            try:
+                await asyncio.wait_for(foreign_event.wait(), timeout=0.05)
+            except asyncio.TimeoutError:
+                pass
+
+        asyncio.run_coroutine_threadsafe(bind_to_foreign_loop(), foreign_loop).result(
+            timeout=5
+        )
+
+        # Precondition: this construction really does produce the mixins
+        # wording, so the assertion below can't pass on the other one.
+        with pytest.raises(RuntimeError, match="bound to a different event loop"):
+            await foreign_event.wait()
+
+        started = asyncio.Event()
+
+        async def task_body():
+            try:
+                started.set()
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                await foreign_event.wait()
+
+        task = asyncio.create_task(task_body())
+        await started.wait()
+
+        await cancel_and_await_if_same_loop(task, asyncio.get_running_loop())
+        assert task.done()
+    finally:
+        _shutdown_loop(foreign_loop, thread)
+
+
 def test_connection_manager_same_loop_close_still_works():
     """A same-loop start/close cycle behaves normally."""
     cfg = AsyncConfig()
