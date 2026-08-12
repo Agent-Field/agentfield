@@ -26,6 +26,9 @@ type Runner struct {
 
 // NewRunner creates a harness runner with default options.
 func NewRunner(defaults Options) *Runner {
+	if defaults.Provider == "" {
+		defaults.Provider = DefaultProvider
+	}
 	return &Runner{
 		DefaultOptions: defaults,
 		Logger:         log.New(io.Discard, "[harness] ", log.LstdFlags),
@@ -52,12 +55,6 @@ type schemaAware interface {
 // is non-nil, the validated output is unmarshalled into it.
 func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, dest any, overrides Options) (*Result, error) {
 	opts := r.mergeOptions(overrides)
-
-	if opts.Provider == "" {
-		return nil, fmt.Errorf(
-			"no harness provider specified: set Provider in runner defaults or pass it to Run()",
-		)
-	}
 
 	provider, err := r.buildProvider(opts)
 	if err != nil {

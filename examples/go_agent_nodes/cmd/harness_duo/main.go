@@ -57,7 +57,9 @@ func main() {
 	}
 
 	registerWorker(duo, "pi_worker", harness.ProviderPi, "PI_BIN")
-	registerWorker(duo, "omp_worker", harness.ProviderOMP, "OMP_BIN")
+	// Omit Provider intentionally: this branch demonstrates that OMP is the
+	// cross-SDK default while still allowing OMP_BIN to select the executable.
+	registerWorker(duo, "omp_worker", "", "OMP_BIN")
 
 	duo.RegisterReasoner("compare", func(ctx context.Context, input map[string]any) (any, error) {
 		branchInput := map[string]any{
@@ -102,6 +104,10 @@ func main() {
 }
 
 func registerWorker(duo *agent.Agent, reasoner, provider, binEnv string) {
+	providerName := provider
+	if providerName == "" {
+		providerName = harness.DefaultProvider
+	}
 	duo.RegisterReasoner(reasoner, func(ctx context.Context, input map[string]any) (any, error) {
 		model := inputString(input, "model", envOr("HARNESS_MODEL", defaultModel))
 		root := inputString(input, "project_dir", projectDir())
@@ -128,11 +134,11 @@ func registerWorker(duo *agent.Agent, reasoner, provider, binEnv string) {
 			return nil, err
 		}
 		if run.IsError {
-			return nil, fmt.Errorf("%s harness: %s", provider, run.ErrorMessage)
+			return nil, fmt.Errorf("%s harness: %s", providerName, run.ErrorMessage)
 		}
 
 		return branchResult{
-			Provider:     provider,
+			Provider:     providerName,
 			Model:        model,
 			Output:       output,
 			DurationMS:   run.DurationMS,
@@ -142,7 +148,7 @@ func registerWorker(duo *agent.Agent, reasoner, provider, binEnv string) {
 			CostUSD:      run.CostUSD,
 			HarnessRunID: run.SessionID,
 		}, nil
-	}, agent.WithDescription("Run the task with the "+provider+" coding harness"))
+	}, agent.WithDescription("Run the task with the "+providerName+" coding harness"))
 }
 
 func defaultTask() string {

@@ -1,5 +1,5 @@
 import { buildPromptSuffix, cleanupTempFiles, getOutputPath, parseAndValidate } from './schema.js';
-import { buildProvider } from './providers/factory.js';
+import { buildProvider, DEFAULT_HARNESS_PROVIDER } from './providers/factory.js';
 import type { HarnessProvider } from './providers/base.js';
 import {
   createHarnessResult,
@@ -55,9 +55,7 @@ export class HarnessRunner {
     const { schema, ...rest } = options;
     const resolved = this.resolveOptions(this.config, rest);
 
-    if (!resolved.provider) {
-      throw new Error("No harness provider specified. Set 'provider' in HarnessConfig or pass it to .harness() call.");
-    }
+    resolved.provider ??= DEFAULT_HARNESS_PROVIDER;
 
     const cwd = resolved.projectDir ?? resolved.cwd ?? '.';
     const provider = await this.buildProvider(resolved.provider, resolved);

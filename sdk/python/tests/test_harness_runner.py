@@ -265,10 +265,17 @@ async def test_run_with_schema_injects_prompt_suffix_and_parses_output(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_run_raises_when_no_provider_set(tmp_path):
+async def test_run_defaults_to_omp_when_no_provider_set(tmp_path):
     runner = HarnessRunner()
-    with pytest.raises(ValueError, match="No harness provider specified"):
-        await runner.run("hello", cwd=str(tmp_path))
+    provider = MockProvider([RawResult(result="ok")])
+
+    with patch("agentfield.harness._runner.build_provider", return_value=provider) as factory:
+        result = await runner.run("hello", cwd=str(tmp_path))
+
+    assert result.result == "ok"
+    assert provider.last_options is not None
+    assert provider.last_options["provider"] == "omp"
+    assert factory.call_args.args[0].provider == "omp"
 
 
 @pytest.mark.asyncio

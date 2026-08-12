@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import * as cli from '../src/harness/cli.js';
 import { buildProvider } from '../src/harness/providers/factory.js';
-import { OmpProvider, PiProvider } from '../src/harness/providers/pi.js';
+import { OMPProvider, PiProvider } from '../src/harness/providers/pi.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -46,7 +46,7 @@ describe.each([
   },
   {
     name: 'omp',
-    provider: new OmpProvider('/opt/omp'),
+    provider: new OMPProvider('/opt/omp'),
     prefix: ['/opt/omp', '--print', '--mode', 'json', '--cwd', '/tmp/project'],
     permissionFlag: '--auto-approve',
     globTool: 'glob',
@@ -105,7 +105,7 @@ describe.each([
 
 it.each([
   { provider: new PiProvider(), resumeFlag: '--session', tools: 'read,grep,find' },
-  { provider: new OmpProvider(), resumeFlag: '--resume', tools: 'read,grep,glob' },
+  { provider: new OMPProvider(), resumeFlag: '--resume', tools: 'read,grep,glob' },
 ])('keeps $resumeFlag retries read-only', async ({ provider, resumeFlag, tools }) => {
   vi.spyOn(cli, 'runCli').mockResolvedValue({
     stdout: eventStream('plan'),
@@ -124,12 +124,26 @@ it.each([
   expect(cmd[cmd.indexOf(resumeFlag) + 1]).toBe('abc123');
 });
 
+it.each([
+  { provider: new PiProvider('pi-missing'), installHint: '@earendil-works/pi-coding-agent' },
+  { provider: new OMPProvider('omp-missing'), installHint: 'omp.sh/install' },
+])('returns actionable install guidance for a missing binary', async ({ provider, installHint }) => {
+  vi.spyOn(cli, 'runCli').mockRejectedValue(new Error('spawn ENOENT'));
+
+  const result = await provider.execute('hello', {});
+
+  expect(result.isError).toBe(true);
+  expect(result.errorMessage).toContain(installHint);
+});
+
 describe('provider factory', () => {
   it('routes pi and omp and passes binary overrides', async () => {
     const pi = await buildProvider({ provider: 'pi', piBin: '/opt/pi' });
     const omp = await buildProvider({ provider: 'omp', ompBin: '/opt/omp' });
+    const defaultProvider = await buildProvider({});
 
     expect(pi).toBeInstanceOf(PiProvider);
-    expect(omp).toBeInstanceOf(OmpProvider);
+    expect(omp).toBeInstanceOf(OMPProvider);
+    expect(defaultProvider).toBeInstanceOf(OMPProvider);
   });
 });

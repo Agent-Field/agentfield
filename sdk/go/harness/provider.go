@@ -15,6 +15,8 @@ const (
 	ProviderPi = "pi"
 	// ProviderOMP is the provider name for the Oh My Pi coding-agent CLI.
 	ProviderOMP = "omp"
+	// DefaultProvider is used when a harness call does not select a provider.
+	DefaultProvider = ProviderOMP
 )
 
 // Provider is the interface that CLI-based harness providers implement.

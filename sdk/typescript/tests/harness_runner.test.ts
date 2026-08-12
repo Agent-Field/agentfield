@@ -163,9 +163,17 @@ describe('harness runner', () => {
     expect(result.parsed).toEqual({ name: 'ok', count: 1 });
   });
 
-  it('run throws when no provider is configured', async () => {
+  it('run defaults to OMP when no provider is configured', async () => {
+    const provider = new MockProvider([
+      createRawResult({ result: 'ok', metrics: createMetrics({ numTurns: 1 }) }),
+    ]);
+    const factorySpy = vi.spyOn(factory, 'buildProvider').mockResolvedValue(provider);
     const runner = new HarnessRunner();
-    await expect(runner.run('hello', {})).rejects.toThrow(/No harness provider specified/);
+    const result = await runner.run('hello', {});
+
+    expect(result.result).toBe('ok');
+    expect(factorySpy).toHaveBeenCalledWith(expect.objectContaining({ provider: 'omp' }));
+    expect(provider.lastOptions).toEqual(expect.objectContaining({ provider: 'omp' }));
   });
 
   it('retries on transient error then succeeds', async () => {

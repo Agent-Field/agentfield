@@ -3,8 +3,12 @@ package harness
 import "fmt"
 
 // BuildProvider creates a Provider instance for the given provider name.
+// An empty name selects DefaultProvider (OMP).
 // Supported providers: "claude-code", "codex", "gemini", "opencode", "pi", "omp".
 func BuildProvider(name string, binPath string) (Provider, error) {
+	if name == "" {
+		name = DefaultProvider
+	}
 	switch name {
 	case ProviderClaudeCode:
 		return NewClaudeCodeProvider(binPath), nil

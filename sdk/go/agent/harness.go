@@ -11,6 +11,7 @@ import (
 // HarnessConfig configures the default harness runner for the agent.
 type HarnessConfig struct {
 	// Provider is the default provider: "claude-code", "codex", "gemini", "opencode", "pi", or "omp".
+	// The zero value selects OMP.
 	Provider string
 
 	// Model is the default model identifier. It may carry a

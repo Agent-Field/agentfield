@@ -275,13 +275,16 @@ class DiscoveryResult:
 
 class HarnessConfig(BaseModel):
     provider: str = Field(
-        ...,
+        default="omp",
         description=(
             'Coding agent provider: "aforge" | "claude-code" | "codex" | '
             '"gemini" | "opencode" | "pi" | "omp" | "grok"'
         ),
     )
-    model: str = Field(default="sonnet", description="Default model identifier.")
+    model: Optional[str] = Field(
+        default=None,
+        description="Default model identifier; omitted uses the CLI's configured default.",
+    )
     max_turns: int = Field(default=30, description="Maximum agent iterations.")
     max_budget_usd: Optional[float] = Field(
         default=None, description="Cost cap in USD."

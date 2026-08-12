@@ -26,7 +26,10 @@ from agentfield.harness._schema import (
     try_parse_from_text,
 )
 from agentfield.harness.providers._base import HarnessProvider
-from agentfield.harness.providers._factory import build_provider
+from agentfield.harness.providers._factory import (
+    DEFAULT_HARNESS_PROVIDER,
+    build_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -277,12 +280,8 @@ class HarnessRunner:
         }
         options = _resolve_options(self._config, overrides)
 
-        resolved_provider = options.get("provider")
-        if not resolved_provider:
-            raise ValueError(
-                "No harness provider specified. Set 'provider' in HarnessConfig "
-                "or pass it to .harness() call."
-            )
+        resolved_provider = options.get("provider") or DEFAULT_HARNESS_PROVIDER
+        options["provider"] = resolved_provider
 
         resolved_cwd = str(options.get("cwd") or ".")
         provider_instance = self._build_provider(str(resolved_provider), options)

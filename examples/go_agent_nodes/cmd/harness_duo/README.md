@@ -5,11 +5,13 @@ This example registers one AgentField workflow with three Go reasoners:
 ```text
 compare
 ├── pi_worker   (Pi harness)
-└── omp_worker  (Oh My Pi harness)
+└── omp_worker  (Oh My Pi through the provider-less OMP default)
 ```
 
 `compare` starts both child reasoners concurrently and joins their structured
-results. The default model is `openrouter/minimax/minimax-m2.7`; set
+results. The Pi branch opts in explicitly; the OMP branch intentionally omits
+`Provider` to exercise the SDK default. The default model is
+`openrouter/minimax/minimax-m2.7`; set
 `HARNESS_MODEL=openrouter/google/gemini-2.5-flash` for the Gemini Flash path.
 
 ## Run

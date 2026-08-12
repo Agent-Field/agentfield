@@ -33,6 +33,7 @@ type harnessProviderSpec struct {
 }
 
 var harnessProviderSpecs = []harnessProviderSpec{
+	{Name: "omp", Binary: "omp", InstallCommand: "curl -fsSL https://omp.sh/install | sh", AuthEnvVars: []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 	// claude-code has no Binary: the Python provider runs on the
 	// claude_agent_sdk pip package (which bundles its own CLI), not on a
 	// globally installed `claude` binary. See claudeCodeHealth.
@@ -41,7 +42,6 @@ var harnessProviderSpecs = []harnessProviderSpec{
 	{Name: "gemini", Binary: "gemini", InstallCommand: "npm install -g @google/gemini-cli", AuthEnvVars: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 	{Name: "opencode", Binary: "opencode", InstallCommand: "curl -fsSL https://opencode.ai/install | bash", AuthEnvVars: []string{}},
 	{Name: "pi", Binary: "pi", InstallCommand: "npm install -g --ignore-scripts @earendil-works/pi-coding-agent", AuthEnvVars: []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}},
-	{Name: "omp", Binary: "omp", InstallCommand: "curl -fsSL https://omp.sh/install | sh", AuthEnvVars: []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 }
 
 // NewHarnessCommand builds harness-related environment checks.
@@ -84,7 +84,7 @@ func newHarnessDoctorCommand() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: claude-code, codex, gemini, opencode, pi, omp")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: omp (default), claude-code, codex, gemini, opencode, pi")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output structured JSON")
 	return cmd
 }

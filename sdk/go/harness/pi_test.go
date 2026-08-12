@@ -150,6 +150,33 @@ func TestBuildProviderPiFamily(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "*harness.PiProvider", fmt.Sprintf("%T", pi))
 	assert.Equal(t, "*harness.OMPProvider", fmt.Sprintf("%T", omp))
+	defaultProvider, err := BuildProvider("", "")
+	require.NoError(t, err)
+	assert.Equal(t, "*harness.OMPProvider", fmt.Sprintf("%T", defaultProvider))
+}
+
+func TestPiFamilyMissingBinaryIncludesInstallGuidance(t *testing.T) {
+	tests := []struct {
+		name        string
+		provider    *piFamilyProvider
+		installHint string
+	}{
+		{"pi", NewPiProvider("pi").piFamilyProvider, "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"},
+		{"omp", NewOMPProvider("omp").piFamilyProvider, "curl -fsSL https://omp.sh/install | sh"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.provider.runCLI = func(context.Context, []string, map[string]string, string, int, []byte) (*CLIResult, error) {
+				return nil, fmt.Errorf("exec: executable file not found in $PATH")
+			}
+			raw, err := tc.provider.execute(context.Background(), "hello", Options{})
+			require.NoError(t, err)
+			require.True(t, raw.IsError)
+			assert.Contains(t, raw.ErrorMessage, tc.installHint)
+			assert.Equal(t, FailureCrash, raw.FailureType)
+		})
+	}
 }
 
 func assertFlagValue(t *testing.T, cmd []string, flag, value string) {

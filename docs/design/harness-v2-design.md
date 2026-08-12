@@ -1,15 +1,15 @@
 # `.harness()` — First-Class Coding Agent Integration for AgentField
 
-> **Status**: Design Proposal  
-> **Author**: Architecture brainstorm  
-> **Scope**: Python SDK + TypeScript SDK (Go SDK tracked separately)  
+> **Status**: Implemented; updated for Pi/OMP parity and OMP default
+> **Author**: Architecture brainstorm
+> **Scope**: Python, TypeScript, and Go SDKs
 > **Date**: 2026-03-02
 
 ---
 
 ## 1. Overview
 
-Add `.harness()` as a first-class method on the Agent class — matching the DX of `.ai()` — enabling developers to dispatch multi-turn coding tasks to external coding agents (Claude Code, Codex, Gemini CLI, OpenCode).
+Add `.harness()` as a first-class method on the Agent class — matching the DX of `.ai()` — enabling developers to dispatch multi-turn coding tasks to external coding agents (OMP, Pi, Claude Code, Codex, Gemini CLI, and OpenCode). OMP is the zero-configuration provider default in every SDK.
 
 **Key principle**: `.ai()` is for single-turn LLM calls. `.harness()` is for multi-turn agentic coding tasks that browse files, edit code, run tests, and iterate.
 
@@ -25,10 +25,7 @@ from agentfield import Agent, AIConfig, HarnessConfig
 app = Agent(
     node_id="my-agent",
     ai_config=AIConfig(model="openai/gpt-4o"),
-    harness_config=HarnessConfig(
-        provider="claude-code",   # Required — no implicit default
-        model="sonnet",
-    ),
+    harness_config=HarnessConfig(),  # OMP; model comes from CLI configuration
 )
 ```
 
@@ -37,10 +34,7 @@ import { Agent } from '@agentfield/sdk';
 
 const agent = new Agent({
     nodeId: 'my-agent',
-    harnessConfig: {
-        provider: 'claude-code',  // Required
-        model: 'sonnet',
-    },
+    harnessConfig: {},  // OMP; model comes from CLI configuration
 });
 ```
 
@@ -107,15 +101,10 @@ fix = await app.harness(
 ### 2.5 Without Constructor Config
 
 ```python
-# No harness_config on Agent — provide everything per-call
+# No harness_config on Agent — OMP is selected automatically
 app = Agent(node_id="minimal-agent")
 
-result = await app.harness(
-    "Fix the bug",
-    provider="gemini",     # Required when no harness_config
-    model="flash",
-    cwd="/my/project",
-)
+result = await app.harness("Fix the bug", cwd="/my/project")
 ```
 
 ### 2.6 Inside a Reasoner (production pattern)
@@ -207,12 +196,14 @@ class Agent(FastAPI):
 
 ### 4.1 Integration Matrix
 
-| Provider | Python | TypeScript | Go (future) | Schema Support |
+| Provider | Python | TypeScript | Go | Schema Support |
 |---|---|---|---|---|
 | **claude-code** | `claude_agent_sdk` (native Python SDK) | `@anthropic-ai/claude-agent-sdk` (native TS SDK) | CLI subprocess | File-write (universal) |
 | **codex** | CLI subprocess `codex exec --json` | `@openai/codex-sdk` (native TS SDK) | CLI subprocess | File-write (universal) |
 | **gemini** | CLI subprocess `gemini --output-format stream-json` | CLI subprocess | CLI subprocess | File-write (universal) |
 | **opencode** | CLI subprocess | CLI subprocess | CLI subprocess | File-write (universal) |
+| **pi** | CLI subprocess | CLI subprocess | CLI subprocess | File-write (universal) |
+| **omp** (default) | CLI subprocess | CLI subprocess | CLI subprocess | File-write (universal) |
 
 ### 4.2 Why SDK-First Where Available
 
@@ -223,7 +214,7 @@ class Agent(FastAPI):
 
 ### 4.3 Why CLI Subprocess for Others
 
-- No native SDK wrapping the CLI agent loop exists for Gemini/OpenCode
+- No native SDK wrapping the CLI agent loop exists for Gemini/OpenCode/Pi/OMP
 - CLI subprocess is lowest-maintenance integration (binary does all the work)
 - All CLIs output JSONL event streams for consistent parsing
 - Go SDK will use CLI subprocess for ALL providers (no Go SDKs exist)
@@ -245,7 +236,7 @@ interface HarnessProvider {
 ```
 
 ```go
-// Go (future)
+// Go
 type Provider interface {
     Execute(ctx context.Context, prompt string, opts HarnessOptions) (*RawResult, error)
 }
@@ -262,7 +253,7 @@ type Provider interface {
 **Why file-write over native flags:**
 - Native flags constrain the model's *text response* — a wrong abstraction for multi-turn coding agents whose core competency is writing files
 - Large schemas can produce JSON that exceeds response token limits or gets truncated
-- File-write works identically across ALL 4 providers (one code path, half the tests)
+- File-write works identically across all providers (one shared orchestration path)
 - Writing a JSON file is trivially easy for agents that refactor entire codebases
 
 ```
@@ -349,47 +340,47 @@ Layer 4: Full retry                                      (expensive, last resort
 ```python
 class HarnessConfig(BaseModel):
     """Configuration for coding agent harness calls.
-    
-    Provider is required — there is no implicit default.
-    All other fields have sensible defaults that can be overridden per-call.
+
+    OMP is the provider default. Every field can be overridden per-call.
     """
-    # Provider selection (required)
-    provider: str               # "claude-code" | "codex" | "gemini" | "opencode"
-    model: str = "sonnet"
-    
+    provider: str = "omp"
+    model: Optional[str] = None  # use the selected CLI's configured default
+
     # Execution limits
     max_turns: int = 30
     max_budget_usd: Optional[float] = None
-    
+
     # Retry behavior
     max_retries: int = 3
     initial_delay: float = 1.0
     max_delay: float = 30.0
     backoff_factor: float = 2.0
-    
+
     # Tools & permissions
     tools: List[str] = Field(default_factory=lambda: [
         "Read", "Write", "Edit", "Bash", "Glob", "Grep"
     ])
     permission_mode: Optional[str] = None  # "plan" | "auto" | None
     system_prompt: Optional[str] = None
-    
+
     # Environment
     env: Dict[str, str] = Field(default_factory=dict)
-    
+
     # Binary paths (for CLI-based providers)
     codex_bin: str = "codex"
     gemini_bin: str = "gemini"
     opencode_bin: str = "opencode"
+    pi_bin: str = "pi"
+    omp_bin: str = "omp"
 ```
 
 ### 6.2 HarnessConfig (TypeScript)
 
 ```typescript
 interface HarnessConfig {
-    /** Required — no default. "claude-code" | "codex" | "gemini" | "opencode" */
-    provider: string;
-    /** Default model identifier. Default: "sonnet" */
+    /** OMP when omitted. */
+    provider?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
+    /** Omitted uses the selected CLI's configured model. */
     model?: string;
     /** Maximum agent iterations. Default: 30 */
     maxTurns?: number;
@@ -417,16 +408,21 @@ interface HarnessConfig {
     geminiBin?: string;
     /** Path to opencode binary. */
     opencodeBin?: string;
+    /** Paths to Pi-family binaries. */
+    piBin?: string;
+    ompBin?: string;
 }
 ```
 
 ### 6.3 Config Resolution (hierarchical, matches .ai pattern)
 
 ```
-1. HarnessConfig defaults (set at agent construction)
-2. Per-call overrides (passed to .harness() method)
-   → Per-call values win over HarnessConfig defaults
-   → If no HarnessConfig AND no per-call provider → raise error
+1. Per-call overrides passed to `.harness()`
+2. `HarnessConfig` set at agent construction
+3. OMP provider default; the CLI's configured model default
+
+Per-call values win. AgentField never substitutes a provider-specific model
+when the model is omitted.
 ```
 
 ---
@@ -439,21 +435,21 @@ interface HarnessConfig {
 @dataclass
 class HarnessResult:
     """Final result from a harness invocation."""
-    
+
     # Core output
     result: Optional[str]           # Raw text result
     parsed: Any                     # Validated schema instance (T | None)
     is_error: bool
-    
+
     # Metrics
     cost_usd: Optional[float]      # Total execution cost
     num_turns: int                  # Number of agent turns
     duration_ms: int                # Wall clock time in milliseconds
     session_id: str                 # For potential session resume
-    
+
     # Message history
     messages: List[Message]         # Full conversation history
-    
+
     # Convenience properties
     @property
     def text(self) -> str:
@@ -514,7 +510,8 @@ sdk/python/agentfield/harness/
 │   ├── claude.py            # Claude Code provider (SDK-based: claude_agent_sdk)
 │   ├── codex.py             # Codex provider (CLI-based: codex exec)
 │   ├── gemini.py            # Gemini provider (CLI-based: gemini)
-│   └── opencode.py          # OpenCode provider (CLI-based: opencode)
+│   ├── opencode.py          # OpenCode provider (CLI-based: opencode)
+│   └── pi.py                # Shared Pi and OMP adapters
 ```
 
 ### 8.2 TypeScript SDK
@@ -534,10 +531,11 @@ sdk/typescript/src/harness/
 │   ├── claude.ts            # Claude Code provider (SDK-based)
 │   ├── codex.ts             # Codex provider (SDK-based: @openai/codex-sdk)
 │   ├── gemini.ts            # Gemini provider (CLI-based)
-│   └── opencode.ts          # OpenCode provider (CLI-based)
+│   ├── opencode.ts          # OpenCode provider (CLI-based)
+│   └── pi.ts                # Shared Pi and OMP adapters
 ```
 
-### 8.3 Go SDK (future)
+### 8.3 Go SDK
 
 ```
 sdk/go/harness/
@@ -551,7 +549,8 @@ sdk/go/harness/
 ├── claude.go                # Claude Code provider (CLI)
 ├── codex.go                 # Codex provider (CLI)
 ├── gemini.go                # Gemini provider (CLI)
-└── opencode.go              # OpenCode provider (CLI)
+├── opencode.go              # OpenCode provider (CLI)
+└── pi.go                    # Shared Pi and OMP adapters
 ```
 
 ---
@@ -612,7 +611,7 @@ class ErrorKind(str, Enum):
 class ClaudeCodeProvider:
     async def execute(self, prompt: str, options: HarnessOptions) -> RawResult:
         from claude_agent_sdk import query, ClaudeAgentOptions
-        
+
         opts = ClaudeAgentOptions(
             model=options.model,
             cwd=options.cwd,
@@ -623,15 +622,15 @@ class ClaudeCodeProvider:
             permission_mode=options.permission_mode,
             env=options.env,
         )
-        
+
         messages = []
         result_text = None
         metrics = {}
-        
+
         async for msg in query(prompt=prompt, options=opts):
             # Collect messages and extract result
             ...
-        
+
         return RawResult(result=result_text, messages=messages, metrics=metrics, is_error=False)
 ```
 
@@ -641,17 +640,17 @@ class ClaudeCodeProvider:
 class CodexProvider:
     def __init__(self, bin_path: str = "codex"):
         self.bin = bin_path
-    
+
     async def execute(self, prompt: str, options: HarnessOptions) -> RawResult:
         cmd = [self.bin, "exec", "--json"]
-        
+
         if options.cwd:
             cmd.extend(["-C", options.cwd])
         if options.permission_mode == "auto":
             cmd.append("--full-auto")
-        
+
         cmd.append(prompt)
-        
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -659,7 +658,7 @@ class CodexProvider:
             env={**os.environ, **options.env},
         )
         stdout, stderr = await proc.communicate()
-        
+
         # Parse JSONL events from stdout
         return self._parse_jsonl_output(stdout.decode())
 ```
@@ -670,17 +669,17 @@ class CodexProvider:
 class GeminiProvider:
     def __init__(self, bin_path: str = "gemini"):
         self.bin = bin_path
-    
+
     async def execute(self, prompt: str, options: HarnessOptions) -> RawResult:
         cmd = [self.bin, "--output-format", "json"]
-        
+
         if options.model:
             cmd.extend(["--model", options.model])
         if options.permission_mode == "auto":
             cmd.extend(["--approval-mode", "yolo"])
-        
+
         cmd.append(prompt)
-        
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -689,7 +688,7 @@ class GeminiProvider:
             cwd=options.cwd,
         )
         stdout, stderr = await proc.communicate()
-        
+
         return self._parse_output(stdout.decode(), proc.returncode)
 ```
 
@@ -722,11 +721,11 @@ class GeminiProvider:
 - [ ] Add to factory
 - [ ] Tests for new providers
 
-### Phase 3: Go SDK Port
+### Phase 3: Go SDK Port (complete)
 
 - [ ] Port all types to Go structs
 - [ ] Runner implementation
-- [ ] All 4 providers (CLI-based)
+- [x] All providers (CLI-based)
 - [ ] Wire into Go Agent struct
 - [ ] Tests
 
@@ -773,11 +772,20 @@ class GeminiProvider:
 ### Go SDK
 - No new dependencies (os/exec is stdlib)
 
+### Runtime installation lifecycle
+
+Pi and OMP follow the same explicit runtime lifecycle as Codex, Gemini, and
+OpenCode. SDK packages do not install or upgrade external executables. Operators
+pin the CLI in their machine or container, verify it with `af harness doctor`,
+and may override its path per provider. Missing-binary failures carry the exact
+upstream install command. This keeps application startup deterministic and
+prevents an SDK call from mutating production hosts.
+
 ---
 
 ## 14. Open Questions
 
-1. **Session resume**: Should `.harness()` support resuming a previous session (by `session_id`)? Claude Code and Codex both support this. Could be a follow-up feature.
+1. **Session resume**: Implemented through the shared `resume_session_id` option, translated to each provider's native flag.
 
 2. **MCP integration**: Should harness providers be discoverable as MCP tools? Codex already has `codex mcp-server` mode. Could be a follow-up.
 

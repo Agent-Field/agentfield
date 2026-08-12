@@ -75,6 +75,27 @@ func TestHarnessDoctorReportsPiWithOpenRouterAuth(t *testing.T) {
 	require.True(t, reports[0].Usable)
 }
 
+func TestHarnessDoctorReportsOMPDefaultWithOfficialInstallCommand(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessTestBinary(t, binDir, "omp", "17.2.15")
+	t.Setenv("PATH", binDir)
+	t.Setenv("OPENROUTER_API_KEY", "configured")
+
+	cmd := NewHarnessCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"doctor", "--provider", "omp", "--json"})
+
+	require.NoError(t, cmd.Execute())
+	var reports []HarnessProviderHealth
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &reports))
+	require.Len(t, reports, 1)
+	require.Equal(t, "omp", reports[0].Provider)
+	require.Equal(t, "configured", reports[0].Auth)
+	require.Equal(t, "curl -fsSL https://omp.sh/install | sh", reports[0].InstallCommand)
+	require.True(t, reports[0].Usable)
+}
+
 func TestHarnessDoctorClaudeCodeReportsInstalledWrapper(t *testing.T) {
 	binDir := t.TempDir()
 	// Stub interpreter standing in for `python3 -c <probe>`: prints "ok" as the

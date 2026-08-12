@@ -182,6 +182,8 @@ func TestInvariant_Runner_ProviderFactoryExhaustiveness(t *testing.T) {
 		ProviderCodex,
 		ProviderGemini,
 		ProviderOpenCode,
+		ProviderPi,
+		ProviderOMP,
 	}
 
 	for _, name := range knownProviders {
@@ -193,11 +195,23 @@ func TestInvariant_Runner_ProviderFactoryExhaustiveness(t *testing.T) {
 	}
 }
 
+// TestInvariant_Runner_ProviderFactoryDefaultSelection verifies that an
+// empty provider name selects DefaultProvider instead of erroring.
+func TestInvariant_Runner_ProviderFactoryDefaultSelection(t *testing.T) {
+	prov, err := BuildProvider("", "")
+	require.NoError(t, err, "BuildProvider must not error for empty provider (selects default)")
+	require.NotNil(t, prov, "BuildProvider must return non-nil for empty provider (selects default)")
+
+	defaultProv, err := BuildProvider(DefaultProvider, "")
+	require.NoError(t, err, "BuildProvider must not error for DefaultProvider %q", DefaultProvider)
+	assert.IsType(t, defaultProv, prov,
+		"empty provider must select the same type as DefaultProvider %q", DefaultProvider)
+}
+
 // TestInvariant_Runner_ProviderFactoryUnknownReturnsError verifies that
 // unknown provider names return an error with a non-nil error value.
 func TestInvariant_Runner_ProviderFactoryUnknownReturnsError(t *testing.T) {
 	unknownNames := []string{
-		"",
 		"nonexistent",
 		"gpt-4",
 		"anthropic",
@@ -335,6 +349,20 @@ func TestInvariant_Runner_BuildProviderWithBinPath(t *testing.T) {
 			provider: ProviderOpenCode,
 			checkPath: func(t *testing.T, prov Provider) {
 				p := prov.(*OpenCodeProvider)
+				assert.Equal(t, customBinPath, p.BinPath)
+			},
+		},
+		{
+			provider: ProviderPi,
+			checkPath: func(t *testing.T, prov Provider) {
+				p := prov.(*PiProvider)
+				assert.Equal(t, customBinPath, p.BinPath)
+			},
+		},
+		{
+			provider: ProviderOMP,
+			checkPath: func(t *testing.T, prov Provider) {
+				p := prov.(*OMPProvider)
 				assert.Equal(t, customBinPath, p.BinPath)
 			},
 		},

@@ -39,12 +39,12 @@ func TestHarnessRunner_LazyInitialization(t *testing.T) {
 }
 
 func TestHarnessRunner_DefaultOptions(t *testing.T) {
-	// Agent with no HarnessConfig — runner gets zero-value Options
+	// Agent with no HarnessConfig — runner resolves the SDK default to OMP.
 	a := newTestAgentForHarness(t)
 
 	runner := a.HarnessRunner()
 	assert.NotNil(t, runner)
-	assert.Equal(t, "", runner.DefaultOptions.Provider)
+	assert.Equal(t, harness.ProviderOMP, runner.DefaultOptions.Provider)
 	assert.Equal(t, "", runner.DefaultOptions.Model)
 }
 
@@ -111,29 +111,32 @@ func TestHarnessRunner_ConcurrentAccess(t *testing.T) {
 	}
 }
 
-func TestHarness_ErrorWithoutProvider(t *testing.T) {
-	// Harness() should fail when no provider is configured.
-	// The runner will return an error about a missing provider.
+func TestHarness_DefaultProviderIsOMP(t *testing.T) {
+	// A provider-less call reaches OMP. This environment intentionally has no
+	// OMP binary, so the provider returns its typed, actionable runtime result.
 	a := newTestAgentForHarness(t)
 
-	_, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "provider")
+	result, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{
+		BinPath: t.TempDir() + "/missing-omp",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ErrorMessage, "OMP binary not found")
+	assert.Contains(t, result.ErrorMessage, "https://omp.sh/install")
 }
 
 func TestHarness_PassesOptsToRunner(t *testing.T) {
 	// Verify that per-call Options are forwarded to the runner.
-	// Using a non-existent provider triggers a provider-build error,
-	// which confirms the Options reached Run() (otherwise we'd get
-	// the "no harness provider specified" error instead).
+	// Using a non-existent provider triggers a provider-build error, which
+	// confirms the explicit override won over the OMP default.
 	a := newTestAgentForHarness(t)
 
 	_, err := a.Harness(context.Background(), "test", nil, nil, harness.Options{
 		Provider: "nonexistent-provider",
 	})
 	assert.Error(t, err)
-	// Should be a provider-build error, NOT the "no harness provider specified" error
-	assert.NotContains(t, err.Error(), "no harness provider specified")
+	assert.Contains(t, err.Error(), "unknown harness provider")
 }
 
 func TestHarnessConfig_PartialOverride(t *testing.T) {
@@ -161,12 +164,11 @@ func TestHarnessConfig_PartialOverride(t *testing.T) {
 }
 
 func TestHarness_NilHarnessConfig(t *testing.T) {
-	// Agent with nil HarnessConfig should still create a runner with default (empty) options
+	// Agent with nil HarnessConfig should still create a runner with OMP selected.
 	a := newTestAgentForHarness(t)
 	assert.Nil(t, a.cfg.HarnessConfig)
 
 	runner := a.HarnessRunner()
 	assert.NotNil(t, runner)
-	// Default options should be zero
-	assert.Equal(t, harness.Options{}, runner.DefaultOptions)
+	assert.Equal(t, harness.Options{Provider: harness.ProviderOMP}, runner.DefaultOptions)
 }

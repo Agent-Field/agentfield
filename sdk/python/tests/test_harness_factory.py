@@ -11,7 +11,11 @@ from __future__ import annotations
 import pytest
 
 from agentfield.harness.providers._base import HarnessProvider
-from agentfield.harness.providers._factory import SUPPORTED_PROVIDERS, build_provider
+from agentfield.harness.providers._factory import (
+    DEFAULT_HARNESS_PROVIDER,
+    SUPPORTED_PROVIDERS,
+    build_provider,
+)
 from agentfield.types import HarnessConfig
 
 
@@ -39,6 +43,13 @@ def test_supported_providers_contains_expected_names():
     assert "pi" in SUPPORTED_PROVIDERS
     assert "omp" in SUPPORTED_PROVIDERS
     assert "grok" in SUPPORTED_PROVIDERS
+
+
+def test_default_provider_is_omp():
+    from agentfield.harness.providers.pi import OMPProvider
+
+    assert DEFAULT_HARNESS_PROVIDER == "omp"
+    assert isinstance(build_provider(HarnessConfig()), OMPProvider)
 
 
 # ---------------------------------------------------------------------------

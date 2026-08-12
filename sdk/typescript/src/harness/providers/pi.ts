@@ -225,7 +225,7 @@ export class PiProvider extends PiFamilyProvider {
   }
 }
 
-export class OmpProvider extends PiFamilyProvider {
+export class OMPProvider extends PiFamilyProvider {
   public constructor(binPath = 'omp') {
     super('omp', binPath);
   }

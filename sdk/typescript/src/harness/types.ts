@@ -1,5 +1,6 @@
 export interface HarnessConfig {
-  provider: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
+  /** Coding-agent provider. Defaults to OMP. */
+  provider?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
   model?: string;
   /**
    * Provider-specific reasoning-effort variant (e.g. `high`, `minimal`).

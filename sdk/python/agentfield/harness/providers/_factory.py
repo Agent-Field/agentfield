@@ -16,10 +16,11 @@ SUPPORTED_PROVIDERS = {
     "opencode",
     "pi",
 }
+DEFAULT_HARNESS_PROVIDER = "omp"
 
 
 def build_provider(config: "HarnessConfig") -> "HarnessProvider":
-    provider_name = config.provider
+    provider_name = config.provider or DEFAULT_HARNESS_PROVIDER
     if provider_name not in SUPPORTED_PROVIDERS:
         raise ValueError(
             f"Unknown harness provider: {provider_name!r}. Supported providers: "

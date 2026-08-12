@@ -36,12 +36,13 @@ func (m *mockProvider) Execute(_ context.Context, prompt string, opts Options) (
 func TestRunner_Run_NoSchema(t *testing.T) {
 	runner := NewRunner(Options{Provider: "opencode"})
 
-	// We can't easily test with real providers, so test the merge/validation logic
-	t.Run("missing provider", func(t *testing.T) {
+	// The zero-value SDK configuration resolves to OMP.
+	t.Run("default provider", func(t *testing.T) {
 		r := NewRunner(Options{})
-		_, err := r.Run(context.Background(), "test", nil, nil, Options{})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no harness provider")
+		assert.Equal(t, ProviderOMP, r.DefaultOptions.Provider)
+		provider, err := BuildProvider("", "")
+		require.NoError(t, err)
+		assert.IsType(t, &OMPProvider{}, provider)
 	})
 
 	t.Run("unknown provider", func(t *testing.T) {
@@ -591,16 +592,13 @@ func TestBuildProvider(t *testing.T) {
 }
 
 func TestRunner_BuildProvider_UsesFactory(t *testing.T) {
-	// Verify the runner can build every provider.
+	// Verify the runner can build every provider without starting external CLIs.
 	for _, name := range []string{"claude-code", "codex", "gemini", "opencode", "pi", "omp"} {
 		t.Run(name, func(t *testing.T) {
 			runner := NewRunner(Options{Provider: name})
-			_, err := runner.Run(context.Background(), "test", nil, nil, Options{})
-			// Should fail at execution (binary not found), not at provider creation
-			// The error should NOT be "unknown harness provider"
-			if err != nil {
-				assert.NotContains(t, err.Error(), "unknown harness provider")
-			}
+			provider, err := runner.buildProvider(runner.DefaultOptions)
+			require.NoError(t, err)
+			assert.NotNil(t, provider)
 		})
 	}
 }

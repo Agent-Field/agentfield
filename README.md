@@ -247,7 +247,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 - **[Reasoners & Skills](https://agentfield.ai/docs/build/building-blocks/reasoners?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-reasoners)** - `@app.reasoner()` for AI judgment, `@app.skill()` for deterministic code
 - **[Structured AI](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-structured-ai)** - `app.ai(schema=MyModel)` → typed Pydantic/Zod output from any LLM
-- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to Claude Code, Codex, Gemini CLI, or OpenCode
+- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to OMP (default), Pi, Claude Code, Codex, Gemini CLI, or OpenCode
 - **[Cross-Agent Calls](https://agentfield.ai/docs/build/coordination/cross-agent-calls?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-cross-agent-calls)** - `app.call("other-agent.func")` routes through the control plane with full tracing
 - **[Discovery](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-discovery)** - `app.discover(tags=["ml*"])` finds agents and capabilities across the mesh. `tools="discover"` lets LLMs auto-invoke them.
 - **[Memory](https://agentfield.ai/docs/build/coordination/shared-memory?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-memory)** - `app.memory.set()` / `.get()` / `.similarity_search()` - KV + vector search, four scopes, no Redis needed
@@ -279,7 +279,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Feature | How |
 |---|---|
 | Structured output (Pydantic/Zod) | `app.ai(schema=MyModel)` |
-| Multi-turn coding agents | `app.harness("task", provider="claude-code")` |
+| Multi-turn coding agents | `app.harness("task")` (OMP default) or `provider="pi"` / another provider |
 | LLM auto-discovers agents and tools | `app.ai(tools="discover")` |
 | Multimodal (text, image, audio) | `app.ai("Describe", image_url="...")` |
 | Streaming responses | `app.ai("...", stream=True)` |

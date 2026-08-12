@@ -301,6 +301,19 @@ func TestRecordHarnessUsage(t *testing.T) {
 		assert.Equal(t, "openrouter", entries[0]["provider"])
 	})
 
+	t.Run("provider falls back to OMP without harness config", func(t *testing.T) {
+		a := newAgentForTest(t)
+		tracker := NewCostTracker()
+		ctx := contextWithCostTracker(context.Background(), tracker)
+
+		a.recordHarnessUsage(ctx, &harness.Result{InputTokens: 1}, harness.Options{})
+
+		entries := tracker.Serialize()["entries"].([]map[string]any)
+		require.Len(t, entries, 1)
+		assert.Equal(t, "omp", entries[0]["harness"])
+		assert.Equal(t, "omp", entries[0]["model"])
+	})
+
 	t.Run("model variant suffix is stripped for attribution", func(t *testing.T) {
 		a := newAgentForTest(t)
 		tracker := NewCostTracker()
