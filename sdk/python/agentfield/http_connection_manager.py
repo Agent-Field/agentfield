@@ -7,6 +7,7 @@ Supports both single requests and batch operations for the AgentField SDK async 
 """
 
 import asyncio
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -17,7 +18,6 @@ import aiohttp
 from .async_config import AsyncConfig
 from .async_lifecycle import (
     cancel_and_await_if_same_loop,
-    cancel_task_cross_loop,
     current_running_loop,
 )
 from .exceptions import AgentFieldClientError
@@ -109,6 +109,11 @@ class ConnectionManager:
         self._connector: Optional[aiohttp.TCPConnector] = None
         self._lock = asyncio.Lock()
         self._closed = False
+        # Closing can be requested from a foreign thread. This small,
+        # thread-safe gate prevents a second close() from trying to acquire
+        # the owner loop's asyncio lock while the first teardown is pending.
+        self._close_request_lock = threading.Lock()
+        self._close_requested = False
 
         # Metrics and health monitoring
         self.metrics = ConnectionMetrics()
@@ -142,13 +147,13 @@ class ConnectionManager:
             AgentFieldClientError: If manager is already started or closed
         """
         async with self._lock:
-            if self._session is not None:
-                raise AgentFieldClientError("ConnectionManager is already started")
-
-            if self._closed:
+            if self._close_requested or self._closed:
                 raise AgentFieldClientError(
                     "ConnectionManager is closed and cannot be restarted"
                 )
+
+            if self._session is not None:
+                raise AgentFieldClientError("ConnectionManager is already started")
 
             # Record the loop the session and background tasks are bound to
             # so close() can tell whether it may await them or must tear down
@@ -207,6 +212,9 @@ class ConnectionManager:
         session would raise ``got Future attached to a different loop`` / hang,
         so we schedule the teardown on the owning loop without awaiting.
         """
+        if not self._claim_close_request():
+            return
+
         owning_loop = self._loop
         current_loop = current_running_loop()
 
@@ -215,11 +223,25 @@ class ConnectionManager:
             self._close_cross_loop(owning_loop)
             return
 
-        async with self._lock:
-            if self._closed:
-                return
+        await self._close_on_owner_loop(owning_loop)
 
-            self._closed = True
+    def _claim_close_request(self) -> bool:
+        """Claim the one close transition allowed for this manager."""
+        with self._close_request_lock:
+            if self._close_requested or self._closed:
+                return False
+            self._close_requested = True
+            return True
+
+    async def _close_on_owner_loop(
+        self, owning_loop: Optional[asyncio.AbstractEventLoop]
+    ) -> None:
+        """Perform the complete teardown while holding the owner-loop lock."""
+        async with self._lock:
+            with self._close_request_lock:
+                if self._closed:
+                    return
+                self._closed = True
 
             # Cancel background tasks (same loop — safe to await).
             await cancel_and_await_if_same_loop(self._health_check_task, owning_loop)
@@ -248,57 +270,42 @@ class ConnectionManager:
         serializes the transition so an in-flight get_session() on the owning
         loop never sees half-torn-down state (#623).
         """
-        if self._closed:
-            return
-        self._closed = True
-
-        cancel_task_cross_loop(self._health_check_task, owning_loop)
-        cancel_task_cross_loop(self._cleanup_task, owning_loop)
-        self._health_check_task = None
-        self._cleanup_task = None
-
-        # Schedule the real teardown (lock acquisition + session/connector
-        # close + state nulling) on the owning loop. We don't mutate
-        # _session/_connector here — that happens inside the scheduled
-        # coroutine under the lock so concurrent get_session() callers
-        # on the owning loop see a consistent state.
+        # Schedule the complete teardown (including task cancellation and all
+        # state mutation) on the owning loop. The foreign thread only claims
+        # the close request; it never touches loop-bound state.
         if owning_loop.is_closed():
             # Loop already gone — resources will be GC'd; just drop refs.
+            with self._close_request_lock:
+                self._closed = True
             self._session = None
             self._connector = None
+            self._health_check_task = None
+            self._cleanup_task = None
             self._loop = None
             logger.info("ConnectionManager closed (owning loop already closed)")
             return
 
-        # Capture refs for the closure; clear self._loop so the manager
-        # appears stopped from the outside immediately.
-        mgr_self = self
-        self._loop = None
-
-        async def _close_resources_on_owner() -> None:
+        async def close_on_owner() -> None:
             try:
-                async with mgr_self._lock:
-                    session = mgr_self._session
-                    connector = mgr_self._connector
-                    mgr_self._session = None
-                    mgr_self._connector = None
-                    if session is not None:
-                        await session.close()
-                    if connector is not None:
-                        await connector.close()
+                await self._close_on_owner_loop(owning_loop)
             except Exception:
-                logger.debug(
-                    "Cross-loop session/connector close failed", exc_info=True
-                )
+                # There is no caller on the foreign loop to receive an
+                # exception from this fire-and-forget teardown task.
+                logger.debug("Cross-loop close failed", exc_info=True)
 
         try:
             owning_loop.call_soon_threadsafe(
-                lambda: owning_loop.create_task(_close_resources_on_owner())
+                lambda: owning_loop.create_task(close_on_owner())
             )
         except Exception:
             # Owning loop may be mid-teardown; drop refs so GC can collect.
+            with self._close_request_lock:
+                self._closed = True
             self._session = None
             self._connector = None
+            self._health_check_task = None
+            self._cleanup_task = None
+            self._loop = None
             logger.debug("Could not schedule cross-loop close", exc_info=True)
 
         logger.info("ConnectionManager closed (cross-loop)")
@@ -314,14 +321,17 @@ class ConnectionManager:
         Raises:
             AgentFieldClientError: If manager is not started or is closed
         """
-        if self._session is None:
-            raise AgentFieldClientError("ConnectionManager is not started. Call start() first.")
+        session = self._session
+        if session is None:
+            raise AgentFieldClientError(
+                "ConnectionManager is not started. Call start() first."
+            )
 
-        if self._closed:
+        if self._close_requested or self._closed:
             raise AgentFieldClientError("ConnectionManager is closed")
 
         try:
-            yield self._session
+            yield session
         except Exception as e:
             self.health.mark_unhealthy(str(e))
             raise
@@ -498,12 +508,12 @@ class ConnectionManager:
     @property
     def is_healthy(self) -> bool:
         """Check if connection manager is healthy."""
-        return self.health.is_healthy and not self._closed
+        return self.health.is_healthy and not self.is_closed
 
     @property
     def is_closed(self) -> bool:
         """Check if connection manager is closed."""
-        return self._closed
+        return self._closed or self._close_requested
 
     def __repr__(self) -> str:
         """String representation of the connection manager."""

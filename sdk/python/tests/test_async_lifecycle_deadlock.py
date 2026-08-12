@@ -23,8 +23,11 @@ import asyncio
 import threading
 import time
 
+import pytest
+
 from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
+from agentfield.async_lifecycle import cancel_and_await_if_same_loop
 from agentfield.http_connection_manager import ConnectionManager
 
 
@@ -62,11 +65,22 @@ def test_connection_manager_cross_loop_close_no_deadlock():
     # something loop-bound to tear down.
     cfg.enable_performance_logging = True
     cm = ConnectionManager(cfg)
+    session_closed = threading.Event()
 
     loop1, thread = _run_loop_in_thread()
     try:
         asyncio.run_coroutine_threadsafe(cm.start(), loop1).result(timeout=5)
         assert cm._session is not None
+
+        original_session_close = cm._session.close
+
+        async def close_session():
+            try:
+                await original_session_close()
+            finally:
+                session_closed.set()
+
+        cm._session.close = close_session
         time.sleep(0.15)
 
         async def close_here():
@@ -74,12 +88,99 @@ def test_connection_manager_cross_loop_close_no_deadlock():
 
         asyncio.run(close_here())
 
-        # Cross-loop close marks the manager closed and drops task refs.
+        assert session_closed.wait(timeout=5)
+        # The owner loop completes the whole teardown before state is cleared.
         assert cm._closed is True
         assert cm._health_check_task is None
         assert cm._cleanup_task is None
+        assert cm._session is None
     finally:
         _shutdown_loop(loop1, thread)
+
+
+def test_connection_manager_cross_loop_close_is_idempotent_while_owner_lock_is_held():
+    """A repeated foreign-loop close must not acquire the owner-loop lock."""
+    cm = ConnectionManager()
+    loop1, thread = _run_loop_in_thread()
+    lock_held = threading.Event()
+    release_lock = asyncio.Event()
+    session_closed = threading.Event()
+    holder = None
+
+    async def hold_owner_lock():
+        async with cm._lock:
+            lock_held.set()
+            await release_lock.wait()
+
+    try:
+        asyncio.run_coroutine_threadsafe(cm.start(), loop1).result(timeout=5)
+        assert cm._session is not None
+        original_session_close = cm._session.close
+
+        async def close_session():
+            try:
+                await original_session_close()
+            finally:
+                session_closed.set()
+
+        cm._session.close = close_session
+        holder = asyncio.run_coroutine_threadsafe(hold_owner_lock(), loop1)
+        assert lock_held.wait(timeout=5)
+
+        asyncio.run(cm.close())
+        # Before the fix this second call fell through to ``async with
+        # self._lock`` after the first cross-loop close cleared ``_loop``.
+        asyncio.run(cm.close())
+
+        loop1.call_soon_threadsafe(release_lock.set)
+        holder.result(timeout=5)
+        assert session_closed.wait(timeout=5)
+        assert cm._session is None
+        assert cm.is_closed is True
+    finally:
+        if not release_lock.is_set():
+            loop1.call_soon_threadsafe(release_lock.set)
+        if holder is not None:
+            holder.result(timeout=5)
+        _shutdown_loop(loop1, thread)
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_await_same_loop_propagates_cleanup_runtime_error():
+    """Teardown must not hide unrelated RuntimeErrors from task cleanup."""
+    started = asyncio.Event()
+
+    async def task_body():
+        try:
+            started.set()
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise RuntimeError("cleanup failed")
+
+    task = asyncio.create_task(task_body())
+    await started.wait()
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await cancel_and_await_if_same_loop(task, asyncio.get_running_loop())
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_await_same_loop_swallows_loop_association_error():
+    """The known cross-loop RuntimeError remains safe to suppress."""
+    started = asyncio.Event()
+
+    async def task_body():
+        try:
+            started.set()
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise RuntimeError("got Future attached to a different loop")
+
+    task = asyncio.create_task(task_body())
+    await started.wait()
+
+    await cancel_and_await_if_same_loop(task, asyncio.get_running_loop())
+    assert task.done()
 
 
 def test_connection_manager_same_loop_close_still_works():

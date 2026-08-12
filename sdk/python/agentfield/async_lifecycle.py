@@ -82,11 +82,14 @@ async def cancel_and_await_if_same_loop(
             await task
         except asyncio.CancelledError:
             pass
-        except RuntimeError:
-            # Defensive: if the loop association is somehow inconsistent,
-            # don't let teardown wedge the caller.
+        except RuntimeError as exc:
+            # A loop-association error can still occur if the task's cleanup
+            # awaits a future created by another loop. Other RuntimeErrors
+            # belong to the task's cleanup and must not be hidden by teardown.
+            if "attached to a different loop" not in str(exc):
+                raise
             logger.debug(
-                "Awaiting cancelled task raised RuntimeError during teardown",
+                "Awaiting cancelled task raised a cross-loop RuntimeError",
                 exc_info=True,
             )
         return
