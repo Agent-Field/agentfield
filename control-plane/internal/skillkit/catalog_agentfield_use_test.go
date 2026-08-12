@@ -89,8 +89,8 @@ func TestAgentfieldUseSourceFallbackContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse source frontmatter: %v", err)
 	}
-	if frontmatter.Name != "agentfield-use" || frontmatter.Version != "0.5.0" {
-		t.Fatalf("source frontmatter = %+v, want name=agentfield-use version=0.5.0", frontmatter)
+	if frontmatter.Name != "agentfield-use" || frontmatter.Version != "0.6.0" {
+		t.Fatalf("source frontmatter = %+v, want name=agentfield-use version=0.6.0", frontmatter)
 	}
 
 	// The offer is available only after coverage is conclusively checked, it
@@ -118,6 +118,54 @@ func TestAgentfieldUseSourceFallbackContract(t *testing.T) {
 	// the builder skills are reachable only through a plain offer.
 	if strings.Contains(content, "coverage_precheck_complete") {
 		t.Fatal("agentfield-use must not carry the retired coverage_precheck_complete marker")
+	}
+}
+
+// Contract for 0.6.0: the three preconditions the skill put in front of every
+// dispatch. Each one exists because skipping it sends work somewhere wrong —
+// the other fleet, a reasoner whose inputs were guessed, or an internal
+// pipeline stage — so each must survive edits to the skill.
+func TestAgentfieldUseDispatchPreconditions(t *testing.T) {
+	content := string(skillSource(t, "agentfield-use"))
+	for _, needle := range []string{
+		// Resolve the control plane first: cloud config beats the local
+		// default, and an unreachable configured cloud stops the work.
+		"## 0. Resolve the server first (local vs cloud)",
+		"agentfield-desktop/settings.json",
+		"Do NOT silently fall back to local",
+		// Fetch the contract before the first call.
+		"### Fetch the exact contract before you dispatch — never guess inputs",
+		"Search and discovery tell you a reasoner exists; they do not license a call.",
+		"entire contract**",
+		// Entry points only.
+		"### Entry points only — undescribed reasoners are internal",
+		"Dispatch ONLY to reasoners that carry the",
+	} {
+		if !strings.Contains(content, needle) {
+			t.Fatalf("agentfield-use SKILL.md is missing dispatch-precondition text %q", needle)
+		}
+	}
+}
+
+// Contract: the catalog entry is what a rules file and `af skill catalog` show
+// — it must advertise the same preconditions the skill body enforces, or an
+// agent choosing skills by description never learns they exist.
+func TestAgentfieldUseCatalogEntryAdvertisesPreconditions(t *testing.T) {
+	skill, err := CatalogByName("agentfield-use")
+	if err != nil {
+		t.Fatalf("CatalogByName(agentfield-use): %v", err)
+	}
+	description := strings.ToLower(skill.Description)
+	for _, needle := range []string{"local or cloud", "contract", "entry-point"} {
+		if !strings.Contains(description, needle) {
+			t.Fatalf("catalog description does not mention %q: %q", needle, skill.Description)
+		}
+	}
+	trigger := strings.ToLower(skill.Trigger)
+	for _, needle := range []string{"delegate work", "control plane", "contract", "entry point"} {
+		if !strings.Contains(trigger, needle) {
+			t.Fatalf("catalog trigger does not mention %q: %q", needle, skill.Trigger)
+		}
 	}
 }
 
