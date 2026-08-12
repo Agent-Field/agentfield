@@ -148,8 +148,12 @@ both shapes into `Usage.Cost`, so cost tracking reads the same either way.
 
 ### AI Client
 
-#### `ai.NewClient(config *Config) (*Client, error)`
+#### `ai.NewClient(config *Config, opts ...ClientOption) (*Client, error)`
 Creates a new AI client with the given configuration.
+
+Use `ai.WithHTTPClient` to provide a custom `*http.Client`, or
+`ai.WithTransport` to provide a custom `http.RoundTripper` while retaining the
+default client's timeout.
 
 #### `client.Complete(ctx context.Context, prompt string, opts ...Option) (*Response, error)`
 Makes a chat completion request.

@@ -5361,10 +5361,23 @@ class Agent(FastAPI):
                 and self._async_execution_manager
             ):
                 try:
-                    # Best-effort cleanup: schedule on running loop if one
-                    # exists, otherwise spawn a daemon thread. Never raises
-                    # even if a loop is already running (#620).
-                    fire_and_forget(self._cleanup_async_resources())
+                    # Best-effort cleanup that must never raise, including
+                    # when a loop is already running (#620).
+                    #
+                    # No running loop (the common destructor / interpreter
+                    # exit case): run it synchronously so cleanup actually
+                    # completes before __del__ returns. Handing it to a
+                    # daemon thread here would let the interpreter kill the
+                    # thread at exit before it does any work.
+                    #
+                    # Running loop: asyncio.run() would raise, so schedule
+                    # on that loop instead and don't block it.
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        asyncio.run(self._cleanup_async_resources())
+                    else:
+                        fire_and_forget(self._cleanup_async_resources())
                 except Exception:
                     # Ignore async cleanup errors in destructor
                     pass

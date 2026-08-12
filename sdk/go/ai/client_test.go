@@ -71,6 +71,70 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
+func TestNewClient_WithHTTPClient(t *testing.T) {
+	var requestSeen bool
+	transport := &roundTripFunc{fn: func(req *http.Request) (*http.Response, error) {
+		requestSeen = true
+		assert.Equal(t, "https://api.example.com/v1/chat/completions", req.URL.String())
+		return testCompletionResponse(), nil
+	}}
+	customHTTPClient := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: transport,
+	}
+	config := &Config{
+		APIKey:  "test-key",
+		BaseURL: "https://api.example.com/v1",
+		Model:   "gpt-4o",
+	}
+
+	client, err := NewClient(config, WithHTTPClient(customHTTPClient))
+	require.NoError(t, err)
+	require.Same(t, customHTTPClient, client.httpClient)
+
+	response, err := client.Complete(context.Background(), "hello")
+	require.NoError(t, err)
+	assert.Equal(t, "ok", response.Text())
+	assert.True(t, requestSeen)
+}
+
+func TestNewClient_WithTransportPreservesTimeout(t *testing.T) {
+	transport := &roundTripFunc{fn: func(*http.Request) (*http.Response, error) {
+		return testCompletionResponse(), nil
+	}}
+	config := &Config{
+		APIKey:  "test-key",
+		BaseURL: "https://api.example.com/v1",
+		Model:   "gpt-4o",
+		Timeout: 17 * time.Second,
+	}
+
+	client, err := NewClient(config, WithTransport(transport))
+	require.NoError(t, err)
+	require.Same(t, transport, client.httpClient.Transport)
+	assert.Equal(t, config.Timeout, client.httpClient.Timeout)
+
+	response, err := client.Complete(context.Background(), "hello")
+	require.NoError(t, err)
+	assert.Equal(t, "ok", response.Text())
+}
+
+type roundTripFunc struct {
+	fn func(*http.Request) (*http.Response, error)
+}
+
+func (f *roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f.fn(req)
+}
+
+func testCompletionResponse() *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}]}`)),
+	}
+}
+
 func TestComplete(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
