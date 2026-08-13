@@ -1,8 +1,16 @@
+# Python
 __pycache__
 *.pyc
 .pytest_cache
-.env
 .venv
+
+# Node / TypeScript — the image installs its own node_modules; copying the
+# host's would shadow it with host-arch binaries.
+node_modules
+dist
+
+# Common
+.env
 *.log
 .git
 .DS_Store
