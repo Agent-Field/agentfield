@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/types"
@@ -81,7 +82,7 @@ func (a *Agent) Span(ctx context.Context, name string, input map[string]any, fn 
 // enqueueSpanStart queues the non-terminal "running" event for async
 // delivery, dropping it if the queue is full.
 func (a *Agent) enqueueSpanStart(execCtx ExecutionContext, input map[string]any) {
-	if a.cfg.AgentFieldURL == "" {
+	if strings.TrimSpace(a.cfg.AgentFieldURL) == "" {
 		return
 	}
 
@@ -145,14 +146,28 @@ func truncateTracePayload(v any) any {
 }
 
 // truncateTraceInput is truncateTracePayload specialized to the event
-// InputData field, which must remain a map.
+// InputData field, which must remain a map. Unlike results (marshaled
+// synchronously before the caller resumes), the input is also serialized
+// later by the async start-event goroutine, so it must be a deep copy —
+// returning the caller's map would race with fn mutating it.
 func truncateTraceInput(input map[string]any) map[string]any {
 	if input == nil {
 		return nil
 	}
-	truncated := truncateTracePayload(input)
-	if m, ok := truncated.(map[string]any); ok {
-		return m
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return map[string]any{"_unserializable": true}
 	}
-	return map[string]any{"_unserializable": true}
+	if len(raw) > spanPayloadMaxBytes {
+		return map[string]any{
+			"_truncated":  true,
+			"total_bytes": len(raw),
+			"preview":     string(raw[:spanPayloadPreviewBytes]),
+		}
+	}
+	var copied map[string]any
+	if err := json.Unmarshal(raw, &copied); err != nil {
+		return map[string]any{"_unserializable": true}
+	}
+	return copied
 }
