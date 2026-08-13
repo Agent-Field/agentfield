@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { pathToFileURL } from 'node:url';
 import { Agent } from '@agentfield/sdk';
 import { reasonersRouter } from './reasoners.js';
 
@@ -31,7 +32,9 @@ async function main() {
   console.log(`Agent "${agent.config.nodeId}" listening on http://localhost:${agent.config.port}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL percent-encodes the script path the same way import.meta.url
+// is encoded, so this also works when the project path contains spaces.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     // eslint-disable-next-line no-console
     console.error(err);
