@@ -5,14 +5,13 @@ import { CATALOG } from '../shared/catalog'
 import { RAILWAY_TEMPLATE_URL } from '../shared/cloudLinks'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type { DesktopSettings } from '../shared/types'
-import { spawn } from 'node:child_process'
 import { getBaseUrl, getSnapshot, setActiveControlPlanePort } from './agentfield'
 import { type AgentAction, runAgentAction, startControlPlane, uninstallAgent } from './agents'
 import { runAutostart } from './autostart'
 import { testCloudConnection, applyConnectionProfile } from './cloud'
 import { isCloudActive } from './connection'
-import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
-import { childEnv, initUserPath } from './env'
+import { initializeCli, installBundledCli, refreshCliStatus } from './cli'
+import { initUserPath } from './env'
 import { installAgent, installFromSource, updateAgent } from './installer'
 import {
   getEnvReports,
@@ -22,6 +21,13 @@ import {
   setAgentSecret
 } from './secrets'
 import { loadSettings, mergeSettings, saveSettings } from './settings'
+import {
+  SkillSync,
+  defaultSkillSyncDeps,
+  shouldSyncOnCliUpdate,
+  shouldSyncOnLaunch,
+  shouldSyncOnSettingsChange
+} from './skills'
 import { pickFreePort } from './ports'
 import { setupTray } from './tray'
 import { syncTrayCompanion } from './tray-companion'
@@ -254,20 +260,34 @@ function syncTray(enabled: boolean): void {
     .catch((err) => console.error('tray companion failed:', err))
 }
 
-// Keep the AgentField skills present in detected coding agents (Claude Code,
-// Codex, Gemini, …). A no-name `af skill install` installs the CLI's ENTIRE
-// skill catalog (builder, personal-agent, consumer, and whatever ships next),
-// so new catalog skills reach existing installs without a desktop release —
-// hardcoding names here is how agentfield-personal was silently missed. One
-// process, so concurrent runs never race on skillkit's state file. Idempotent
-// — skillkit tracks versions in ~/.agentfield/skills/.state.json — and pure
-// best-effort: failures are ignored.
-function syncSkills(): void {
-  spawn(getCliCommand(), ['skill', 'install', '--non-interactive'], {
-    windowsHide: true,
-    stdio: 'ignore',
-    env: childEnv()
-  }).on('error', () => {})
+// Where per-run skill-sync lines land: ~/Library/Logs/AgentField/skill-sync.log
+// on macOS, the platform equivalent elsewhere. app.getPath('logs') is the
+// Electron-blessed spot; fall back under userData if the platform has no logs
+// path so a sync is never lost for want of a directory.
+function skillSyncLogFile(): string {
+  try {
+    return join(app.getPath('logs'), 'skill-sync.log')
+  } catch {
+    return join(app.getPath('userData'), 'logs', 'skill-sync.log')
+  }
+}
+
+/**
+ * Keeps the AgentField skill catalog installed in detected coding agents (see
+ * main/skills.ts) and remembers how the last run went. Built once app is
+ * ready — skillSyncLogFile() needs the app paths.
+ */
+let skillSync: SkillSync
+
+/**
+ * Fire-and-forget wrapper for the three triggers (launch, the settings toggle
+ * flipping on, a successful CLI update). SkillSync never rejects and
+ * serializes overlapping calls, so this is safe to call from anywhere.
+ */
+function syncSkills(reason: string): void {
+  void skillSync.sync().then((record) => {
+    console.log(`skill sync (${reason}): ${record.ok ? 'ok' : 'FAILED'} — ${record.message}`)
+  })
 }
 
 // Register (or clear) the OS login item. Dev builds skip it — registering
@@ -331,14 +351,18 @@ function main(): void {
     await initializeCli(bundledCliPath())
     // Skills and the furrow client belong to local coding agents even when
     // their control plane and workspaces are remote.
-    if (settings.installSkills) syncSkills()
+    skillSync = new SkillSync(defaultSkillSyncDeps(skillSyncLogFile()))
+    if (shouldSyncOnLaunch(settings)) syncSkills('launch')
 
     // macOS only: provision + install the af-tray menu-bar companion so a
     // desktop-app-only install gets the menu-bar icon. Runs after initializeCli
     // (it needs the managed bin dir to exist) and non-blocking, like syncSkills.
     syncTray(settings.trayCompanion)
 
-    ipcMain.handle('agentfield:snapshot', () => getSnapshot())
+    // The snapshot carries the last skill-sync result along with the control-
+    // plane view, so the renderer's existing 5s poll keeps the dashboard's
+    // skill state honest without a channel (or a loop) of its own.
+    ipcMain.handle('agentfield:snapshot', () => getSnapshot({ skillSync: skillSync.last() }))
     ipcMain.handle('agentfield:catalog', () => CATALOG)
     ipcMain.handle('agentfield:install', async (event, name: unknown) => {
       if (typeof name !== 'string') {
@@ -478,6 +502,9 @@ function main(): void {
     ipcMain.handle('agentfield:cli-update', async () => {
       const result = await installBundledCli(bundledCliPath())
       if (!result.ok) console.error(result.message)
+      // A newer af ships a newer skill catalog: re-sync so the skills the
+      // coding agents see match the CLI that just landed.
+      if (shouldSyncOnCliUpdate(result.ok, settings)) syncSkills('cli update')
       return refreshCliStatus(bundledCliPath())
     })
 
@@ -596,6 +623,10 @@ function main(): void {
       }
       // macOS: reflect a flipped tray toggle (install ↔ uninstall) right away.
       if (settings.trayCompanion !== prev.trayCompanion) syncTray(settings.trayCompanion)
+      // Skills toggled on: install them now instead of at the next launch.
+      // (Off is not a trigger — `af skill install` has no uninstall side, and
+      // the dashboard reports the setting itself as off.)
+      if (shouldSyncOnSettingsChange(prev, settings)) syncSkills('settings')
       await saveSettings(settingsFile(), settings)
       applyConnectionProfile(settings)
       return settings

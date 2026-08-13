@@ -807,6 +807,10 @@ func (a *Agent) Execute(ctx context.Context, reasonerName string, input map[stri
 	if input == nil {
 		input = make(map[string]any)
 	}
+	// Trigger dispatch: honour the envelope shape here too so a caller that
+	// forwards a raw dispatcher payload through Execute() gets the same
+	// unwrap + Transform + context injection as the HTTP paths.
+	ctx, input = applyTriggerDispatch(ctx, reasoner, input)
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting local reasoner execution", map[string]any{
 		"reasoner_id": reasonerName,
 		"mode":        "direct",
@@ -866,6 +870,10 @@ func (a *Agent) HandleServerlessEvent(ctx context.Context, event map[string]any,
 	if !ok {
 		return map[string]any{"error": "reasoner not found"}, http.StatusNotFound, nil
 	}
+
+	// Trigger dispatch: serverless deployments receive the dispatcher envelope
+	// directly in the platform event, so unwrap here as well.
+	ctx, input = applyTriggerDispatch(ctx, handler, input)
 
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting serverless reasoner execution", map[string]any{
 		"reasoner_id": reasoner,
@@ -1222,6 +1230,10 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 	tracker := NewCostTracker()
 	ctx = contextWithCostTracker(ctx, tracker)
 
+	// Trigger dispatch: the /execute route can also carry the dispatcher
+	// envelope, so unwrap + Transform + inject here as well.
+	ctx, input = applyTriggerDispatch(ctx, reasoner, input)
+
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
 		"reasoner_id": reasonerName,
@@ -1446,6 +1458,12 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	tracker := NewCostTracker()
 	ctx = contextWithCostTracker(ctx, tracker)
 
+	// Trigger dispatch: unwrap the {event, _meta} envelope when present,
+	// apply the binding's Transform, and attach *triggers.Context to ctx so
+	// the handler can read it via triggers.FromContext(ctx). Direct calls
+	// pass through unchanged.
+	ctx, input = applyTriggerDispatch(ctx, reasoner, input)
+
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
 		"reasoner_id": name,
@@ -1564,6 +1582,11 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	// callback. Concurrent executions each get their own tracker.
 	tracker := NewCostTracker()
 	ctx = contextWithCostTracker(ctx, tracker)
+
+	// Trigger dispatch: same unwrap + Transform + context injection as the
+	// sync path, so both paths deliver identical semantics to the handler.
+	ctx, input = applyTriggerDispatch(ctx, reasoner, input)
+
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting asynchronous reasoner execution", map[string]any{
 		"reasoner_id": reasoner.Name,

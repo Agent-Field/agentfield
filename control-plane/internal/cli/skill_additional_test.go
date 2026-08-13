@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -177,6 +178,73 @@ func pickedByIndex(indexes ...int) []string {
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
+
+// TestSkillInstallExitsNonZeroWhenATargetFails is the contract that makes an
+// automated `af skill install` (the desktop app runs one at launch) trustworthy:
+// a target that could not be written is a failed command, not a success with a
+// red line buried in the report. The report still prints first.
+func TestSkillInstallExitsNonZeroWhenATargetFails(t *testing.T) {
+	setupFailingClaudeTarget := func(t *testing.T) {
+		t.Helper()
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		t.Setenv("AGENTFIELD_HOME", filepath.Join(home, ".agentfield"))
+		t.Setenv("AGENTFIELD_SKIP_FURROW", "1")
+		// A regular file where ~/.claude/skills belongs: the target cannot
+		// create its directory, so its install fails while the canonical
+		// store write succeeds.
+		require.NoError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(home, ".claude", "skills"), []byte("blocker"), 0o644))
+	}
+
+	t.Run("named skill", func(t *testing.T) {
+		setupFailingClaudeTarget(t)
+		cmd := newSkillInstallCommand()
+		cmd.SetArgs([]string{"agentfield", "--target", "claude-code"})
+		var err error
+		output := captureOutput(t, func() { err = cmd.Execute() })
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "claude-code")
+		require.Contains(t, output, "af skill list", "the report must print before the command fails")
+	})
+
+	t.Run("whole catalog", func(t *testing.T) {
+		setupFailingClaudeTarget(t)
+		cmd := newSkillInstallCommand()
+		cmd.SetArgs([]string{"--target", "claude-code"})
+		var err error
+		output := captureOutput(t, func() { err = cmd.Execute() })
+		require.Error(t, err)
+		for _, skill := range skillkit.Catalog {
+			require.Contains(t, err.Error(), skill.Name)
+		}
+		require.Contains(t, output, "af skill list")
+	})
+
+	t.Run("update", func(t *testing.T) {
+		setupFailingClaudeTarget(t)
+		// Record claude-code as installed so update has a target to retry.
+		require.NoError(t, skillkit.SaveState(&skillkit.State{
+			Skills: map[string]skillkit.InstalledSkill{
+				"agentfield": {
+					CurrentVersion:    skillkit.Catalog[0].Version,
+					InstalledAt:       time.Now().UTC(),
+					AvailableVersions: []string{skillkit.Catalog[0].Version},
+					Targets: map[string]skillkit.InstalledTarget{
+						"claude-code": {TargetName: "claude-code", Method: "symlink", Version: skillkit.Catalog[0].Version},
+					},
+				},
+			},
+		}))
+		cmd := newSkillUpdateCommand()
+		cmd.SetArgs([]string{"agentfield"})
+		var err error
+		_ = captureOutput(t, func() { err = cmd.Execute() })
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "claude-code")
+	})
+}
 
 // TestSkillInstallExplicitNameDryRun covers the explicit-skill-name install
 // path (`af skill install <name>`), which is unchanged by the no-name

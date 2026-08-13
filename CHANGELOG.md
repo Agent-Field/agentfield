@@ -6,6 +6,343 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.128-rc.3] - 2026-08-13
+
+
+### Added
+
+- Feat(sdk/go): triggers package + OnEvent/OnSchedule sugar (#513) (#906)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(sdk/go): triggers package + OnEvent/OnSchedule sugar (#513)
+
+Add the public triggers package and agent-level sugar methods for
+declaring inbound webhook and cron-schedule bindings on Go SDK reasoners.
+
+New sdk/go/triggers/ package:
+- Context type (TriggerID, Source, EventType, EventID, IdempotencyKey,
+  ReceivedAt, VCID) — nil for direct calls, populated by dispatch
+- EventOpts / ScheduleOpts configuration structs
+- Event() / Schedule() factory functions producing Binding values
+- Transform function type for pre-handler event transformation
+- BindingKind enum (EventBinding / ScheduleBinding)
+
+New agent sugar (sdk/go/agent/agent_triggers.go):
+- Agent.OnEvent(opts, name, handler) — registers a reasoner with an
+  event trigger binding in one call
+- Agent.OnSchedule(expression, name, handler, ...OnScheduleOption) —
+  registers a reasoner with a cron trigger binding
+- WithTimezone(tz) option for OnSchedule
+- withTriggersBinding() bridges triggers.Binding into the existing
+  ReasonerOption machinery
+- bindingToWire() converts triggers.Binding to types.TriggerBinding
+
+Modified sdk/go/agent/agent.go:
+- Added triggerBindings field to Reasoner (stores Transform for dispatch)
+- Import triggers package
+- triggerToBinding() now also accepts triggers.Binding (backward compat)
+
+Tests: 9 tests in triggers/triggers_test.go (types, factories, config,
+transform, defaults) + 6 tests in agent/agent_triggers_test.go (OnEvent,
+OnSchedule, WithTimezone, parity with WithTriggers, backward compat).
+All pass. go build/vet clean.
+
+Part of #508. Closes #513.
+
+* fix(sdk/go): address review feedback on triggers package (#513)
+
+1. WithTriggers(triggers.Event(...)) now stores triggerBindings (preserving
+   Transform) alongside the wire binding — parity with OnEvent path.
+   Added regression test.
+
+2. Schedule() always merges expression/timezone into Config, even when
+   custom Config is provided. Prevents silent loss of the cron expression.
+
+3. Renamed ScheduleOpts.Expression to ScheduleOpts.Cron for consistency
+   with the Python and TypeScript SDKs.
+
+4. Removed unused captureCallerOrigin function.
+
+5. Marked Context as EXPERIMENTAL until #514 ships the dispatch injection.
+
+Addresses @santoshkumarradha's review on #906.
+
+* docs(sdk/go): mark triggers Transform as experimental pending #514
+
+The Transform doc claimed the SDK runs Transform(rawEvent) before invoking
+the reasoner. Nothing on the Go side consumes TriggerBinding.TransformFn
+yet — the binding stores it and dispatch never executes it, so a reasoner
+invoked by an inbound event silently receives the raw event.
+
+Restate the doc to match reality and add the same EXPERIMENTAL caveat that
+Context already carries, on both the Transform type and EventOpts.Transform.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): keep Cron authoritative when merging schedule config
+
+Schedule() seeded the config map with expression/timezone and then merged
+custom Config over it, so a custom "expression" key silently replaced
+opts.Cron — the same silent cron loss the previous fix targeted, reached
+from the other direction.
+
+Merge custom keys first and apply Cron unconditionally afterwards.
+Timezone precedence is now explicit: opts.Timezone wins, else a custom
+"timezone" key survives, else the UTC default stands. Malformed and
+non-object Config is still ignored rather than propagated, which is now
+documented on ScheduleOpts.Config instead of being an implicit quirk.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* style(sdk/go): gofmt triggers files touched by this PR
+
+Two spots this branch introduced fail gofmt: the trailing blank line left
+in agent_triggers.go by the captureCallerOrigin removal, and struct-key
+alignment in triggers_test.go after the Expression -> Cron rename.
+
+Scoped to files this PR already touches; the other pre-existing gofmt
+offenders under sdk/go are left alone.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (081b53e)
+
+
+
+### Fixed
+
+- Fix(sdk/python): add lock timeouts + offload blocking requests fallback (#620) (#904)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* fix(sdk/python): add lock timeouts + offload blocking requests fallback (#620)
+
+Slice 4 of #620: prevents indefinite hangs from contended locks and
+offloads the remaining blocking HTTP call in an async function.
+
+Lock timeouts:
+- New agentfield/lock_utils.py: timed_lock() context manager that
+  acquires with a configurable timeout (default 30s, env var
+  AGENTFIELD_LOCK_TIMEOUT_SECONDS) and raises LockTimeoutError with
+  diagnostic info instead of hanging.
+- Applied to all lock sites in result_cache.py (11), cost_tracker.py (8),
+  node_logs.py (7) — the 26 highest-contention acquisitions.
+
+Blocking request offload:
+- memory_events.py history() fallback: the blocking requests.get() in
+  the async function's ImportError path is now offloaded to
+  loop.run_in_executor() so it doesn't freeze the event loop.
+- Removed the ASYNC210 per-file-ignore for memory_events.py (resolved).
+
+Running-loop guard:
+- client.execute_sync() now emits a RuntimeWarning when called from
+  within a running event loop, directing users to await execute() instead.
+
+Tests: 7 tests in test_lock_timeout.py covering timeout behaviour,
+reentrant locks, cross-thread contention, error attributes, and the
+execute_sync warning. 63 tests pass across the affected test surface.
+
+Part of #620.
+
+* fix(sdk/python): parse AGENTFIELD_LOCK_TIMEOUT_SECONDS defensively
+
+DEFAULT_LOCK_TIMEOUT was resolved with a bare float() at import time, so a
+malformed value took down `import agentfield` altogether. The empty-string
+case is the common one: `AGENTFIELD_LOCK_TIMEOUT_SECONDS=` in a compose
+`env:` block makes float("") raise from __init__.py -> result_cache.py ->
+lock_utils.py. A negative value imported fine but broke every lock op, since
+lock.acquire(timeout=-5) raises ValueError.
+
+Parsing now falls back to 30s for missing, empty, non-numeric, non-positive
+and non-finite values, warning through the module logger for the cases that
+look like a misconfiguration. Tests drive a fresh interpreter per value so
+the import-time path is the one under test.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): keep LockTimeoutError diagnostics visible on 3.11+
+
+On Python 3.11+ asyncio.TimeoutError is TimeoutError, so deriving from it
+made LockTimeoutError catchable by every `except asyncio.TimeoutError` up the
+stack. Agent.call wraps client.execute in asyncio.wait_for and that path goes
+through the result cache, so a real lock deadlock surfaced as "Execute call
+timed out" and the holder/wait diagnostics were lost.
+
+Deriving from RuntimeError instead keeps the message intact on all matrix
+versions. Nothing in the repo catches LockTimeoutError, so no call sites
+change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/python): harden execute_sync warning fixture, fix module docstring
+
+The __new__-based client only avoided real I/O by accident: execution died on
+a missing caller_agent_id attribute inside `except Exception: pass`. Give
+caller_agent_id a value and stub _submit_execution_sync with a sentinel, so
+the test asserts the RuntimeWarning and proves nothing was submitted — rather
+than depending on a crash that a class-level default would silence, turning
+the test into a live POST to localhost:8080 plus a polling loop.
+
+The module docstring also advertised a memory_events.history() test that was
+never written; say where that change is actually guarded instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (25821fc)
+
+- Fix(sdk/python): harden cross-loop teardown (#907)
+
+* fix(sdk/python): harden cross-loop teardown
+
+* fix(sdk/python): absorb both CPython cross-loop error wordings in task teardown
+
+cancel_and_await_if_same_loop only suppressed the asyncio/tasks.py wording
+("attached to a different loop"). CPython raises the same error class with a
+second wording from asyncio/mixins.py ("is bound to a different event loop")
+when a cancellation cleanup awaits a Lock/Event/Condition bound to a foreign
+loop, so that case re-raised out of teardown instead of being absorbed.
+
+Match both wordings. The regression test binds an asyncio.Event to a
+background thread's loop and awaits it from a cancelled task's cleanup on
+another loop, reproducing the mixins wording genuinely rather than raising a
+synthetic RuntimeError; the existing test asserting unrelated RuntimeErrors
+still propagate is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a2ea9e6)
+
+
+
+### Other
+
+- Seamless agent use: cloud-aware skill, native Codex install, self-healing skill sync (#910)
+
+* feat(skills): agentfield-use v0.6.0 — cloud-vs-local resolution, contract fetch, entry points only
+
+The skill now resolves which control plane work goes to before anything
+else: an explicit server or AGENTFIELD_SERVER wins, then the AgentField
+Desktop cloud config (settings.json cloud.enabled/serverUrl/apiKey, read
+from the per-OS app-data path), else the local default. A configured but
+unreachable cloud is a stop-and-report, never a silent fallback — the
+local and cloud fleets are disjoint. The target is passed explicitly per
+call (--server/-k), never exported.
+
+Dispatch gains two preconditions: fetch the reasoner's exact contract
+first (agent-summary / get_reasoner_schema; a vacuous schema means the
+description IS the contract), and only call entrypoint-tagged or
+described reasoners — undescribed run_* reasoners are internal pipeline
+stages. The workspace-handle flow is capability-gated (not every build
+ships get_workspace_handle), and process-wide serialization (swe-pro) is
+called out in the concurrency guidance.
+
+Also adds agentfield-personal to the embed sync script's list — edits to
+that skill previously never reached the embedded mirror.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skillkit): install Codex skills natively, self-heal broken targets, isolate tests from the real home
+
+Codex reads the cross-tool skills standard (~/.codex/skills/<name>/
+SKILL.md), not the AGENTS.override.md rules file the marker-block target
+wrote — so skills were never visible to Codex at all. The codex target
+now symlinks into ~/.codex/skills like claude-code, and install/update/
+uninstall strip any legacy agentfield marker block (deleting the rules
+file when only whitespace remains).
+
+Installs self-heal: the already-at-this-version skip now also requires
+the recorded artifact to be valid — symlinks must resolve inside the
+skill's canonical store, marker blocks must exist and point at a real
+SKILL.md, and a recorded method that differs from the target's current
+one is invalid by definition (which is what migrates legacy Codex
+entries). Machines in the wild carry state pointing at deleted temp
+directories; a matching version over a broken artifact previously meant
+the target was never repaired.
+
+Those deleted temp paths came from skillkit's own tests: they isolated
+AGENTFIELD_HOME but resolved targets against the real home, so go test
+rewrote real ~/.codex/AGENTS.override.md files. A package TestMain now
+pins HOME/USERPROFILE/AGENTFIELD_HOME to temp dirs, and a regression
+test runs a full InstallAll and fingerprints the real home before/after.
+
+af skill install/update now exit non-zero when any skill or target
+fails (report printed first), and InstallAll continues past a failing
+skill instead of abandoning the rest of the catalog.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(agentic): bound agent-summary payloads and return descriptions in reasoner search
+
+GET /api/v1/agentic/agent/:id/summary inlined every execution payload
+from the last 24h — unbounded, often megabytes — making the best
+contract-discovery surface unusable for coding agents. The query now
+excludes payloads, sorts newest-first, and is capped at 500 rows;
+metrics_24h stays exact over the window while recent_executions is
+sliced to 20. Reasoner descriptions in the summary now apply the same
+legacy-metadata fallback as discovery.
+
+Reasoner search results carry the (truncated) description — previously
+description was scored for ranking and then discarded, forcing a second
+round trip before dispatch — and the search index now prefers the
+registered description over the legacy metadata map, which also makes
+current-SDK descriptions searchable.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): observable skill sync with re-sync triggers and honest dashboard state
+
+Skill sync previously spawned af skill install with stdio ignored, an
+empty error handler, and no exit-code check, ran only once at launch,
+and the dashboard claimed skills were installed based on the settings
+boolean alone. A new SkillSync module captures output (64KB cap, 120s
+timeout), records the last sync result, appends to
+<logs>/skill-sync.log, and serializes concurrent triggers. Syncs run at
+launch, when installSkills flips on, and after a CLI update. The
+dashboard row now renders from the recorded result: installed only
+after an exit-0 sync, a visible failure message otherwise.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skills): §0 probes the Windows desktop config from WSL
+
+On WSL machines the desktop app usually lives on the Windows side, but a
+Linux-side settings.json (written by a Linux desktop install, often with
+no cloud key at all) can exist too. §0's "first file that exists" rule
+stopped there, never saw the Windows cloud config, and resolved to
+local — reproducing the exact silent-local-fallback incident this skill
+exists to prevent.
+
+§0 now checks every path that applies to the machine: a config file
+without an enabled cloud no longer ends the search, and under WSL
+(detected via /proc/version) the Windows side is probed at
+/mnt/c/Users/*/AppData/Roaming/agentfield-desktop/settings.json after
+the Linux path. First file declaring an enabled cloud wins.
+
+Found by rehearsing the desktop-to-cloud happy path on a WSL+Windows
+machine where the split-brain is live.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (0256b37)
+
 ## [0.1.128-rc.2] - 2026-08-12
 
 

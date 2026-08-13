@@ -1,19 +1,62 @@
 ---
 name: agentfield-use
-version: 0.5.0
-description: "Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill."
+version: 0.6.0
+description: "Discover and call agents already running on a local or cloud AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Resolves the right control plane (desktop-configured cloud first), fetches the reasoner's exact contract before dispatching, and only calls entry-point reasoners. Not for building new agents — that is the agentfield skill."
 ---
 
 # Using AgentField agents
 
-A machine with AgentField has a **control plane** (default `http://localhost:8080`,
-override via `AGENTFIELD_SERVER`) and **agent nodes** installed under
-`~/.agentfield`. Each node exposes **reasoners** — typed functions you call over
-HTTP. You never talk to an agent's own port: every call goes through the control
-plane, which routes it, records the workflow, and returns the result.
+A machine with AgentField has one or more **control planes** — a local one
+(default `http://localhost:8080`) and possibly a **cloud deployment**
+configured in AgentField Desktop — plus **agent nodes** installed under
+`~/.agentfield`. Each node exposes **reasoners** — typed functions you call
+over HTTP. You never talk to an agent's own port: every call goes through the
+control plane, which routes it, records the workflow, and returns the result.
 
-In local mode there is no auth. If the server has an API key configured, send it
-as `X-API-Key: <key>` on every request.
+**Resolve which control plane you are targeting before anything else (§0).**
+The local and cloud fleets are disjoint: different agents, different versions,
+different filesystems, different run history. Nothing ever falls back from one
+to the other on its own.
+
+A local server in local mode has no auth. A cloud deployment (and any server
+with an API key configured) requires `X-API-Key: <key>` on every request.
+
+## 0. Resolve the server first (local vs cloud)
+
+Resolution order — stop at the first match:
+
+1. **Explicit wins.** The user named a server, or `AGENTFIELD_SERVER` is set in
+   the environment → use that.
+2. **Read the desktop cloud config.** Check every path that applies to this
+   machine — a file that exists but declares no enabled cloud does NOT end
+   the search:
+   - macOS: `~/Library/Application Support/agentfield-desktop/settings.json`
+   - Windows: `%APPDATA%/agentfield-desktop/settings.json`
+   - Linux: `~/.config/agentfield-desktop/settings.json`
+   - WSL (detect: `grep -qi microsoft /proc/version`): the Linux path above
+     first, then the Windows side, where the desktop app usually lives:
+     `/mnt/c/Users/*/AppData/Roaming/agentfield-desktop/settings.json`.
+     A Linux-side file with no `cloud` key shadowing a Windows file that
+     holds the real cloud config is the common split-brain — the enabled
+     cloud wins, whichever side declares it.
+   The first file declaring `cloud.enabled: true` with a non-empty
+   `cloud.serverUrl` makes the cloud the target: strip any trailing slash
+   from the URL and take `cloud.apiKey` as the key. Health-check it
+   (`GET <url>/health` with `X-API-Key`).
+   - Healthy → use the cloud for everything below.
+   - Unreachable → **stop and tell the user their cloud control plane is
+     configured but not responding.** Do NOT silently fall back to local:
+     work dispatched there lands on a different fleet with different
+     filesystems, which is worse than no dispatch.
+3. **Otherwise use local:** `http://localhost:8080`.
+
+Then pass the target **explicitly on every call**: `af --server <url> -k <key>`
+(every `af` command accepts `-s/--server` and `-k/--api-key`), or the URL plus
+`-H 'X-API-Key: <key>'` for curl. Do not export `AGENTFIELD_SERVER` yourself to
+switch targets — a global default leaks into other processes and outlives the
+task; explicit per-call flags are the contract. If you'd rather not pass `-k`
+each time, `af auth login --server <url>` stores a key per server in
+`~/.agentfield/credentials.json`.
 
 ## MCP (zero-setup)
 
@@ -25,6 +68,8 @@ Claude Code:
 
 ```bash
 claude mcp add --transport http agentfield http://localhost:8080/mcp
+# cloud target (§0):
+claude mcp add --transport http agentfield https://<cloud-host>/mcp --header "X-API-Key: <key>"
 ```
 
 Other MCP clients: point them at the same streamable-HTTP URL
@@ -43,8 +88,11 @@ than the five tools give you.
 
 ## The flow
 
+0. Resolve the server (§0) — desktop-configured cloud first, explicit
+   `--server`/URL on every call.
 1. Health-check the control plane.
-2. Discover what agents and reasoners exist.
+2. Discover what agents and reasoners exist, and fetch the target reasoner's
+   exact contract before the first call.
 3. Execute — async for anything nontrivial. Fire independent calls concurrently.
 4. Poll (or stream) until the execution finishes — and watch for wedged runs.
 
@@ -54,10 +102,12 @@ than the five tools give you.
 curl -s http://localhost:8080/health
 ```
 
-Healthy: `200` with `{"status":"healthy", ...}`. Connection refused means no
-control plane is running — the user can open the AgentField desktop app, or you
-can start one in the background (`af server` blocks, so background it and poll
-`/health` until healthy).
+Healthy: `200` with `{"status":"healthy", ...}`. Connection refused on the
+**local** target means no control plane is running — the user can open the
+AgentField desktop app, or you can start one in the background (`af server`
+blocks, so background it and poll `/health` until healthy). If the resolved
+target is the desktop-configured **cloud** and this check fails, stop and
+report it (§0) — do not retarget local.
 
 ## 2. Discover agents and reasoners
 
@@ -105,6 +155,38 @@ Each hit carries `reasoner_id`, `agent_id`, `invocation_target`, `tags`,
 `score`, and `agent_health` — everything you need to dispatch with no second
 lookup. Build the execute target straight from `invocation_target` (colon → dot)
 and only dispatch to hits whose `agent_health` is `"active"`.
+
+### Fetch the exact contract before you dispatch — never guess inputs
+
+Search and discovery tell you a reasoner exists; they do not license a call.
+Before the first call to any reasoner, read its contract:
+
+```bash
+af agent agent-summary --id <agent_id> -s <server>   # all of an agent's reasoners: descriptions + input/output schemas + health + 24h metrics
+# single reasoner via MCP: get_reasoner_schema
+# or the fleet at once: curl -s "<server>/api/v1/discovery/capabilities?include_input_schema=true"
+```
+
+Read BOTH the description and the input schema, and follow them literally:
+
+- A schema of `{"type":"object"}` with no properties is NOT "anything goes" —
+  it means the agent registered no schema and **the description text is the
+  entire contract**. Field names, required-ness, and types stated there are
+  binding (e.g. swe-pro's `code_task`: `goal` and an **absolute** `dir` are
+  required; model pools are comma-separated strings, not arrays).
+- Result semantics live in the description too. Some agents report a failed
+  job in the RESULT (`status: "fail"`) while the execution itself reads
+  `succeeded` — check the result's own status field, not just the execution's.
+
+### Entry points only — undescribed reasoners are internal
+
+Agents register their internal pipeline stages alongside their public flows,
+and discovery lists all of them. Dispatch ONLY to reasoners that carry the
+`entrypoint` tag or a description. A reasoner with no description (e.g.
+swe-planner's `run_*` stages) or tagged `internal` is plumbing invoked by an
+orchestrator — calling it directly fails or corrupts a run. `af ls -e` lists
+tagged entry points; when in doubt, pick the described reasoner whose
+description names your use case.
 
 ### No coverage: offer to build it
 
@@ -161,7 +243,10 @@ batch now and poll as a group — not one-at-a-time. What to know:
 - Concurrent calls to the **same reasoner** are safe when the agent is (e.g.
   pr-af isolates concurrent reviews per PR). If an agent's docs don't say it's
   parallel-safe, assume same-target calls may contend on shared state and
-  stagger them; different agents never contend.
+  stagger them; different agents never contend. Some agents serialize ALL
+  executions process-wide (swe-pro queues concurrent `code_task` calls behind
+  one lock) — the reasoner description says so when known; dispatching more
+  than one heavy call to such a node just builds a queue.
 - Each call fans out inside the agent (one review ≈ dozens of sub-executions,
   several LLM CLI processes). 3–4 heavy runs per node is a sensible ceiling
   unless the agent documents otherwise.
@@ -267,7 +352,10 @@ so change files between issues or on a fork rather than while the agent writes.
 
 `get_workspace_handle` re-fetches a handle mid-run:
 `POST /api/v1/execute/<agent>.get_workspace_handle` with `{"input":{"run_id":"..."}}`.
-`{"available": false}` means no mirror — carry on without it.
+`{"available": false}` means no mirror — carry on without it. Not every build
+ships this reasoner: check the agent's reasoner list (discovery or
+`agent-summary`) before calling it; if it's absent, the node predates the
+mirror feature and results simply never carry a handle.
 
 **Several at once:** `POST /api/v1/executions/batch-status` with
 `{"execution_ids": [...]}`. Terminal entries embed the FULL result payload —
@@ -309,7 +397,9 @@ resolve from the `X-Workflow-ID` / `X-Session-ID` / `X-Actor-ID` headers).
 
 | Symptom | Meaning | Fix |
 |---|---|---|
-| connection refused on :8080 | control plane not running | desktop app, or background `af server` and poll `/health` |
+| connection refused on :8080 | local control plane not running | desktop app, or background `af server` and poll `/health` |
+| desktop-configured cloud unreachable | cloud deployment down, or URL/key stale | stop and tell the user (§0) — never silently retarget local |
+| 401/403 from a cloud target | missing or wrong `X-API-Key` | key from desktop `settings.json` `cloud.apiKey`, or `af auth login --server <url>` |
 | agent `inactive` in discovery / missing | node installed but not running (or not installed) | `af list`, then `af run <name>` — or `af install <source>` |
 | `missing required environment variables: X` from `af run` | required key not configured | `af secrets set X` (value via stdin/arg; `--node <name>` for node-scoped) — or desktop app → Agents → Keys |
 | HTTP 502 with `error_message` | the agent itself errored | read `af logs <name>`, fix, retry |
@@ -318,9 +408,14 @@ resolve from the `X-Workflow-ID` / `X-Session-ID` / `X-Actor-ID` headers).
 
 ## Local ops cheat sheet (af CLI)
 
+All commands accept `-s/--server <url>` and `-k/--api-key <key>` — required on
+every invocation when the resolved target is the cloud (§0).
+
 ```bash
 af list                    # installed agents + status
 af ls [query]              # search reasoners across running agents (NOT the install registry)
+af ls -e                   # only entry-point reasoners — the callable surface
+af agent agent-summary --id <name>   # full contract: reasoners, schemas, health, 24h metrics
 af ps                      # in-flight runs across all agents (af ps --agent <name>)
 af run <name>              # start (detached); af stop <name>
 af logs <name>             # agent logs (-f follows; no per-run filter — grep by run_id)
@@ -338,6 +433,13 @@ is enabled), and verify offline with `af verify audit.json`.
 
 ## Hard rules
 
+- Resolve the server per §0 and pass it explicitly (`--server` / full URL) on
+  every call. A desktop-configured cloud beats the local default; an
+  unreachable configured cloud is a stop-and-report, never a silent fallback.
+- Fetch the reasoner's contract before the first call. A vacuous schema means
+  the description is the contract — follow it literally.
+- Dispatch only to `entrypoint`-tagged or described reasoners. Undescribed or
+  `internal`-tagged reasoners are pipeline stages — never call them directly.
 - Every call goes through the control plane — never POST to an agent's own port.
   The one exception is a `workspace_handle`: its `ssh://` endpoint is a furrow
   transport, not the agent's HTTP port, and the per-run token in the handle is

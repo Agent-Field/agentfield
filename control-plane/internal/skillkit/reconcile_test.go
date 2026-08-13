@@ -24,6 +24,12 @@ func setupReconciliation(t *testing.T, state *State) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("AGENTFIELD_HOME", home)
+	// Targets resolve their install paths through os.UserHomeDir(), which
+	// AGENTFIELD_HOME does not cover: every one of these must be set or a
+	// reconcile test that installs into a real target writes into the running
+	// user's home. (TestMain already redirects it package-wide; this narrows
+	// it to one test.)
+	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	if err := SaveState(state); err != nil {
 		t.Fatal(err)

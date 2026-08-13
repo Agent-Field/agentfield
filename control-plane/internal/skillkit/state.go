@@ -13,24 +13,24 @@ import (
 // and which target integrations are active. Persisted at
 // ~/.agentfield/skills/.state.json.
 type State struct {
-	Version string                       `json:"state_version"`
-	Skills  map[string]InstalledSkill    `json:"skills"`
+	Version string                    `json:"state_version"`
+	Skills  map[string]InstalledSkill `json:"skills"`
 }
 
 // InstalledSkill records the installed-version state of a single skill.
 type InstalledSkill struct {
-	CurrentVersion    string                       `json:"current_version"`
-	InstalledAt       time.Time                    `json:"installed_at"`
-	AvailableVersions []string                     `json:"available_versions"`
-	Targets           map[string]InstalledTarget   `json:"targets"`
+	CurrentVersion    string                     `json:"current_version"`
+	InstalledAt       time.Time                  `json:"installed_at"`
+	AvailableVersions []string                   `json:"available_versions"`
+	Targets           map[string]InstalledTarget `json:"targets"`
 }
 
 // InstalledTarget records one target integration for one skill.
 type InstalledTarget struct {
-	TargetName  string    `json:"target_name"`  // "claude-code", "codex", ...
-	Method      string    `json:"method"`       // "symlink", "marker-block", "manual"
-	Path        string    `json:"path"`         // file or directory the integration writes to
-	Version     string    `json:"version"`      // version installed at this target
+	TargetName  string    `json:"target_name"` // "claude-code", "codex", ...
+	Method      string    `json:"method"`      // "symlink", "marker-block", "manual"
+	Path        string    `json:"path"`        // file or directory the integration writes to
+	Version     string    `json:"version"`     // version installed at this target
 	InstalledAt time.Time `json:"installed_at"`
 }
 

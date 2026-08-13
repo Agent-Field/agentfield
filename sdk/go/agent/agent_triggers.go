@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+
 	"github.com/Agent-Field/agentfield/sdk/go/triggers"
 	"github.com/Agent-Field/agentfield/sdk/go/types"
 )
@@ -70,4 +72,39 @@ func bindingToWire(b triggers.Binding) types.TriggerBinding {
 		SecretEnvVar: b.SecretEnv,
 		CodeOrigin:   b.CodeOrigin,
 	}
+}
+
+// applyTriggerDispatch detects a dispatcher trigger envelope in the raw input,
+// unwraps it, applies the matching binding's Transform, and returns the
+// resolved input plus a context carrying the *triggers.Context.
+//
+// For direct calls (no envelope) the input is returned unchanged and the
+// context is untouched, so triggers.FromContext(ctx) yields nil.
+//
+// This is the single place the dispatch-side trigger handling lives; both the
+// sync HTTP path and the async goroutine path route through it so their
+// behaviour cannot drift.
+func applyTriggerDispatch(
+	ctx context.Context,
+	reasoner *Reasoner,
+	input map[string]any,
+) (context.Context, map[string]any) {
+	unwrapped, tc := triggers.Unwrap(input)
+	if tc == nil {
+		// Direct call — nothing to do.
+		return ctx, input
+	}
+
+	// Run the matching binding's Transform (if any) against the event.
+	transformed := triggers.ApplyTransform(tc, reasoner.triggerBindings, unwrapped)
+
+	resolved, ok := transformed.(map[string]any)
+	if !ok {
+		// A Transform may legitimately return a non-object (e.g. a slice or
+		// scalar). The HandlerFunc contract is map[string]any, so wrap it
+		// under a conventional key rather than dropping the value.
+		resolved = map[string]any{"input": transformed}
+	}
+
+	return triggers.NewContext(ctx, tc), resolved
 }

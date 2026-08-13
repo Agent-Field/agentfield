@@ -1,6 +1,7 @@
 package skillkit
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -126,9 +127,13 @@ func install(opts InstallOptions, reconcile bool) (*InstallReport, error) {
 	}
 
 	for _, t := range selected {
-		// Skip if already at this version and not forced.
+		// Skip if already at this version and not forced — but only when the
+		// recorded integration is really there. A matching version over a
+		// missing, stale, or legacy-method artifact is exactly the case that
+		// leaves a machine permanently broken, so it reinstalls instead.
 		if !opts.Force {
-			if existing, ok := skillState.Targets[t.Name()]; ok && existing.Version == skill.Version {
+			if existing, ok := skillState.Targets[t.Name()]; ok && existing.Version == skill.Version &&
+				installedArtifactValid(skill, t, existing) {
 				report.TargetsSkipped = append(report.TargetsSkipped, SkipReason{
 					TargetName: t.Name(),
 					Reason:     fmt.Sprintf("already installed at v%s (use --force to reinstall)", existing.Version),
@@ -182,16 +187,46 @@ func InstallAll(opts InstallOptions) ([]*InstallReport, error) {
 		}
 	}
 	reports := make([]*InstallReport, 0, len(Catalog))
+	var failures []error
 	for _, s := range Catalog {
 		o := opts
 		o.SkillName = s.Name
 		report, err := install(o, false)
 		if err != nil {
-			return reports, err
+			// One broken skill must not cost the user every skill after it in
+			// the catalog: record the failure and keep going, then return them
+			// all together so the caller can still exit non-zero.
+			failures = append(failures, fmt.Errorf("skill %q: %w", s.Name, err))
+			continue
 		}
 		reports = append(reports, report)
 	}
-	return reports, nil
+	return reports, errors.Join(failures...)
+}
+
+// ReportError returns a non-nil error when any target in the report failed to
+// install, so callers (the CLI) can exit non-zero after printing the report
+// rather than reporting success over a pile of failures.
+func (r *InstallReport) ReportError() error {
+	if r == nil || len(r.TargetsFailed) == 0 {
+		return nil
+	}
+	errs := make([]error, 0, len(r.TargetsFailed))
+	for _, failed := range r.TargetsFailed {
+		errs = append(errs, fmt.Errorf("%s: %s: %w", r.Skill.Name, failed.TargetName, failed.Err))
+	}
+	return errors.Join(errs...)
+}
+
+// ReportsError aggregates ReportError across a batch of reports (InstallAll).
+func ReportsError(reports []*InstallReport) error {
+	errs := make([]error, 0, len(reports))
+	for _, report := range reports {
+		if err := report.ReportError(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Uninstall removes a skill from the named targets (or all if empty), and
