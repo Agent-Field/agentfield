@@ -45,7 +45,13 @@ const (
 // name is used as the reasoner id on the trace node. input and the returned
 // result are attached to the events after size capping; pass a digest rather
 // than full artifacts for large payloads.
+//
+// A nil receiver runs fn untraced, so test code exercising wrapped functions
+// with a nil *Agent keeps working.
 func (a *Agent) Span(ctx context.Context, name string, input map[string]any, fn func(ctx context.Context) (any, error)) (result any, err error) {
+	if a == nil {
+		return fn(ctx)
+	}
 	parent := executionContextFrom(ctx)
 	child := a.buildChildContext(parent, name)
 	ctx = contextWithExecution(ctx, child)

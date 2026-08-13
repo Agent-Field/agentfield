@@ -234,6 +234,15 @@ func TestSpanTruncatesLargePayloads(t *testing.T) {
 	}
 }
 
+func TestSpanNilAgentRunsUntraced(t *testing.T) {
+	var ag *Agent
+	res, err := ag.Span(context.Background(), "untraced", nil, func(ctx context.Context) (any, error) {
+		return "ok", nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "ok", res)
+}
+
 func TestSpanWithoutControlPlaneStillRuns(t *testing.T) {
 	cfg := Config{
 		NodeID:  "node-1",
