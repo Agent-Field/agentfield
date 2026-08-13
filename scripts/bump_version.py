@@ -238,7 +238,10 @@ def update_requirements(version: SemVer) -> None:
         lines = path.read_text(encoding="utf-8").splitlines()
         replaced = False
         for idx, line in enumerate(lines):
-            if line.strip().startswith("agentfield"):
+            # Match the agentfield distribution only (bare or with a version
+            # specifier), not other packages that share the prefix, e.g.
+            # agentfield-cli or agentfield_extras.
+            if re.match(r"^agentfield\s*(?:[<>=~!].*)?$", line.strip()):
                 lines[idx] = f"agentfield>={version}"
                 replaced = True
                 break
