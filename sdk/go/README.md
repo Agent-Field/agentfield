@@ -22,7 +22,8 @@ import (
 
 func main() {
     agent, err := agentfieldagent.New(agentfieldagent.Config{
-        NodeID:   "example-agent",
+        NodeID:        "example-agent",
+        Version:       "1.0.0",
         AgentFieldURL: "http://localhost:8080",
     })
     if err != nil {
@@ -86,12 +87,15 @@ The `client` package provides methods for requesting human approval, checking st
 ```go
 import "github.com/Agent-Field/agentfield/sdk/go/client"
 
-approvalClient := client.New("http://localhost:8080", nil)
+approvalClient, err := client.New("http://localhost:8080")
+if err != nil {
+    log.Fatal(err)
+}
 approvalRequestID := "req-abc123"
 
 // Create the human-facing approval request in your approval service first,
 // then pass its ID/URL to AgentField so the execution transitions to "waiting".
-_, err := approvalClient.RequestApproval(ctx, nodeID, executionID,
+_, err = approvalClient.RequestApproval(ctx, nodeID, executionID,
     client.RequestApprovalRequest{
         ApprovalRequestID:  approvalRequestID,
         ApprovalRequestURL: "https://approvals.example.com/review/" + approvalRequestID,
