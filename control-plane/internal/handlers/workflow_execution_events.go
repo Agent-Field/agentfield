@@ -43,43 +43,68 @@ func WorkflowExecutionEventHandler(store ExecutionStore) gin.HandlerFunc {
 		ctx := c.Request.Context()
 		now := time.Now().UTC()
 
-		existing, err := store.GetExecutionRecord(ctx, req.ExecutionID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to load execution: %v", err)})
-			return
-		}
-
-		if existing == nil {
-			if err := store.CreateExecutionRecord(ctx, buildExecutionRecordFromEvent(&req, now)); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create execution: %v", err)})
+		// Events for the same execution_id are not strictly ordered and may
+		// arrive concurrently (the Go SDK ships span "running" events from an
+		// async queue while terminal events are sent synchronously). Two such
+		// requests can both observe "no row" and race to insert; the loser
+		// must re-read and merge via the update path rather than fail — a
+		// dropped terminal event would leave the node dangling in "running"
+		// forever. Bounded retry: each iteration either creates, merges, or
+		// observes the racing writer's row on the next read.
+		var lastErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			existing, err := store.GetExecutionRecord(ctx, req.ExecutionID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to load execution: %v", err)})
 				return
 			}
-			// Also ensure a workflow_executions record exists so that
-			// approval endpoints (which query workflow_executions) work
-			// for executions reported through this event-based path.
-			wfExec := buildWorkflowExecutionFromEvent(&req, now)
-			if storeErr := store.StoreWorkflowExecution(ctx, wfExec); storeErr != nil {
-				// Non-fatal: the lightweight record was already created.
-				// Log but don't fail the request.
-				fmt.Printf("WARN: failed to create workflow execution record for %s: %v\n", req.ExecutionID, storeErr)
+
+			if existing == nil {
+				if err := store.CreateExecutionRecord(ctx, buildExecutionRecordFromEvent(&req, now)); err != nil {
+					// Likely a unique-constraint loss to a concurrent event
+					// for the same execution_id — re-read and merge.
+					lastErr = err
+					continue
+				}
+				// Also ensure a workflow_executions record exists so that
+				// approval endpoints (which query workflow_executions) work
+				// for executions reported through this event-based path.
+				wfExec := buildWorkflowExecutionFromEvent(&req, now)
+				if storeErr := store.StoreWorkflowExecution(ctx, wfExec); storeErr != nil {
+					// Non-fatal: the lightweight record was already created.
+					// Log but don't fail the request.
+					fmt.Printf("WARN: failed to create workflow execution record for %s: %v\n", req.ExecutionID, storeErr)
+				}
+				c.JSON(http.StatusOK, gin.H{"success": true, "created": true})
+				return
 			}
-			c.JSON(http.StatusOK, gin.H{"success": true, "created": true})
+
+			rowVanished := false
+			_, err = store.UpdateExecutionRecord(ctx, req.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+				if current == nil {
+					// Row deleted between read and update (e.g. cleanup) —
+					// UpdateExecutionRecord's UPDATE would affect zero rows,
+					// so signal the outer loop to re-create instead.
+					rowVanished = true
+					return nil, nil
+				}
+				applyEventToExecution(current, &req, now)
+				return current, nil
+			})
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update execution: %v", err)})
+				return
+			}
+			if rowVanished {
+				lastErr = fmt.Errorf("execution %s disappeared during update", req.ExecutionID)
+				continue
+			}
+
+			c.JSON(http.StatusOK, gin.H{"success": true, "updated": true})
 			return
 		}
 
-		_, err = store.UpdateExecutionRecord(ctx, req.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
-			if current == nil {
-				return buildExecutionRecordFromEvent(&req, now), nil
-			}
-			applyEventToExecution(current, &req, now)
-			return current, nil
-		})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update execution: %v", err)})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"success": true, "updated": true})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to persist execution event after retries: %v", lastErr)})
 	}
 }
 
@@ -122,6 +147,13 @@ func buildExecutionRecordFromEvent(req *WorkflowExecutionEventRequest, now time.
 	if types.IsTerminalExecutionStatus(status) {
 		completed := now
 		exec.CompletedAt = &completed
+		// A node created from its terminal event alone (start event shed or
+		// lost) would otherwise get StartedAt == CompletedAt — a zero-width
+		// timeline bar sorted by arrival rather than by when the work began.
+		// The terminal event carries the measured duration, so backdate.
+		if req.DurationMS != nil && *req.DurationMS > 0 {
+			exec.StartedAt = now.Add(-time.Duration(*req.DurationMS) * time.Millisecond)
+		}
 	}
 
 	return exec
@@ -199,17 +231,17 @@ func buildWorkflowExecutionFromEvent(req *WorkflowExecutionEventRequest, now tim
 	workflowName := fmt.Sprintf("%s.%s", agentNodeID, reasonerID)
 
 	wfExec := &types.WorkflowExecution{
-		WorkflowID:  runID,
-		ExecutionID: req.ExecutionID,
-		RunID:       &runID,
-		AgentNodeID: agentNodeID,
-		ReasonerID:  reasonerID,
-		Status:      status,
-		InputData:   inputPayload,
-		OutputData:  outputPayload,
-		StartedAt:   now,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		WorkflowID:   runID,
+		ExecutionID:  req.ExecutionID,
+		RunID:        &runID,
+		AgentNodeID:  agentNodeID,
+		ReasonerID:   reasonerID,
+		Status:       status,
+		InputData:    inputPayload,
+		OutputData:   outputPayload,
+		StartedAt:    now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 		WorkflowName: &workflowName,
 	}
 
