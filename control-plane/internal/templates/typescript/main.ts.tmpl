@@ -5,8 +5,10 @@ import { reasonersRouter } from './reasoners.js';
 
 async function main() {
   const agent = new Agent({
-    nodeId: process.env.AGENT_ID ?? "{{.NodeID}}",
-    agentFieldUrl: process.env.AGENTFIELD_URL ?? 'http://localhost:8080',
+    // AGENTFIELD_SERVER / AGENT_NODE_ID are the names used across SDKs and
+    // docs; AGENTFIELD_URL / AGENT_ID remain supported for existing setups.
+    nodeId: process.env.AGENT_NODE_ID ?? process.env.AGENT_ID ?? "{{.NodeID}}",
+    agentFieldUrl: process.env.AGENTFIELD_SERVER ?? process.env.AGENTFIELD_URL ?? 'http://localhost:8080',
     port: Number(process.env.PORT ?? 8001),
     version: '1.0.0',
     devMode: true,
