@@ -9,6 +9,9 @@ async function main() {
     port: Number(process.env.PORT ?? 8001),
     version: '1.0.0',
     devMode: true,
+    // URL the control plane uses to reach this agent. Needed when the
+    // agent is not on the control plane's localhost (e.g. Docker Compose).
+    publicUrl: process.env.AGENT_CALLBACK_URL,
 
     // 🔧 Uncomment to enable AI features:
     // aiConfig: {

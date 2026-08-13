@@ -5,29 +5,27 @@ import "testing"
 func TestGetDockerTemplateFiles(t *testing.T) {
 	t.Parallel()
 
+	// docker-compose.yml.tmpl builds the agent service from `dockerfile:
+	// Dockerfile`, so every supported language must map a Dockerfile template.
 	tests := []struct {
-		name           string
-		language       string
-		wantFile       string
-		wantDest       string
-		wantDockerfile bool
+		name     string
+		language string
+		wantFile string
 	}{
 		{
-			name:           "python includes language dockerfile",
-			language:       "python",
-			wantFile:       "docker/python.Dockerfile.tmpl",
-			wantDest:       "Dockerfile",
-			wantDockerfile: true,
+			name:     "python includes language dockerfile",
+			language: "python",
+			wantFile: "docker/python.Dockerfile.tmpl",
 		},
 		{
-			name:           "go omits language dockerfile",
-			language:       "go",
-			wantDockerfile: false,
+			name:     "go includes language dockerfile",
+			language: "go",
+			wantFile: "docker/go.Dockerfile.tmpl",
 		},
 		{
-			name:           "typescript omits language dockerfile",
-			language:       "typescript",
-			wantDockerfile: false,
+			name:     "typescript includes language dockerfile",
+			language: "typescript",
+			wantFile: "docker/typescript.Dockerfile.tmpl",
 		},
 	}
 
@@ -50,13 +48,18 @@ func TestGetDockerTemplateFiles(t *testing.T) {
 				}
 			}
 
-			_, hasDockerfile := got["docker/python.Dockerfile.tmpl"]
-			if hasDockerfile != tt.wantDockerfile {
-				t.Fatalf("GetDockerTemplateFiles(%q) python dockerfile present = %v, want %v", tt.language, hasDockerfile, tt.wantDockerfile)
+			if got[tt.wantFile] != "Dockerfile" {
+				t.Fatalf("GetDockerTemplateFiles(%q)[%q] = %q, want %q", tt.language, tt.wantFile, got[tt.wantFile], "Dockerfile")
 			}
 
-			if tt.wantDockerfile && got[tt.wantFile] != tt.wantDest {
-				t.Fatalf("GetDockerTemplateFiles(%q)[%q] = %q, want %q", tt.language, tt.wantFile, got[tt.wantFile], tt.wantDest)
+			dockerfiles := 0
+			for path := range got {
+				if got[path] == "Dockerfile" {
+					dockerfiles++
+				}
+			}
+			if dockerfiles != 1 {
+				t.Fatalf("GetDockerTemplateFiles(%q) maps %d Dockerfile templates, want exactly 1", tt.language, dockerfiles)
 			}
 		})
 	}

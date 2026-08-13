@@ -105,6 +105,10 @@ func GetDockerTemplateFiles(language string) map[string]string {
 	switch language {
 	case "python":
 		files["docker/python.Dockerfile.tmpl"] = "Dockerfile"
+	case "go":
+		files["docker/go.Dockerfile.tmpl"] = "Dockerfile"
+	case "typescript":
+		files["docker/typescript.Dockerfile.tmpl"] = "Dockerfile"
 	}
 	return files
 }
