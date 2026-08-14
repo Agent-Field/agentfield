@@ -8,7 +8,7 @@ const pageState = vi.hoisted(() => ({
   adminToken: "admin-token" as string | null,
   invalidateQueries: vi.fn(),
   probeQuery: {
-    data: true,
+    data: "token-required" as string | undefined,
     isLoading: false,
     isSuccess: true,
     isError: false,
@@ -208,7 +208,7 @@ describe("AccessManagementPage", () => {
     pageState.invalidateQueries.mockReset();
     pageState.policiesQuery.refetch.mockReset();
     pageState.probeQuery = {
-      data: true,
+      data: "token-required",
       isLoading: false,
       isSuccess: true,
       isError: false,
@@ -242,7 +242,7 @@ describe("AccessManagementPage", () => {
 
   it("shows the disabled-server guidance when admin routes are unavailable", () => {
     pageState.probeQuery = {
-      data: false,
+      data: "unavailable",
       isLoading: false,
       isSuccess: true,
       isError: false,
@@ -283,5 +283,49 @@ describe("AccessManagementPage", () => {
       queryKey: ["access-management"],
     });
     expect(pageState.policiesQuery.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the admin token card when the server enforces no token", () => {
+    pageState.probeQuery.data = "open";
+    pageState.adminToken = null;
+
+    render(<AccessManagementPage />);
+
+    expect(screen.queryByRole("button", { name: "Save token" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Browser admin token")).not.toBeInTheDocument();
+    expect(screen.getByText("Rules can mutate: true")).toBeInTheDocument();
+  });
+
+  it("offers cleanup when a token is stored but the server enforces none", () => {
+    pageState.probeQuery.data = "open";
+    pageState.adminToken = "stale-token";
+
+    render(<AccessManagementPage />);
+
+    expect(screen.getByText(/doesn't enforce an admin token/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save token" })).toBeInTheDocument();
+  });
+
+  it("prompts for the admin token and gates mutations when the server enforces one", () => {
+    pageState.probeQuery.data = "token-required";
+    pageState.adminToken = null;
+
+    render(<AccessManagementPage />);
+
+    expect(screen.getByRole("button", { name: "Save token" })).toBeInTheDocument();
+    expect(screen.getByText("Rules can mutate: false")).toBeInTheDocument();
+  });
+
+  it("surfaces an API key problem instead of claiming routes are available", () => {
+    pageState.probeQuery.data = "unauthorized";
+    pageState.adminToken = null;
+
+    render(<AccessManagementPage />);
+
+    expect(screen.getByText("Your API key was rejected")).toBeInTheDocument();
+    expect(screen.getByText("Rules can mutate: false")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Authorization APIs are not enabled on this server"),
+    ).not.toBeInTheDocument();
   });
 });

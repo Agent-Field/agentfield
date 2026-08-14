@@ -7,7 +7,7 @@ vi.mock("@/services/api", () => ({
 
 import { getGlobalAdminToken, getGlobalApiKey } from "@/services/api";
 import { countPendingAgentTags, getAgentTagRowStatus } from "@/lib/governanceUtils";
-import { areGovernanceAdminRoutesAvailable } from "@/lib/governanceProbe";
+import { probeGovernanceAdminAccess } from "@/lib/governanceProbe";
 import { queryClient } from "@/lib/query-client";
 import { getStatusBadgeClasses, getStatusTone, statusTone } from "@/lib/theme";
 import { getNextTimeRange, TIME_RANGE_OPTIONS } from "@/lib/timeRanges";
@@ -91,28 +91,40 @@ describe("lib helpers", () => {
     ).toBe(1);
   });
 
-  it("uses auth headers when probing governance admin routes", async () => {
+  it("probes governance admin routes with the API key but never the admin token", async () => {
     vi.mocked(getGlobalApiKey).mockReturnValue("api-key");
+    // Even with a token stored, the probe must omit it: the tokenless status
+    // is what discriminates "open" (200) from "token-required" (403).
     vi.mocked(getGlobalAdminToken).mockReturnValue("admin-token");
-    globalThis.fetch = vi.fn().mockResolvedValue({ status: 200 });
+    globalThis.fetch = vi.fn().mockResolvedValue({ status: 200, ok: true });
 
-    await expect(areGovernanceAdminRoutesAvailable()).resolves.toBe(true);
+    await expect(probeGovernanceAdminAccess()).resolves.toBe("open");
     expect(globalThis.fetch).toHaveBeenCalledWith("/api/v1/admin/policies", {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
         "X-Api-Key": "api-key",
-        "X-Admin-Token": "admin-token",
       },
     });
   });
 
-  it("treats a 404 governance probe as unavailable", async () => {
+  it("maps each governance probe status to an access state", async () => {
     vi.mocked(getGlobalApiKey).mockReturnValue(null);
     vi.mocked(getGlobalAdminToken).mockReturnValue(null);
-    globalThis.fetch = vi.fn().mockResolvedValue({ status: 404 });
 
-    await expect(areGovernanceAdminRoutesAvailable()).resolves.toBe(false);
+    globalThis.fetch = vi.fn().mockResolvedValue({ status: 403, ok: false });
+    await expect(probeGovernanceAdminAccess()).resolves.toBe("token-required");
+
+    globalThis.fetch = vi.fn().mockResolvedValue({ status: 404, ok: false });
+    await expect(probeGovernanceAdminAccess()).resolves.toBe("unavailable");
+
+    globalThis.fetch = vi.fn().mockResolvedValue({ status: 401, ok: false });
+    await expect(probeGovernanceAdminAccess()).resolves.toBe("unauthorized");
+
+    globalThis.fetch = vi.fn().mockResolvedValue({ status: 500, ok: false });
+    await expect(probeGovernanceAdminAccess()).rejects.toThrow(
+      "Governance probe failed with status 500",
+    );
   });
 
   it("configures the shared query client defaults", () => {
