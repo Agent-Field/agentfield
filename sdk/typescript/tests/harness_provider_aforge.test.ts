@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AforgeProvider } from '../src/harness/providers/aforge.js';
 import { buildProvider, SUPPORTED_PROVIDERS } from '../src/harness/providers/factory.js';
@@ -37,6 +37,10 @@ afterEach(() => {
   delete process.env.AGENTFIELD_HARNESS_TIMEOUT_SECONDS;
   delete process.env.AFORGE_BIN;
   delete process.env.AGENTFIELD_AFORGE_COMMAND;
+});
+
+beforeEach(() => {
+  process.env.AGENTFIELD_AFORGE_COMMAND = 'do';
 });
 
 describe('aforge provider', () => {
@@ -101,7 +105,7 @@ describe('aforge provider', () => {
   });
 
   it('maps the opt-in exec command and original envelope contract', async () => {
-    process.env.AGENTFIELD_AFORGE_COMMAND = 'exec';
+    delete process.env.AGENTFIELD_AFORGE_COMMAND;
     vi.spyOn(cli, 'runCli').mockResolvedValue({
       stdout: execEnvelope(' linear answer ', {
         turns: 4,

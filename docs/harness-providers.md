@@ -40,10 +40,11 @@ separately available executable depending on the wrapper and platform.
 ### Aforge drop-in usage
 
 Aforge is registered as `aforge` in the Python, Go, and TypeScript SDKs. The
-adapters all invoke the same non-interactive contract: `aforge do --json
---yes-spend`, send the task over stdin, and map Aforge's usage ledger into
-AgentField turns, token counts, and cost metrics. Install a current aforge-v2
-binary on `PATH`, set `OPENROUTER_API_KEY`, then select the provider:
+adapters default to the direct non-interactive contract, `aforge exec --json`,
+send the task over stdin, and map Aforge's usage ledger into AgentField turns,
+token counts, and cost metrics. Set `AGENTFIELD_AFORGE_COMMAND=do` to opt into
+the routed `aforge do --json --yes-spend` workflow instead. Install a current
+aforge-v2 binary on `PATH`, set `OPENROUTER_API_KEY`, then select the provider:
 
 ```python
 result = await app.harness(task, provider="aforge", model="openrouter/z-ai/glm-5.2")
@@ -67,7 +68,7 @@ Set `AFORGE_MAX_CONCURRENT` to cap simultaneous Aforge subprocesses. The
 default is 8. `AGENTFIELD_HARNESS_TIMEOUT_SECONDS` is the outer watchdog; each
 adapter gives Aforge a five-second landing window to emit its exit-2 timeout
 envelope. Schema runs use a unique output directory per invocation so parallel
-benchmark jobs can safely share a checkout. Set `AFORGE_BIN` to an absolute
+jobs can safely share a checkout. Set `AFORGE_BIN` to an absolute
 path when the unreleased binary is not installed on `PATH`.
 
 ## Model selection and reasoning-effort variants
@@ -87,7 +88,7 @@ An explicit `variant="high"` keyword wins over the suffix. Per provider:
 
 | Provider | Model flag | Variant handling |
 | --- | --- | --- |
-| `aforge` | `AFORGE_MODEL` env var with a bare OpenRouter slug (a leading `openrouter/` is stripped) | `AFORGE_EXEC_REASONING` (`off`, `low`, `medium`, or `high`) |
+| `aforge` | `exec`: `--model` and `--plan-model`; `do`: `AFORGE_MODEL` (a leading `openrouter/` is stripped) | `AFORGE_EXEC_REASONING` (`off`, `low`, `medium`, or `high`) |
 | OpenCode | `-m <model>` | `--variant <v>` (provider-specific effort, e.g. `high`, `max`, `minimal`) |
 | Codex | `-m <model>` | `-c model_reasoning_effort=<v>` |
 | Claude Code | SDK `model` option | No effort control — variant is dropped with a debug log |

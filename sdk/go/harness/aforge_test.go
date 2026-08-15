@@ -31,7 +31,13 @@ func aforgeExecEnvelope(text, stop, usage string, turns int) string {
 		text, stop, usage, turns)
 }
 
+func useAforgeDo(t *testing.T) {
+	t.Helper()
+	t.Setenv("AGENTFIELD_AFORGE_COMMAND", "do")
+}
+
 func TestAforgeProviderMapsDoCommandEnvelopeAndMetrics(t *testing.T) {
+	useAforgeDo(t)
 	var capturedCmd []string
 	var capturedEnv map[string]string
 	var capturedCwd string
@@ -90,7 +96,7 @@ func TestAforgeProviderMapsDoCommandEnvelopeAndMetrics(t *testing.T) {
 }
 
 func TestAforgeProviderMapsExecCommandEnvelopeAndMetrics(t *testing.T) {
-	t.Setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+	t.Setenv("AGENTFIELD_AFORGE_COMMAND", "")
 	var capturedCmd []string
 	var capturedEnv map[string]string
 	var capturedStdin []byte
@@ -148,6 +154,7 @@ func TestAforgeProviderBinaryEnvironmentOverride(t *testing.T) {
 }
 
 func TestAforgeProviderModelVariantAndEnvironmentPrecedence(t *testing.T) {
+	useAforgeDo(t)
 	var captured []map[string]string
 	p := NewAforgeProvider("aforge")
 	p.runCLI = func(_ context.Context, _ []string, env map[string]string, _ string, _, _ int, _ []byte) (*CLIResult, error) {
@@ -180,6 +187,7 @@ func TestAforgeProviderModelVariantAndEnvironmentPrecedence(t *testing.T) {
 }
 
 func TestAforgeProviderRootAndTimeoutResolution(t *testing.T) {
+	useAforgeDo(t)
 	t.Setenv("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "2400")
 	var commands [][]string
 	var timeouts []int
@@ -202,6 +210,7 @@ func TestAforgeProviderRootAndTimeoutResolution(t *testing.T) {
 }
 
 func TestAforgeProviderExitSemantics(t *testing.T) {
+	useAforgeDo(t)
 	tests := []struct {
 		name        string
 		code        int
@@ -242,6 +251,7 @@ func TestAforgeProviderExitSemantics(t *testing.T) {
 }
 
 func TestAforgeProviderParsesLastEnvelopeAndLeavesZeroCostUnknown(t *testing.T) {
+	useAforgeDo(t)
 	p := NewAforgeProvider("aforge")
 	p.runCLI = func(context.Context, []string, map[string]string, string, int, int, []byte) (*CLIResult, error) {
 		return &CLIResult{Stdout: "stray diagnostic\n{\"type\":\"event\"}\n" +
@@ -255,6 +265,7 @@ func TestAforgeProviderParsesLastEnvelopeAndLeavesZeroCostUnknown(t *testing.T) 
 }
 
 func TestAforgeProviderParsesPrettyPrintedEnvelope(t *testing.T) {
+	useAforgeDo(t)
 	p := NewAforgeProvider("aforge")
 	p.runCLI = func(context.Context, []string, map[string]string, string, int, int, []byte) (*CLIResult, error) {
 		var value map[string]any
@@ -271,6 +282,7 @@ func TestAforgeProviderParsesPrettyPrintedEnvelope(t *testing.T) {
 }
 
 func TestAforgeProviderMissingBinaryAndTimeout(t *testing.T) {
+	useAforgeDo(t)
 	t.Run("missing binary", func(t *testing.T) {
 		p := NewAforgeProvider("aforge-missing")
 		p.runCLI = func(context.Context, []string, map[string]string, string, int, int, []byte) (*CLIResult, error) {
@@ -296,6 +308,7 @@ func TestAforgeProviderMissingBinaryAndTimeout(t *testing.T) {
 }
 
 func TestAforgeProviderConcurrencyLimit(t *testing.T) {
+	useAforgeDo(t)
 	t.Setenv("AFORGE_MAX_CONCURRENT", "2")
 	aforgeSemaphore = nil
 	aforgeSemOnce = sync.Once{}
@@ -333,6 +346,7 @@ func TestAforgeProviderConcurrencyLimit(t *testing.T) {
 }
 
 func TestAforgeRunnerConcurrentSameCwdUsesIsolatedSchemaFiles(t *testing.T) {
+	useAforgeDo(t)
 	cwd := t.TempDir()
 	script := writeTestScript(t, cwd, "aforge-test", `#!/bin/sh
 prompt=$(cat)

@@ -96,7 +96,7 @@ func aforgeTaskInput(prompt, systemPrompt string) string {
 func aforgeCommand() (string, error) {
 	command := strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFIELD_AFORGE_COMMAND")))
 	if command == "" {
-		return "do", nil
+		return "exec", nil
 	}
 	if command != "do" && command != "exec" {
 		return "", fmt.Errorf("AGENTFIELD_AFORGE_COMMAND must be do or exec, got %q", command)

@@ -130,8 +130,8 @@ function stringOptions(value: unknown): Record<string, string> {
 }
 
 /**
- * Aforge CLI provider. `do` is the default; set
- * `AGENTFIELD_AFORGE_COMMAND=exec` for the direct one-shot entry point.
+ * Aforge CLI provider. `exec` is the default direct one-shot entry point; set
+ * `AGENTFIELD_AFORGE_COMMAND=do` to opt into Aforge's routed workflow.
  */
 export class AforgeProvider implements HarnessProvider {
   private readonly bin: string;
@@ -153,7 +153,7 @@ export class AforgeProvider implements HarnessProvider {
     const cwd = typeof options.cwd === 'string' ? options.cwd : undefined;
     const root = projectDir ?? cwd ?? '.';
     const outerTimeout = timeoutSeconds();
-    const command = (process.env.AGENTFIELD_AFORGE_COMMAND ?? 'do').trim().toLowerCase();
+    const command = (process.env.AGENTFIELD_AFORGE_COMMAND ?? 'exec').trim().toLowerCase();
     if (command !== 'do' && command !== 'exec') {
       return createRawResult({
         isError: true,

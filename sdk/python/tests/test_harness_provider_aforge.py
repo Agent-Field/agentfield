@@ -16,6 +16,7 @@ def mock_aforge_available(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "agentfield.harness._availability.shutil.which", lambda path: path
     )
+    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", "do")
 
 
 def _envelope(
@@ -126,7 +127,7 @@ async def test_aforge_exec_mode_maps_original_contract_and_pins_model(
             0,
         )
 
-    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+    monkeypatch.delenv("AGENTFIELD_AFORGE_COMMAND")
     monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", fake_run_cli)
     raw = await AforgeProvider("/opt/aforge").execute(
         "prompt that stays off argv",

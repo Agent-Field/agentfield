@@ -90,8 +90,8 @@ def _crash_message(
 class AforgeProvider:
     """Aforge CLI provider.
 
-    ``do`` remains the default. Set ``AGENTFIELD_AFORGE_COMMAND=exec`` to use
-    Aforge's direct one-shot harness entry point.
+    ``exec`` is the default direct one-shot entry point. Set
+    ``AGENTFIELD_AFORGE_COMMAND=do`` to opt into Aforge's routed workflow.
     """
 
     _MAX_CONCURRENT: ClassVar[int] = int(os.environ.get("AFORGE_MAX_CONCURRENT", "8"))
@@ -130,7 +130,7 @@ class AforgeProvider:
         # Leave a small landing window so aforge can emit its honest timeout
         # envelope before the outer subprocess watchdog has to kill it.
         aforge_timeout = max(1, timeout_seconds - 5)
-        command = os.environ.get("AGENTFIELD_AFORGE_COMMAND", "do").strip().lower()
+        command = os.environ.get("AGENTFIELD_AFORGE_COMMAND", "exec").strip().lower()
         if command not in {"do", "exec"}:
             return RawResult(
                 is_error=True,

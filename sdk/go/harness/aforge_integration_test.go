@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAforgeProvider_Integration drives the real aforge binary and its `do`
-// JSON envelope. Set AFORGE_INTEGRATION=1 so TestMain does not shadow it.
+// TestAforgeProvider_Integration drives the real aforge binary and its default
+// `exec` JSON envelope. Set AFORGE_INTEGRATION=1 so TestMain does not shadow it.
 func TestAforgeProvider_Integration(t *testing.T) {
 	binPath, err := exec.LookPath("aforge")
 	if err != nil {

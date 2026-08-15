@@ -92,7 +92,7 @@ describe.skipIf(!HAS_AFORGE)('Aforge Functional', () => {
     cleanupWorkDir(workDir);
   });
 
-  it('basic prompt returns the do JSON deliverable and benchmark metrics', async () => {
+  it('basic prompt returns the exec JSON deliverable and provider metrics', async () => {
     const { AforgeProvider } = await import('../src/harness/providers/aforge.js');
     const result = await new AforgeProvider().execute(
       'Reply with exactly: HELLO_AGENTFIELD',
