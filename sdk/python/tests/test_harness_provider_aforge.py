@@ -39,6 +39,25 @@ def _envelope(
     return json.dumps(envelope)
 
 
+def _exec_envelope(
+    text: str = "done",
+    *,
+    stop: str = "done",
+    usage: dict[str, object] | None = None,
+    turns: int = 1,
+) -> str:
+    return json.dumps(
+        {
+            "text": text,
+            "stop": stop,
+            "usage": usage or {},
+            "artifacts": [],
+            "turns": turns,
+            "elapsed_ms": 12,
+        }
+    )
+
+
 @pytest.mark.asyncio
 async def test_aforge_success_maps_envelope_and_metrics(
     monkeypatch: pytest.MonkeyPatch,
@@ -79,6 +98,91 @@ async def test_aforge_success_maps_envelope_and_metrics(
     assert raw.metrics.duration_api_ms >= 0
     assert raw.returncode == 0
     assert raw.messages[0]["deliverable"] == " final answer "
+
+
+@pytest.mark.asyncio
+async def test_aforge_exec_mode_maps_original_contract_and_pins_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, object] = {}
+
+    async def fake_run_cli(
+        cmd, *, env=None, cwd=None, timeout=None, idle_seconds=None, input_text=None
+    ):
+        captured.update(cmd=cmd, env=env, input_text=input_text)
+        return (
+            _exec_envelope(
+                " linear answer ",
+                usage={
+                    "calls": 3,
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "cached_tokens": 20,
+                    "cost": 0.0123,
+                },
+                turns=4,
+            ),
+            "",
+            0,
+        )
+
+    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+    monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", fake_run_cli)
+    raw = await AforgeProvider("/opt/aforge").execute(
+        "prompt that stays off argv",
+        {
+            "project_dir": "/project",
+            "system_prompt": "  be precise  ",
+            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+        },
+    )
+
+    assert captured["cmd"] == [
+        "/opt/aforge",
+        "exec",
+        "--json",
+        "-w",
+        "/project",
+        "--timeout",
+        "1795",
+        "--context-fill",
+        "60",
+        "--completion-reserve",
+        "65536",
+        "--system",
+        "be precise",
+        "--model",
+        "deepseek/deepseek-v4-flash-0731",
+        "--plan-model",
+        "deepseek/deepseek-v4-flash-0731",
+    ]
+    assert captured["env"] == {
+        "AFORGE_MODELS": "",
+        "AFORGE_MODEL": "deepseek/deepseek-v4-flash-0731",
+    }
+    assert captured["input_text"] == "prompt that stays off argv"
+    assert raw.result == "linear answer"
+    assert raw.is_error is False
+    assert raw.metrics.num_turns == 4
+    assert raw.metrics.input_tokens == 100
+    assert raw.metrics.total_cost_usd == 0.0123
+
+
+@pytest.mark.asyncio
+async def test_aforge_exec_mode_accepts_budget_partial(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+    monkeypatch.setattr(
+        "agentfield.harness.providers.aforge.run_cli",
+        AsyncMock(return_value=(_exec_envelope("usable", stop="budget"), "", 2)),
+    )
+
+    raw = await AforgeProvider().execute("hello", {})
+
+    assert raw.result == "usable"
+    assert raw.is_error is False
+    assert raw.failure_type is FailureType.NONE
 
 
 def test_aforge_binary_environment_override(monkeypatch: pytest.MonkeyPatch):

@@ -18,10 +18,25 @@ function envelope(
   });
 }
 
+function execEnvelope(
+  text = 'done',
+  options: { stop?: string; usage?: Record<string, unknown>; turns?: number } = {}
+): string {
+  return JSON.stringify({
+    text,
+    stop: options.stop ?? 'done',
+    usage: options.usage ?? {},
+    artifacts: [],
+    turns: options.turns ?? 1,
+    elapsed_ms: 12,
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.AGENTFIELD_HARNESS_TIMEOUT_SECONDS;
   delete process.env.AFORGE_BIN;
+  delete process.env.AGENTFIELD_AFORGE_COMMAND;
 });
 
 describe('aforge provider', () => {
@@ -83,6 +98,71 @@ describe('aforge provider', () => {
       model: 'openrouter/z-ai/glm-5.2',
     });
     expect(result.messages[0].deliverable).toBe(' final answer ');
+  });
+
+  it('maps the opt-in exec command and original envelope contract', async () => {
+    process.env.AGENTFIELD_AFORGE_COMMAND = 'exec';
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: execEnvelope(' linear answer ', {
+        turns: 4,
+        usage: {
+          calls: 3,
+          prompt_tokens: 100,
+          completion_tokens: 50,
+          cached_tokens: 20,
+          cost: 0.0123,
+        },
+      }),
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const result = await new AforgeProvider('/opt/aforge').execute('prompt that stays off argv', {
+      projectDir: '/project',
+      systemPrompt: '  be precise  ',
+      model: 'openrouter/deepseek/deepseek-v4-flash-0731#high',
+    });
+
+    expect(cli.runCli).toHaveBeenCalledWith(
+      [
+        '/opt/aforge', 'exec', '--json', '-w', '/project', '--timeout', '1795',
+        '--context-fill', '60', '--completion-reserve', '65536',
+        '--system', 'be precise',
+        '--model', 'deepseek/deepseek-v4-flash-0731',
+        '--plan-model', 'deepseek/deepseek-v4-flash-0731',
+      ],
+      {
+        env: {
+          AFORGE_MODELS: '',
+          AFORGE_MODEL: 'deepseek/deepseek-v4-flash-0731',
+          AFORGE_EXEC_REASONING: 'high',
+        },
+        cwd: undefined,
+        timeout: 1_800_000,
+        idleSeconds: 0,
+        inputText: 'prompt that stays off argv',
+      }
+    );
+    expect(result.result).toBe('linear answer');
+    expect(result.isError).toBe(false);
+    expect(result.metrics.numTurns).toBe(4);
+    expect(result.metrics.inputTokens).toBe(100);
+    expect(result.metrics.totalCostUsd).toBe(0.0123);
+  });
+
+  it('accepts an exec budget partial with usable text', async () => {
+    process.env.AGENTFIELD_AFORGE_COMMAND = 'exec';
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: execEnvelope('usable', { stop: 'budget', turns: 2 }),
+      stderr: '',
+      exitCode: 2,
+    });
+
+    const result = await new AforgeProvider().execute('hello', {});
+
+    expect(result.result).toBe('usable');
+    expect(result.isError).toBe(false);
+    expect(result.failureType).toBe('none');
   });
 
   it('uses cwd as the root and gives aforge a timeout landing window', async () => {

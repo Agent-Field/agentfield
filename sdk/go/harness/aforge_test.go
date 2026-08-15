@@ -23,6 +23,14 @@ func aforgeEnvelope(deliverable string, settled bool, blockedOn, usage string) s
 		settled, deliverable, blockedOn, usage)
 }
 
+func aforgeExecEnvelope(text, stop, usage string, turns int) string {
+	if usage == "" {
+		usage = `{"calls":1,"prompt_tokens":0,"completion_tokens":0,"cached_tokens":0,"cost":0}`
+	}
+	return fmt.Sprintf(`{"text":%q,"stop":%q,"usage":%s,"artifacts":[],"turns":%d,"elapsed_ms":12}`,
+		text, stop, usage, turns)
+}
+
 func TestAforgeProviderMapsDoCommandEnvelopeAndMetrics(t *testing.T) {
 	var capturedCmd []string
 	var capturedEnv map[string]string
@@ -79,6 +87,58 @@ func TestAforgeProviderMapsDoCommandEnvelopeAndMetrics(t *testing.T) {
 	assert.InDelta(t, 0.0123, *raw.Metrics.CostUSD, 1e-9)
 	require.Len(t, raw.Messages, 1)
 	assert.Equal(t, " final answer ", raw.Messages[0]["deliverable"])
+}
+
+func TestAforgeProviderMapsExecCommandEnvelopeAndMetrics(t *testing.T) {
+	t.Setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+	var capturedCmd []string
+	var capturedEnv map[string]string
+	var capturedStdin []byte
+	p := NewAforgeProvider("/opt/aforge")
+	p.runCLI = func(_ context.Context, cmd []string, env map[string]string, _ string, _, _ int, stdin []byte) (*CLIResult, error) {
+		capturedCmd = append([]string(nil), cmd...)
+		capturedEnv = env
+		capturedStdin = append([]byte(nil), stdin...)
+		return &CLIResult{Stdout: aforgeExecEnvelope(" linear answer ", "done",
+			`{"calls":3,"prompt_tokens":100,"completion_tokens":50,"cached_tokens":20,"cost":0.0123}`, 4)}, nil
+	}
+
+	raw, err := p.Execute(context.Background(), "prompt that stays off argv", Options{
+		ProjectDir:   "/project",
+		SystemPrompt: "  be precise  ",
+		Model:        "openrouter/deepseek/deepseek-v4-flash-0731",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"/opt/aforge", "exec", "--json", "-w", "/project",
+		"--timeout", "1795", "--context-fill", "60", "--completion-reserve", "65536",
+		"--system", "be precise",
+		"--model", "deepseek/deepseek-v4-flash-0731",
+		"--plan-model", "deepseek/deepseek-v4-flash-0731",
+	}, capturedCmd)
+	assert.Equal(t, "", capturedEnv["AFORGE_MODELS"])
+	assert.Equal(t, "deepseek/deepseek-v4-flash-0731", capturedEnv["AFORGE_MODEL"])
+	assert.Equal(t, "prompt that stays off argv", string(capturedStdin))
+	assert.Equal(t, "linear answer", raw.Result)
+	assert.False(t, raw.IsError)
+	assert.Equal(t, 4, raw.Metrics.NumTurns)
+	assert.Equal(t, 100, raw.Metrics.InputTokens)
+	require.NotNil(t, raw.Metrics.CostUSD)
+	assert.InDelta(t, 0.0123, *raw.Metrics.CostUSD, 1e-9)
+}
+
+func TestAforgeProviderExecBudgetPartialIsUsable(t *testing.T) {
+	t.Setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+	p := NewAforgeProvider("aforge")
+	p.runCLI = func(context.Context, []string, map[string]string, string, int, int, []byte) (*CLIResult, error) {
+		return &CLIResult{Stdout: aforgeExecEnvelope("usable", "budget", "", 2), ReturnCode: 2}, nil
+	}
+
+	raw, err := p.Execute(context.Background(), "hello", Options{})
+	require.NoError(t, err)
+	assert.False(t, raw.IsError)
+	assert.Equal(t, FailureNone, raw.FailureType)
+	assert.Equal(t, "usable", raw.Result)
 }
 
 func TestAforgeProviderBinaryEnvironmentOverride(t *testing.T) {

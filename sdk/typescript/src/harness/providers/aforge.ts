@@ -56,12 +56,12 @@ function stripOpenRouterPrefix(model: string): string {
 }
 
 function parseEnvelope(stdout: string): Record<string, unknown> | undefined {
-  // Canonical `aforge do --json` output is one object, currently formatted
-  // across multiple lines. Parse that shape before falling back to the
-  // line-oriented form tolerated for wrappers that prepend diagnostics.
+  // Both canonical `do` and `exec` print one JSON object. Parse that shape
+  // before the wrapper-compatible line scan.
   try {
     const value: unknown = JSON.parse(stdout.trim());
-    if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'deliverable' in value) {
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)
+      && ('deliverable' in value || 'text' in value)) {
       return value as Record<string, unknown>;
     }
   } catch {
@@ -72,7 +72,8 @@ function parseEnvelope(stdout: string): Record<string, unknown> | undefined {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     try {
       const value: unknown = JSON.parse(lines[index]);
-      if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'deliverable' in value) {
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)
+        && ('deliverable' in value || 'text' in value)) {
         return value as Record<string, unknown>;
       }
     } catch {
@@ -128,7 +129,10 @@ function stringOptions(value: unknown): Record<string, string> {
   return result;
 }
 
-/** Aforge CLI provider using canonical `aforge do --json` one-shot mode. */
+/**
+ * Aforge CLI provider. `do` is the default; set
+ * `AGENTFIELD_AFORGE_COMMAND=exec` for the direct one-shot entry point.
+ */
 export class AforgeProvider implements HarnessProvider {
   private readonly bin: string;
 
@@ -149,21 +153,52 @@ export class AforgeProvider implements HarnessProvider {
     const cwd = typeof options.cwd === 'string' ? options.cwd : undefined;
     const root = projectDir ?? cwd ?? '.';
     const outerTimeout = timeoutSeconds();
-    const cmd = [
-      this.bin,
-      'do',
-      '--json',
-      '--yes-spend',
-      '-w',
-      root,
-      '--timeout',
-      String(innerTimeout(outerTimeout)),
-    ];
+    const command = (process.env.AGENTFIELD_AFORGE_COMMAND ?? 'do').trim().toLowerCase();
+    if (command !== 'do' && command !== 'exec') {
+      return createRawResult({
+        isError: true,
+        errorMessage: `AGENTFIELD_AFORGE_COMMAND must be 'do' or 'exec', got ${JSON.stringify(command)}`,
+        failureType: 'crash',
+        metrics: createMetrics(),
+      });
+    }
+    const systemPrompt = options.systemPrompt ?? options.system_prompt;
+    const cmd = command === 'exec'
+      ? [
+          this.bin,
+          'exec',
+          '--json',
+          '-w',
+          root,
+          '--timeout',
+          String(innerTimeout(outerTimeout)),
+          '--context-fill',
+          '60',
+          '--completion-reserve',
+          '65536',
+        ]
+      : [
+          this.bin,
+          'do',
+          '--json',
+          '--yes-spend',
+          '-w',
+          root,
+          '--timeout',
+          String(innerTimeout(outerTimeout)),
+        ];
+    if (command === 'exec' && typeof systemPrompt === 'string' && systemPrompt.trim()) {
+      cmd.push('--system', systemPrompt.trim());
+    }
 
     const { model, variant } = resolveModelAndVariant(options);
-    const env: Record<string, string> = {};
+    const env: Record<string, string> = command === 'exec' ? { AFORGE_MODELS: '' } : {};
     if (model) {
-      env.AFORGE_MODEL = stripOpenRouterPrefix(model);
+      const slug = stripOpenRouterPrefix(model);
+      env.AFORGE_MODEL = slug;
+      if (command === 'exec') {
+        cmd.push('--model', slug, '--plan-model', slug);
+      }
     }
     if (variant) {
       const normalized = variant.trim().toLowerCase();
@@ -180,23 +215,29 @@ export class AforgeProvider implements HarnessProvider {
         cwd: undefined,
         timeout: outerTimeout * 1000,
         idleSeconds: 0,
-        inputText: taskInput(prompt, options.systemPrompt ?? options.system_prompt),
+        inputText: command === 'exec' ? prompt : taskInput(prompt, systemPrompt),
       });
       const envelope = parseEnvelope(stdout);
-      const resultText = typeof envelope?.deliverable === 'string' && envelope.deliverable.trim()
-        ? envelope.deliverable.trim()
+      const outputValue = command === 'exec' ? envelope?.text : envelope?.deliverable;
+      const resultText = typeof outputValue === 'string' && outputValue.trim()
+        ? outputValue.trim()
         : undefined;
       const blockedOn = typeof envelope?.blocked_on === 'string' ? envelope.blocked_on.trim() : '';
+      const stop = typeof envelope?.stop === 'string' ? envelope.stop.trim() : '';
       const usage = typeof envelope?.usage === 'object' && envelope.usage !== null && !Array.isArray(envelope.usage)
         ? envelope.usage as Record<string, unknown>
         : {};
 
-      const isError = exitCode !== 0 || resultText === undefined || blockedOn !== '';
+      const isError = command === 'exec'
+        ? exitCode < 0 || resultText === undefined || ![0, 2, 3].includes(exitCode)
+        : exitCode !== 0 || resultText === undefined || blockedOn !== '';
       const inputTokens = Math.trunc(numeric(usage.prompt_tokens) ?? 0);
       const outputTokens = Math.trunc(numeric(usage.completion_tokens) ?? 0);
       const cacheReadTokens = Math.trunc(numeric(usage.cached_tokens) ?? 0);
-      const calls = Math.trunc(numeric(usage.calls) ?? 0);
-      const providerCost = numeric(usage.cost);
+      const calls = Math.trunc(numeric(command === 'exec' ? envelope?.turns : usage.calls) ?? 0);
+      const nativeSpend = numeric(envelope?.spend);
+      const legacyCost = numeric(usage.cost);
+      const providerCost = nativeSpend !== undefined && nativeSpend > 0 ? nativeSpend : legacyCost;
 
       return createRawResult({
         result: resultText,
@@ -215,8 +256,12 @@ export class AforgeProvider implements HarnessProvider {
           model,
         }),
         isError,
-        errorMessage: isError ? crashMessage(exitCode, blockedOn, resultText, stderr) : undefined,
-        failureType: isError ? (exitCode === 2 ? 'timeout' : 'crash') : 'none',
+        errorMessage: isError ? crashMessage(exitCode, blockedOn || stop, resultText, stderr) : undefined,
+        failureType: isError
+          ? ((command === 'do' && exitCode === 2) || (command === 'exec' && exitCode === 4)
+              ? 'timeout'
+              : 'crash')
+          : 'none',
         returnCode: exitCode,
       });
     } catch (error) {

@@ -93,13 +93,25 @@ func aforgeTaskInput(prompt, systemPrompt string) string {
 	return prompt
 }
 
+func aforgeCommand() (string, error) {
+	command := strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFIELD_AFORGE_COMMAND")))
+	if command == "" {
+		return "do", nil
+	}
+	if command != "do" && command != "exec" {
+		return "", fmt.Errorf("AGENTFIELD_AFORGE_COMMAND must be do or exec, got %q", command)
+	}
+	return command, nil
+}
+
 func parseAforgeEnvelope(stdout string) map[string]any {
-	// Canonical `aforge do --json` output is one object, currently formatted
-	// across multiple lines. Parse that shape before falling back to the
-	// line-oriented form tolerated for wrappers that prepend diagnostics.
+	// Both canonical `do` and `exec` print one JSON object. Parse that shape
+	// before the wrapper-compatible line scan.
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope); err == nil {
-		if _, ok := envelope["deliverable"]; ok {
+		_, hasDeliverable := envelope["deliverable"]
+		_, hasText := envelope["text"]
+		if hasDeliverable || hasText {
 			return envelope
 		}
 	}
@@ -114,7 +126,9 @@ func parseAforgeEnvelope(stdout string) map[string]any {
 		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
 			continue
 		}
-		if _, ok := envelope["deliverable"]; ok {
+		_, hasDeliverable := envelope["deliverable"]
+		_, hasText := envelope["text"]
+		if hasDeliverable || hasText {
 			return envelope
 		}
 	}
@@ -174,15 +188,43 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 		root = "."
 	}
 	outerTimeout := aforgeTimeout(options)
-	cmd := []string{
-		p.BinPath, "do", "--json", "--yes-spend", "-w", root,
-		"--timeout", strconv.Itoa(aforgeInnerTimeout(outerTimeout)),
+	command, commandErr := aforgeCommand()
+	if commandErr != nil {
+		return &RawResult{
+			IsError: true, ErrorMessage: commandErr.Error(), FailureType: FailureCrash,
+			Metrics: Metrics{},
+		}, nil
+	}
+	var cmd []string
+	input := []byte(prompt)
+	if command == "exec" {
+		cmd = []string{
+			p.BinPath, "exec", "--json", "-w", root,
+			"--timeout", strconv.Itoa(aforgeInnerTimeout(outerTimeout)),
+			"--context-fill", "60", "--completion-reserve", "65536",
+		}
+		if systemPrompt := strings.TrimSpace(options.SystemPrompt); systemPrompt != "" {
+			cmd = append(cmd, "--system", systemPrompt)
+		}
+	} else {
+		cmd = []string{
+			p.BinPath, "do", "--json", "--yes-spend", "-w", root,
+			"--timeout", strconv.Itoa(aforgeInnerTimeout(outerTimeout)),
+		}
+		input = []byte(aforgeTaskInput(prompt, options.SystemPrompt))
 	}
 
 	model, variant := options.resolveModelAndVariant()
 	env := make(map[string]string)
+	if command == "exec" {
+		env["AFORGE_MODELS"] = ""
+	}
 	if model != "" {
-		env["AFORGE_MODEL"] = stripOpenRouterPrefix(model)
+		modelSlug := stripOpenRouterPrefix(model)
+		env["AFORGE_MODEL"] = modelSlug
+		if command == "exec" {
+			cmd = append(cmd, "--model", modelSlug, "--plan-model", modelSlug)
+		}
 	}
 	if normalized, ok := supportedAforgeVariant(variant); ok {
 		env["AFORGE_EXEC_REASONING"] = normalized
@@ -193,7 +235,7 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 	}
 
 	started := time.Now()
-	cliResult, err := p.runCLI(ctx, cmd, env, "", outerTimeout, 0, []byte(aforgeTaskInput(prompt, options.SystemPrompt)))
+	cliResult, err := p.runCLI(ctx, cmd, env, "", outerTimeout, 0, input)
 	apiMS := int(time.Since(started).Milliseconds())
 	if err != nil {
 		if isExecNotFound(err) {
@@ -218,9 +260,14 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 	envelope := parseAforgeEnvelope(cliResult.Stdout)
 	resultText := ""
 	blockedOn := ""
+	stop := ""
 	usage := map[string]any{}
 	if envelope != nil {
-		if text, ok := envelope["deliverable"].(string); ok {
+		textKey := "deliverable"
+		if command == "exec" {
+			textKey = "text"
+		}
+		if text, ok := envelope[textKey].(string); ok {
 			resultText = strings.TrimSpace(text)
 		}
 		if value, ok := envelope["blocked_on"].(string); ok {
@@ -229,12 +276,26 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 		if value, ok := envelope["usage"].(map[string]any); ok {
 			usage = value
 		}
+		if command == "exec" {
+			if value, ok := envelope["stop"].(string); ok {
+				stop = strings.TrimSpace(value)
+			}
+		}
 	}
 
 	isError := cliResult.ReturnCode != 0 || resultText == "" || blockedOn != ""
+	if command == "exec" {
+		isError = cliResult.ReturnCode < 0 || resultText == "" ||
+			(cliResult.ReturnCode != 0 && cliResult.ReturnCode != 2 && cliResult.ReturnCode != 3)
+	}
 	metrics := Metrics{DurationAPIMS: apiMS}
 	if value, ok := aforgeNumber(usage["calls"]); ok {
 		metrics.NumTurns = int(value)
+	}
+	if command == "exec" {
+		if value, ok := aforgeNumber(envelope["turns"]); ok {
+			metrics.NumTurns = int(value)
+		}
 	}
 	if value, ok := aforgeNumber(usage["prompt_tokens"]); ok {
 		metrics.InputTokens = int(value)
@@ -245,8 +306,13 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 	if value, ok := aforgeNumber(usage["cached_tokens"]); ok {
 		metrics.CacheReadTokens = int(value)
 	}
-	if value, ok := aforgeNumber(usage["cost"]); ok && value > 0 {
-		cost := value
+	spend, hasSpend := aforgeNumber(envelope["spend"])
+	legacyCost, hasLegacyCost := aforgeNumber(usage["cost"])
+	if hasSpend && spend > 0 {
+		cost := spend
+		metrics.CostUSD = &cost
+	} else if hasLegacyCost && legacyCost > 0 {
+		cost := legacyCost
 		metrics.CostUSD = &cost
 	}
 
@@ -263,12 +329,12 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 		ReturnCode:  cliResult.ReturnCode,
 	}
 	if isError {
-		if cliResult.ReturnCode == 2 {
+		if (command == "do" && cliResult.ReturnCode == 2) || (command == "exec" && cliResult.ReturnCode == 4) {
 			raw.FailureType = FailureTimeout
 		} else {
 			raw.FailureType = FailureCrash
 		}
-		raw.ErrorMessage = aforgeCrashMessage(cliResult.ReturnCode, blockedOn, resultText, cliResult.Stderr)
+		raw.ErrorMessage = aforgeCrashMessage(cliResult.ReturnCode, firstNonEmpty(blockedOn, stop), resultText, cliResult.Stderr)
 	}
 	return raw, nil
 }

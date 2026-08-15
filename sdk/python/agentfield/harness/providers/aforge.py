@@ -29,16 +29,15 @@ def _strip_openrouter_prefix(model: str) -> str:
 
 
 def _parse_envelope(stdout: str) -> dict[str, object] | None:
-    """Return the last JSON object containing an aforge deliverable."""
-    # Canonical `aforge do --json` output is one object, currently formatted
-    # across multiple lines. Parse that shape before falling back to the
-    # line-oriented form tolerated for wrappers that prepend diagnostics.
+    """Return the last canonical ``do`` or ``exec`` envelope."""
+    # Both surfaces print one JSON object. Parse that shape before falling back
+    # to the line-oriented form tolerated for wrappers that prepend diagnostics.
     try:
         value = json.loads(stdout.strip())
     except ValueError:
         pass
     else:
-        if isinstance(value, dict) and "deliverable" in value:
+        if isinstance(value, dict) and ("deliverable" in value or "text" in value):
             return value
 
     for line in reversed(
@@ -48,7 +47,7 @@ def _parse_envelope(stdout: str) -> dict[str, object] | None:
             value = json.loads(line)
         except ValueError:
             continue
-        if isinstance(value, dict) and "deliverable" in value:
+        if isinstance(value, dict) and ("deliverable" in value or "text" in value):
             return value
     return None
 
@@ -89,7 +88,11 @@ def _crash_message(
 
 
 class AforgeProvider:
-    """Aforge CLI provider. Invokes canonical ``aforge do --json`` mode."""
+    """Aforge CLI provider.
+
+    ``do`` remains the default. Set ``AGENTFIELD_AFORGE_COMMAND=exec`` to use
+    Aforge's direct one-shot harness entry point.
+    """
 
     _MAX_CONCURRENT: ClassVar[int] = int(os.environ.get("AFORGE_MAX_CONCURRENT", "8"))
     _concurrency_sem: ClassVar[asyncio.Semaphore | None] = None
@@ -123,25 +126,58 @@ class AforgeProvider:
         timeout_seconds = int(
             os.environ.get("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1800")
         )
+        model_value, variant_value = resolve_model_and_variant(options)
         # Leave a small landing window so aforge can emit its honest timeout
         # envelope before the outer subprocess watchdog has to kill it.
         aforge_timeout = max(1, timeout_seconds - 5)
-        cmd = [
-            self._bin,
-            "do",
-            "--json",
-            "--yes-spend",
-            "-w",
-            root,
-            "--timeout",
-            str(aforge_timeout),
-        ]
-        input_text = _task_input(prompt, options.get("system_prompt"))
+        command = os.environ.get("AGENTFIELD_AFORGE_COMMAND", "do").strip().lower()
+        if command not in {"do", "exec"}:
+            return RawResult(
+                is_error=True,
+                error_message=(
+                    "AGENTFIELD_AFORGE_COMMAND must be 'do' or 'exec', "
+                    f"got {command!r}"
+                ),
+                failure_type=FailureType.CRASH,
+                metrics=Metrics(),
+            )
+        if command == "exec":
+            cmd = [
+                self._bin,
+                "exec",
+                "--json",
+                "-w",
+                root,
+                "--timeout",
+                str(aforge_timeout),
+                "--context-fill",
+                "60",
+                "--completion-reserve",
+                "65536",
+            ]
+            system_prompt = options.get("system_prompt")
+            if isinstance(system_prompt, str) and system_prompt.strip():
+                cmd.extend(["--system", system_prompt.strip()])
+            input_text = prompt
+        else:
+            cmd = [
+                self._bin,
+                "do",
+                "--json",
+                "--yes-spend",
+                "-w",
+                root,
+                "--timeout",
+                str(aforge_timeout),
+            ]
+            input_text = _task_input(prompt, options.get("system_prompt"))
 
-        model_value, variant_value = resolve_model_and_variant(options)
-        env: dict[str, str] = {}
+        env: dict[str, str] = {"AFORGE_MODELS": ""} if command == "exec" else {}
         if model_value:
-            env["AFORGE_MODEL"] = _strip_openrouter_prefix(model_value)
+            model_slug = _strip_openrouter_prefix(model_value)
+            env["AFORGE_MODEL"] = model_slug
+            if command == "exec":
+                cmd.extend(["--model", model_slug, "--plan-model", model_slug])
 
         if variant_value:
             normalized_variant = variant_value.strip().lower()
@@ -190,8 +226,9 @@ class AforgeProvider:
         usage: dict[object, object] = {}
         calls = 0
         blocked_on = ""
+        stop = ""
         if envelope is not None:
-            text_value = envelope.get("deliverable")
+            text_value = envelope.get("text" if command == "exec" else "deliverable")
             if isinstance(text_value, str) and text_value.strip():
                 result_text = text_value.strip()
             blocked_value = envelope.get("blocked_on")
@@ -203,6 +240,13 @@ class AforgeProvider:
                 calls_value = _numeric(usage.get("calls"))
                 if calls_value is not None:
                     calls = int(calls_value)
+            if command == "exec":
+                stop_value = envelope.get("stop")
+                if isinstance(stop_value, str):
+                    stop = stop_value.strip()
+                turns_value = _numeric(envelope.get("turns"))
+                if turns_value is not None:
+                    calls = int(turns_value)
 
         clean_stderr = strip_ansi(stderr.strip()) if stderr else ""
         logger.info(
@@ -214,15 +258,26 @@ class AforgeProvider:
         if not result_text and clean_stderr:
             logger.warning("aforge no text. stderr: %s", clean_stderr[:800])
 
-        is_error = returncode != 0 or result_text is None or bool(blocked_on)
+        if command == "exec":
+            # Budget and turn-cap exits with a usable landing are partial
+            # successes under the original exec adapter contract.
+            is_error = (
+                returncode < 0
+                or result_text is None
+                or returncode not in {0, 2, 3}
+            )
+        else:
+            is_error = returncode != 0 or result_text is None or bool(blocked_on)
         if not is_error:
             failure_type = FailureType.NONE
-        elif returncode == 2:
+        elif (command == "do" and returncode == 2) or (
+            command == "exec" and returncode == 4
+        ):
             failure_type = FailureType.TIMEOUT
         else:
             failure_type = FailureType.CRASH
         error_message = (
-            _crash_message(returncode, blocked_on, result_text, stderr)
+            _crash_message(returncode, blocked_on or stop, result_text, stderr)
             if is_error
             else None
         )
@@ -230,8 +285,11 @@ class AforgeProvider:
         input_tokens_value = _numeric(usage.get("prompt_tokens"))
         output_tokens_value = _numeric(usage.get("completion_tokens"))
         cached_tokens_value = _numeric(usage.get("cached_tokens"))
+        spend_value = _numeric(envelope.get("spend")) if envelope else None
         cost_value = _numeric(usage.get("cost"))
-        if cost_value is not None and cost_value > 0:
+        if spend_value is not None and spend_value > 0:
+            total_cost = float(spend_value)
+        elif cost_value is not None and cost_value > 0:
             total_cost = float(cost_value)
         else:
             total_cost = estimate_cli_cost(
