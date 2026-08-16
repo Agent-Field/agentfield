@@ -175,6 +175,11 @@ except ImportError:
     aiohttp = None
 
 
+def _ip_detection_disabled() -> bool:
+    """Whether cloud-metadata / third-party IP probing is opted out via env var."""
+    return os.getenv("AGENTFIELD_SKIP_IP_DETECTION", "false").lower() == "true"
+
+
 def _detect_container_ip() -> Optional[str]:
     """
     Detect the external IP address when running in a containerized environment.
@@ -367,9 +372,10 @@ def _build_callback_candidates(
         if railway_service_name and railway_environment:
             add_candidate(f"http://{railway_service_name}.railway.internal:{port}")
 
-        external_ip = _detect_container_ip()
-        if external_ip:
-            add_candidate(f"http://{external_ip}:{port}")
+        if not _ip_detection_disabled():
+            external_ip = _detect_container_ip()
+            if external_ip:
+                add_candidate(f"http://{external_ip}:{port}")
 
     # 4. Local network hints
     local_ip = _detect_local_ip()

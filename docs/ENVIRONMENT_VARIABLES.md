@@ -144,6 +144,7 @@ The same concept applies to **Docker**:
 - `AGENTFIELD_URL` (recommended): Control plane base URL.
 - `AGENT_NODE_ID` (optional): Node id.
 - `AGENT_CALLBACK_URL` (recommended in Docker/Kubernetes): URL the control plane will call back to (examples: `http://my-agent:8001`, or for host-run agents with Dockerized control plane: `http://host.docker.internal:8001`).
+- `AGENTFIELD_SKIP_IP_DETECTION` (optional, default `false`): set to `true` to skip the automatic cloud-metadata and third-party IP lookups (`169.254.169.254`, `metadata.google.internal`, `api.ipify.org`) that always run when a container is detected, regardless of whether `AGENT_CALLBACK_URL` is already set. Set this when those probes generate egress traffic or network-policy-deny log noise you don't want.
 
 Many Python examples also require model provider credentials (for example `OPENAI_API_KEY`), depending on the `AIConfig` you choose.
 

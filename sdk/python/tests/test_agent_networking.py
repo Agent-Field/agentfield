@@ -115,6 +115,53 @@ def test_resolve_callback_url_uses_first_candidate(monkeypatch):
     assert resolved == "http://from-env:7777"
 
 
+def test_build_callback_candidates_skips_ip_detection_when_disabled(monkeypatch):
+    """AGENTFIELD_SKIP_IP_DETECTION=true must stop _detect_container_ip from being
+    called at all, not just from being used (issue #624: the cloud-metadata/ipify
+    probes fire unconditionally on every container start with no opt-out, flooding
+    NetworkPolicy deny logs and leaking pod egress for a best-effort candidate)."""
+    monkeypatch.setattr(agent_mod, "_is_running_in_container", lambda: True)
+    monkeypatch.setattr(agent_mod, "_detect_local_ip", lambda: None)
+    monkeypatch.setenv("AGENTFIELD_SKIP_IP_DETECTION", "true")
+
+    calls = []
+    monkeypatch.setattr(
+        agent_mod, "_detect_container_ip", lambda: calls.append(1) or "203.0.113.10"
+    )
+
+    candidates = _build_callback_candidates(None, 9090)
+
+    assert calls == []
+    assert not any("203.0.113.10" in candidate for candidate in candidates)
+
+
+def test_build_callback_candidates_runs_ip_detection_by_default(monkeypatch):
+    """Default behavior (no env var set) is unchanged: the probe still runs."""
+    monkeypatch.setattr(agent_mod, "_is_running_in_container", lambda: True)
+    monkeypatch.setattr(agent_mod, "_detect_local_ip", lambda: None)
+    monkeypatch.delenv("AGENTFIELD_SKIP_IP_DETECTION", raising=False)
+    monkeypatch.setattr(agent_mod, "_detect_container_ip", lambda: "203.0.113.10")
+
+    candidates = _build_callback_candidates(None, 9090)
+
+    assert any(candidate.startswith("http://203.0.113.10") for candidate in candidates)
+
+
+@pytest.mark.parametrize("value", ["true", "True", "TRUE"])
+def test_ip_detection_disabled_is_case_insensitive(monkeypatch, value):
+    monkeypatch.setenv("AGENTFIELD_SKIP_IP_DETECTION", value)
+    assert agent_mod._ip_detection_disabled() is True
+
+
+@pytest.mark.parametrize("value", [None, "false", "0", "garbage"])
+def test_ip_detection_disabled_defaults_to_false(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("AGENTFIELD_SKIP_IP_DETECTION", raising=False)
+    else:
+        monkeypatch.setenv("AGENTFIELD_SKIP_IP_DETECTION", value)
+    assert agent_mod._ip_detection_disabled() is False
+
+
 def test_build_callback_discovery_payload_marks_container(monkeypatch):
     agent, _ = create_test_agent(monkeypatch)
     agent.callback_candidates = ["http://first:7000", "http://second:7000"]
