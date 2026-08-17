@@ -269,7 +269,7 @@ export class AforgeProvider implements HarnessProvider {
       if (message.includes('ENOENT')) {
         return createRawResult({
           isError: true,
-          errorMessage: `Aforge binary not found at '${this.bin}'. Build it from https://github.com/Agent-Field/aforge-v2`,
+          errorMessage: `AForge binary not found at '${this.bin}'. Install it with \`af aforge ensure\`, or set AFORGE_BIN to its path.`,
           failureType: 'crash',
           metrics: createMetrics({ durationApiMs: Date.now() - startApi }),
         });

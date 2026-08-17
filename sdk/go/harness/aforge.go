@@ -241,7 +241,7 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 		if isExecNotFound(err) {
 			return &RawResult{
 				IsError:      true,
-				ErrorMessage: fmt.Sprintf("Aforge binary not found at '%s'. Build it from https://github.com/Agent-Field/aforge-v2", p.BinPath),
+				ErrorMessage: fmt.Sprintf("AForge binary not found at '%s'. Install it with `af aforge ensure`, or set AFORGE_BIN to its path.", p.BinPath),
 				FailureType:  FailureCrash,
 				Metrics:      Metrics{DurationAPIMS: apiMS},
 			}, nil
