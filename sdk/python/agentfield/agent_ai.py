@@ -655,13 +655,34 @@ class AgentAI:
             if system:
                 messages.append({"role": "system", "content": system})
 
-        # Handle flexible user input with intelligent processing
-        if user:
-            messages.append({"role": "user", "content": user})
-        elif args:
-            processed_content = self._process_multimodal_args(args)
-            if processed_content:
-                messages.extend(processed_content)
+        # Handle flexible user input with intelligent processing. When both
+        # input styles are used, keep the positional multimodal content and
+        # append the keyword prompt to the final user message.
+        processed_content = self._process_multimodal_args(args) if args else []
+        if user and processed_content:
+            user_message = next(
+                (
+                    message
+                    for message in reversed(processed_content)
+                    if message.get("role") == "user"
+                ),
+                None,
+            )
+            if user_message is not None:
+                content = user_message.get("content")
+                if isinstance(content, list):
+                    content.append({"type": "text", "text": user})
+                else:
+                    user_message["content"] = [
+                        {"type": "text", "text": content},
+                        {"type": "text", "text": user},
+                    ]
+            else:
+                processed_content.append({"role": "user", "content": user})
+        elif user:
+            processed_content.append({"role": "user", "content": user})
+
+        messages.extend(processed_content)
 
         litellm_module = litellm if hasattr(litellm, "acompletion") else None
 

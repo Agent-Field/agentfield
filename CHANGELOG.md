@@ -6,6 +6,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.130-rc.2] - 2026-08-17
+
+
+### Added
+
+- Feat(examples): triggers-demo-go end-to-end demo + Go skill docs (#516) (#917)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(examples): triggers-demo-go end-to-end demo + Go skill docs (#516)
+
+Go counterpart to examples/triggers-demo/ (Python) and
+examples/triggers-demo-ts/ (TypeScript), driven by the same unmodified
+scripts/fire-events.sh and producing equivalent memory writes.
+
+New examples/triggers-demo-go/:
+- main.go with three deterministic reasoners: handle_payment (stripe, with a
+  Transform flattening data.object), handle_pr (github), handle_tick (cron).
+  Memory keys and record shapes match the Python demo exactly, so the UI
+  surfaces read the same data regardless of which demo is running.
+- Dockerfile: multi-stage build against the in-tree SDK, CGO disabled, alpine
+  runtime with ca-certificates for outbound HTTPS.
+- docker-compose.yml: control plane plus Go agent, sharing the demo secrets so
+  signature verification roundtrips with no external configuration. DID enabled
+  so the run-detail trigger enrichment has a VC chain to walk.
+- scripts/fire-events.sh: byte-identical copy of the Python demo's script.
+- README.md: quick start, UI tour, memory-key table, and a note on the script's
+  Slack/HMAC/Bearer sections (they target a handle_inbound catch-all that this
+  demo, like the TypeScript one, does not define).
+- main_test.go: 24 tests exercising the reasoners through
+  triggers.SimulateEvent / SimulateSchedule / LoadFixture, doubling as a worked
+  example of testing trigger reasoners with no control plane.
+
+The reasoners are declared as eventReasoner / scheduleReasoner values that
+main() iterates, rather than inline inside registration calls, so the handlers
+and trigger wiring are testable without reaching into SDK internals.
+
+Collapses the duplicated transform matcher flagged in #915: SimulateEvent now
+uses the shared ApplyTransform and NewContext from dispatch.go instead of a
+private copy. This fixes a real defect the demo surfaced — the helpers attached
+the context under a private key while handlers read it via FromContext, so a
+handler that worked in production saw a nil context under test. Added a
+regression test asserting FromContext sees what SimulateEvent attaches.
+
+skills/agentfield-multi-reasoner-builder/references/triggers.md gains a Go
+section covering both declaration forms, Context fields, the FromContext
+accessor, the test helpers, and a three-way comparison table. Every Go snippet
+was compiled against the real SDK. Updated the shared wire-format and envelope
+sections from "both SDKs" to "all three".
+
+Verified: build, vet, gofmt, and go test -race clean on both modules;
+docker compose config valid; the Dockerfile's exact steps reproduced with
+-mod=readonly to confirm go.sum completeness; and the real binary registers all
+three triggers with the expected wire payload (sources, event types, secret env
+vars, cron config, accepts_webhook auto-set, code_origin stamped) against a
+stub control plane. Docker image build itself not run, as no daemon was
+available in this environment.
+
+Part of #508. Closes #516.
+
+* fix(examples): drop committed Windows binary from triggers-demo-go
+
+Removes examples/triggers-demo-go/triggers-demo-go.exe, an 11 MB build
+artifact that should never have been committed. It came from compiling the
+demo to verify it and was swept in by adding the directory rather than
+naming files.
+
+Adds a .gitignore for the binary so a local build cannot reintroduce it.
+The example remains buildable from source via the Dockerfile or `go build`.
+
+Addresses @santoshkumarradha's review on #917.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (a1dd50b)
+
+
+
+### Fixed
+
+- Fix(sdk): merge positional multimodal args with user prompt (#923) (243d906)
+
 ## [0.1.130-rc.1] - 2026-08-14
 
 
