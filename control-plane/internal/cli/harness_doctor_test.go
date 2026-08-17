@@ -164,22 +164,14 @@ func TestProbeHarnessBinaryVersionBehavior(t *testing.T) {
 	// from CI.
 	t.Setenv("AGENTFIELD_HOME", t.TempDir())
 
-	// The pinned aforge build prints its whole usage banner and exits 1 for
-	// every version-ish argument, so the fixture does exactly that — a probe
+	// A CLI that does not recognise the version argument prints its usage
+	// banner and exits non-zero, so the fixture does exactly that — a probe
 	// that only checked for output would file the banner as the version.
-	const usageOnExitOne = "echo 'aforge — build and revise task graphs' >&2; exit 1"
+	const usageOnExitOne = "echo 'usage: build and revise task graphs' >&2; exit 1"
 
-	t.Run("optional version", func(t *testing.T) {
-		writeHarnessTestScript(t, binDir, "optional", usageOnExitOne)
-		reports := reportsForTestSpec(t, harnessProviderSpec{Name: "optional", Binary: "optional", VersionArgs: [][]string{{"version"}, {"--version"}}, VersionOptional: true})
-		require.True(t, reports[0].Usable)
-		require.Equal(t, "unknown", reports[0].Version)
-		require.Equal(t, []string{"version_unavailable"}, reports[0].Issues)
-	})
-
-	t.Run("required version", func(t *testing.T) {
+	t.Run("version is required", func(t *testing.T) {
 		writeHarnessTestScript(t, binDir, "required", usageOnExitOne)
-		reports := reportsForTestSpec(t, harnessProviderSpec{Name: "required", Binary: "required"})
+		reports := reportsForTestSpec(t, harnessProviderSpec{Name: "required", Binary: "required", VersionArgs: [][]string{{"version"}, {"--version"}}})
 		require.False(t, reports[0].Usable)
 		require.Empty(t, reports[0].Version)
 		require.Equal(t, []string{"version_probe_failed"}, reports[0].Issues)
@@ -214,6 +206,41 @@ func TestHarnessDoctorAforgeSpec(t *testing.T) {
 	require.Equal(t, "aforge", reports[0].Provider)
 	require.Equal(t, "af aforge ensure", reports[0].InstallCommand)
 	require.Equal(t, []string{"OPENROUTER_API_KEY"}, reports[0].AuthEnvVars)
+}
+
+// The pinned aforge release answers `version`, so aforge is held to the same
+// bar as every other provider: a binary that cannot name itself is unusable.
+func TestHarnessDoctorAforgeRequiresRealVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+
+	t.Run("reports the version it prints", func(t *testing.T) {
+		binDir := t.TempDir()
+		writeHarnessTestScript(t, binDir, "aforge", "[ \"$1\" = version ] && printf 'aforge v0.1.0\\n'")
+		t.Setenv("PATH", binDir)
+		t.Setenv("AGENTFIELD_HOME", t.TempDir())
+
+		reports, err := buildHarnessDoctorReports([]string{"aforge"})
+		require.NoError(t, err)
+		require.True(t, reports[0].Usable)
+		require.Equal(t, "aforge v0.1.0", reports[0].Version)
+		require.Empty(t, reports[0].Issues)
+	})
+
+	t.Run("unusable without a version", func(t *testing.T) {
+		binDir := t.TempDir()
+		writeHarnessTestScript(t, binDir, "aforge", "echo 'usage: aforge <command>' >&2; exit 1")
+		t.Setenv("PATH", binDir)
+		t.Setenv("AGENTFIELD_HOME", t.TempDir())
+
+		reports, err := buildHarnessDoctorReports([]string{"aforge"})
+		require.NoError(t, err)
+		require.True(t, reports[0].Installed)
+		require.False(t, reports[0].Usable)
+		require.Empty(t, reports[0].Version)
+		require.Equal(t, []string{"version_probe_failed"}, reports[0].Issues)
+	})
 }
 
 func reportsForTestSpec(t *testing.T, spec harnessProviderSpec) []HarnessProviderHealth {

@@ -35,14 +35,10 @@ type harnessProviderSpec struct {
 	// VersionArgs are tried in order until one produces output; empty means
 	// {"--version"}.
 	VersionArgs [][]string
-	// VersionOptional marks a provider that is usable without a working version
-	// probe. aforge's pinned build predates its `version` subcommand, so a
-	// present-and-executable binary is enough — the next release adds it.
-	VersionOptional bool
 }
 
 var harnessProviderSpecs = []harnessProviderSpec{
-	{Name: "aforge", Binary: "aforge", InstallCommand: "af aforge ensure", AuthEnvVars: []string{"OPENROUTER_API_KEY"}, VersionArgs: [][]string{{"version"}, {"--version"}}, VersionOptional: true},
+	{Name: "aforge", Binary: "aforge", InstallCommand: "af aforge ensure", AuthEnvVars: []string{"OPENROUTER_API_KEY"}, VersionArgs: [][]string{{"version"}, {"--version"}}},
 	// claude-code has no Binary: the Python provider runs on the
 	// claude_agent_sdk pip package (which bundles its own CLI), not on a
 	// globally installed `claude` binary. See claudeCodeHealth.
@@ -125,13 +121,7 @@ func buildHarnessDoctorReports(requested []string) ([]HarnessProviderHealth, err
 		if !tool.Available {
 			issues = append(issues, "binary_not_found")
 		} else if tool.Version == "" {
-			if spec.VersionOptional {
-				tool.Version = "unknown"
-				usable = true
-				issues = append(issues, "version_unavailable")
-			} else {
-				issues = append(issues, "version_probe_failed")
-			}
+			issues = append(issues, "version_probe_failed")
 		}
 		reports = append(reports, HarnessProviderHealth{
 			Provider:       spec.Name,
@@ -186,10 +176,10 @@ func probeHarnessBinary(spec harnessProviderSpec) ToolStatus {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		out, runErr := exec.CommandContext(ctx, path, args...).CombinedOutput()
 		cancel()
-		// A non-zero exit is not a version, however much it printed: the pinned
-		// aforge build answers both `version` and `--version` with its whole
-		// usage text on exit 1, and accepting that output would file the usage
-		// banner as the installed version.
+		// A non-zero exit is not a version, however much it printed: CLIs
+		// answer an unrecognised version flag with their whole usage text on a
+		// non-zero exit, and accepting that output would file the usage banner
+		// as the installed version.
 		if runErr != nil {
 			continue
 		}

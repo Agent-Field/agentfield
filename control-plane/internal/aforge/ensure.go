@@ -20,7 +20,7 @@ import (
 const (
 	// Version is deliberately pinned. Bump it only when af should distribute a
 	// newer, reviewed aforge build.
-	Version        = "build-9b3ff482de3f"
+	Version        = "v0.1.0"
 	defaultBaseURL = "https://agentfield.ai/downloads/aforge/" + Version
 	baseURLEnv     = "AGENTFIELD_AFORGE_BASE_URL"
 	skipEnv        = "AGENTFIELD_SKIP_AFORGE"
