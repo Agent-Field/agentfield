@@ -27,6 +27,15 @@ func TestAforgeCommandHelp(t *testing.T) {
 	require.Contains(t, stdout.String(), "--force")
 }
 
+func TestAforgeEnsureCommand(t *testing.T) {
+	t.Setenv("AGENTFIELD_SKIP_AFORGE", "1")
+	for _, args := range [][]string{{"ensure"}, {"ensure", "--force"}} {
+		cmd := NewAforgeCommand()
+		cmd.SetArgs(args)
+		require.NoError(t, cmd.Execute())
+	}
+}
+
 func TestHarnessDoctorJSONReportsRequestedProvider(t *testing.T) {
 	binDir := t.TempDir()
 	writeHarnessTestBinary(t, binDir, "codex", "codex-cli 1.2.3")
