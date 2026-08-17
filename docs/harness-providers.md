@@ -8,7 +8,7 @@ starting a workflow.
 
 | Provider | Python extra | Required CLI | Authentication |
 | --- | --- | --- | --- |
-| `aforge` | None | `aforge` | `OPENROUTER_API_KEY` |
+| `aforge` | None | `aforge` (`af aforge ensure`) | `OPENROUTER_API_KEY` |
 | Claude Code | `agentfield[harness-claude]` | Bundled by `claude-agent-sdk` | Claude login or `ANTHROPIC_API_KEY` |
 | Codex | `agentfield[harness-codex]` | `codex` | Codex login or `OPENAI_API_KEY` |
 | Gemini | None | `gemini` | Gemini login, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
@@ -19,6 +19,19 @@ Install every Python wrapper with:
 ```bash
 pip install 'agentfield[harness-all]'
 ```
+
+`aforge` is the one CLI AgentField distributes itself. Every install surface
+provisions it beside `af` in `~/.agentfield/bin` — the curl installer, the
+desktop app on launch, and the `python-agent` / `go-agent` / cloud control-plane
+images. To install or repair it by hand:
+
+```bash
+af aforge ensure          # --force re-downloads even when already current
+```
+
+The pinned build, its download host and the opt-out are documented under
+`AGENTFIELD_AFORGE_BASE_URL` / `AGENTFIELD_SKIP_AFORGE` in
+[docs/ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md).
 
 The extras install Python wrappers. They do not replace the runtime preflight:
 Aforge and Gemini are CLI-only, and Codex or OpenCode may still require a

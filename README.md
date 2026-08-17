@@ -42,6 +42,10 @@ https://github.com/user-attachments/assets/9fb7b1cf-26de-4b9b-9ba2-917252cc26ec
 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
 
+The installer also drops the `aforge` coding harness beside `af` in
+`~/.agentfield/bin`, so harness-backed agents work out of the box; skip it with
+`--no-aforge`.
+
 On macOS the installer also registers the control plane to start at login (under
 launchd) and adds a menu-bar icon. Stop it with `af service stop` or the menu-bar
 icon — a plain `kill` looks like a crash and it restarts. `af service status`
