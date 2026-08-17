@@ -635,6 +635,11 @@ install_skill() {
 # mirroring how the skill install is delegated to `af skill install`.
 # Best-effort: aforge is optional, so a failure here must never fail an
 # install whose control plane is already working.
+# `af aforge ensure` installs into $AGENTFIELD_HOME/bin, defaulting to
+# ~/.agentfield/bin. Staging puts af in ~/.agentfield-staging/bin and only adds
+# that directory to PATH, so the default left aforge off PATH. Pinning the home
+# to INSTALL_DIR's parent keeps both binaries together; production remains
+# ~/.agentfield because ~/.agentfield/bin strips to ~/.agentfield.
 install_aforge() {
   local install_dir="$1"
   local af_bin="$install_dir/agentfield"
@@ -652,7 +657,7 @@ install_aforge() {
 
   printf "\n"
   print_info "Installing the aforge coding harness..."
-  if "$af_bin" aforge ensure; then
+  if AGENTFIELD_HOME="${install_dir%/bin}" "$af_bin" aforge ensure; then
     print_success "aforge coding harness installed"
   else
     print_warning "aforge install reported an issue; the control plane is unaffected"
