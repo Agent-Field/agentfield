@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildPromptSuffix, cleanupTempFiles, getOutputPath, parseAndValidate } from './schema.js';
-import { buildProvider } from './providers/factory.js';
+import { buildProvider, resolveProviderName } from './providers/factory.js';
 import type { HarnessProvider } from './providers/base.js';
 import {
   createHarnessResult,
@@ -56,10 +56,7 @@ export class HarnessRunner {
   public async run(prompt: string, options: HarnessOptions = {}) {
     const { schema, ...rest } = options;
     const resolved = this.resolveOptions(this.config, rest);
-
-    if (!resolved.provider) {
-      throw new Error("No harness provider specified. Set 'provider' in HarnessConfig or pass it to .harness() call.");
-    }
+    resolved.provider = resolveProviderName(resolved.provider);
 
     const provider = await this.buildProvider(resolved.provider, resolved);
     const cwd = resolved.cwd ?? '.';
@@ -222,7 +219,7 @@ export class HarnessRunner {
 
   private async buildProvider(providerName: string, options: RunnerOptions): Promise<HarnessProvider> {
     const { provider: _, ...rest } = options;
-    return buildProvider({ provider: providerName as HarnessConfig['provider'], ...rest });
+    return buildProvider({ provider: providerName as NonNullable<HarnessConfig['provider']>, ...rest });
   }
 
   private computeBackoffDelay(

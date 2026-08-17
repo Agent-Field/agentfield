@@ -21,6 +21,7 @@ function makeTempDir(): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -208,9 +209,27 @@ describe('harness runner', () => {
     expect(fs.existsSync(getOutputPath(cwd))).toBe(false);
   });
 
-  it('run throws when no provider is configured', async () => {
+  it('run defaults to aforge when no provider is configured', async () => {
+    vi.stubEnv('AGENTFIELD_HARNESS_PROVIDER', '');
+    const provider = new MockProvider();
+    const buildProviderSpy = vi.spyOn(factory, 'buildProvider').mockResolvedValue(provider);
     const runner = new HarnessRunner();
-    await expect(runner.run('hello', {})).rejects.toThrow(/No harness provider specified/);
+    await runner.run('hello', {});
+
+    expect(buildProviderSpy).toHaveBeenCalledWith(expect.objectContaining({ provider: 'aforge' }));
+    expect(provider.lastOptions?.provider).toBe('aforge');
+  });
+
+  it('per-call provider wins over the runner default and environment', async () => {
+    vi.stubEnv('AGENTFIELD_HARNESS_PROVIDER', 'gemini');
+    const provider = new MockProvider();
+    const buildProviderSpy = vi.spyOn(factory, 'buildProvider').mockResolvedValue(provider);
+    const runner = new HarnessRunner({ provider: 'codex' });
+
+    await runner.run('hello', { provider: 'opencode' });
+
+    expect(buildProviderSpy).toHaveBeenCalledWith(expect.objectContaining({ provider: 'opencode' }));
+    expect(provider.lastOptions?.provider).toBe('opencode');
   });
 
   it('retries on transient error then succeeds', async () => {

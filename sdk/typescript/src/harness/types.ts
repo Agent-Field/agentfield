@@ -1,5 +1,11 @@
 export interface HarnessConfig {
-  provider: 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode';
+  /**
+   * Coding agent provider. Defaults to `aforge`, AgentField's native harness.
+   * When unset, `AGENTFIELD_HARNESS_PROVIDER` is consulted before the default.
+   * An explicit value always wins.
+   */
+  provider?: 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode';
+  /** Model identifier. Empty means the provider's own default. */
   model?: string;
   /**
    * Provider-specific reasoning-effort variant (e.g. `high`, `minimal`).
@@ -25,7 +31,13 @@ export interface HarnessConfig {
 }
 
 export interface HarnessOptions {
+  /**
+   * Coding agent provider. Defaults to `aforge`, AgentField's native harness.
+   * When unset, `AGENTFIELD_HARNESS_PROVIDER` is consulted before the default.
+   * An explicit value always wins.
+   */
   provider?: string;
+  /** Model identifier. Empty means the provider's own default. */
   model?: string;
   /**
    * Provider-specific reasoning-effort variant (e.g. `high`, `minimal`).
