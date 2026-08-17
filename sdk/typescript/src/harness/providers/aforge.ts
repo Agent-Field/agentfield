@@ -175,10 +175,6 @@ export class AforgeProvider implements HarnessProvider {
           root,
           '--timeout',
           String(innerTimeout(outerTimeout)),
-          '--context-fill',
-          '60',
-          '--completion-reserve',
-          '65536',
         ]
       : [
           this.bin,
@@ -190,6 +186,15 @@ export class AforgeProvider implements HarnessProvider {
           '--timeout',
           String(innerTimeout(outerTimeout)),
         ];
+    // --turns exists only on exec, not do. Aforge's --budget is a token budget,
+    // not a USD cap, so maxBudgetUsd has no honest mapping.
+    if (command === 'exec' && typeof options.maxTurns === 'number'
+      && Number.isFinite(options.maxTurns) && options.maxTurns > 0) {
+      cmd.push('--turns', String(Math.trunc(options.maxTurns)));
+    }
+    if (command === 'exec') {
+      cmd.push('--context-fill', '60', '--completion-reserve', '65536');
+    }
     if (command === 'exec' && typeof systemPrompt === 'string' && systemPrompt.trim()) {
       cmd.push('--system', systemPrompt.trim());
     }

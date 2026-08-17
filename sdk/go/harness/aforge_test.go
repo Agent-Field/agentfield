@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -133,6 +134,45 @@ func TestAforgeProviderMapsExecCommandEnvelopeAndMetrics(t *testing.T) {
 	assert.Equal(t, "openrouter/deepseek/deepseek-v4-flash-0731", raw.Metrics.Model)
 	require.NotNil(t, raw.Metrics.CostUSD)
 	assert.InDelta(t, 0.0123, *raw.Metrics.CostUSD, 1e-9)
+}
+
+func TestAforgeProviderTurnCapArgv(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		options Options
+		want    []string
+	}{
+		{name: "positive exec", command: "exec", options: Options{MaxTurns: 2}, want: []string{"--timeout", "1795", "--turns", "2", "--context-fill"}},
+		{name: "unset exec", command: "exec"},
+		{name: "zero exec", command: "exec", options: Options{MaxTurns: 0}},
+		{name: "negative exec", command: "exec", options: Options{MaxTurns: -2}},
+		{name: "positive do", command: "do", options: Options{MaxTurns: 2}},
+		{name: "cost cap only", command: "exec", options: Options{MaxBudgetUSD: 1.5}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("AGENTFIELD_AFORGE_COMMAND", test.command)
+			var captured []string
+			p := NewAforgeProvider("aforge")
+			p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _, _ int, _ []byte) (*CLIResult, error) {
+				captured = append([]string(nil), cmd...)
+				if test.command == "exec" {
+					return &CLIResult{Stdout: aforgeExecEnvelope("done", "done", "", 1)}, nil
+				}
+				return &CLIResult{Stdout: aforgeEnvelope("done", true, "", "")}, nil
+			}
+
+			_, err := p.Execute(context.Background(), "hello", test.options)
+			require.NoError(t, err)
+			if test.want != nil {
+				assert.Contains(t, strings.Join(captured, " "), strings.Join(test.want, " "))
+			} else {
+				assert.NotContains(t, captured, "--turns")
+			}
+			assert.NotContains(t, captured, "--budget")
+		})
+	}
 }
 
 func TestAforgeProviderExecBudgetPartialIsUsable(t *testing.T) {

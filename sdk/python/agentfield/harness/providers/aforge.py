@@ -153,11 +153,19 @@ class AforgeProvider:
                 root,
                 "--timeout",
                 str(aforge_timeout),
-                "--context-fill",
-                "60",
-                "--completion-reserve",
-                "65536",
             ]
+            # --turns exists only on exec, not do. Aforge's --budget is a token
+            # budget, not a USD cap, so max_budget_usd has no honest mapping.
+            max_turns = options.get("max_turns")
+            if (
+                isinstance(max_turns, int)
+                and not isinstance(max_turns, bool)
+                and max_turns > 0
+            ):
+                cmd.extend(["--turns", str(max_turns)])
+            cmd.extend(
+                ["--context-fill", "60", "--completion-reserve", "65536"]
+            )
             system_prompt = options.get("system_prompt")
             if isinstance(system_prompt, str) and system_prompt.strip():
                 cmd.extend(["--system", system_prompt.strip()])

@@ -195,6 +195,52 @@ async def test_aforge_exec_mode_maps_original_contract_and_pins_model(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "expected_turns"),
+    [
+        ({"max_turns": 2}, "2"),
+        ({}, None),
+        ({"max_turns": 0}, None),
+        ({"max_turns": -2}, None),
+        ({"max_turns": True}, None),
+        ({"max_turns": "5"}, None),
+        ({"max_budget_usd": 1.5}, None),
+    ],
+)
+async def test_aforge_exec_turn_cap_argv(
+    monkeypatch: pytest.MonkeyPatch,
+    options: dict[str, object],
+    expected_turns: str | None,
+):
+    run_cli_mock = AsyncMock(return_value=(_exec_envelope(), "", 0))
+    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+    monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", run_cli_mock)
+
+    await AforgeProvider().execute("hello", options)
+
+    cmd = run_cli_mock.await_args.args[0]
+    if expected_turns is None:
+        assert "--turns" not in cmd
+    else:
+        timeout_index = cmd.index("--timeout")
+        assert cmd[timeout_index + 2 : timeout_index + 4] == [
+            "--turns",
+            expected_turns,
+        ]
+    assert "--budget" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_aforge_do_does_not_pass_turn_cap(monkeypatch: pytest.MonkeyPatch):
+    run_cli_mock = AsyncMock(return_value=(_envelope(), "", 0))
+    monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", run_cli_mock)
+
+    await AforgeProvider().execute("hello", {"max_turns": 2})
+
+    assert "--turns" not in run_cli_mock.await_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_aforge_exec_mode_accepts_budget_partial(
     monkeypatch: pytest.MonkeyPatch,
 ):

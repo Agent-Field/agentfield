@@ -156,6 +156,40 @@ describe('aforge provider', () => {
   });
 
   it.each([
+    [{ maxTurns: 2 }, '2'],
+    [{}, undefined],
+    [{ maxTurns: 0 }, undefined],
+    [{ maxTurns: -2 }, undefined],
+    [{ maxTurns: Number.NaN }, undefined],
+    [{ maxTurns: Number.POSITIVE_INFINITY }, undefined],
+    [{ maxBudgetUsd: 1.5 }, undefined],
+  ] as const)('maps exec turn options %o to %s', async (options, expectedTurns) => {
+    process.env.AGENTFIELD_AFORGE_COMMAND = 'exec';
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: execEnvelope(), stderr: '', exitCode: 0,
+    });
+
+    await new AforgeProvider().execute('hello', options);
+
+    const cmd = vi.mocked(cli.runCli).mock.calls[0][0];
+    if (expectedTurns === undefined) {
+      expect(cmd).not.toContain('--turns');
+    } else {
+      const timeoutIndex = cmd.indexOf('--timeout');
+      expect(cmd.slice(timeoutIndex + 2, timeoutIndex + 4)).toEqual(['--turns', expectedTurns]);
+    }
+    expect(cmd).not.toContain('--budget');
+  });
+
+  it('does not pass a positive turn cap to do', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: envelope(), stderr: '', exitCode: 0 });
+
+    await new AforgeProvider().execute('hello', { maxTurns: 2 });
+
+    expect(vi.mocked(cli.runCli).mock.calls[0][0]).not.toContain('--turns');
+  });
+
+  it.each([
     { options: { model: 'some/model#high' }, expected: 'some/model' },
     { options: { env: { AFORGE_MODEL: 'env/model' } }, expected: 'env/model' },
     { options: {}, expected: AFORGE_DEFAULT_MODEL },
