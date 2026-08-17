@@ -11,6 +11,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAforgeCommandHelp(t *testing.T) {
+	cmd := NewAforgeCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"--help"})
+	require.NoError(t, cmd.Execute())
+	require.Contains(t, stdout.String(), "ensure")
+
+	stdout.Reset()
+	cmd = NewAforgeCommand()
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"ensure", "--help"})
+	require.NoError(t, cmd.Execute())
+	require.Contains(t, stdout.String(), "--force")
+}
+
 func TestHarnessDoctorJSONReportsRequestedProvider(t *testing.T) {
 	binDir := t.TempDir()
 	writeHarnessTestBinary(t, binDir, "codex", "codex-cli 1.2.3")
@@ -126,6 +142,84 @@ func TestHarnessDoctorRejectsUnknownProvider(t *testing.T) {
 	cmd := NewHarnessCommand()
 	cmd.SetArgs([]string{"doctor", "--provider", "unknown"})
 	require.ErrorContains(t, cmd.Execute(), "unknown harness provider")
+}
+
+func TestProbeHarnessBinaryVersionBehavior(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+	binDir := t.TempDir()
+	t.Setenv("PATH", binDir)
+	// Keep the managed-bin fallback out of these results: a developer machine
+	// with a real ~/.agentfield/bin/aforge would otherwise answer differently
+	// from CI.
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+
+	// The pinned aforge build prints its whole usage banner and exits 1 for
+	// every version-ish argument, so the fixture does exactly that — a probe
+	// that only checked for output would file the banner as the version.
+	const usageOnExitOne = "echo 'aforge — build and revise task graphs' >&2; exit 1"
+
+	t.Run("optional version", func(t *testing.T) {
+		writeHarnessTestScript(t, binDir, "optional", usageOnExitOne)
+		reports := reportsForTestSpec(t, harnessProviderSpec{Name: "optional", Binary: "optional", VersionArgs: [][]string{{"version"}, {"--version"}}, VersionOptional: true})
+		require.True(t, reports[0].Usable)
+		require.Equal(t, "unknown", reports[0].Version)
+		require.Equal(t, []string{"version_unavailable"}, reports[0].Issues)
+	})
+
+	t.Run("required version", func(t *testing.T) {
+		writeHarnessTestScript(t, binDir, "required", usageOnExitOne)
+		reports := reportsForTestSpec(t, harnessProviderSpec{Name: "required", Binary: "required"})
+		require.False(t, reports[0].Usable)
+		require.Empty(t, reports[0].Version)
+		require.Equal(t, []string{"version_probe_failed"}, reports[0].Issues)
+	})
+
+	t.Run("managed bin fallback", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AGENTFIELD_HOME", home)
+		managed := filepath.Join(home, "bin")
+		require.NoError(t, os.MkdirAll(managed, 0o755))
+		writeHarnessTestScript(t, managed, "offpath", "printf 'offpath 2.0\\n'")
+		reports := reportsForTestSpec(t, harnessProviderSpec{Name: "offpath", Binary: "offpath"})
+		require.True(t, reports[0].Installed)
+		require.Equal(t, "offpath 2.0", reports[0].Version)
+		require.Equal(t, filepath.Join(managed, "offpath"), reports[0].Binary)
+	})
+
+	t.Run("ordered arguments", func(t *testing.T) {
+		writeHarnessTestScript(t, binDir, "ordered", "[ \"$1\" = --version ] && printf 'ordered 1.0\\n'")
+		reports := reportsForTestSpec(t, harnessProviderSpec{Name: "ordered", Binary: "ordered", VersionArgs: [][]string{{"version"}, {"--version"}}})
+		require.True(t, reports[0].Usable)
+		require.Equal(t, "ordered 1.0", reports[0].Version)
+	})
+}
+
+func TestHarnessDoctorAforgeSpec(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	reports, err := buildHarnessDoctorReports([]string{"aforge"})
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, "aforge", reports[0].Provider)
+	require.Equal(t, "af aforge ensure", reports[0].InstallCommand)
+	require.Equal(t, []string{"OPENROUTER_API_KEY"}, reports[0].AuthEnvVars)
+}
+
+func reportsForTestSpec(t *testing.T, spec harnessProviderSpec) []HarnessProviderHealth {
+	t.Helper()
+	original := harnessProviderSpecs
+	harnessProviderSpecs = []harnessProviderSpec{spec}
+	t.Cleanup(func() { harnessProviderSpecs = original })
+	reports, err := buildHarnessDoctorReports([]string{spec.Name})
+	require.NoError(t, err)
+	return reports
+}
+
+func writeHarnessTestScript(t *testing.T, dir, name, body string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755))
 }
 
 func writeHarnessTestBinary(t *testing.T, dir, name, version string) {
