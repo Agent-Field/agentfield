@@ -20,6 +20,9 @@ from agentfield.harness._result import FailureType, Metrics, RawResult
 
 logger = logging.getLogger("agentfield.harness.aforge")
 
+# From aforge's DefaultModel; keep in step with aforge's built-in default.
+AFORGE_DEFAULT_MODEL = "~deepseek/deepseek-v4-flash-latest"
+
 _REASONING_VARIANTS = {"off", "low", "medium", "high"}
 
 
@@ -196,6 +199,8 @@ class AforgeProvider:
                 }
             )
 
+        effective_model = model_value or env.get("AFORGE_MODEL") or AFORGE_DEFAULT_MODEL
+
         start_api = time.monotonic()
 
         try:
@@ -310,7 +315,7 @@ class AforgeProvider:
                 output_tokens=int(output_tokens_value or 0),
                 cache_read_tokens=int(cached_tokens_value or 0),
                 cache_creation_tokens=0,
-                model=model_value,
+                model=effective_model,
             ),
             is_error=is_error,
             error_message=error_message,

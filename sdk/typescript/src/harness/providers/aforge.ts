@@ -10,6 +10,9 @@ const LANDING_WINDOW_SECONDS = 5;
 const DEFAULT_MAX_CONCURRENT = 8;
 const ANSI_PATTERN = /\x1B\[[0-?]*[ -/]*[@-~]/g;
 
+// From aforge's DefaultModel; keep in step with aforge's built-in default.
+export const AFORGE_DEFAULT_MODEL = '~deepseek/deepseek-v4-flash-latest';
+
 class Semaphore {
   private active = 0;
   private readonly waiters: Array<() => void> = [];
@@ -208,6 +211,8 @@ export class AforgeProvider implements HarnessProvider {
     }
     Object.assign(env, stringOptions(options.env));
 
+    const effectiveModel = model || env.AFORGE_MODEL || AFORGE_DEFAULT_MODEL;
+
     const startApi = Date.now();
     try {
       const { stdout, stderr, exitCode } = await runCli(cmd, {
@@ -253,7 +258,7 @@ export class AforgeProvider implements HarnessProvider {
           cacheReadTokens,
           cacheCreationTokens: 0,
           totalTokens: inputTokens + outputTokens,
-          model,
+          model: effectiveModel,
         }),
         isError,
         errorMessage: isError ? crashMessage(exitCode, blockedOn || stop, resultText, stderr) : undefined,

@@ -89,6 +89,7 @@ func TestAforgeProviderMapsDoCommandEnvelopeAndMetrics(t *testing.T) {
 	assert.Equal(t, 100, raw.Metrics.InputTokens)
 	assert.Equal(t, 50, raw.Metrics.OutputTokens)
 	assert.Equal(t, 20, raw.Metrics.CacheReadTokens)
+	assert.Equal(t, "openrouter/z-ai/glm-5.2", raw.Metrics.Model)
 	require.NotNil(t, raw.Metrics.CostUSD)
 	assert.InDelta(t, 0.0123, *raw.Metrics.CostUSD, 1e-9)
 	require.Len(t, raw.Messages, 1)
@@ -129,6 +130,7 @@ func TestAforgeProviderMapsExecCommandEnvelopeAndMetrics(t *testing.T) {
 	assert.False(t, raw.IsError)
 	assert.Equal(t, 4, raw.Metrics.NumTurns)
 	assert.Equal(t, 100, raw.Metrics.InputTokens)
+	assert.Equal(t, "openrouter/deepseek/deepseek-v4-flash-0731", raw.Metrics.Model)
 	require.NotNil(t, raw.Metrics.CostUSD)
 	assert.InDelta(t, 0.0123, *raw.Metrics.CostUSD, 1e-9)
 }
@@ -184,6 +186,30 @@ func TestAforgeProviderModelVariantAndEnvironmentPrecedence(t *testing.T) {
 	assert.Equal(t, "override/model", captured[1]["AFORGE_MODEL"])
 	assert.Equal(t, "off", captured[1]["AFORGE_EXEC_REASONING"])
 	assert.Equal(t, "1", captured[1]["EXTRA"])
+}
+
+func TestAforgeProviderReportsEffectiveModel(t *testing.T) {
+	useAforgeDo(t)
+	tests := []struct {
+		name    string
+		options Options
+		want    string
+	}{
+		{name: "variant stripped", options: Options{Model: "some/model#high"}, want: "some/model"},
+		{name: "environment", options: Options{Env: map[string]string{"AFORGE_MODEL": "env/model"}}, want: "env/model"},
+		{name: "default", want: DefaultAforgeModel},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p := NewAforgeProvider("aforge")
+			p.runCLI = func(context.Context, []string, map[string]string, string, int, int, []byte) (*CLIResult, error) {
+				return &CLIResult{Stdout: aforgeEnvelope("done", true, "", "")}, nil
+			}
+			raw, err := p.Execute(context.Background(), "hello", test.options)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, raw.Metrics.Model)
+		})
+	}
 }
 
 func TestAforgeProviderRootAndTimeoutResolution(t *testing.T) {
@@ -395,6 +421,7 @@ printf '%s\n' '{"settled":true,"deliverable":"done","blocked_on":"","spend_usd":
 		require.NoError(t, got.err)
 		require.NotNil(t, got.result)
 		assert.False(t, got.result.IsError, got.result.ErrorMessage)
+		assert.Equal(t, DefaultAforgeModel, got.result.Model)
 		seen[got.dest.Name] = got.dest.Count
 	}
 	assert.Equal(t, map[string]int{"first": 1, "second": 2}, seen)

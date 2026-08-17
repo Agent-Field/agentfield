@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AforgeProvider } from '../src/harness/providers/aforge.js';
+import { AFORGE_DEFAULT_MODEL, AforgeProvider } from '../src/harness/providers/aforge.js';
 import { buildProvider, SUPPORTED_PROVIDERS } from '../src/harness/providers/factory.js';
 import * as cli from '../src/harness/cli.js';
 
@@ -152,6 +152,19 @@ describe('aforge provider', () => {
     expect(result.metrics.numTurns).toBe(4);
     expect(result.metrics.inputTokens).toBe(100);
     expect(result.metrics.totalCostUsd).toBe(0.0123);
+    expect(result.metrics.model).toBe('openrouter/deepseek/deepseek-v4-flash-0731');
+  });
+
+  it.each([
+    { options: { model: 'some/model#high' }, expected: 'some/model' },
+    { options: { env: { AFORGE_MODEL: 'env/model' } }, expected: 'env/model' },
+    { options: {}, expected: AFORGE_DEFAULT_MODEL },
+  ])('reports the effective model for options $options', async ({ options, expected }) => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: envelope(), stderr: '', exitCode: 0 });
+
+    const result = await new AforgeProvider().execute('hello', options);
+
+    expect(result.metrics.model).toBe(expected);
   });
 
   it('accepts an exec budget partial with usable text', async () => {

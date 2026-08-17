@@ -8,7 +8,7 @@ import pytest
 
 from agentfield.exceptions import HarnessProviderUnavailable
 from agentfield.harness._result import FailureType
-from agentfield.harness.providers.aforge import AforgeProvider
+from agentfield.harness.providers.aforge import AFORGE_DEFAULT_MODEL, AforgeProvider
 
 
 @pytest.fixture(autouse=True)
@@ -102,6 +102,30 @@ async def test_aforge_success_maps_envelope_and_metrics(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({"model": "some/model#high"}, "some/model"),
+        ({"env": {"AFORGE_MODEL": "env/model"}}, "env/model"),
+        ({}, AFORGE_DEFAULT_MODEL),
+    ],
+)
+async def test_aforge_reports_effective_model(
+    monkeypatch: pytest.MonkeyPatch,
+    options: dict[str, object],
+    expected: str,
+):
+    monkeypatch.setattr(
+        "agentfield.harness.providers.aforge.run_cli",
+        AsyncMock(return_value=(_envelope(), "", 0)),
+    )
+
+    raw = await AforgeProvider().execute("hello", options)
+
+    assert raw.metrics.model == expected
+
+
+@pytest.mark.asyncio
 async def test_aforge_exec_mode_maps_original_contract_and_pins_model(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -167,6 +191,7 @@ async def test_aforge_exec_mode_maps_original_contract_and_pins_model(
     assert raw.metrics.num_turns == 4
     assert raw.metrics.input_tokens == 100
     assert raw.metrics.total_cost_usd == 0.0123
+    assert raw.metrics.model == "openrouter/deepseek/deepseek-v4-flash-0731"
 
 
 @pytest.mark.asyncio
