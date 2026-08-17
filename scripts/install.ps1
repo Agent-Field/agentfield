@@ -1,6 +1,9 @@
+param([switch]$NoAforge)
+
 # AgentField CLI Installer for Windows
 # Usage: iwr -useb https://agentfield.ai/install.ps1 | iex
 # Version pinning: $env:VERSION="v1.0.0"; iwr -useb https://agentfield.ai/install.ps1 | iex
+# Skip aforge: $env:AFORGE_MODE="none"; iwr -useb https://agentfield.ai/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
@@ -10,6 +13,8 @@ $InstallDir = if ($env:AGENTFIELD_INSTALL_DIR) { $env:AGENTFIELD_INSTALL_DIR } e
 $Version = if ($env:VERSION) { $env:VERSION } else { "latest" }
 $Verbose = if ($env:VERBOSE -eq "1") { $true } else { $false }
 $SkipPathConfig = if ($env:SKIP_PATH_CONFIG -eq "1") { $true } else { $false }
+# Piped iwr | iex installs cannot pass switches, so retain an environment opt-out.
+$AforgeMode = if ($NoAforge -or $env:AFORGE_MODE -eq 'none') { 'none' } else { 'auto' }
 
 # Colors
 function Write-ColorOutput {
@@ -304,6 +309,31 @@ function Test-Installation {
     }
 }
 
+function Install-Aforge {
+    param([string]$InstallDir)
+
+    if ($AforgeMode -eq 'none') {
+        Write-Info "Skipping aforge install (AFORGE_MODE=none)"
+        return
+    }
+
+    try {
+        Write-Info "Installing the aforge coding harness..."
+        # agentfield.exe, not the af.exe alias: Install-Binary creates the alias
+        # best-effort and warns when both the hardlink and the copy fail.
+        & (Join-Path $InstallDir 'agentfield.exe') aforge ensure
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "aforge coding harness installed"
+        }
+        else {
+            Write-Warning "aforge install reported an issue; the control plane is unaffected"
+        }
+    }
+    catch {
+        Write-Warning "aforge install reported an issue; the control plane is unaffected"
+    }
+}
+
 # Print success message
 function Write-SuccessMessage {
     Write-Host ""
@@ -383,6 +413,8 @@ function Main {
 
         # Verify installation
         Test-Installation -InstallDir $InstallDir
+
+        Install-Aforge -InstallDir $InstallDir
 
         # Print success message
         Write-SuccessMessage

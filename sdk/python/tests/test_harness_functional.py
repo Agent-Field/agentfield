@@ -5,7 +5,7 @@ Excluded from default ``pytest`` runs via the ``harness_live`` marker.
 
 Prerequisites
 ~~~~~~~~~~~~~
-- Coding agent CLIs installed (claude, codex, opencode)
+- Coding agent CLIs installed (aforge, claude, codex, opencode)
 - Valid API keys / auth configured for each provider
 - Internet access for API calls
 
@@ -18,6 +18,7 @@ Run a single provider::
     pytest tests/test_harness_functional.py -m harness_live -v -k codex --timeout=300
     pytest tests/test_harness_functional.py -m harness_live -v -k claude --timeout=300
     pytest tests/test_harness_functional.py -m harness_live -v -k opencode --timeout=300
+    pytest tests/test_harness_functional.py -m harness_live -v -k aforge --timeout=300
 """
 
 from __future__ import annotations
@@ -26,13 +27,12 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import List
 
 import pytest
 from pydantic import BaseModel
 
-from agentfield.harness._runner import HarnessRunner
 from agentfield.harness._result import HarnessResult  # noqa: F401
+from agentfield.harness._runner import HarnessRunner
 from agentfield.types import HarnessConfig
 
 # ────────────────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ class CodeReviewResponse(BaseModel):
 
     summary: str
     score: int
-    suggestions: List[str]
+    suggestions: list[str]
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -61,6 +61,7 @@ class CodeReviewResponse(BaseModel):
 
 HAS_CODEX = shutil.which("codex") is not None
 HAS_OPENCODE = shutil.which("opencode") is not None
+HAS_AFORGE = shutil.which("aforge") is not None
 
 try:
     import claude_agent_sdk  # noqa: F401
@@ -104,6 +105,78 @@ def work_dir():
 
 # Module‐level markers — every test in this file is harness_live + asyncio
 pytestmark = [pytest.mark.harness_live, pytest.mark.asyncio]
+
+
+# ════════════════════════════════════════════════════════════════════════
+# AFORGE
+# ════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.skipif(not HAS_AFORGE, reason="aforge CLI not installed")
+class TestAforgeLive:
+    """Live tests against Aforge's canonical ``aforge do --json`` mode."""
+
+    async def test_basic_prompt(self, work_dir: str) -> None:
+        """Provider returns text plus measured benchmark usage."""
+        from agentfield.harness.providers.aforge import AforgeProvider
+
+        result = await AforgeProvider().execute(
+            "Reply with exactly: HELLO_AGENTFIELD",
+            {"cwd": work_dir},
+        )
+
+        assert not result.is_error, f"Aforge returned error: {result.error_message}"
+        assert result.result is not None
+        assert "HELLO_AGENTFIELD" in result.result
+        assert result.metrics.num_turns > 0
+        assert result.metrics.input_tokens > 0
+        assert result.metrics.output_tokens > 0
+        assert result.metrics.total_cost_usd is not None
+        assert result.metrics.total_cost_usd > 0
+        print(
+            "aforge metrics",
+            {
+                "duration_ms": result.metrics.duration_api_ms,
+                "calls": result.metrics.num_turns,
+                "input_tokens": result.metrics.input_tokens,
+                "output_tokens": result.metrics.output_tokens,
+                "cache_read_tokens": result.metrics.cache_read_tokens,
+                "cost_usd": result.metrics.total_cost_usd,
+            },
+        )
+
+    async def test_schema_pipeline(self, work_dir: str) -> None:
+        """Full schema pipeline writes, parses, and cleans isolated output."""
+        result = await HarnessRunner().run(
+            'Return exactly: greeting="Hello from Aforge" and number=42. '
+            "Follow the OUTPUT REQUIREMENTS below precisely.",
+            provider="aforge",
+            schema=SimpleResponse,
+            cwd=work_dir,
+            max_retries=1,
+        )
+
+        assert not result.is_error, (
+            f"Schema pipeline failed: {result.error_message}\n"
+            f"Raw result: {result.result!r}"
+        )
+        assert isinstance(result.parsed, SimpleResponse)
+        assert result.parsed.greeting == "Hello from Aforge"
+        assert result.parsed.number == 42
+        print(
+            "aforge schema metrics",
+            {
+                "duration_ms": result.duration_ms,
+                "calls": result.num_turns,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "cache_read_tokens": result.cache_read_tokens,
+                "cost_usd": result.cost_usd,
+            },
+        )
+        assert not any(
+            name.startswith(".agentfield-out-") for name in os.listdir(work_dir)
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════

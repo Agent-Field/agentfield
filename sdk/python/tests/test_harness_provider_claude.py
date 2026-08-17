@@ -88,6 +88,30 @@ async def test_execute_maps_options_and_extracts_result(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_defaults_model_to_sonnet(monkeypatch):
+    from agentfield.harness.providers.claude import ClaudeCodeProvider
+
+    captured: dict[str, Any] = {}
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    def fake_query(*, prompt: str, options: FakeClaudeAgentOptions):
+        captured["options"] = options
+        return _AsyncStream([{"type": "result", "result": "ok"}])
+
+    fake_sdk = ModuleType("claude_agent_sdk")
+    setattr(fake_sdk, "ClaudeAgentOptions", FakeClaudeAgentOptions)
+    setattr(fake_sdk, "query", fake_query)
+    monkeypatch.setitem(__import__("sys").modules, "claude_agent_sdk", fake_sdk)
+
+    await ClaudeCodeProvider().execute("hello", {})
+
+    assert captured["options"].kwargs["model"] == "sonnet"
+
+
+@pytest.mark.asyncio
 async def test_execute_extracts_result_from_subtype_success(monkeypatch):
     """Claude Agent SDK sends subtype='success' instead of type='result'."""
     from agentfield.harness.providers.claude import ClaudeCodeProvider

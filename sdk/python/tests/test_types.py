@@ -470,7 +470,7 @@ class TestHarnessConfig:
     def test_defaults(self):
         hc = HarnessConfig(provider="claude-code")
         assert hc.provider == "claude-code"
-        assert hc.model == "sonnet"
+        assert hc.model is None
         assert hc.max_turns == 30
         assert hc.max_budget_usd is None
         assert hc.max_retries == 3
@@ -493,9 +493,9 @@ class TestHarnessConfig:
         assert hc.tools == ["Bash"]
         assert hc.permission_mode == "auto"
 
-    def test_provider_required(self):
-        with pytest.raises(Exception):
-            HarnessConfig()  # type: ignore[call-arg]
+    def test_provider_defaults_to_aforge(self, monkeypatch):
+        monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
+        assert HarnessConfig().provider == "aforge"
 
     def test_json_roundtrip(self):
         hc = HarnessConfig(provider="gemini", model="gemini-2.5-flash")

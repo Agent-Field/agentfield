@@ -33,19 +33,26 @@ export function runCli(
     cwd?: string;
     timeout?: number;
     idleSeconds?: number;
+    inputText?: string;
   }
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
     const [bin, ...args] = cmd;
     const env = { ...process.env, ...options?.env };
     applyOpenRouterAttributionEnv(env);
+    const hasInput = options?.inputText !== undefined;
     // 'ignore' on stdin gives the child an immediate EOF instead of an open
-    // pipe that never closes (a hang risk if the child probes stdin).
+    // pipe that never closes (a hang risk if the child probes stdin). Providers
+    // with large or sensitive prompts can explicitly pipe text over stdin.
     const proc = spawn(bin, args, {
       env,
       cwd: options?.cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [hasInput ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
+
+    if (hasInput) {
+      proc.stdin?.end(options.inputText);
+    }
 
     let stdout = '';
     let stderr = '';
@@ -54,11 +61,11 @@ export function runCli(
 
     // Both stdout and stderr are drained concurrently via their own 'data'
     // listeners, so a full stderr pipe cannot deadlock the read of stdout.
-    proc.stdout.on('data', (data: Uint8Array | string) => {
+    proc.stdout!.on('data', (data: Uint8Array | string) => {
       stdout += data.toString();
       lastActivity = Date.now();
     });
-    proc.stderr.on('data', (data: Uint8Array | string) => {
+    proc.stderr!.on('data', (data: Uint8Array | string) => {
       stderr += data.toString();
       lastActivity = Date.now();
     });

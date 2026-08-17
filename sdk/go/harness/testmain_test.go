@@ -27,6 +27,11 @@ printf '%s\n' 'stub gemini result'
 printf '%s\n' 'stub opencode result'
 `,
 	}
+	if os.Getenv("AFORGE_INTEGRATION") != "1" {
+		stubs["aforge"] = `#!/bin/sh
+printf '%s\n' '{"settled":true,"deliverable":"stub aforge result","blocked_on":"","spend_usd":0,"elapsed_ms":1,"usage":{"calls":1,"prompt_tokens":0,"completion_tokens":0,"cached_tokens":0,"cost":0}}'
+`
+	}
 
 	for name, content := range stubs {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {

@@ -12,6 +12,24 @@ AgentField uses Viper with the prefix `AGENTFIELD` and maps nested config keys u
 - `AGENTFIELD_CONFIG_FILE` (optional): Path to `agentfield.yaml` (in containers this is typically `/etc/agentfield/config/agentfield.yaml`).
 - `AGENTFIELD_HOME` (recommended in containers): Base directory where AgentField stores local state (SQLite DB, Bolt DB, keys, logs). In Kubernetes, mount a PVC and set `AGENTFIELD_HOME=/data`.
 
+### Coding harness (aforge)
+
+`af` distributes one harness CLI itself: `aforge`. Every install surface (the curl
+installer, `af skill install --all`, the desktop app on launch, and the
+`python-agent` / `go-agent` / cloud control-plane images) provisions the pinned
+build into `$AGENTFIELD_HOME/bin/aforge` (`~/.agentfield/bin` by default), verified
+against the published sha256 of the uncompressed binary.
+
+- `AGENTFIELD_AFORGE_BASE_URL` (optional): Whole-base override for the download host,
+  e.g. an internal mirror. The pinned version is **not** appended — the URL must
+  already point at a directory holding `aforge-<os>-<arch>[.exe].gz` and
+  `checksums.txt`. Default: `https://agentfield.ai/downloads/aforge/<pinned-version>`.
+- `AGENTFIELD_SKIP_AFORGE` (optional): Set to `1` to make every aforge provisioning
+  step a no-op — air-gapped hosts, or images that vendor their own harness.
+
+Shell-installer equivalents: `--no-aforge` / `AFORGE_MODE=none` (`scripts/install.sh`),
+`-NoAforge` / `$env:AFORGE_MODE='none'` (`scripts/install.ps1`).
+
 ### Storage
 
 AgentField supports:

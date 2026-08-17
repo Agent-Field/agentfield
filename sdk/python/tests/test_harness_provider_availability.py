@@ -17,7 +17,7 @@ from agentfield.harness.providers.opencode import OpenCodeProvider
 @pytest.mark.parametrize(
     ("provider", "name", "install_command"),
     [
-        (AforgeProvider(bin_path="aforge-missing"), "aforge", "aforge-v2"),
+        (AforgeProvider(bin_path="aforge-missing"), "aforge", "af aforge ensure"),
         (CodexProvider(bin_path="codex-missing"), "codex", "@openai/codex"),
         (
             OpenCodeProvider(bin_path="opencode-missing"),

@@ -7,6 +7,7 @@ import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '..
 import type { DesktopSettings } from '../shared/types'
 import { getBaseUrl, getSnapshot, setActiveControlPlanePort } from './agentfield'
 import { type AgentAction, runAgentAction, startControlPlane, uninstallAgent } from './agents'
+import { ensureAforgeCompanion } from './aforge-companion'
 import { runAutostart } from './autostart'
 import { testCloudConnection, applyConnectionProfile } from './cloud'
 import { isCloudActive } from './connection'
@@ -358,6 +359,13 @@ function main(): void {
     // desktop-app-only install gets the menu-bar icon. Runs after initializeCli
     // (it needs the managed bin dir to exist) and non-blocking, like syncSkills.
     syncTray(settings.trayCompanion)
+
+    // The pinned aforge harness binary lands beside af in ~/.agentfield/bin, so a
+    // desktop-only install can run harness-backed agents. Fire-and-forget: a failed
+    // download must never delay or break app startup.
+    void ensureAforgeCompanion().then((r) =>
+      console.log(`aforge companion: ${r.ok ? 'ok' : 'FAILED'} — ${r.message}`)
+    )
 
     // The snapshot carries the last skill-sync result along with the control-
     // plane view, so the renderer's existing 5s poll keeps the dashboard's

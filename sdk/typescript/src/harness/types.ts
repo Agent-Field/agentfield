@@ -1,5 +1,11 @@
 export interface HarnessConfig {
-  provider: 'claude-code' | 'codex' | 'gemini' | 'opencode';
+  /**
+   * Coding agent provider. Defaults to `aforge`, AgentField's native harness.
+   * When unset, `AGENTFIELD_HARNESS_PROVIDER` is consulted before the default.
+   * An explicit value always wins.
+   */
+  provider?: 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode';
+  /** Model identifier. Empty means the provider's own default. */
   model?: string;
   /**
    * Provider-specific reasoning-effort variant (e.g. `high`, `minimal`).
@@ -17,13 +23,21 @@ export interface HarnessConfig {
   systemPrompt?: string;
   env?: Record<string, string>;
   cwd?: string;
+  projectDir?: string;
+  aforgeBin?: string;
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
 }
 
 export interface HarnessOptions {
+  /**
+   * Coding agent provider. Defaults to `aforge`, AgentField's native harness.
+   * When unset, `AGENTFIELD_HARNESS_PROVIDER` is consulted before the default.
+   * An explicit value always wins.
+   */
   provider?: string;
+  /** Model identifier. Empty means the provider's own default. */
   model?: string;
   /**
    * Provider-specific reasoning-effort variant (e.g. `high`, `minimal`).
@@ -41,6 +55,8 @@ export interface HarnessOptions {
   systemPrompt?: string;
   env?: Record<string, string>;
   cwd?: string;
+  projectDir?: string;
+  aforgeBin?: string;
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
@@ -64,12 +80,16 @@ export interface Metrics {
   model?: string;
 }
 
+export type FailureType = 'none' | 'crash' | 'timeout' | 'api_error' | 'no_output' | 'schema';
+
 export interface RawResult {
   result?: string;
   messages: Array<Record<string, unknown>>;
   metrics: Metrics;
   isError: boolean;
   errorMessage?: string;
+  failureType?: FailureType;
+  returnCode?: number;
 }
 
 export interface HarnessResult {
@@ -77,6 +97,8 @@ export interface HarnessResult {
   parsed?: unknown;
   isError: boolean;
   errorMessage?: string;
+  failureType?: FailureType;
+  returnCode?: number;
   costUsd?: number;
   numTurns: number;
   durationMs: number;

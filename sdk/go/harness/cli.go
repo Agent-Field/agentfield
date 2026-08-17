@@ -74,6 +74,17 @@ func RunCLI(ctx context.Context, cmd []string, env map[string]string, cwd string
 // string value ("") causes that variable to be removed from the environment
 // rather than set to empty — use this to unset inherited variables.
 func RunCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte) (*CLIResult, error) {
+	return runCLIWithStdin(ctx, cmd, env, cwd, timeout, stdin, nil)
+}
+
+// runCLIWithStdinIdle is the provider-internal variant with an explicit idle
+// watchdog. A value <= 0 disables the watchdog. Aforge uses this because its
+// machine-readable mode is intentionally silent until the final JSON envelope.
+func runCLIWithStdinIdle(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout, idleSeconds int, stdin []byte) (*CLIResult, error) {
+	return runCLIWithStdin(ctx, cmd, env, cwd, timeout, stdin, &idleSeconds)
+}
+
+func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte, idleOverride *int) (*CLIResult, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
@@ -191,6 +202,9 @@ func RunCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 	}()
 
 	idleSeconds := resolveIdleSeconds()
+	if idleOverride != nil {
+		idleSeconds = *idleOverride
+	}
 	idleTimedOut := false
 	var waitErr error
 

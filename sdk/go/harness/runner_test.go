@@ -37,11 +37,15 @@ func TestRunner_Run_NoSchema(t *testing.T) {
 	runner := NewRunner(Options{Provider: "opencode"})
 
 	// We can't easily test with real providers, so test the merge/validation logic
-	t.Run("missing provider", func(t *testing.T) {
-		r := NewRunner(Options{})
-		_, err := r.Run(context.Background(), "test", nil, nil, Options{})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no harness provider")
+	t.Run("empty provider defaults to aforge", func(t *testing.T) {
+		t.Setenv(ProviderEnvVar, "")
+		r := NewRunner(Options{BinPath: filepath.Join(t.TempDir(), "missing-aforge")})
+		result, err := r.Run(context.Background(), "test", nil, nil, Options{})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.True(t, result.IsError)
+		assert.Contains(t, result.ErrorMessage, "missing-aforge")
+		assert.NotContains(t, result.ErrorMessage, "no harness provider specified")
 	})
 
 	t.Run("unknown provider", func(t *testing.T) {
@@ -567,6 +571,7 @@ func TestBuildProvider(t *testing.T) {
 		wantType string
 		wantErr  bool
 	}{
+		{"aforge", "aforge", "*harness.AforgeProvider", false},
 		{"claude-code", "claude-code", "*harness.ClaudeCodeProvider", false},
 		{"codex", "codex", "*harness.CodexProvider", false},
 		{"gemini", "gemini", "*harness.GeminiProvider", false},
@@ -589,8 +594,8 @@ func TestBuildProvider(t *testing.T) {
 }
 
 func TestRunner_BuildProvider_UsesFactory(t *testing.T) {
-	// Verify the runner can now build all 4 providers
-	for _, name := range []string{"claude-code", "codex", "gemini", "opencode"} {
+	// Verify the runner can build every registered provider.
+	for _, name := range []string{"aforge", "claude-code", "codex", "gemini", "opencode"} {
 		t.Run(name, func(t *testing.T) {
 			runner := NewRunner(Options{Provider: name})
 			_, err := runner.Run(context.Background(), "test", nil, nil, Options{})

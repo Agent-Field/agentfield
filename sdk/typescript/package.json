@@ -1,6 +1,6 @@
 {
   "name": "@agentfield/sdk",
-  "version": "0.1.130-rc.1",
+  "version": "0.1.130-rc.5",
   "description": "AgentField TypeScript SDK",
   "type": "module",
   "main": "dist/index.js",
@@ -14,7 +14,7 @@
     "dev": "tsup --watch",
     "lint": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
-    "test:functional": "vitest run tests/harness_functional.test.ts --timeout=300000",
+    "test:functional": "vitest run --config vitest.functional.config.ts",
     "test:core": "vitest run --config vitest.config.ts",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "test:coverage:core": "vitest run --config vitest.config.ts --coverage",
@@ -88,6 +88,7 @@
   "author": "AgentField Team",
   "overrides": {
     "esbuild": "0.28.1",
+    "nanoid": "3.3.18",
     "postcss": "8.5.25",
     "body-parser": "1.20.6"
   }
