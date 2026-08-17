@@ -1,23 +1,21 @@
 # pyright: reportMissingImports=false
 
 import pytest
-from pydantic import ValidationError
-
 from agentfield.harness._result import HarnessResult, Metrics, RawResult
 from agentfield.harness.providers._factory import build_provider
 from agentfield.types import HarnessConfig
 
 
-def test_harness_config_provider_required():
-    with pytest.raises(ValidationError):
-        HarnessConfig()
+def test_harness_config_provider_defaults_to_aforge(monkeypatch):
+    monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
+    assert HarnessConfig().provider == "aforge"
 
 
 def test_harness_config_defaults():
     cfg = HarnessConfig(provider="codex")
 
     assert cfg.provider == "codex"
-    assert cfg.model == "sonnet"
+    assert cfg.model is None
     assert cfg.max_turns == 30
     assert cfg.max_budget_usd is None
     assert cfg.max_retries == 3

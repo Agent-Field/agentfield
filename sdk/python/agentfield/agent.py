@@ -3735,8 +3735,9 @@ class Agent(FastAPI):
             prompt: Task description for the coding agent.
             schema: Pydantic BaseModel class for structured output validation.
             provider: Override provider ("aforge", "claude-code", "codex", "gemini",
-                "opencode").
-            model: Override model identifier.
+                "opencode", "grok"). Omit to use ``AGENTFIELD_HARNESS_PROVIDER``
+                when set, otherwise ``aforge``.
+            model: Override model identifier. Empty uses the provider's own default.
             max_turns: Maximum agent iterations.
             max_budget_usd: Cost cap in USD.
             tools: Allowed tools list.

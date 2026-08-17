@@ -273,15 +273,29 @@ class DiscoveryResult:
     xml: Optional[str] = None
 
 
+def _default_harness_provider() -> str:
+    # Imported lazily: agentfield.harness imports agentfield.types.
+    from agentfield.harness._defaults import resolve_harness_provider
+
+    return resolve_harness_provider()
+
+
 class HarnessConfig(BaseModel):
     provider: str = Field(
-        ...,
+        default_factory=_default_harness_provider,
         description=(
-            'Coding agent provider: "aforge" | "claude-code" | "codex" | '
-            '"gemini" | "opencode" | "grok"'
+            'Coding agent provider: "aforge" (default) | "claude-code" | "codex" | '
+            '"gemini" | "opencode" | "grok". Unset resolves to the '
+            'AGENTFIELD_HARNESS_PROVIDER env var when present, else "aforge".'
         ),
     )
-    model: str = Field(default="sonnet", description="Default model identifier.")
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model identifier. None/empty means the provider's own default "
+            "(aforge picks its own; claude-code uses sonnet)."
+        ),
+    )
     max_turns: int = Field(default=30, description="Maximum agent iterations.")
     max_budget_usd: Optional[float] = Field(
         default=None, description="Cost cap in USD."

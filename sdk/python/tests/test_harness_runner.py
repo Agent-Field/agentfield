@@ -265,10 +265,21 @@ async def test_run_with_schema_injects_prompt_suffix_and_parses_output(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_run_raises_when_no_provider_set(tmp_path):
+async def test_run_defaults_to_aforge_when_no_provider_set(tmp_path, monkeypatch):
+    monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
     runner = HarnessRunner()
-    with pytest.raises(ValueError, match="No harness provider specified"):
-        await runner.run("hello", cwd=str(tmp_path))
+    provider = MockProvider([RawResult(result="ok")])
+    captured: dict[str, str] = {}
+
+    def fake_build_provider(config):
+        captured["provider"] = config.provider
+        return provider
+
+    with patch("agentfield.harness._runner.build_provider", fake_build_provider):
+        result = await runner.run("hello", cwd=str(tmp_path))
+
+    assert captured["provider"] == "aforge"
+    assert result.result == "ok"
 
 
 @pytest.mark.asyncio
