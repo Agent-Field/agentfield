@@ -173,6 +173,39 @@ async def test_ai_multimodal_input_processing(monkeypatch, agent_with_ai):
 
 
 @pytest.mark.asyncio
+async def test_ai_merges_user_keyword_with_positional_multimodal_args(
+    monkeypatch, agent_with_ai
+):
+    """Keep positional media and text when a keyword user prompt is supplied."""
+    from agentfield.multimodal import Image, Text
+
+    litellm_module = setup_litellm_stub(monkeypatch)
+    litellm_module.acompletion.return_value = make_chat_response("image analyzed")
+
+    ai = AgentAI(agent_with_ai)
+    await ai.ai(
+        Image.from_url("https://example.com/image.jpg"),
+        Text(text="Positional context"),
+        user="Describe the image.",
+    )
+
+    messages = litellm_module.acompletion.call_args[1]["messages"]
+    user_messages = [message for message in messages if message["role"] == "user"]
+    assert len(user_messages) == 1
+    assert user_messages[0]["content"] == [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "https://example.com/image.jpg",
+                "detail": "high",
+            },
+        },
+        {"type": "text", "text": "Positional context"},
+        {"type": "text", "text": "Describe the image."},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ai_error_recovery_and_retry(monkeypatch, agent_with_ai):
     """Test error recovery and retry logic."""
     litellm_module = setup_litellm_stub(monkeypatch)

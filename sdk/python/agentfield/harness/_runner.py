@@ -10,6 +10,7 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
+from agentfield.harness._defaults import resolve_harness_provider
 from agentfield.harness._result import FailureType, HarnessResult, RawResult
 from agentfield.harness._schema import (
     build_followup_prompt,
@@ -275,12 +276,8 @@ class HarnessRunner:
         }
         options = _resolve_options(self._config, overrides)
 
-        resolved_provider = options.get("provider")
-        if not resolved_provider:
-            raise ValueError(
-                "No harness provider specified. Set 'provider' in HarnessConfig "
-                "or pass it to .harness() call."
-            )
+        resolved_provider = resolve_harness_provider(options.get("provider"))
+        options["provider"] = resolved_provider
 
         resolved_cwd = str(options.get("cwd") or ".")
         provider_instance = self._build_provider(str(resolved_provider), options)

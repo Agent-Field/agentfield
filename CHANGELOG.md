@@ -6,6 +6,1073 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.130-rc.5] - 2026-08-17
+
+
+### Added
+
+- Feat(harness): make aforge the default provider across Python, Go, and TypeScript (#905)
+
+* feat(harness): add aforge do parity across SDKs
+
+* feat(harness): preserve TypeScript failure metadata
+
+* fix(harness): parse live aforge JSON envelopes
+
+* feat(harness): support aforge exec across SDKs
+
+* feat(harness): default aforge to exec
+
+* feat(harness): make aforge the default provider in the Python SDK
+
+`app.harness("...")` with nothing configured now runs AForge, AgentField's
+native coding harness, instead of raising "No harness provider specified".
+
+Provider precedence is explicit value > AGENTFIELD_HARNESS_PROVIDER >
+"aforge", implemented once in harness/_defaults.py and applied both where
+HarnessConfig materialises its default and where the runner resolves options
+(so a runner built without any config follows the same chain).
+
+HarnessConfig.model stops defaulting to "sonnet" — that was Claude-specific
+and wrong for every other provider. The default is now empty, meaning "use
+the provider's own default", and the claude-code provider carries "sonnet"
+internally so explicit claude-code users see no change.
+
+Also drops the private-repo build instruction from the aforge install hint;
+the binary ships alongside `af` and `af aforge ensure` (re)installs it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(harness): make aforge the default provider in the Go SDK
+
+Runner.Run no longer errors on an empty Options.Provider. BuildProvider and
+Run both route the name through ResolveProviderName, which applies the same
+precedence as the Python SDK: explicit value > AGENTFIELD_HARNESS_PROVIDER >
+DefaultProvider ("aforge"). The resolved name is written back onto the
+options so error messages and provider construction see the real provider.
+
+Model stays empty by default and means "the provider's own default"; the
+Harness doc example no longer suggests a Claude-specific "sonnet".
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(harness): lead with AForge as the default harness
+
+Rewrites the harness-providers lead so the zero-setup path is the headline:
+AForge is the default, `af aforge ensure` installs it alongside `af`, and
+picking Claude Code / Codex / Gemini CLI / OpenCode is an override of one
+option rather than a prerequisite. Documents the provider precedence chain
+(explicit > AGENTFIELD_HARNESS_PROVIDER > aforge) and that an unset model
+means the provider's own default.
+
+Drops the "go build -o aforge ./cmd/aforge" instruction — that repo is not
+public and is no longer how anyone gets the binary. Adds the grok row
+(Python SDK only) so the install table matches the supported provider set.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(harness): correct the v2 design doc's "provider is required" rule
+
+The design doc still asserted that HarnessConfig.provider has no implicit
+default and that a call without one raises. Both are false now: provider
+resolves through explicit > AGENTFIELD_HARNESS_PROVIDER > "aforge", and
+model defaults to the provider's own rather than "sonnet".
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(harness): make aforge the default provider in the TypeScript SDK
+
+HarnessRunner.run no longer throws when nothing sets a provider. Both the
+runner and buildProvider route the name through resolveProviderName, which
+applies the same precedence as the Python and Go SDKs: explicit value >
+AGENTFIELD_HARNESS_PROVIDER > DEFAULT_HARNESS_PROVIDER ("aforge"). The
+resolved name is written back onto the options so providers and error
+messages see the real provider.
+
+HarnessConfig.provider becomes optional to match, so `{}` is a complete
+config.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): stop pointing users at a private repo to get aforge
+
+The Go and TypeScript adapters told anyone hitting a missing binary to
+"Build it from https://github.com/Agent-Field/aforge-v2" — a repo they
+cannot open. AForge ships with `af`, so the message now names
+`af aforge ensure` and the AFORGE_BIN escape hatch, matching the Python
+install hint.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (6b8c9be)
+
+## [0.1.130-rc.4] - 2026-08-17
+
+
+### Added
+
+- Feat(install): provision the aforge harness binary alongside af (curl, desktop, docker) (#924)
+
+* feat(aforge): pinned-binary provisioner for the aforge coding harness
+
+AgentField's harness providers spawn `aforge exec --json`, but nothing in the
+product ever put that binary on a machine — every install surface assumed the
+user had built it from a private repo. This adds the provisioning half.
+
+Shaped on internal/furrow's provisioner (same lock, marker, atomic-rename and
+best-effort contract) with three deliberate differences:
+
+  * assets are distributed gzipped, so the stream is decompressed before it is
+    hashed — checksums.txt carries the sha256 of the UNCOMPRESSED binary — and
+    the decompressed size is capped so a bad endpoint cannot gzip-bomb us;
+  * all six platforms are mapped, not the three furrow happens to ship;
+  * Options.Force exists so `af aforge ensure --force` can bypass the marker.
+
+AGENTFIELD_AFORGE_BASE_URL overrides the whole base (mirrors, staging hosts);
+AGENTFIELD_SKIP_AFORGE=1 makes the whole thing a no-op.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): af aforge ensure, and teach the harness doctor about aforge
+
+`af aforge ensure` mirrors `af furrow ensure` — Ensure, not EnsureBestEffort,
+because someone who asks for the binary by name is owed the failure — plus a
+--force that bypasses the version marker.
+
+The doctor needed two new ideas to describe aforge honestly:
+
+  * VersionArgs, because providers do not agree on how to be asked. aforge
+    will answer `version`; every other provider answers `--version`.
+  * VersionOptional, because the pinned aforge build answers BOTH with its
+    whole usage banner on exit 1. A present, executable binary is enough to
+    call it usable; it reports version "unknown" with an informational
+    "version_unavailable" issue until the next aforge release adds the
+    subcommand. The probe requires exit 0 before it believes any output —
+    without that it would file the usage banner as the installed version.
+
+The probe also falls back to $AGENTFIELD_HOME/bin when PATH misses: the shell
+that just ran `af aforge ensure` has not re-read PATH, and reporting a binary
+we installed thirty seconds ago as missing is the wrong answer.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(install): provision aforge from the skill install and both shell installers
+
+Three entry points, one implementation. `af skill install --all`, the curl
+installer and the PowerShell installer all end up calling the same Go
+provisioner, so there is exactly one place that knows the pinned version, the
+download host and the checksum rules.
+
+The skillkit hook goes in InstallAll rather than install(): InstallAll is the
+one call every fresh machine makes, and hooking each skill would re-download a
+35MB binary once per catalog entry. --dry-run stays side-effect free.
+
+Both shell installers keep aforge strictly optional — a failed provision warns
+and moves on, because by that point the control plane is already installed and
+working. Opt out with --no-aforge / AFORGE_MODE=none (sh) or -NoAforge /
+$env:AFORGE_MODE='none' (ps1; a piped `iwr | iex` cannot pass a switch, hence
+the env var).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): ensure aforge on launch, once, without blocking startup
+
+A desktop-only install never runs the curl installer, so it would have had af
+and no harness. The app now shells out to `af aforge ensure` right after it
+resolves the CLI — no bundled payload, so there is one download path and the
+upgrade rules stay in Go.
+
+Deliberately not extraResources: bundling the binary would fork the install
+path and freeze the pinned version at package time, and the app would still
+need the runtime check for machines that already had an older copy.
+
+Shaped like tray-companion.ts: planAforge() is pure so the skip rules are unit
+tested, and the effect takes injected deps so no test ever spawns anything.
+Fire-and-forget with a once-per-launch latch set before the await, so a dead
+network delays nothing and two callers still produce one download.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(docker): ship aforge in the images that actually run agent nodes
+
+The cloud control plane (single-container topology), the python-agent image and
+the go-agent image all host agent nodes, and a node that reaches for a harness
+in a container without one fails at spawn. Dockerfile.control-plane is left
+alone: it is distroless, has no shell, and by construction runs agents
+elsewhere.
+
+Soft fetch, hard verify. The asset host goes live with the website deploy, so a
+404 has to degrade to "this image ships without aforge" rather than break every
+image build in the meantime — but a download that does land is always checked
+against the published sha256, taken after gunzip because checksums.txt hashes
+the uncompressed binary. A mismatch fails the build.
+
+The COPY takes the fetch stage's output DIRECTORY, not a fixed file path: when
+the fetch was skipped the directory is empty and the COPY is a no-op, instead
+of planting a zero-byte `aforge` on PATH that `af harness doctor` would
+cheerfully report as installed.
+
+aforge is a statically linked ELF, so the debian-built asset runs unchanged on
+the musl/alpine go-agent base.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(aforge): point every install hint at `af aforge ensure`
+
+The Python SDK told users to `go build -o aforge ./cmd/aforge` from a private
+repo when a harness call failed — advice nobody could follow. It now names the
+command that actually exists on their machine.
+
+Also documents the two knobs the provisioner reads (AGENTFIELD_AFORGE_BASE_URL
+for mirrors, AGENTFIELD_SKIP_AFORGE for air-gapped hosts) and the shell
+installers' equivalents.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(aforge): cover the provisioner's failure paths
+
+CI's patch-coverage gate came in at 79.00% against an 80% floor — all of the
+misses were the error branches of the new code, which is exactly the code you
+want covered: a provisioner is mostly failure handling.
+
+Adds tests for the paths that were only reachable by breaking something: an
+unwritable bin directory (MkdirAll and flock failures), a `bin/aforge` path
+occupied by a directory so the atomic rename fails, a marker path likewise, a
+corrupt/truncated/non-gzip body, an unreachable host, a checksums file with
+malformed hex or no line for the asset, and every branch of home resolution.
+Also exercises the default GOOS/GOARCH path and asserts — via a fake
+RoundTripper rather than a real request — that the default base URL is the one
+actually dialled.
+
+internal/aforge: 78.0% → 95.5% of statements. No production code changed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(aforge): pin the installer to aforge v0.1.0 and require a real version from the doctor
+
+aforge-v2 cut its first semver release, so every surface that provisioned
+build-9b3ff482de3f now provisions v0.1.0: the pinned constant in
+control-plane/internal/aforge, the AFORGE_VERSION build arg in the cloud
+control-plane / python-agent / go-agent images, and the base-URL example in
+.env.example.
+
+The release also ships a real `version` subcommand (and `--version`), which
+retires the reason aforge was allowed to be "usable" without one. Drop the
+aforge-only VersionOptional allowance from the harness doctor: a binary that
+cannot name itself is now version_probe_failed and unusable, exactly like
+every other provider. VersionArgs still tries "version" before "--version",
+and a non-zero exit is still rejected so a usage banner never lands in the
+version field.
+
+The Docker fetch stays soft-fail on a 404 (hard-verify on a hit) — that is a
+separate documented follow-up, not this change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (480342e)
+
+## [0.1.130-rc.3] - 2026-08-17
+
+
+### Fixed
+
+- Fix high-severity npm dependency alerts (#922)
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (efbaca3)
+
+## [0.1.130-rc.2] - 2026-08-17
+
+
+### Added
+
+- Feat(examples): triggers-demo-go end-to-end demo + Go skill docs (#516) (#917)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(examples): triggers-demo-go end-to-end demo + Go skill docs (#516)
+
+Go counterpart to examples/triggers-demo/ (Python) and
+examples/triggers-demo-ts/ (TypeScript), driven by the same unmodified
+scripts/fire-events.sh and producing equivalent memory writes.
+
+New examples/triggers-demo-go/:
+- main.go with three deterministic reasoners: handle_payment (stripe, with a
+  Transform flattening data.object), handle_pr (github), handle_tick (cron).
+  Memory keys and record shapes match the Python demo exactly, so the UI
+  surfaces read the same data regardless of which demo is running.
+- Dockerfile: multi-stage build against the in-tree SDK, CGO disabled, alpine
+  runtime with ca-certificates for outbound HTTPS.
+- docker-compose.yml: control plane plus Go agent, sharing the demo secrets so
+  signature verification roundtrips with no external configuration. DID enabled
+  so the run-detail trigger enrichment has a VC chain to walk.
+- scripts/fire-events.sh: byte-identical copy of the Python demo's script.
+- README.md: quick start, UI tour, memory-key table, and a note on the script's
+  Slack/HMAC/Bearer sections (they target a handle_inbound catch-all that this
+  demo, like the TypeScript one, does not define).
+- main_test.go: 24 tests exercising the reasoners through
+  triggers.SimulateEvent / SimulateSchedule / LoadFixture, doubling as a worked
+  example of testing trigger reasoners with no control plane.
+
+The reasoners are declared as eventReasoner / scheduleReasoner values that
+main() iterates, rather than inline inside registration calls, so the handlers
+and trigger wiring are testable without reaching into SDK internals.
+
+Collapses the duplicated transform matcher flagged in #915: SimulateEvent now
+uses the shared ApplyTransform and NewContext from dispatch.go instead of a
+private copy. This fixes a real defect the demo surfaced — the helpers attached
+the context under a private key while handlers read it via FromContext, so a
+handler that worked in production saw a nil context under test. Added a
+regression test asserting FromContext sees what SimulateEvent attaches.
+
+skills/agentfield-multi-reasoner-builder/references/triggers.md gains a Go
+section covering both declaration forms, Context fields, the FromContext
+accessor, the test helpers, and a three-way comparison table. Every Go snippet
+was compiled against the real SDK. Updated the shared wire-format and envelope
+sections from "both SDKs" to "all three".
+
+Verified: build, vet, gofmt, and go test -race clean on both modules;
+docker compose config valid; the Dockerfile's exact steps reproduced with
+-mod=readonly to confirm go.sum completeness; and the real binary registers all
+three triggers with the expected wire payload (sources, event types, secret env
+vars, cron config, accepts_webhook auto-set, code_origin stamped) against a
+stub control plane. Docker image build itself not run, as no daemon was
+available in this environment.
+
+Part of #508. Closes #516.
+
+* fix(examples): drop committed Windows binary from triggers-demo-go
+
+Removes examples/triggers-demo-go/triggers-demo-go.exe, an 11 MB build
+artifact that should never have been committed. It came from compiling the
+demo to verify it and was swept in by adding the directory rather than
+naming files.
+
+Adds a .gitignore for the binary so a local build cannot reintroduce it.
+The example remains buildable from source via the Dockerfile or `go build`.
+
+Addresses @santoshkumarradha's review on #917.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (a1dd50b)
+
+
+
+### Fixed
+
+- Fix(sdk): merge positional multimodal args with user prompt (#923) (243d906)
+
+## [0.1.130-rc.1] - 2026-08-14
+
+
+### Fixed
+
+- Fix(ui): only prompt for the admin token when the server enforces one (#920)
+
+* fix(ui): only prompt for the admin token when the server enforces one
+
+The Access management page rendered the admin-token input
+unconditionally, so deployments that never configured
+AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN were still asked for a token the
+server would never read (AdminTokenAuth is a no-op when the configured
+token is empty). Operators pasted whatever they had — usually the API
+key — into a field that does nothing.
+
+The governance probe already received the discriminating signal and
+threw it away: it collapsed the status of GET /api/v1/admin/policies
+into `status !== 404`, which also misread 401 (API-key problem) as
+"admin routes available".
+
+Replace the boolean probe with a tri-state one that deliberately omits
+X-Admin-Token — since AdminTokenAuth wraps the whole admin group, the
+tokenless status is authoritative for every admin route:
+
+- 404 → authorization feature disabled (existing banner, no prompt)
+- 403 → an admin token is enforced: the only state that shows the
+  prompt; policy/tag queries and mutations are gated until a token
+  is stored
+- 200 → no admin token enforced: prompt hidden, admin APIs just work;
+  a stored stale token gets a hint that it can be cleared
+- 401 → surfaced as an API-key error instead of "routes available"
+
+Also drop the "unchanged repo default is often admin-secret" hint
+copy: it is only true for a source checkout run from control-plane/
+(or a deploy pointing AGENTFIELD_CONFIG_FILE at the bundled YAML) and
+misled operators of env-configured deployments into pasting wrong
+values.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ui): drop the admin-token field from the login screen
+
+At sign-in the client cannot yet know whether the server enforces an
+admin token (an unauthenticated probe always 401s), so the "Admin
+Token (optional)" field was another unconditional prompt inviting
+wrong pastes. Access management now asks for the token in the one
+state where it is actually required, so the login screen only asks
+for the API key.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f3e5ec9)
+
+## [0.1.129] - 2026-08-13
+
+## [0.1.129-rc.1] - 2026-08-13
+
+
+### Fixed
+
+- Fix: repair broken quickstart flows — Go docs/examples, docker scaffolds, TS template (#918)
+
+* fix(examples): regenerate stale go.sum in Go example modules
+
+examples/go_agent_nodes and examples/go_harness_demo stopped building when
+sdk/go added jsonschema/v5 (#750) without their go.sum being refreshed:
+'missing go.sum entry for module providing package .../jsonschema/v5'.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/go): fix broken quickstart and approvals snippets
+
+- Quick Start omitted the required Config.Version, so a copy-paste run
+  exited with 'config.Version is required'; the CLAUDE.md variant also
+  discarded the error from New and nil-panicked on RegisterSkill.
+- Approvals snippet called client.New with one return value (it returns
+  (*Client, error)) and passed a nil variadic Option, which panics.
+
+Both snippets now compile and start against the current SDK.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): make 'af init --docker' work for Go and TypeScript scaffolds
+
+The generated docker-compose.yml builds the agent from 'dockerfile:
+Dockerfile' for every language, but only Python mapped a Dockerfile
+template — Go and TypeScript scaffolds failed at 'docker compose up'.
+
+- Add go.Dockerfile.tmpl and typescript.Dockerfile.tmpl and map them in
+  GetDockerTemplateFiles; the test now asserts every language maps
+  exactly one Dockerfile instead of codifying the gap.
+- Wire AGENT_CALLBACK_URL (set by the compose template) through to the
+  SDK's public URL in the Go and TypeScript scaffolds so the control
+  plane can reach containerized agents; Python already reads it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): TypeScript scaffold never started from a path containing spaces
+
+The main-module guard compared import.meta.url (percent-encoded) against
+a raw 'file://' + process.argv[1] string, so under any path with a space
+(e.g. 'My Projects/') the guard was false and 'npm run dev' exited
+silently without starting the agent. Compare against
+pathToFileURL(process.argv[1]).href instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): unify scaffold env var names on AGENTFIELD_SERVER / AGENT_NODE_ID
+
+The TypeScript scaffold read AGENTFIELD_URL/AGENT_ID while Python, Go,
+the docs, and the docker-compose template all use AGENTFIELD_SERVER/
+AGENT_NODE_ID — a TS agent given the documented variable silently
+registered with the default localhost:8080 instead. The old names are
+kept as fallbacks for existing setups.
+
+Python and Go .env.example advertised AGENTFIELD_CONTROL_PLANE_URL,
+which nothing reads; they now list the variables the scaffolds honor.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): scaffold polish — accurate next steps, current dep floors, ruff-clean output
+
+- Python next steps (README + af init output) told users to uncomment an
+  ai_config that the scaffold already ships enabled, and the README
+  promised port auto-discovery while main.py pins port 8001.
+- Fresh Python scaffolds failed 'ruff check' out of the box (F401 on
+  pydantic imports only used by the commented AI sample); the imports
+  now live inside that commented block.
+- TypeScript AI sample never passed the input text into the prompt.
+- Dep floors were stale: @agentfield/sdk pinned ^0.1.0 (128 releases
+  old) and requirements.txt had no floor at all. Both now sit at the
+  current release, and bump_version.py updates them on stable releases
+  the same way it already maintains go.mod.tmpl.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): close scaffold gaps found in verification
+
+- .dockerignore.tmpl (shared by all languages) did not exclude
+  node_modules, so a host install was COPY'd over the container's in the
+  TypeScript image, shadowing it with host-arch binaries; it now covers
+  Node and Python artifacts for every language.
+- The Go scaffold hardcoded NodeID, silently ignoring the AGENT_NODE_ID
+  override that the generated docker-compose.yml and .env.example set.
+- Uncommenting the Python AI sample tripped ruff E402 (mid-file import);
+  the commented import now carries noqa for when it is enabled.
+- .env.example now lists AGENT_NODE_ID (and AI_MODEL for Python) to
+  match what the scaffolds actually read.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(scripts): anchor agentfield matcher in bump_version + cover template updaters
+
+The requirements updater matched any line starting with 'agentfield',
+which would silently rewrite e.g. 'agentfield-cli>=1.0'; it now matches
+only the agentfield distribution (bare or with a version specifier).
+Adds regression tests for update_ts_template and the scaffold
+requirements floor, which previously had no coverage.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a5f1573)
+
+## [0.1.128] - 2026-08-13
+
+## [0.1.128-rc.4] - 2026-08-13
+
+
+### Added
+
+- Feat(sdk/go): add Agent.Span for traced in-process sub-executions (#916)
+
+* feat(sdk/go): add Agent.Span for traced in-process sub-executions
+
+Span(ctx, name, input, fn) runs fn as a child execution of the context
+carried by ctx and emits workflow events so it appears as a node in the
+run's DAG — CallLocal's lineage and event emission without requiring the
+target to be a registered reasoner. The child context is injected into
+fn's ctx, so nested Span/CallLocal/Note calls chain correctly and
+concurrent Spans become siblings.
+
+Terminal events are sent synchronously (a finished span can never be
+left dangling in "running"); start events go through a bounded async
+queue and are shed first under load, which is safe because the events
+endpoint upserts nodes from the terminal event alone. fn panics emit a
+"failed" terminal event and re-raise. Input/result payloads are size-
+capped agent-side (16KB, 4KB preview) since the events path stores them
+verbatim.
+
+Motivation: the deep-research Go agent runs its internal pipeline stages
+as plain function calls, so a 12-minute prepare_research_package renders
+as a single DAG node — while the Python SDK's decorator tracking gave
+every internal stage its own node. Span restores that trace parity for
+in-process stages.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): make Agent.Span nil-receiver safe
+
+A nil *Agent runs fn untraced instead of panicking in
+buildChildContext. Unit tests for wrapped pipeline functions commonly
+pass a nil agent for stages that never touch the LLM; those must keep
+working when the stage gains a Span wrapper.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): snapshot span input before handing it to the async event queue
+
+truncateTraceInput returned the caller's map by identity whenever it fit
+under the size cap, and enqueueSpanStart handed that same map to the
+background sender goroutine, which json.Marshals it at an unbounded delay.
+Any caller that mutates the input map after Span entry — including inside
+fn itself — raced that marshal; without -race that is a process-fatal
+'concurrent map read and map write'. Reproduced with go test -race.
+
+The traced input is now deep-copied from its marshaled bytes at Span
+entry, so events carry a consistent as-of-call snapshot and never alias
+caller memory. Also aligns enqueueSpanStart's control-plane-URL guard
+with emitWorkflowEvent's TrimSpace semantics.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): survive insert races and shed starts on the events endpoint
+
+The workflow events endpoint did Get→Create with no transaction. Two
+events for the same execution_id arriving concurrently — exactly what
+sdk/go Span produces, an async 'running' event racing the synchronous
+terminal event for any sub-millisecond span — both saw no row and raced
+to INSERT; the loser got a unique-violation 500 and was dropped. When the
+loser was the terminal event, the node stayed 'running' forever: the run
+never left /executions/active, and the stale-execution reaper eventually
+flipped it to timeout, making a finished run render as timed out.
+Reproduced live: 550-span flood → 11 nodes stranded, 30 dropped events.
+
+The handler now retries in a bounded loop: a failed create re-reads and
+merges through the update path (the row necessarily exists once the racing
+winner lands), and a row that vanishes between read and update re-creates
+instead of silently no-oping. Terminal-state immutability is unchanged.
+Post-fix the same flood persists 551/551 nodes terminal with zero errors.
+
+Also backdate StartedAt by duration_ms when a node is created from its
+terminal event alone (start event shed under queue pressure), so such
+nodes get a real timeline bar instead of a zero-width one at arrival time.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (526466c)
+
+- Feat(sdk/go): dispatch envelope unwrap + Context injection (#514) (#914)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(sdk/go): dispatch envelope unwrap + Context injection (#514)
+
+Wire the dispatch-side envelope unwrap and *triggers.Context injection into
+the Go SDK reasoner dispatch paths, so a webhook delivery from the control
+plane lands on the handler with the transformed payload and populated
+trigger metadata.
+
+New sdk/go/triggers/dispatch.go:
+- IsEnvelope(body) detects the dispatcher shape {event, _meta} (requires
+  _meta.trigger_id, so ordinary payloads are never misread)
+- Unwrap(body) peels the event and builds a *Context from _meta, with
+  multi-layout received_at parsing and a now() fallback
+- NewContext / FromContext propagate the trigger metadata through
+  context.Context, so HandlerFunc keeps its existing signature (no
+  breaking change for current reasoners)
+- ApplyTransform picks the best-matching binding (source match, exact or
+  dotted-prefix event type, specific beats catch-all) and runs its
+  Transform, recovering from a panicking transform to raw input
+
+Wired into every dispatch path via a single applyTriggerDispatch helper so
+they cannot drift: handleReasoner (sync HTTP), executeReasonerAsync (async
+goroutine), handleExecute (/execute route), Execute (local), and
+HandleServerlessEvent (serverless). CallLocal is deliberately left alone,
+since agent-to-agent calls are direct invocations by definition.
+
+Direct calls are unchanged: input passes through untouched, Transform is
+skipped, and FromContext returns nil.
+
+Tests: 17 tests in triggers/dispatch_test.go (envelope detection table,
+unwrap, timestamp fallbacks, context round-trip, transform matching,
+specificity, prefix match, panic recovery) plus 6 end-to-end tests in
+agent/agent_dispatch_triggers_test.go proving both shapes through the real
+Execute path. go build/vet clean, go test -race ./triggers/ green.
+
+Part of #508. Closes #514.
+
+* docs(sdk/go): drop EXPERIMENTAL caveats now that dispatch is wired (#514)
+
+The Context, Transform, and EventOpts.Transform docs carried EXPERIMENTAL
+notes saying dispatch-time execution and context injection would ship with
+#514. This PR is that work, so the caveats are now stale and describe the
+opposite of reality.
+
+Replaced with accurate contracts: FromContext(ctx) retrieval with the nil
+check distinguishing trigger dispatches from direct calls, Transform running
+before the handler on dispatches only, and the panic-degrades-to-passthrough
+behaviour. Kept the VCID caveat, which is still pending the DID/VC chain
+work tracked separately.
+
+Follows up on @AbirAbbas's review of #906, which flagged these docs as
+promising behaviour that was not yet wired.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (f6e6f11)
+
+- Feat(sdk/go): trigger test helpers + fixture library (#515) (#915)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(sdk/go): trigger test helpers + fixture library (#515)
+
+Add Go test helpers and a captured-fixture library so reasoners can be
+unit-tested without spinning up a control plane, mirroring the Python
+agentfield/testing.py surface.
+
+New sdk/go/triggers/testing.go:
+- SimulateEvent(t, handler, opts) builds the *Context the runtime would
+  have produced, applies the matching binding's Transform, and invokes the
+  handler with the context attached
+- SimulateSchedule(t, handler, opts) wraps SimulateEvent for cron handlers
+  (source "cron", event type "tick")
+- SimulatedContextFrom(ctx) retrieves the synthetic context in tests
+- Identifiers default to fresh random values so repeated simulations are
+  independently dedup-safe; every field is overridable
+- Transform matching mirrors the other SDKs exactly (source match, exact or
+  dotted-prefix event type, specific beats catch-all) and recovers from a
+  panicking transform to raw input
+
+New sdk/go/triggers/load_fixture.go:
+- LoadFixture(t, name) reads a captured payload, accepting "stripe" or
+  "stripe.json"
+- RawFixture(t, name) returns undecoded bytes for byte-level assertions
+- FixtureNames() lists all six sources for table-driven tests
+- Fixtures are embedded with go:embed rather than read from a relative
+  testdata path, so LoadFixture works from any caller's working directory
+  including the module cache
+
+New sdk/go/triggers/testdata/*.json: six fixtures (stripe, github, slack,
+cron, generic_hmac, generic_bearer) copied byte-for-byte from the Python SDK.
+
+Tests: 61 test cases covering all six fixtures through SimulateEvent, known
+field values per provider, transform application and source mismatch,
+identifier overrides and uniqueness, parent-context propagation, handler
+error propagation, non-object and panicking transforms, and the schedule
+helper. Includes a parity guard asserting the fixtures are byte-identical to
+the Python SDK copies, plus a check that FixtureNames() stays in sync with
+the embedded files. go test -race ./triggers/ green, build/vet clean.
+
+Part of #508. Closes #515.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (4a7529c)
+
+## [0.1.128-rc.3] - 2026-08-13
+
+
+### Added
+
+- Feat(sdk/go): triggers package + OnEvent/OnSchedule sugar (#513) (#906)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(sdk/go): triggers package + OnEvent/OnSchedule sugar (#513)
+
+Add the public triggers package and agent-level sugar methods for
+declaring inbound webhook and cron-schedule bindings on Go SDK reasoners.
+
+New sdk/go/triggers/ package:
+- Context type (TriggerID, Source, EventType, EventID, IdempotencyKey,
+  ReceivedAt, VCID) — nil for direct calls, populated by dispatch
+- EventOpts / ScheduleOpts configuration structs
+- Event() / Schedule() factory functions producing Binding values
+- Transform function type for pre-handler event transformation
+- BindingKind enum (EventBinding / ScheduleBinding)
+
+New agent sugar (sdk/go/agent/agent_triggers.go):
+- Agent.OnEvent(opts, name, handler) — registers a reasoner with an
+  event trigger binding in one call
+- Agent.OnSchedule(expression, name, handler, ...OnScheduleOption) —
+  registers a reasoner with a cron trigger binding
+- WithTimezone(tz) option for OnSchedule
+- withTriggersBinding() bridges triggers.Binding into the existing
+  ReasonerOption machinery
+- bindingToWire() converts triggers.Binding to types.TriggerBinding
+
+Modified sdk/go/agent/agent.go:
+- Added triggerBindings field to Reasoner (stores Transform for dispatch)
+- Import triggers package
+- triggerToBinding() now also accepts triggers.Binding (backward compat)
+
+Tests: 9 tests in triggers/triggers_test.go (types, factories, config,
+transform, defaults) + 6 tests in agent/agent_triggers_test.go (OnEvent,
+OnSchedule, WithTimezone, parity with WithTriggers, backward compat).
+All pass. go build/vet clean.
+
+Part of #508. Closes #513.
+
+* fix(sdk/go): address review feedback on triggers package (#513)
+
+1. WithTriggers(triggers.Event(...)) now stores triggerBindings (preserving
+   Transform) alongside the wire binding — parity with OnEvent path.
+   Added regression test.
+
+2. Schedule() always merges expression/timezone into Config, even when
+   custom Config is provided. Prevents silent loss of the cron expression.
+
+3. Renamed ScheduleOpts.Expression to ScheduleOpts.Cron for consistency
+   with the Python and TypeScript SDKs.
+
+4. Removed unused captureCallerOrigin function.
+
+5. Marked Context as EXPERIMENTAL until #514 ships the dispatch injection.
+
+Addresses @santoshkumarradha's review on #906.
+
+* docs(sdk/go): mark triggers Transform as experimental pending #514
+
+The Transform doc claimed the SDK runs Transform(rawEvent) before invoking
+the reasoner. Nothing on the Go side consumes TriggerBinding.TransformFn
+yet — the binding stores it and dispatch never executes it, so a reasoner
+invoked by an inbound event silently receives the raw event.
+
+Restate the doc to match reality and add the same EXPERIMENTAL caveat that
+Context already carries, on both the Transform type and EventOpts.Transform.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): keep Cron authoritative when merging schedule config
+
+Schedule() seeded the config map with expression/timezone and then merged
+custom Config over it, so a custom "expression" key silently replaced
+opts.Cron — the same silent cron loss the previous fix targeted, reached
+from the other direction.
+
+Merge custom keys first and apply Cron unconditionally afterwards.
+Timezone precedence is now explicit: opts.Timezone wins, else a custom
+"timezone" key survives, else the UTC default stands. Malformed and
+non-object Config is still ignored rather than propagated, which is now
+documented on ScheduleOpts.Config instead of being an implicit quirk.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* style(sdk/go): gofmt triggers files touched by this PR
+
+Two spots this branch introduced fail gofmt: the trailing blank line left
+in agent_triggers.go by the captureCallerOrigin removal, and struct-key
+alignment in triggers_test.go after the Expression -> Cron rename.
+
+Scoped to files this PR already touches; the other pre-existing gofmt
+offenders under sdk/go are left alone.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (081b53e)
+
+
+
+### Fixed
+
+- Fix(sdk/python): add lock timeouts + offload blocking requests fallback (#620) (#904)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* fix(sdk/python): add lock timeouts + offload blocking requests fallback (#620)
+
+Slice 4 of #620: prevents indefinite hangs from contended locks and
+offloads the remaining blocking HTTP call in an async function.
+
+Lock timeouts:
+- New agentfield/lock_utils.py: timed_lock() context manager that
+  acquires with a configurable timeout (default 30s, env var
+  AGENTFIELD_LOCK_TIMEOUT_SECONDS) and raises LockTimeoutError with
+  diagnostic info instead of hanging.
+- Applied to all lock sites in result_cache.py (11), cost_tracker.py (8),
+  node_logs.py (7) — the 26 highest-contention acquisitions.
+
+Blocking request offload:
+- memory_events.py history() fallback: the blocking requests.get() in
+  the async function's ImportError path is now offloaded to
+  loop.run_in_executor() so it doesn't freeze the event loop.
+- Removed the ASYNC210 per-file-ignore for memory_events.py (resolved).
+
+Running-loop guard:
+- client.execute_sync() now emits a RuntimeWarning when called from
+  within a running event loop, directing users to await execute() instead.
+
+Tests: 7 tests in test_lock_timeout.py covering timeout behaviour,
+reentrant locks, cross-thread contention, error attributes, and the
+execute_sync warning. 63 tests pass across the affected test surface.
+
+Part of #620.
+
+* fix(sdk/python): parse AGENTFIELD_LOCK_TIMEOUT_SECONDS defensively
+
+DEFAULT_LOCK_TIMEOUT was resolved with a bare float() at import time, so a
+malformed value took down `import agentfield` altogether. The empty-string
+case is the common one: `AGENTFIELD_LOCK_TIMEOUT_SECONDS=` in a compose
+`env:` block makes float("") raise from __init__.py -> result_cache.py ->
+lock_utils.py. A negative value imported fine but broke every lock op, since
+lock.acquire(timeout=-5) raises ValueError.
+
+Parsing now falls back to 30s for missing, empty, non-numeric, non-positive
+and non-finite values, warning through the module logger for the cases that
+look like a misconfiguration. Tests drive a fresh interpreter per value so
+the import-time path is the one under test.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): keep LockTimeoutError diagnostics visible on 3.11+
+
+On Python 3.11+ asyncio.TimeoutError is TimeoutError, so deriving from it
+made LockTimeoutError catchable by every `except asyncio.TimeoutError` up the
+stack. Agent.call wraps client.execute in asyncio.wait_for and that path goes
+through the result cache, so a real lock deadlock surfaced as "Execute call
+timed out" and the holder/wait diagnostics were lost.
+
+Deriving from RuntimeError instead keeps the message intact on all matrix
+versions. Nothing in the repo catches LockTimeoutError, so no call sites
+change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/python): harden execute_sync warning fixture, fix module docstring
+
+The __new__-based client only avoided real I/O by accident: execution died on
+a missing caller_agent_id attribute inside `except Exception: pass`. Give
+caller_agent_id a value and stub _submit_execution_sync with a sentinel, so
+the test asserts the RuntimeWarning and proves nothing was submitted — rather
+than depending on a crash that a class-level default would silence, turning
+the test into a live POST to localhost:8080 plus a polling loop.
+
+The module docstring also advertised a memory_events.history() test that was
+never written; say where that change is actually guarded instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (25821fc)
+
+- Fix(sdk/python): harden cross-loop teardown (#907)
+
+* fix(sdk/python): harden cross-loop teardown
+
+* fix(sdk/python): absorb both CPython cross-loop error wordings in task teardown
+
+cancel_and_await_if_same_loop only suppressed the asyncio/tasks.py wording
+("attached to a different loop"). CPython raises the same error class with a
+second wording from asyncio/mixins.py ("is bound to a different event loop")
+when a cancellation cleanup awaits a Lock/Event/Condition bound to a foreign
+loop, so that case re-raised out of teardown instead of being absorbed.
+
+Match both wordings. The regression test binds an asyncio.Event to a
+background thread's loop and awaits it from a cancelled task's cleanup on
+another loop, reproducing the mixins wording genuinely rather than raising a
+synthetic RuntimeError; the existing test asserting unrelated RuntimeErrors
+still propagate is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a2ea9e6)
+
+
+
+### Other
+
+- Seamless agent use: cloud-aware skill, native Codex install, self-healing skill sync (#910)
+
+* feat(skills): agentfield-use v0.6.0 — cloud-vs-local resolution, contract fetch, entry points only
+
+The skill now resolves which control plane work goes to before anything
+else: an explicit server or AGENTFIELD_SERVER wins, then the AgentField
+Desktop cloud config (settings.json cloud.enabled/serverUrl/apiKey, read
+from the per-OS app-data path), else the local default. A configured but
+unreachable cloud is a stop-and-report, never a silent fallback — the
+local and cloud fleets are disjoint. The target is passed explicitly per
+call (--server/-k), never exported.
+
+Dispatch gains two preconditions: fetch the reasoner's exact contract
+first (agent-summary / get_reasoner_schema; a vacuous schema means the
+description IS the contract), and only call entrypoint-tagged or
+described reasoners — undescribed run_* reasoners are internal pipeline
+stages. The workspace-handle flow is capability-gated (not every build
+ships get_workspace_handle), and process-wide serialization (swe-pro) is
+called out in the concurrency guidance.
+
+Also adds agentfield-personal to the embed sync script's list — edits to
+that skill previously never reached the embedded mirror.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skillkit): install Codex skills natively, self-heal broken targets, isolate tests from the real home
+
+Codex reads the cross-tool skills standard (~/.codex/skills/<name>/
+SKILL.md), not the AGENTS.override.md rules file the marker-block target
+wrote — so skills were never visible to Codex at all. The codex target
+now symlinks into ~/.codex/skills like claude-code, and install/update/
+uninstall strip any legacy agentfield marker block (deleting the rules
+file when only whitespace remains).
+
+Installs self-heal: the already-at-this-version skip now also requires
+the recorded artifact to be valid — symlinks must resolve inside the
+skill's canonical store, marker blocks must exist and point at a real
+SKILL.md, and a recorded method that differs from the target's current
+one is invalid by definition (which is what migrates legacy Codex
+entries). Machines in the wild carry state pointing at deleted temp
+directories; a matching version over a broken artifact previously meant
+the target was never repaired.
+
+Those deleted temp paths came from skillkit's own tests: they isolated
+AGENTFIELD_HOME but resolved targets against the real home, so go test
+rewrote real ~/.codex/AGENTS.override.md files. A package TestMain now
+pins HOME/USERPROFILE/AGENTFIELD_HOME to temp dirs, and a regression
+test runs a full InstallAll and fingerprints the real home before/after.
+
+af skill install/update now exit non-zero when any skill or target
+fails (report printed first), and InstallAll continues past a failing
+skill instead of abandoning the rest of the catalog.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(agentic): bound agent-summary payloads and return descriptions in reasoner search
+
+GET /api/v1/agentic/agent/:id/summary inlined every execution payload
+from the last 24h — unbounded, often megabytes — making the best
+contract-discovery surface unusable for coding agents. The query now
+excludes payloads, sorts newest-first, and is capped at 500 rows;
+metrics_24h stays exact over the window while recent_executions is
+sliced to 20. Reasoner descriptions in the summary now apply the same
+legacy-metadata fallback as discovery.
+
+Reasoner search results carry the (truncated) description — previously
+description was scored for ranking and then discarded, forcing a second
+round trip before dispatch — and the search index now prefers the
+registered description over the legacy metadata map, which also makes
+current-SDK descriptions searchable.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): observable skill sync with re-sync triggers and honest dashboard state
+
+Skill sync previously spawned af skill install with stdio ignored, an
+empty error handler, and no exit-code check, ran only once at launch,
+and the dashboard claimed skills were installed based on the settings
+boolean alone. A new SkillSync module captures output (64KB cap, 120s
+timeout), records the last sync result, appends to
+<logs>/skill-sync.log, and serializes concurrent triggers. Syncs run at
+launch, when installSkills flips on, and after a CLI update. The
+dashboard row now renders from the recorded result: installed only
+after an exit-0 sync, a visible failure message otherwise.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skills): §0 probes the Windows desktop config from WSL
+
+On WSL machines the desktop app usually lives on the Windows side, but a
+Linux-side settings.json (written by a Linux desktop install, often with
+no cloud key at all) can exist too. §0's "first file that exists" rule
+stopped there, never saw the Windows cloud config, and resolved to
+local — reproducing the exact silent-local-fallback incident this skill
+exists to prevent.
+
+§0 now checks every path that applies to the machine: a config file
+without an enabled cloud no longer ends the search, and under WSL
+(detected via /proc/version) the Windows side is probed at
+/mnt/c/Users/*/AppData/Roaming/agentfield-desktop/settings.json after
+the Linux path. First file declaring an enabled cloud wins.
+
+Found by rehearsing the desktop-to-cloud happy path on a WSL+Windows
+machine where the split-brain is live.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (0256b37)
+
 ## [0.1.128-rc.2] - 2026-08-12
 
 

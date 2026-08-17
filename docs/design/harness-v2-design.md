@@ -26,8 +26,8 @@ app = Agent(
     node_id="my-agent",
     ai_config=AIConfig(model="openai/gpt-4o"),
     harness_config=HarnessConfig(
-        provider="claude-code",   # Required — no implicit default
-        model="sonnet",
+        provider="claude-code",   # Optional — defaults to "aforge"
+        model="sonnet",      # Optional — defaults to the provider's own
     ),
 )
 ```
@@ -38,8 +38,8 @@ import { Agent } from '@agentfield/sdk';
 const agent = new Agent({
     nodeId: 'my-agent',
     harnessConfig: {
-        provider: 'claude-code',  // Required
-        model: 'sonnet',
+        provider: 'claude-code',  // Optional — defaults to 'aforge'
+        model: 'sonnet',          // Optional — defaults to the provider's own
     },
 });
 ```
@@ -112,7 +112,7 @@ app = Agent(node_id="minimal-agent")
 
 result = await app.harness(
     "Fix the bug",
-    provider="gemini",     # Required when no harness_config
+    provider="gemini",     # Optional — omit to use the default, "aforge"
     model="flash",
     cwd="/my/project",
 )
@@ -142,7 +142,7 @@ async def fix_issue(issue: dict) -> dict:
 ```
 Agent
 ├── .ai()      → AIConfig      → LiteLLM     → LLM APIs (100+ providers)
-└── .harness() → HarnessConfig → HarnessRunner → Provider → {Claude Code, Codex, Gemini, OpenCode}
+└── .harness() → HarnessConfig → HarnessRunner → Provider → {Aforge, Claude Code, Codex, Gemini, OpenCode}
 ```
 
 ### 3.2 Component Stack
@@ -350,12 +350,12 @@ Layer 4: Full retry                                      (expensive, last resort
 class HarnessConfig(BaseModel):
     """Configuration for coding agent harness calls.
     
-    Provider is required — there is no implicit default.
-    All other fields have sensible defaults that can be overridden per-call.
+    Provider defaults to "aforge", AgentField's native harness.
+    All fields have sensible defaults that can be overridden per-call.
     """
-    # Provider selection (required)
-    provider: str               # "claude-code" | "codex" | "gemini" | "opencode"
-    model: str = "sonnet"
+    # Provider selection: explicit > AGENTFIELD_HARNESS_PROVIDER > "aforge"
+    provider: str = "aforge"    # | "claude-code" | "codex" | "gemini" | "opencode"
+    model: Optional[str] = None  # None → the provider's own default
     
     # Execution limits
     max_turns: int = 30
@@ -426,7 +426,8 @@ interface HarnessConfig {
 1. HarnessConfig defaults (set at agent construction)
 2. Per-call overrides (passed to .harness() method)
    → Per-call values win over HarnessConfig defaults
-   → If no HarnessConfig AND no per-call provider → raise error
+   → If no HarnessConfig AND no per-call provider → AGENTFIELD_HARNESS_PROVIDER,
+     then the default provider "aforge"
 ```
 
 ---

@@ -21,6 +21,7 @@ function makeTempDir(): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -45,13 +46,19 @@ class MockProvider implements HarnessProvider {
 }
 
 class FileWritingProvider extends MockProvider {
+  public readonly outputPaths: string[] = [];
+
   public constructor(private readonly payload: string, result?: RawResult) {
     super([result ?? createRawResult({ result: 'ok' })]);
   }
 
   public override async execute(prompt: string, options: Record<string, unknown>): Promise<RawResult> {
-    const cwd = typeof options.cwd === 'string' ? options.cwd : '.';
-    fs.writeFileSync(getOutputPath(cwd), this.payload, 'utf8');
+    const match = prompt.match(/(\S*\.agentfield_output\.json)/);
+    if (!match) {
+      throw new Error('schema prompt did not contain an output path');
+    }
+    this.outputPaths.push(match[1]);
+    fs.writeFileSync(match[1], this.payload, 'utf8');
     return super.execute(prompt, options);
   }
 }
@@ -68,6 +75,8 @@ describe('harness runner', () => {
       systemPrompt: 'base',
       env: { A: '1' },
       cwd: '/tmp/base',
+      projectDir: '/tmp/project',
+      aforgeBin: 'aforge',
       codexBin: 'codex',
       geminiBin: 'gemini',
       opencodeBin: 'opencode',
@@ -88,6 +97,8 @@ describe('harness runner', () => {
     expect(options.maxBudgetUsd).toBe(2);
     expect(options.env).toEqual({ B: '2' });
     expect(options.cwd).toBe('/tmp/override');
+    expect(options.projectDir).toBe('/tmp/project');
+    expect(options.aforgeBin).toBe('aforge');
   });
 
   it('isTransient matches transient errors and rejects non-transient', () => {
@@ -128,6 +139,8 @@ describe('harness runner', () => {
     const provider = new MockProvider([
       createRawResult({
         result: 'done',
+        failureType: 'none',
+        returnCode: 0,
         metrics: createMetrics({ numTurns: 2, totalCostUsd: 0.42, sessionId: 'sess-1' }),
       }),
     ]);
@@ -142,6 +155,8 @@ describe('harness runner', () => {
     expect(result.costUsd).toBe(0.42);
     expect(result.numTurns).toBe(2);
     expect(result.sessionId).toBe('sess-1');
+    expect(result.failureType).toBe('none');
+    expect(result.returnCode).toBe(0);
   });
 
   it('run with schema injects suffix and parses output', async () => {
@@ -154,14 +169,67 @@ describe('harness runner', () => {
     const result = await runner.run('produce json', { provider: 'codex', schema, cwd });
 
     expect(provider.lastPrompt).toContain('OUTPUT REQUIREMENTS');
-    expect(provider.lastPrompt).toContain(getOutputPath(cwd));
+    expect(provider.outputPaths).toHaveLength(1);
+    expect(provider.lastPrompt).toContain(provider.outputPaths[0]);
+    expect(provider.outputPaths[0]).toMatch(/\.agentfield-out-[^/]+\/\.agentfield_output\.json$/);
     expect(result.isError).toBe(false);
     expect(result.parsed).toEqual({ name: 'ok', count: 1 });
+    expect(fs.existsSync(provider.outputPaths[0])).toBe(false);
   });
 
-  it('run throws when no provider is configured', async () => {
+  it('isolates concurrent schema runs that share one cwd', async () => {
+    const cwd = makeTempDir();
+    const schema = z.object({ name: z.string(), count: z.number() });
+    const outputPaths: string[] = [];
+    const provider: HarnessProvider = {
+      async execute(prompt: string): Promise<RawResult> {
+        const match = prompt.match(/(\S*\.agentfield_output\.json)/);
+        if (!match) {
+          throw new Error('schema prompt did not contain an output path');
+        }
+        outputPaths.push(match[1]);
+        const first = prompt.startsWith('first');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        fs.writeFileSync(match[1], JSON.stringify({ name: first ? 'first' : 'second', count: first ? 1 : 2 }));
+        return createRawResult({ result: 'done' });
+      },
+    };
+    vi.spyOn(factory, 'buildProvider').mockResolvedValue(provider);
+
     const runner = new HarnessRunner();
-    await expect(runner.run('hello', {})).rejects.toThrow(/No harness provider specified/);
+    const [first, second] = await Promise.all([
+      runner.run('first', { provider: 'aforge', schema, cwd }),
+      runner.run('second', { provider: 'aforge', schema, cwd }),
+    ]);
+
+    expect(first.parsed).toEqual({ name: 'first', count: 1 });
+    expect(second.parsed).toEqual({ name: 'second', count: 2 });
+    expect(new Set(outputPaths).size).toBe(2);
+    expect(fs.readdirSync(cwd).filter((name) => name.startsWith('.agentfield-out-'))).toEqual([]);
+    expect(fs.existsSync(getOutputPath(cwd))).toBe(false);
+  });
+
+  it('run defaults to aforge when no provider is configured', async () => {
+    vi.stubEnv('AGENTFIELD_HARNESS_PROVIDER', '');
+    const provider = new MockProvider();
+    const buildProviderSpy = vi.spyOn(factory, 'buildProvider').mockResolvedValue(provider);
+    const runner = new HarnessRunner();
+    await runner.run('hello', {});
+
+    expect(buildProviderSpy).toHaveBeenCalledWith(expect.objectContaining({ provider: 'aforge' }));
+    expect(provider.lastOptions?.provider).toBe('aforge');
+  });
+
+  it('per-call provider wins over the runner default and environment', async () => {
+    vi.stubEnv('AGENTFIELD_HARNESS_PROVIDER', 'gemini');
+    const provider = new MockProvider();
+    const buildProviderSpy = vi.spyOn(factory, 'buildProvider').mockResolvedValue(provider);
+    const runner = new HarnessRunner({ provider: 'codex' });
+
+    await runner.run('hello', { provider: 'opencode' });
+
+    expect(buildProviderSpy).toHaveBeenCalledWith(expect.objectContaining({ provider: 'opencode' }));
+    expect(provider.lastOptions?.provider).toBe('opencode');
   });
 
   it('retries on transient error then succeeds', async () => {

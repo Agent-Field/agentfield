@@ -16,9 +16,31 @@ def mock_aforge_available(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "agentfield.harness._availability.shutil.which", lambda path: path
     )
+    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", "do")
 
 
 def _envelope(
+    text: str = "done",
+    *,
+    usage: dict[str, object] | None = None,
+    settled: bool = True,
+    blocked_on: str | None = None,
+) -> str:
+    envelope = {
+        "deliverable": text,
+        "usage": usage or {},
+        "artifacts": [],
+        "nodes": 2,
+        "seconds": 0.012,
+        "settled": settled,
+        "spend": 0.0,
+    }
+    if blocked_on is not None:
+        envelope["blocked_on"] = blocked_on
+    return json.dumps(envelope)
+
+
+def _exec_envelope(
     text: str = "done",
     *,
     stop: str = "done",
@@ -55,7 +77,6 @@ async def test_aforge_success_maps_envelope_and_metrics(
                     "cached_tokens": 20,
                     "cost": 0.0123,
                 },
-                turns=4,
             ),
             "",
             0,
@@ -72,12 +93,103 @@ async def test_aforge_success_maps_envelope_and_metrics(
     assert raw.metrics.output_tokens == 50
     assert raw.metrics.cache_read_tokens == 20
     assert raw.metrics.cache_creation_tokens == 0
-    assert raw.metrics.num_turns == 4
+    assert raw.metrics.num_turns == 3
     assert raw.metrics.total_cost_usd == 0.0123
     assert raw.metrics.model == "openrouter/z-ai/glm-5.2"
     assert raw.metrics.duration_api_ms >= 0
     assert raw.returncode == 0
-    assert raw.messages[0]["text"] == " final answer "
+    assert raw.messages[0]["deliverable"] == " final answer "
+
+
+@pytest.mark.asyncio
+async def test_aforge_exec_mode_maps_original_contract_and_pins_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, object] = {}
+
+    async def fake_run_cli(
+        cmd, *, env=None, cwd=None, timeout=None, idle_seconds=None, input_text=None
+    ):
+        captured.update(cmd=cmd, env=env, input_text=input_text)
+        return (
+            _exec_envelope(
+                " linear answer ",
+                usage={
+                    "calls": 3,
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "cached_tokens": 20,
+                    "cost": 0.0123,
+                },
+                turns=4,
+            ),
+            "",
+            0,
+        )
+
+    monkeypatch.delenv("AGENTFIELD_AFORGE_COMMAND")
+    monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", fake_run_cli)
+    raw = await AforgeProvider("/opt/aforge").execute(
+        "prompt that stays off argv",
+        {
+            "project_dir": "/project",
+            "system_prompt": "  be precise  ",
+            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+        },
+    )
+
+    assert captured["cmd"] == [
+        "/opt/aforge",
+        "exec",
+        "--json",
+        "-w",
+        "/project",
+        "--timeout",
+        "1795",
+        "--context-fill",
+        "60",
+        "--completion-reserve",
+        "65536",
+        "--system",
+        "be precise",
+        "--model",
+        "deepseek/deepseek-v4-flash-0731",
+        "--plan-model",
+        "deepseek/deepseek-v4-flash-0731",
+    ]
+    assert captured["env"] == {
+        "AFORGE_MODELS": "",
+        "AFORGE_MODEL": "deepseek/deepseek-v4-flash-0731",
+    }
+    assert captured["input_text"] == "prompt that stays off argv"
+    assert raw.result == "linear answer"
+    assert raw.is_error is False
+    assert raw.metrics.num_turns == 4
+    assert raw.metrics.input_tokens == 100
+    assert raw.metrics.total_cost_usd == 0.0123
+
+
+@pytest.mark.asyncio
+async def test_aforge_exec_mode_accepts_budget_partial(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+    monkeypatch.setattr(
+        "agentfield.harness.providers.aforge.run_cli",
+        AsyncMock(return_value=(_exec_envelope("usable", stop="budget"), "", 2)),
+    )
+
+    raw = await AforgeProvider().execute("hello", {})
+
+    assert raw.result == "usable"
+    assert raw.is_error is False
+    assert raw.failure_type is FailureType.NONE
+
+
+def test_aforge_binary_environment_override(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AFORGE_BIN", "/opt/aforge-env")
+    assert AforgeProvider()._bin == "/opt/aforge-env"
+    assert AforgeProvider("/explicit/aforge")._bin == "/explicit/aforge"
 
 
 @pytest.mark.asyncio
@@ -200,7 +312,7 @@ async def test_aforge_disables_idle_watchdog_and_honors_timeout_env(
 
 
 @pytest.mark.asyncio
-async def test_aforge_passes_stripped_system_prompt_flag(
+async def test_aforge_prepends_stripped_system_prompt_to_stdin(
     monkeypatch: pytest.MonkeyPatch,
 ):
     captured: dict[str, Any] = {}
@@ -208,15 +320,17 @@ async def test_aforge_passes_stripped_system_prompt_flag(
     async def fake_run_cli(
         cmd, *, env=None, cwd=None, timeout=None, idle_seconds=None, input_text=None
     ):
-        _ = env, cwd, timeout, idle_seconds, input_text
+        _ = env, cwd, timeout, idle_seconds
         captured["cmd"] = cmd
+        captured["input_text"] = input_text
         return _envelope(), "", 0
 
     monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", fake_run_cli)
 
     await AforgeProvider().execute("hello", {"system_prompt": "  be precise  "})
 
-    assert captured["cmd"][-2:] == ["--system", "be precise"]
+    assert "--system" not in captured["cmd"]
+    assert captured["input_text"] == "be precise\n\nTask:\nhello"
 
 
 @pytest.mark.asyncio
@@ -240,19 +354,25 @@ async def test_aforge_project_dir_precedes_cwd_and_cwd_is_fallback(
     )
     await provider.execute("hello", {"cwd": "/cwd-only"})
 
-    assert captured_cmds[0][:6] == [
+    assert captured_cmds[0] == [
         "aforge",
-        "exec",
+        "do",
         "--json",
+        "--yes-spend",
         "-w",
         "/project",
+        "--timeout",
+        "1795",
     ]
-    assert captured_cmds[1][:6] == [
+    assert captured_cmds[1] == [
         "aforge",
-        "exec",
+        "do",
         "--json",
+        "--yes-spend",
         "-w",
         "/cwd-only",
+        "--timeout",
+        "1795",
     ]
 
 
@@ -281,7 +401,7 @@ async def test_aforge_error_exit_is_crash_with_stderr(
         cmd, *, env=None, cwd=None, timeout=None, idle_seconds=None, input_text=None
     ):
         _ = cmd, env, cwd, timeout, idle_seconds, input_text
-        return _envelope("", stop="error"), "authentication exploded", 5
+        return _envelope(""), "authentication exploded", 1
 
     monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", fake_run_cli)
 
@@ -289,38 +409,38 @@ async def test_aforge_error_exit_is_crash_with_stderr(
 
     assert raw.is_error is True
     assert raw.failure_type is FailureType.CRASH
-    assert "aforge exit code 5" in (raw.error_message or "")
+    assert "aforge exit code 1" in (raw.error_message or "")
     assert "authentication exploded" in (raw.error_message or "")
 
 
 @pytest.mark.asyncio
-async def test_aforge_budget_exit_with_text_is_success(
+async def test_aforge_timeout_exit_with_partial_is_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def fake_run_cli(
         cmd, *, env=None, cwd=None, timeout=None, idle_seconds=None, input_text=None
     ):
         _ = cmd, env, cwd, timeout, idle_seconds, input_text
-        return _envelope("usable landing", stop="budget"), "", 2
+        return _envelope("usable partial", settled=False), "", 2
 
     monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", fake_run_cli)
 
     raw = await AforgeProvider().execute("hello", {})
 
-    assert raw.result == "usable landing"
-    assert raw.is_error is False
-    assert raw.failure_type is FailureType.NONE
+    assert raw.result == "usable partial"
+    assert raw.is_error is True
+    assert raw.failure_type is FailureType.TIMEOUT
 
 
 @pytest.mark.asyncio
-async def test_aforge_turn_cap_without_text_is_crash(
+async def test_aforge_blocked_question_is_crash(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def fake_run_cli(
         cmd, *, env=None, cwd=None, timeout=None, idle_seconds=None, input_text=None
     ):
         _ = cmd, env, cwd, timeout, idle_seconds, input_text
-        return _envelope("", stop="turn-cap"), "turn cap reached", 3
+        return _envelope("", blocked_on="Which repository?"), "", 1
 
     monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", fake_run_cli)
 
@@ -328,7 +448,8 @@ async def test_aforge_turn_cap_without_text_is_crash(
 
     assert raw.is_error is True
     assert raw.failure_type is FailureType.CRASH
-    assert "aforge exit code 3" in (raw.error_message or "")
+    assert "aforge exit code 1" in (raw.error_message or "")
+    assert "Which repository?" in (raw.error_message or "")
 
 
 @pytest.mark.asyncio
@@ -386,6 +507,24 @@ async def test_aforge_parses_last_valid_envelope_after_stray_stdout(
     raw = await AforgeProvider().execute("hello", {})
 
     assert raw.result == "real result"
+    assert raw.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_aforge_parses_pretty_printed_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_run_cli(
+        cmd, *, env=None, cwd=None, timeout=None, idle_seconds=None, input_text=None
+    ):
+        _ = cmd, env, cwd, timeout, idle_seconds, input_text
+        return json.dumps(json.loads(_envelope("pretty result")), indent=2), "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", fake_run_cli)
+
+    raw = await AforgeProvider().execute("hello", {})
+
+    assert raw.result == "pretty result"
     assert raw.is_error is False
 
 

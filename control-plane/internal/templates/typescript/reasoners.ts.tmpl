@@ -44,7 +44,7 @@ reasonersRouter.reasoner<{ message: string }, { original: string; echoed: string
 //      *   -d '{"input": {"text": "I love this product!"}}'
 //      */
 //     const sentiment = await ctx.ai(
-//       `You are a sentiment analysis expert. Analyze the sentiment of this text.`,
+//       `You are a sentiment analysis expert. Analyze the sentiment of this text: ${ctx.input.text}`,
 //       { schema: sentimentSchema, temperature: 0.2 }
 //     );
 //

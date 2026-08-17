@@ -286,6 +286,22 @@ export interface AppUpdateStatus {
   error: string | null
 }
 
+/**
+ * Result of the last `af skill install --non-interactive` this app ran (see
+ * main/skills.ts). In-memory, per session: null means no sync has finished
+ * since launch, which the UI must show as pending rather than as installed.
+ */
+export interface SkillSyncRecord {
+  /** ISO timestamp of when the sync finished. */
+  at: string
+  /** The CLI exited 0 — every skill reached every detected coding agent. */
+  ok: boolean
+  /** Exit code, or null when the CLI never ran (spawn error / timeout). */
+  exitCode: number | null
+  /** One line: what the sync reported, or why it failed. */
+  message: string
+}
+
 /** Headline numbers from GET /api/ui/v1/dashboard/summary. */
 export interface DashboardMetrics {
   agentsRunning: number
@@ -333,6 +349,12 @@ export interface AgentFieldSnapshot {
    * response could not be parsed — UI hides Spend/Usage entirely.
    */
   usage: UsageStats | null
+  /**
+   * Last coding-agent skill sync, or null when none has finished this session.
+   * Main-process state, not control-plane data — it rides the snapshot so the
+   * existing poll delivers it without a second polling loop in the renderer.
+   */
+  skillSync: SkillSyncRecord | null
   /** ISO timestamp of when this snapshot was assembled. */
   fetchedAt: string
 }

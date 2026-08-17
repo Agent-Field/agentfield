@@ -1,0 +1,19 @@
+FROM golang:1.24-alpine AS build
+
+WORKDIR /app
+
+# The scaffold ships without go.sum; go mod tidy resolves and records
+# dependencies before the build.
+COPY . .
+RUN go mod tidy && CGO_ENABLED=0 go build -o /agent .
+
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /app
+COPY --from=build /agent /agent
+
+EXPOSE {{.AgentPort}}
+
+CMD ["/agent"]

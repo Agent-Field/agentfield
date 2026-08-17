@@ -19,13 +19,16 @@ import (
 
 // Context is the webhook-trigger metadata exposed to reasoners at runtime.
 //
-// Available as the *triggers.Context parameter in the handler (nil when the
-// reasoner was invoked directly via app.Call instead of by an inbound event).
+// Retrieve it inside a handler with FromContext(ctx). It is nil when the
+// reasoner was invoked directly (app.Call, Execute with a flat input) rather
+// than dispatched by an inbound event, so a nil check distinguishes the two:
 //
-// EXPERIMENTAL: This type is exported for forward compatibility. Runtime
-// construction and injection into handler context is planned for #514
-// (dispatch envelope unwrap + Context injection). Do not depend on this
-// being populated until that issue ships.
+//	if tc := triggers.FromContext(ctx); tc != nil {
+//	    // dispatched via a trigger
+//	}
+//
+// VCID may be empty until the DID/VC chain wiring lands (tracked separately
+// under SDK Feature Parity).
 type Context struct {
 	// AgentField trigger row ID; stable, equals the public URL slug.
 	TriggerID string
@@ -46,11 +49,12 @@ type Context struct {
 // Transform is an optional sync function to convert a raw provider event
 // into the reasoner's input. Must be synchronous.
 //
-// EXPERIMENTAL: The Go SDK stores the transform on the binding but does not
-// execute it yet — a reasoner invoked by an inbound event still receives the
-// raw event. Dispatch-time execution is planned for #514 (dispatch envelope
-// unwrap + Context injection). Do not depend on the transform running until
-// that issue ships.
+// When a binding declaring a Transform matches the dispatched event, the SDK
+// runs Transform(rawEvent) and the handler's input is the return value rather
+// than the raw event. A Transform that panics degrades to pass-through: the
+// handler receives the raw event instead of failing the dispatch.
+//
+// Transforms are only applied to trigger dispatches, never to direct calls.
 type Transform func(rawEvent map[string]any) any
 
 // EventOpts configures an event trigger binding.
@@ -67,8 +71,8 @@ type EventOpts struct {
 	// Source-specific JSON config (timestamp tolerance, custom header names, etc).
 	Config json.RawMessage
 	// Optional sync transform to convert raw provider event to reasoner input.
-	// EXPERIMENTAL: stored on the binding but not executed by the Go SDK yet;
-	// dispatch-time execution ships with #514. See Transform.
+	// Runs before the handler on trigger dispatches, skipped on direct calls.
+	// See Transform.
 	Transform Transform
 }
 

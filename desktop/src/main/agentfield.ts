@@ -14,6 +14,7 @@ import type {
   ExecutionSummary,
   InstalledAgent,
   RegistryResult,
+  SkillSyncRecord,
   UsageGroup,
   UsageStats
 } from '../shared/types'
@@ -354,6 +355,12 @@ export interface SnapshotOptions {
   baseUrl?: string
   fetchImpl?: FetchLike
   cpClient?: CpClient
+  /**
+   * Last skill-sync result, passed through onto the snapshot. It is main-
+   * process state (main/skills.ts), not something this module can read, so the
+   * IPC handler supplies it; callers that don't care (autostart) leave it out.
+   */
+  skillSync?: SkillSyncRecord | null
 }
 
 /**
@@ -396,6 +403,7 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
     executions,
     metrics,
     usage,
+    skillSync: options.skillSync ?? null,
     fetchedAt: new Date().toISOString()
   }
 }

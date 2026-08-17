@@ -51,6 +51,39 @@ RUN cd control-plane && \
     if [ "${TARGETARCH}" = "arm64" ]; then export CC=aarch64-linux-gnu-gcc; else export CC=gcc; fi && \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags "embedded sqlite_fts5" -o /app/bin/af ./cmd/af
 
+# aforge — the pinned coding-harness binary AgentField's harness providers
+# spawn (`aforge exec --json -w <dir>`). Fetched in its own stage so the
+# runtime layer is a single COPY and the download never drags curl/apt state
+# into the final image.
+#
+# Soft fetch, hard verify: the download host goes live with the website
+# deploy, so a 404 degrades to "this image ships without aforge" rather than
+# breaking every image build in the meantime. A download that DOES land is
+# always checksum-verified — checksums.txt carries the sha256 of the
+# UNCOMPRESSED binary, so the hash is taken after gunzip.
+#
+# Pin overrides (both are build args): AFORGE_BASE_URL, AFORGE_VERSION.
+FROM debian:bookworm-slim AS aforge-dist
+ARG TARGETARCH
+ARG AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge
+ARG AFORGE_VERSION=v0.1.0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /out
+RUN set -eu; \
+    if curl -fsSL "${AFORGE_BASE_URL}/${AFORGE_VERSION}/aforge-linux-${TARGETARCH}.gz" -o aforge.gz \
+       && curl -fsSL "${AFORGE_BASE_URL}/${AFORGE_VERSION}/checksums.txt" -o checksums.txt; then \
+        gunzip -c aforge.gz > "aforge-linux-${TARGETARCH}"; \
+        grep " aforge-linux-${TARGETARCH}\$" checksums.txt | sha256sum -c -; \
+        chmod 0755 "aforge-linux-${TARGETARCH}"; \
+        mv "aforge-linux-${TARGETARCH}" aforge; \
+    else \
+        echo "WARNING: aforge ${AFORGE_VERSION} is not available at ${AFORGE_BASE_URL}; this image ships without it" >&2; \
+    fi; \
+    rm -f aforge.gz checksums.txt
+
 # Toolchain donors — same arch as the runtime stage (no --platform pin).
 FROM node:22-bookworm-slim AS node-dist
 FROM golang:1.25-bookworm AS go-dist
@@ -101,6 +134,13 @@ COPY --from=go-builder /app/control-plane/config /etc/agentfield/config
 # cache and freeze whatever version the first build resolved. The `af`
 # binary changes every release, so everything after it rebuilds fresh.
 RUN npm install -g opencode-ai
+
+# aforge harness binary (see the aforge-dist stage). Copying the stage's
+# output DIRECTORY, not a fixed file path, is deliberate: when the pinned
+# build could not be fetched the directory is empty and this COPY is a
+# no-op, instead of failing the build or planting a zero-byte `aforge` on
+# PATH that `af harness doctor` would report as installed.
+COPY --from=aforge-dist /out/ /usr/local/bin/
 
 # Everything stateful (SQLite, BoltDB, installed.yaml, secrets keyring,
 # agent package dirs) lives under one mount point.

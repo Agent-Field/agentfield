@@ -8,6 +8,9 @@ require (
 	github.com/awslabs/aws-lambda-go-api-proxy v0.16.2
 )
 
-require gopkg.in/yaml.v3 v3.0.1 // indirect
+require (
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
 
 replace github.com/Agent-Field/agentfield/sdk/go => ../../sdk/go

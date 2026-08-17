@@ -41,12 +41,15 @@ function AccessManagementPageInner() {
   const queryClient = useQueryClient();
   const { adminToken } = useAuth();
 
-  const probeQuery = useAccessAdminRoutesProbe(adminToken);
-  const adminRoutesAvailable = probeQuery.data === true;
+  const probeQuery = useAccessAdminRoutesProbe();
+  const access = probeQuery.data;
+  const adminRoutesAvailable = access === "open" || access === "token-required";
+  const tokenRequired = access === "token-required";
+  // Admin calls can work right now: routes exist, and either no token is
+  // enforced or the browser has one stored to send.
+  const canAdmin = adminRoutesAvailable && (!tokenRequired || !!adminToken);
 
-  const policiesQuery = useAccessPolicies(
-    probeQuery.isSuccess && adminRoutesAvailable,
-  );
+  const policiesQuery = useAccessPolicies(probeQuery.isSuccess && canAdmin);
 
   const tagsQuery = useAgentTagSummaries();
 
@@ -60,8 +63,7 @@ function AccessManagementPageInner() {
   };
 
   const policiesLoading =
-    probeQuery.isLoading ||
-    (adminRoutesAvailable && policiesQuery.isLoading);
+    probeQuery.isLoading || (canAdmin && policiesQuery.isLoading);
 
   const showProbeSkeleton = probeQuery.isLoading;
 
@@ -73,9 +75,9 @@ function AccessManagementPageInner() {
           <div className="flex items-center gap-1">
             <h1 className="text-2xl font-semibold tracking-tight">Access management</h1>
             <HintIcon label="What this page does">
-              Tag rules for cross-agent calls and registration-tag approvals. When
-              the server expects it, use the browser admin token below—separate from
-              your normal API key.
+              Tag rules for cross-agent calls and registration-tag approvals. If
+              the server enforces an admin token, a prompt for it appears
+              below—separate from your normal API key.
             </HintIcon>
           </div>
           <p className="text-muted-foreground mt-1 text-sm">
@@ -117,6 +119,15 @@ function AccessManagementPageInner() {
               : "Try again after checking your API key and network."}
           </AlertDescription>
         </Alert>
+      ) : access === "unauthorized" ? (
+        <Alert variant="destructive">
+          <AlertTitle>Your API key was rejected</AlertTitle>
+          <AlertDescription>
+            The server requires a valid API key before authorization APIs can
+            be reached. Sign in again with a current key — the admin token is
+            not involved in this error.
+          </AlertDescription>
+        </Alert>
       ) : !adminRoutesAvailable ? (
         <Alert>
           <AlertTitle>Authorization APIs are not enabled on this server</AlertTitle>
@@ -151,22 +162,30 @@ function AccessManagementPageInner() {
         </Alert>
       ) : null}
 
-      <Card className="border-border/80">
-        <CardHeader className="pb-3">
-          <div className="flex items-center gap-1">
-            <CardTitle className="text-sm font-medium">Browser admin token</CardTitle>
-            <HintIcon label="About the admin token">
-              Same secret as server config (<code className="font-mono">admin_token</code> or{" "}
-              <code className="font-mono">AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN</code>). Not in the DB
-              or Settings—only this browser. Sends <code className="font-mono">X-Admin-Token</code> when
-              set.
-            </HintIcon>
-          </div>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <AdminTokenPrompt onTokenSet={() => invalidateAccessQueries()} />
-        </CardContent>
-      </Card>
+      {(tokenRequired || adminToken) && (
+        <Card className="border-border/80">
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-1">
+              <CardTitle className="text-sm font-medium">Browser admin token</CardTitle>
+              <HintIcon label="About the admin token">
+                Same secret as server config (<code className="font-mono">admin_token</code> or{" "}
+                <code className="font-mono">AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN</code>). Not in the DB
+                or Settings—only this browser. Sends <code className="font-mono">X-Admin-Token</code> when
+                set.
+              </HintIcon>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-2">
+            {access === "open" && adminToken && (
+              <p className="text-xs text-muted-foreground">
+                This server doesn&apos;t enforce an admin token — the saved token
+                isn&apos;t needed and can be cleared.
+              </p>
+            )}
+            <AdminTokenPrompt onTokenSet={() => invalidateAccessQueries()} />
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="access-rules" className="flex flex-col gap-0">
         <TabsList variant="underline" className="w-full justify-start">
@@ -201,7 +220,7 @@ function AccessManagementPageInner() {
                 policies={policiesQuery.data ?? []}
                 loading={policiesLoading}
                 onRefresh={() => void policiesQuery.refetch()}
-                canMutate={adminRoutesAvailable}
+                canMutate={canAdmin}
                 fetchError={
                   policiesQuery.isError
                     ? policiesQuery.error instanceof Error
@@ -239,7 +258,7 @@ function AccessManagementPageInner() {
                       : new Error(String(tagsQuery.error))
                     : null
                 }
-                canMutate={adminRoutesAvailable}
+                canMutate={canAdmin}
                 onRefresh={() => invalidateAccessQueries()}
               />
             </CardContent>

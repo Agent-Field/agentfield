@@ -149,9 +149,148 @@ interface TriggerContext {
 
 ---
 
+## Go
+
+Go has no decorators, so registration is explicit. The trigger types live in
+their own package, `github.com/Agent-Field/agentfield/sdk/go/triggers`.
+
+### Event trigger (sugar method)
+
+```go
+import (
+    "context"
+
+    "github.com/Agent-Field/agentfield/sdk/go/agent"
+    "github.com/Agent-Field/agentfield/sdk/go/triggers"
+)
+
+// Option A: app.OnEvent sugar — one call, registers and binds
+app.OnEvent(triggers.EventOpts{
+    Source:    "stripe",
+    Types:     []string{"payment_intent.succeeded"},
+    SecretEnv: "STRIPE_WEBHOOK_SECRET",
+    Transform: func(evt map[string]any) any {
+        data, _ := evt["data"].(map[string]any)
+        return data["object"]
+    },
+}, "handle_payment", func(ctx context.Context, payment map[string]any) (any, error) {
+    // payment is the transformed value (data.object)
+    tc := triggers.FromContext(ctx) // nil on direct calls
+    if tc != nil {
+        _ = tc.Source // "stripe"
+    }
+    return map[string]any{"ok": true}, nil
+})
+
+// Option B: the option-struct form on RegisterReasoner
+app.RegisterReasoner("handle_pr", handlePR,
+    agent.WithTriggers(triggers.Event(triggers.EventOpts{
+        Source:    "github",
+        Types:     []string{"pull_request"},
+        SecretEnv: "GITHUB_SECRET",
+    })),
+)
+```
+
+### Schedule trigger
+
+```go
+// Option A: app.OnSchedule sugar
+app.OnSchedule("* * * * *", "handle_tick", func(ctx context.Context, _ map[string]any) (any, error) {
+    tc := triggers.FromContext(ctx)
+    // tc.Source == "cron", tc.EventType == "tick"
+    return nil, nil
+}, agent.WithTimezone("America/New_York")) // optional
+
+// Option B: explicit binding
+app.RegisterReasoner("handle_tick", handleTick,
+    agent.WithTriggers(triggers.Schedule(triggers.ScheduleOpts{
+        Cron:     "* * * * *",
+        Timezone: "UTC",
+    })),
+)
+```
+
+### Context fields (Go)
+
+```go
+type Context struct {
+    TriggerID      string    // AgentField trigger row ID
+    Source         string    // "stripe", "github", "slack", "cron", "generic_hmac", "generic_bearer"
+    EventType      string    // Provider event type (or "" for cron)
+    EventID        string    // AgentField inbound_event ID (replay key)
+    IdempotencyKey string    // Provider's idempotency key
+    ReceivedAt     time.Time // When CP received the event
+    VCID           string    // VC ID if DID enabled (may be empty)
+}
+```
+
+Retrieve it with `triggers.FromContext(ctx)`, which returns `nil` for direct
+calls. Handler signatures are unchanged, so a reasoner can serve both the
+trigger and direct paths:
+
+```go
+func handlePayment(ctx context.Context, input map[string]any) (any, error) {
+    if tc := triggers.FromContext(ctx); tc != nil {
+        // dispatched via a trigger
+    }
+    return nil, nil
+}
+```
+
+### Testing Go trigger reasoners
+
+The `triggers` package ships helpers and a fixture library, so a reasoner can
+be tested without a control plane, HTTP server, or real provider:
+
+```go
+func TestHandlePayment(t *testing.T) {
+    result, err := triggers.SimulateEvent(t, handlePayment, triggers.SimulateEventOpts{
+        Source:    "stripe",
+        EventType: "payment_intent.succeeded",
+        Body:      triggers.LoadFixture(t, "stripe"),
+        Bindings:  []triggers.Binding{triggers.Event(opts)}, // applies Transform
+    })
+    if err != nil {
+        t.Fatal(err)
+    }
+    // assert on result...
+}
+
+func TestHandleTick(t *testing.T) {
+    result, err := triggers.SimulateSchedule(t, handleTick, triggers.SimulateScheduleOpts{
+        Cron: "* * * * *",
+    })
+    // ...
+}
+```
+
+`LoadFixture` reads from an embedded library of six captured payloads
+(`stripe`, `github`, `slack`, `cron`, `generic_hmac`, `generic_bearer`) that
+are byte-identical to the Python SDK's, so behaviour is comparable across
+SDKs. `FixtureNames()` lists them for table-driven tests.
+
+### Key differences from Python and TypeScript
+
+| Aspect | Python | TypeScript | Go |
+|---|---|---|---|
+| Declaration | `@on_event` decorator | `app.onEvent()` | `app.OnEvent()` or `agent.WithTriggers(triggers.Event(...))` |
+| Trigger context access | `trigger` parameter | `ctx.trigger` property | `triggers.FromContext(ctx)` |
+| Nil / null check | `if trigger:` | `ctx.trigger?` | `if tc != nil` |
+| Transform | `transform=callable` | `transform: (evt) => ...` | `Transform: func(map[string]any) any` |
+| Cron field name | `cron` | `cron` | `Cron` |
+| Naming convention | snake_case | camelCase | PascalCase fields |
+
+Why `FromContext` rather than a third handler parameter: Go's `HandlerFunc` is
+`func(context.Context, map[string]any) (any, error)`, and adding a parameter
+would break every existing reasoner. Context propagation matches how the SDK
+already threads `ExecutionContext` and the cost tracker.
+
+---
+
 ## Registration wire format
 
-Both SDKs produce the same control-plane registration payload per trigger:
+All three SDKs produce the same control-plane registration payload per trigger:
 
 ```json
 {
@@ -199,6 +338,6 @@ The control plane dispatches triggers as:
 }
 ```
 
-Both SDKs detect this shape, unwrap `event`, build `TriggerContext` from
+All three SDKs detect this shape, unwrap `event`, build the trigger context from
 `_meta`, apply the matching binding's `transform`, and deliver the result
 to the handler. Direct calls (no `_meta`) pass through unchanged.

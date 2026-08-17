@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -30,9 +32,13 @@ type harnessProviderSpec struct {
 	Binary         string
 	InstallCommand string
 	AuthEnvVars    []string
+	// VersionArgs are tried in order until one produces output; empty means
+	// {"--version"}.
+	VersionArgs [][]string
 }
 
 var harnessProviderSpecs = []harnessProviderSpec{
+	{Name: "aforge", Binary: "aforge", InstallCommand: "af aforge ensure", AuthEnvVars: []string{"OPENROUTER_API_KEY"}, VersionArgs: [][]string{{"version"}, {"--version"}}},
 	// claude-code has no Binary: the Python provider runs on the
 	// claude_agent_sdk pip package (which bundles its own CLI), not on a
 	// globally installed `claude` binary. See claudeCodeHealth.
@@ -82,7 +88,7 @@ func newHarnessDoctorCommand() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: claude-code, codex, gemini, opencode")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: aforge, claude-code, codex, gemini, opencode")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output structured JSON")
 	return cmd
 }
@@ -109,8 +115,9 @@ func buildHarnessDoctorReports(requested []string) ([]HarnessProviderHealth, err
 			reports = append(reports, claudeCodeHealth(spec))
 			continue
 		}
-		tool := checkTool(spec.Binary, "--version")
+		tool := probeHarnessBinary(spec)
 		issues := []string{}
+		usable := tool.Available && tool.Version != ""
 		if !tool.Available {
 			issues = append(issues, "binary_not_found")
 		} else if tool.Version == "" {
@@ -122,13 +129,66 @@ func buildHarnessDoctorReports(requested []string) ([]HarnessProviderHealth, err
 			Installed:      tool.Available,
 			Version:        tool.Version,
 			Auth:           harnessAuthStatus(spec.AuthEnvVars),
-			Usable:         tool.Available && tool.Version != "",
+			Usable:         usable,
 			InstallCommand: spec.InstallCommand,
 			AuthEnvVars:    append([]string{}, spec.AuthEnvVars...),
 			Issues:         issues,
 		})
 	}
 	return reports, nil
+}
+
+// probeHarnessBinary resolves a provider binary and asks it for a version,
+// trying each candidate argument set in order.
+func probeHarnessBinary(spec harnessProviderSpec) ToolStatus {
+	path, err := exec.LookPath(spec.Binary)
+	if err != nil {
+		// `af aforge ensure` installs into AgentField's own bin directory, which
+		// the current shell may not have re-read into PATH yet. Looking there
+		// directly is what stops the doctor from calling a binary it just
+		// installed "not found".
+		home := os.Getenv("AGENTFIELD_HOME")
+		if home == "" {
+			userHome, homeErr := os.UserHomeDir()
+			if homeErr != nil {
+				return ToolStatus{}
+			}
+			home = filepath.Join(userHome, ".agentfield")
+		}
+		binary := spec.Binary
+		if runtime.GOOS == "windows" {
+			binary += ".exe"
+		}
+		candidate := filepath.Join(home, "bin", binary)
+		info, statErr := os.Stat(candidate)
+		if statErr != nil || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0) {
+			return ToolStatus{}
+		}
+		path = candidate
+	}
+
+	argsSets := spec.VersionArgs
+	if len(argsSets) == 0 {
+		argsSets = [][]string{{"--version"}}
+	}
+	status := ToolStatus{Available: true, Path: path}
+	for _, args := range argsSets {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		out, runErr := exec.CommandContext(ctx, path, args...).CombinedOutput()
+		cancel()
+		// A non-zero exit is not a version, however much it printed: CLIs
+		// answer an unrecognised version flag with their whole usage text on a
+		// non-zero exit, and accepting that output would file the usage banner
+		// as the installed version.
+		if runErr != nil {
+			continue
+		}
+		if version := strings.Split(strings.TrimSpace(string(out)), "\n")[0]; version != "" {
+			status.Version = version
+			break
+		}
+	}
+	return status
 }
 
 // claudeWrapperProbe asks a Python interpreter whether the claude_agent_sdk
