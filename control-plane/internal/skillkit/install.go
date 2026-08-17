@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/aforge"
 	"github.com/Agent-Field/agentfield/control-plane/internal/furrow"
 )
 
@@ -200,6 +201,12 @@ func InstallAll(opts InstallOptions) ([]*InstallReport, error) {
 			continue
 		}
 		reports = append(reports, report)
+	}
+	if !opts.DryRun {
+		// `af skill install --all` is the one call every fresh install makes;
+		// keeping this out of install() avoids provisioning a 35MB binary once
+		// per catalog entry, and keeps --dry-run side-effect free.
+		_ = aforge.EnsureBestEffort(aforge.Options{}, os.Stderr)
 	}
 	return reports, errors.Join(failures...)
 }
