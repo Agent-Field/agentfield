@@ -46,6 +46,7 @@ var harnessProviderSpecs = []harnessProviderSpec{
 	{Name: "codex", Binary: "codex", InstallCommand: "npm install -g @openai/codex", AuthEnvVars: []string{"OPENAI_API_KEY"}},
 	{Name: "gemini", Binary: "gemini", InstallCommand: "npm install -g @google/gemini-cli", AuthEnvVars: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 	{Name: "opencode", Binary: "opencode", InstallCommand: "curl -fsSL https://opencode.ai/install | bash", AuthEnvVars: []string{}},
+	{Name: "grok", Binary: "grok", InstallCommand: "Install the Grok Build CLI, then run: grok login", AuthEnvVars: []string{"XAI_API_KEY"}},
 }
 
 // NewHarnessCommand builds harness-related environment checks.
@@ -94,7 +95,7 @@ func newHarnessDoctorCommand() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: aforge, claude-code, codex, gemini, opencode")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: aforge, claude-code, codex, gemini, opencode, grok")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output structured JSON")
 	return cmd
 }
