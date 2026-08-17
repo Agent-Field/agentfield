@@ -64,8 +64,10 @@ func newHarnessDoctorCommand() *cobra.Command {
 	var providers []string
 	var jsonOut bool
 	cmd := &cobra.Command{
-		Use:   "doctor",
-		Short: "Verify harness provider binaries, versions, and authentication",
+		Use:           "doctor",
+		Short:         "Verify harness provider binaries, versions, and authentication",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			reports, err := buildHarnessDoctorReports(providers)
 			if err != nil {
@@ -80,9 +82,13 @@ func newHarnessDoctorCommand() *cobra.Command {
 			} else {
 				printHarnessDoctorReports(cmd, reports)
 			}
-			for _, report := range reports {
-				if !report.Usable {
-					return fmt.Errorf("requested harness provider is unavailable: %s", report.Provider)
+			// A fresh machine legitimately has providers it has not installed, so a
+			// bare doctor is an informational survey; only requested providers fail.
+			if len(providers) > 0 {
+				for _, report := range reports {
+					if !report.Usable {
+						return cliExitError{Code: 1, Err: fmt.Errorf("requested harness provider is unavailable: %s", report.Provider)}
+					}
 				}
 			}
 			return nil

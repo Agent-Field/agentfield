@@ -63,8 +63,40 @@ func TestHarnessDoctorJSONReportsRequestedProvider(t *testing.T) {
 	}}, reports)
 }
 
+func TestHarnessDoctorSurveyReturnsSuccessWhenProvidersAreMissing(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+
+	cmd := NewHarnessCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"doctor"})
+
+	require.NoError(t, cmd.Execute())
+	require.Contains(t, stdout.String(), "aforge: unavailable")
+}
+
+func TestHarnessDoctorJSONSurveyReturnsSuccessWhenProvidersAreMissing(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+
+	cmd := NewHarnessCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"doctor", "--json"})
+
+	require.NoError(t, cmd.Execute())
+	var reports []HarnessProviderHealth
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &reports))
+	require.NotEmpty(t, reports)
+	for _, report := range reports {
+		require.False(t, report.Usable)
+	}
+}
+
 func TestHarnessDoctorReturnsErrorForRequestedMissingProvider(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
 	cmd := NewHarnessCommand()
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
@@ -72,6 +104,8 @@ func TestHarnessDoctorReturnsErrorForRequestedMissingProvider(t *testing.T) {
 
 	err := cmd.Execute()
 	require.ErrorContains(t, err, "requested harness provider is unavailable")
+	require.True(t, IsCLIExitError(err))
+	require.Equal(t, 1, ExitCode(err))
 
 	var reports []HarnessProviderHealth
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &reports))
