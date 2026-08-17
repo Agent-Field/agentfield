@@ -539,6 +539,87 @@ class TestEnvelopeTransport:
         assert entry["cache_read_tokens"] == 500
         assert entry["cost_usd"] == 0.03
 
+    def test_record_harness_usage_defaults_to_aforge(self, monkeypatch):
+        from agentfield.harness._result import HarnessResult
+
+        monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
+        agent = self._agent()
+        tracker = CostTracker()
+        agent.cost_tracker = tracker
+
+        agent._record_harness_usage(
+            HarnessResult(result="done", input_tokens=1), provider=None
+        )
+
+        entry = tracker.serialize()["entries"][0]
+        assert entry["harness"] == "aforge"
+        assert entry["model"] == "aforge"
+
+    def test_record_harness_usage_explicit_provider_wins(self, monkeypatch):
+        from agentfield.harness._result import HarnessResult
+
+        monkeypatch.setenv("AGENTFIELD_HARNESS_PROVIDER", "opencode")
+        agent = self._agent()
+        tracker = CostTracker()
+        agent.cost_tracker = tracker
+
+        agent._record_harness_usage(
+            HarnessResult(result="done", input_tokens=1),
+            provider="claude-code",
+        )
+
+        assert tracker.serialize()["entries"][0]["harness"] == "claude_code"
+
+    def test_record_harness_usage_honors_env_provider(self, monkeypatch):
+        from agentfield.harness._result import HarnessResult
+
+        monkeypatch.setenv("AGENTFIELD_HARNESS_PROVIDER", "opencode")
+        agent = self._agent()
+        tracker = CostTracker()
+        agent.cost_tracker = tracker
+
+        agent._record_harness_usage(
+            HarnessResult(result="done", input_tokens=1), provider=None
+        )
+
+        assert tracker.serialize()["entries"][0]["harness"] == "opencode"
+
+    def test_record_harness_usage_config_provider_wins(self, monkeypatch):
+        from agentfield.agent import Agent
+        from agentfield.harness._result import HarnessResult
+        from agentfield.types import HarnessConfig
+
+        monkeypatch.setenv("AGENTFIELD_HARNESS_PROVIDER", "opencode")
+        agent = Agent(
+            node_id="usage-test-agent",
+            harness_config=HarnessConfig(provider="codex"),
+        )
+        tracker = CostTracker()
+        agent.cost_tracker = tracker
+
+        agent._record_harness_usage(
+            HarnessResult(result="done", input_tokens=1), provider=None
+        )
+
+        assert tracker.serialize()["entries"][0]["harness"] == "codex"
+
+    def test_record_harness_usage_preserves_result_model(self, monkeypatch):
+        from agentfield.harness._result import HarnessResult
+
+        monkeypatch.setenv("AGENTFIELD_HARNESS_PROVIDER", "opencode")
+        agent = self._agent()
+        tracker = CostTracker()
+        agent.cost_tracker = tracker
+
+        agent._record_harness_usage(
+            HarnessResult(
+                result="done", input_tokens=1, model="some/model"
+            ),
+            provider=None,
+        )
+
+        assert tracker.serialize()["entries"][0]["model"] == "some/model"
+
     def test_record_harness_usage_noop_when_empty(self):
         from agentfield.harness._result import HarnessResult
 

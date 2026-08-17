@@ -3806,6 +3806,7 @@ class Agent(FastAPI):
                 derive_provider,
                 get_current_cost_tracker,
             )
+            from agentfield.harness._defaults import resolve_harness_provider
 
             input_tokens = getattr(result, "input_tokens", 0) or 0
             output_tokens = getattr(result, "output_tokens", 0) or 0
@@ -3824,7 +3825,7 @@ class Agent(FastAPI):
             if tracker is None:
                 return
 
-            resolved_provider = (
+            resolved_provider = resolve_harness_provider(
                 str(provider) if provider else self._harness_provider_name()
             )
             harness_name = (
