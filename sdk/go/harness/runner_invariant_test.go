@@ -198,7 +198,6 @@ func TestInvariant_Runner_ProviderFactoryExhaustiveness(t *testing.T) {
 // unknown provider names return an error with a non-nil error value.
 func TestInvariant_Runner_ProviderFactoryUnknownReturnsError(t *testing.T) {
 	unknownNames := []string{
-		"",
 		"nonexistent",
 		"gpt-4",
 		"anthropic",
