@@ -48,6 +48,9 @@ TRAY_MODE="${TRAY_MODE:-auto}"
 # spawn it for LLM work, so a machine with af but no aforge fails at the first
 # harness call. The download/verify/upgrade rules live in Go, so this installer
 # only decides WHETHER to ask for it. Opt out with --no-aforge or AFORGE_MODE=none.
+# Opting out also exports AGENTFIELD_SKIP_AFORGE=1 for every `af` call this
+# script makes: `af skill install` runs the same best-effort aforge hook, so
+# without the env gate the binary would be downloaded anyway.
 AFORGE_MODE="${AFORGE_MODE:-auto}"
 
 # Extra flags forwarded to `af-tray install` (see --defer-restart / --take-over).
@@ -817,6 +820,14 @@ print_success_message() {
 main() {
   # Parse command line arguments
   parse_args "$@"
+
+  # --no-aforge / AFORGE_MODE=none must hold for the whole install, not just
+  # the explicit `af aforge ensure` step: `af skill install` (and af-tray) run
+  # the same provisioning hook, and AGENTFIELD_SKIP_AFORGE=1 is the one switch
+  # the Go side honours (control-plane/internal/aforge).
+  if [[ "$AFORGE_MODE" == "none" ]]; then
+    export AGENTFIELD_SKIP_AFORGE=1
+  fi
 
   # Set install directory based on channel
   set_install_dir
