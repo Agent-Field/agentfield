@@ -8,6 +8,25 @@ import {
   openRouterAttributionHeaders,
 } from '../../ai/openrouterAttribution.js';
 
+const ANSI_PATTERN = /\x1B\[[0-?]*[ -/]*[@-~]/g;
+const STDERR_ERROR_PATTERNS = [
+  /^Error:/m,
+  /\bModel not found\b/,
+  /\bAuthenticationError\b/,
+  /\bUnauthorized\b/,
+  /\bAPIError\b/,
+];
+
+function extractOpenCodeError(stderr: string): string {
+  const lines = stderr.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (STDERR_ERROR_PATTERNS.some((pattern) => pattern.test(lines[index]))) {
+      return lines.slice(Math.max(0, index - 1), index + 5).join('\n').trim().slice(0, 1000);
+    }
+  }
+  return stderr.slice(0, 1000);
+}
+
 export class OpenCodeProvider implements HarnessProvider {
   private readonly bin: string;
 
@@ -82,7 +101,28 @@ export class OpenCodeProvider implements HarnessProvider {
       const { stdout, stderr, exitCode } = await runCli(cmd, { env });
 
       const resultText = stdout.trim() || undefined;
-      const isError = exitCode !== 0 && !resultText;
+      const cleanStderr = stderr.trim().replace(ANSI_PATTERN, '');
+      let isError = false;
+      let errorMessage: string | undefined;
+
+      if (exitCode < 0) {
+        isError = true;
+        errorMessage = cleanStderr
+          ? `Process killed by signal ${-exitCode}. stderr: ${cleanStderr.slice(0, 500)}`
+          : `Process killed by signal ${-exitCode}.`;
+      } else if (exitCode !== 0 && !resultText) {
+        isError = true;
+        errorMessage = cleanStderr
+          ? extractOpenCodeError(cleanStderr)
+          : `Process exited with code ${exitCode} and produced no output.`;
+      } else if (
+        !resultText &&
+        cleanStderr &&
+        STDERR_ERROR_PATTERNS.some((pattern) => pattern.test(cleanStderr))
+      ) {
+        isError = true;
+        errorMessage = extractOpenCodeError(cleanStderr);
+      }
 
       return createRawResult({
         result: resultText,
@@ -94,7 +134,8 @@ export class OpenCodeProvider implements HarnessProvider {
           model: modelValue,
         }),
         isError,
-        errorMessage: isError ? stderr.trim() : undefined,
+        errorMessage,
+        failureType: isError ? 'crash' : 'none',
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

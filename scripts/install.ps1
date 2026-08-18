@@ -321,7 +321,16 @@ function Install-Aforge {
         Write-Info "Installing the aforge coding harness..."
         # agentfield.exe, not the af.exe alias: Install-Binary creates the alias
         # best-effort and warns when both the hardlink and the copy fail.
-        & (Join-Path $InstallDir 'agentfield.exe') aforge ensure
+        # aforge installs into AGENTFIELD_HOME\bin, so pin its home to the
+        # install directory's parent to keep aforge beside agentfield.exe.
+        $previousAgentFieldHome = $env:AGENTFIELD_HOME
+        try {
+            $env:AGENTFIELD_HOME = Split-Path -Parent $InstallDir
+            & (Join-Path $InstallDir 'agentfield.exe') aforge ensure
+        }
+        finally {
+            $env:AGENTFIELD_HOME = $previousAgentFieldHome
+        }
         if ($LASTEXITCODE -eq 0) {
             Write-Success "aforge coding harness installed"
         }

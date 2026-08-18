@@ -8,7 +8,7 @@ import pytest
 
 from agentfield.exceptions import HarnessProviderUnavailable
 from agentfield.harness._result import FailureType
-from agentfield.harness.providers.aforge import AforgeProvider
+from agentfield.harness.providers.aforge import AFORGE_DEFAULT_MODEL, AforgeProvider
 
 
 @pytest.fixture(autouse=True)
@@ -102,6 +102,30 @@ async def test_aforge_success_maps_envelope_and_metrics(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({"model": "some/model#high"}, "some/model"),
+        ({"env": {"AFORGE_MODEL": "env/model"}}, "env/model"),
+        ({}, AFORGE_DEFAULT_MODEL),
+    ],
+)
+async def test_aforge_reports_effective_model(
+    monkeypatch: pytest.MonkeyPatch,
+    options: dict[str, object],
+    expected: str,
+):
+    monkeypatch.setattr(
+        "agentfield.harness.providers.aforge.run_cli",
+        AsyncMock(return_value=(_envelope(), "", 0)),
+    )
+
+    raw = await AforgeProvider().execute("hello", options)
+
+    assert raw.metrics.model == expected
+
+
+@pytest.mark.asyncio
 async def test_aforge_exec_mode_maps_original_contract_and_pins_model(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -167,6 +191,53 @@ async def test_aforge_exec_mode_maps_original_contract_and_pins_model(
     assert raw.metrics.num_turns == 4
     assert raw.metrics.input_tokens == 100
     assert raw.metrics.total_cost_usd == 0.0123
+    assert raw.metrics.model == "openrouter/deepseek/deepseek-v4-flash-0731"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "expected_turns"),
+    [
+        ({"max_turns": 2}, "2"),
+        ({}, None),
+        ({"max_turns": 0}, None),
+        ({"max_turns": -2}, None),
+        ({"max_turns": True}, None),
+        ({"max_turns": "5"}, None),
+        ({"max_budget_usd": 1.5}, None),
+    ],
+)
+async def test_aforge_exec_turn_cap_argv(
+    monkeypatch: pytest.MonkeyPatch,
+    options: dict[str, object],
+    expected_turns: str | None,
+):
+    run_cli_mock = AsyncMock(return_value=(_exec_envelope(), "", 0))
+    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+    monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", run_cli_mock)
+
+    await AforgeProvider().execute("hello", options)
+
+    cmd = run_cli_mock.await_args.args[0]
+    if expected_turns is None:
+        assert "--turns" not in cmd
+    else:
+        timeout_index = cmd.index("--timeout")
+        assert cmd[timeout_index + 2 : timeout_index + 4] == [
+            "--turns",
+            expected_turns,
+        ]
+    assert "--budget" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_aforge_do_does_not_pass_turn_cap(monkeypatch: pytest.MonkeyPatch):
+    run_cli_mock = AsyncMock(return_value=(_envelope(), "", 0))
+    monkeypatch.setattr("agentfield.harness.providers.aforge.run_cli", run_cli_mock)
+
+    await AforgeProvider().execute("hello", {"max_turns": 2})
+
+    assert "--turns" not in run_cli_mock.await_args.args[0]
 
 
 @pytest.mark.asyncio

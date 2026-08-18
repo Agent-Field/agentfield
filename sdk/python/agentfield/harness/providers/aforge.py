@@ -20,6 +20,9 @@ from agentfield.harness._result import FailureType, Metrics, RawResult
 
 logger = logging.getLogger("agentfield.harness.aforge")
 
+# From aforge's DefaultModel; keep in step with aforge's built-in default.
+AFORGE_DEFAULT_MODEL = "~deepseek/deepseek-v4-flash-latest"
+
 _REASONING_VARIANTS = {"off", "low", "medium", "high"}
 
 
@@ -150,11 +153,19 @@ class AforgeProvider:
                 root,
                 "--timeout",
                 str(aforge_timeout),
-                "--context-fill",
-                "60",
-                "--completion-reserve",
-                "65536",
             ]
+            # --turns exists only on exec, not do. Aforge's --budget is a token
+            # budget, not a USD cap, so max_budget_usd has no honest mapping.
+            max_turns = options.get("max_turns")
+            if (
+                isinstance(max_turns, int)
+                and not isinstance(max_turns, bool)
+                and max_turns > 0
+            ):
+                cmd.extend(["--turns", str(max_turns)])
+            cmd.extend(
+                ["--context-fill", "60", "--completion-reserve", "65536"]
+            )
             system_prompt = options.get("system_prompt")
             if isinstance(system_prompt, str) and system_prompt.strip():
                 cmd.extend(["--system", system_prompt.strip()])
@@ -195,6 +206,8 @@ class AforgeProvider:
                     if isinstance(key, str) and isinstance(value, str)
                 }
             )
+
+        effective_model = model_value or env.get("AFORGE_MODEL") or AFORGE_DEFAULT_MODEL
 
         start_api = time.monotonic()
 
@@ -310,7 +323,7 @@ class AforgeProvider:
                 output_tokens=int(output_tokens_value or 0),
                 cache_read_tokens=int(cached_tokens_value or 0),
                 cache_creation_tokens=0,
-                model=model_value,
+                model=effective_model,
             ),
             is_error=is_error,
             error_message=error_message,

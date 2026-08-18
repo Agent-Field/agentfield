@@ -56,6 +56,84 @@ describe('opencode provider', () => {
     expect(result.isError).toBe(true);
     expect(result.result).toBeUndefined();
     expect(result.errorMessage).toBe('boom');
+    expect(result.failureType).toBe('crash');
+  });
+
+  it('returns a fallback when non-zero exit has no output', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 1 });
+
+    const result = await new OpenCodeProvider().execute('hello', {});
+
+    expect(result.isError).toBe(true);
+    expect(result.errorMessage).toBe('Process exited with code 1 and produced no output.');
+    expect(result.failureType).toBe('crash');
+  });
+
+  it.each(['Model not found: foo/bar', 'Unauthorized'])(
+    'treats an empty successful result with known stderr failure %j as an error',
+    async (stderr) => {
+      vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: '', stderr, exitCode: 0 });
+
+      const result = await new OpenCodeProvider().execute('hello', {});
+
+      expect(result.isError).toBe(true);
+      expect(result.errorMessage).toContain(stderr);
+      expect(result.failureType).toBe('crash');
+    },
+  );
+
+  it('strips ANSI before matching and surfaces the matching stderr window', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: '',
+      stderr: `migration prelude\n\u001b[31mModel not found: foo/bar\u001b[0m\ncontext`,
+      exitCode: 0,
+    });
+
+    const result = await new OpenCodeProvider().execute('hello', {});
+
+    expect(result.isError).toBe(true);
+    expect(result.errorMessage).toBe('migration prelude\nModel not found: foo/bar\ncontext');
+  });
+
+  it('lets a non-empty result win over stderr failure noise', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: 'answer',
+      stderr: 'Unauthorized',
+      exitCode: 0,
+    });
+
+    const result = await new OpenCodeProvider().execute('hello', {});
+
+    expect(result.isError).toBe(false);
+    expect(result.result).toBe('answer');
+    expect(result.failureType).toBe('none');
+  });
+
+  it('does not treat unknown stderr with an empty successful result as an error', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: '',
+      stderr: 'one-time migration complete',
+      exitCode: 0,
+    });
+
+    const result = await new OpenCodeProvider().execute('hello', {});
+
+    expect(result.isError).toBe(false);
+    expect(result.failureType).toBe('none');
+  });
+
+  it('reports a negative exit code as a signal crash', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: '',
+      stderr: 'last diagnostic',
+      exitCode: -9,
+    });
+
+    const result = await new OpenCodeProvider().execute('hello', {});
+
+    expect(result.isError).toBe(true);
+    expect(result.errorMessage).toBe('Process killed by signal 9. stderr: last diagnostic');
+    expect(result.failureType).toBe('crash');
   });
 
   it('passes model flag', async () => {

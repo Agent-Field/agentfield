@@ -427,6 +427,7 @@ af install https://github.com/Agent-Field/SWE-AF             # autonomous engine
 af install https://github.com/Agent-Field/sec-af             # security auditor              → node: sec-af
 af install https://github.com/Agent-Field/cloudsecurity-af   # cloud / IaC security scanner  → node: cloudsecurity
 af install https://github.com/Agent-Field/pr-af              # agentic code review           → node: pr-af
+af install https://github.com/Agent-Field/person-to-brief-af # cited person intelligence     → node: person-to-brief-af
 
 af run swe-planner                                          # start a node (prompts once for required secrets)
 af call swe-planner.build --in '{"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}'
@@ -505,6 +506,21 @@ Full walkthrough — authoring, installing, and configuring nodes: [Installing a
       <sub>#1 open-source reviewer on Code-Review-Bench - 0.706 golden recall across 42 tools compared, at ~10x lower cost per review. Builds a custom review strategy for every PR, then adversarially challenges its own findings.</sub>
       <br/><br/>
       <a href="https://agentfield.ai/github/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">View project →</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://github.com/Agent-Field/person-to-brief-af">
+        <img src="assets/examples/person-to-brief-af.png" alt="Person to Brief AF" />
+      </a>
+      <br/>
+      <b>Person to Brief AF</b>
+      <br/>
+      <sub>Give it a name and company. It resolves the right identity, researches public professional sources in parallel, verifies claims, and returns an outreach-ready brief plus cited PDF.</sub>
+      <br/><br/>
+      <a href="https://github.com/Agent-Field/person-to-brief-af">View project →</a>
+    </td>
+    <td align="center" width="50%">
     </td>
   </tr>
 </table>

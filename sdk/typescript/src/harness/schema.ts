@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { isZod4Schema, zod4ToJsonSchema } from '../utils/zod-schema.js';
 
 export const OUTPUT_FILENAME = '.agentfield_output.json';
 export const SCHEMA_FILENAME = '.agentfield_schema.json';
@@ -85,6 +86,10 @@ export function getSchemaPath(cwd: string): string {
 }
 
 export function schemaToJsonSchema(schema: unknown): JsonSchemaRecord {
+  if (isZod4Schema(schema)) {
+    return zod4ToJsonSchema(schema);
+  }
+
   if (isRecord(schema)) {
     if ('type' in schema || 'properties' in schema || '$schema' in schema) {
       return schema;
@@ -99,7 +104,9 @@ export function schemaToJsonSchema(schema: unknown): JsonSchemaRecord {
     return converter(schema);
   }
 
-  throw new TypeError('Unsupported schema type. Expected a Zod schema, JSON schema object, or jsonSchema() provider.');
+  throw new TypeError(
+    'Unsupported schema type. Expected a Zod schema (requires "zod-to-json-schema" for Zod 3 or "zod" for Zod 4), JSON schema object, or jsonSchema() provider.',
+  );
 }
 
 export function isLargeSchema(schemaJson: string): boolean {

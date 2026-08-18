@@ -46,6 +46,7 @@ var harnessProviderSpecs = []harnessProviderSpec{
 	{Name: "codex", Binary: "codex", InstallCommand: "npm install -g @openai/codex", AuthEnvVars: []string{"OPENAI_API_KEY"}},
 	{Name: "gemini", Binary: "gemini", InstallCommand: "npm install -g @google/gemini-cli", AuthEnvVars: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 	{Name: "opencode", Binary: "opencode", InstallCommand: "curl -fsSL https://opencode.ai/install | bash", AuthEnvVars: []string{}},
+	{Name: "grok", Binary: "grok", InstallCommand: "Install the Grok Build CLI, then run: grok login", AuthEnvVars: []string{"XAI_API_KEY"}},
 }
 
 // NewHarnessCommand builds harness-related environment checks.
@@ -64,8 +65,10 @@ func newHarnessDoctorCommand() *cobra.Command {
 	var providers []string
 	var jsonOut bool
 	cmd := &cobra.Command{
-		Use:   "doctor",
-		Short: "Verify harness provider binaries, versions, and authentication",
+		Use:           "doctor",
+		Short:         "Verify harness provider binaries, versions, and authentication",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			reports, err := buildHarnessDoctorReports(providers)
 			if err != nil {
@@ -80,15 +83,19 @@ func newHarnessDoctorCommand() *cobra.Command {
 			} else {
 				printHarnessDoctorReports(cmd, reports)
 			}
-			for _, report := range reports {
-				if !report.Usable {
-					return fmt.Errorf("requested harness provider is unavailable: %s", report.Provider)
+			// A fresh machine legitimately has providers it has not installed, so a
+			// bare doctor is an informational survey; only requested providers fail.
+			if len(providers) > 0 {
+				for _, report := range reports {
+					if !report.Usable {
+						return cliExitError{Code: 1, Err: fmt.Errorf("requested harness provider is unavailable: %s", report.Provider)}
+					}
 				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: aforge, claude-code, codex, gemini, opencode")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: aforge, claude-code, codex, gemini, opencode, grok")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output structured JSON")
 	return cmd
 }

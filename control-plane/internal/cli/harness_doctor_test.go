@@ -63,8 +63,40 @@ func TestHarnessDoctorJSONReportsRequestedProvider(t *testing.T) {
 	}}, reports)
 }
 
+func TestHarnessDoctorSurveyReturnsSuccessWhenProvidersAreMissing(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+
+	cmd := NewHarnessCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"doctor"})
+
+	require.NoError(t, cmd.Execute())
+	require.Contains(t, stdout.String(), "aforge: unavailable")
+}
+
+func TestHarnessDoctorJSONSurveyReturnsSuccessWhenProvidersAreMissing(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+
+	cmd := NewHarnessCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"doctor", "--json"})
+
+	require.NoError(t, cmd.Execute())
+	var reports []HarnessProviderHealth
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &reports))
+	require.NotEmpty(t, reports)
+	for _, report := range reports {
+		require.False(t, report.Usable)
+	}
+}
+
 func TestHarnessDoctorReturnsErrorForRequestedMissingProvider(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
 	cmd := NewHarnessCommand()
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
@@ -72,6 +104,8 @@ func TestHarnessDoctorReturnsErrorForRequestedMissingProvider(t *testing.T) {
 
 	err := cmd.Execute()
 	require.ErrorContains(t, err, "requested harness provider is unavailable")
+	require.True(t, IsCLIExitError(err))
+	require.Equal(t, 1, ExitCode(err))
 
 	var reports []HarnessProviderHealth
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &reports))
@@ -206,6 +240,56 @@ func TestHarnessDoctorAforgeSpec(t *testing.T) {
 	require.Equal(t, "aforge", reports[0].Provider)
 	require.Equal(t, "af aforge ensure", reports[0].InstallCommand)
 	require.Equal(t, []string{"OPENROUTER_API_KEY"}, reports[0].AuthEnvVars)
+}
+
+func TestHarnessDoctorGrokSpec(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	reports, err := buildHarnessDoctorReports([]string{"grok"})
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, "grok", reports[0].Provider)
+	require.Equal(t, "Install the Grok Build CLI, then run: grok login", reports[0].InstallCommand)
+	require.Equal(t, []string{"XAI_API_KEY"}, reports[0].AuthEnvVars)
+}
+
+func TestHarnessDoctorAcceptsGrokProvider(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	cmd := NewHarnessCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"doctor", "--provider", "grok", "--json"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "unknown harness provider")
+	require.Contains(t, err.Error(), "requested harness provider is unavailable: grok")
+}
+
+func TestHarnessDoctorGrokReportsUsable(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessTestBinary(t, binDir, "grok", "grok 1.2.3")
+	t.Setenv("PATH", binDir)
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	t.Setenv("XAI_API_KEY", "configured")
+
+	reports, err := buildHarnessDoctorReports([]string{"grok"})
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.True(t, reports[0].Usable)
+	require.Equal(t, "grok 1.2.3", reports[0].Version)
+	require.Equal(t, "configured", reports[0].Auth)
+}
+
+func TestHarnessProviderSpecsMatchPythonProviderNames(t *testing.T) {
+	// Keep in sync with sdk/python/agentfield/harness/_availability.py.
+	expected := []string{"aforge", "claude-code", "codex", "gemini", "opencode", "grok"}
+	actual := make([]string, 0, len(harnessProviderSpecs))
+	for _, spec := range harnessProviderSpecs {
+		actual = append(actual, spec.Name)
+	}
+	require.ElementsMatch(t, expected, actual)
 }
 
 // The pinned aforge release answers `version`, so aforge is held to the same

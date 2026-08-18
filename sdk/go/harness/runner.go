@@ -163,6 +163,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 		IsError:      raw.IsError,
 		ErrorMessage: raw.ErrorMessage,
 		FailureType:  raw.FailureType,
+		Model:        raw.Metrics.Model,
 		CostUSD:      raw.Metrics.CostUSD,
 		NumTurns:     raw.Metrics.NumTurns,
 		DurationMS:   elapsed,
@@ -418,6 +419,7 @@ func (r *Runner) handleSchemaWithRetry(
 			NumTurns:   turns,
 			DurationMS: elapsed,
 			SessionID:  sid,
+			Model:      firstMetricsModel(allRaws),
 			Messages:   msgs,
 		}
 		tok.applyTo(res)
@@ -446,6 +448,7 @@ func (r *Runner) handleSchemaWithRetry(
 			NumTurns:     turns,
 			DurationMS:   elapsed,
 			SessionID:    sid,
+			Model:        firstMetricsModel(allRaws),
 			Messages:     msgs,
 		}
 		tok.applyTo(res)
@@ -472,6 +475,7 @@ func (r *Runner) handleSchemaWithRetry(
 					NumTurns:     turns,
 					DurationMS:   elapsed,
 					SessionID:    sid,
+					Model:        firstMetricsModel(allRaws),
 					Messages:     msgs,
 				}
 				tok.applyTo(res)
@@ -554,6 +558,7 @@ func (r *Runner) handleSchemaWithRetry(
 				NumTurns:   turns,
 				DurationMS: elapsed,
 				SessionID:  sid,
+				Model:      firstMetricsModel(allRaws),
 				Messages:   msgs,
 			}
 			tok.applyTo(res)
@@ -576,6 +581,7 @@ func (r *Runner) handleSchemaWithRetry(
 		NumTurns:    turns,
 		DurationMS:  elapsed,
 		SessionID:   sid,
+		Model:       firstMetricsModel(allRaws),
 		Messages:    msgs,
 	}
 	tok.applyTo(res)
@@ -608,6 +614,15 @@ func accumulateMetrics(raws []*RawResult) (totalCost *float64, totalTurns int, s
 		tokens.cacheCreationTokens += raw.Metrics.CacheCreationTokens
 	}
 	return
+}
+
+func firstMetricsModel(raws []*RawResult) string {
+	for _, raw := range raws {
+		if raw.Metrics.Model != "" {
+			return raw.Metrics.Model
+		}
+	}
+	return ""
 }
 
 func fileExists(path string) bool {

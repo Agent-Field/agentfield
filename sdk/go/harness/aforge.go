@@ -12,6 +12,8 @@ import (
 )
 
 const (
+	// DefaultAforgeModel comes from aforge's DefaultModel; keep it in step with aforge's built-in default.
+	DefaultAforgeModel         = "~deepseek/deepseek-v4-flash-latest"
 	defaultAforgeMaxConcurrent = 8
 	defaultAforgeTimeout       = 1800
 	aforgeLandingWindow        = 5
@@ -201,8 +203,13 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 		cmd = []string{
 			p.BinPath, "exec", "--json", "-w", root,
 			"--timeout", strconv.Itoa(aforgeInnerTimeout(outerTimeout)),
-			"--context-fill", "60", "--completion-reserve", "65536",
 		}
+		// --turns exists only on exec, not do. Aforge's --budget is a token
+		// budget, not a USD cap, so MaxBudgetUSD has no honest mapping.
+		if options.MaxTurns > 0 {
+			cmd = append(cmd, "--turns", strconv.Itoa(options.MaxTurns))
+		}
+		cmd = append(cmd, "--context-fill", "60", "--completion-reserve", "65536")
 		if systemPrompt := strings.TrimSpace(options.SystemPrompt); systemPrompt != "" {
 			cmd = append(cmd, "--system", systemPrompt)
 		}
@@ -233,6 +240,7 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 	for key, value := range options.Env {
 		env[key] = value
 	}
+	effectiveModel := firstNonEmpty(model, env["AFORGE_MODEL"], DefaultAforgeModel)
 
 	started := time.Now()
 	cliResult, err := p.runCLI(ctx, cmd, env, "", outerTimeout, 0, input)
@@ -288,7 +296,7 @@ func (p *AforgeProvider) Execute(ctx context.Context, prompt string, options Opt
 		isError = cliResult.ReturnCode < 0 || resultText == "" ||
 			(cliResult.ReturnCode != 0 && cliResult.ReturnCode != 2 && cliResult.ReturnCode != 3)
 	}
-	metrics := Metrics{DurationAPIMS: apiMS}
+	metrics := Metrics{DurationAPIMS: apiMS, Model: effectiveModel}
 	if value, ok := aforgeNumber(usage["calls"]); ok {
 		metrics.NumTurns = int(value)
 	}

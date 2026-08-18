@@ -10,6 +10,9 @@ const LANDING_WINDOW_SECONDS = 5;
 const DEFAULT_MAX_CONCURRENT = 8;
 const ANSI_PATTERN = /\x1B\[[0-?]*[ -/]*[@-~]/g;
 
+// From aforge's DefaultModel; keep in step with aforge's built-in default.
+export const AFORGE_DEFAULT_MODEL = '~deepseek/deepseek-v4-flash-latest';
+
 class Semaphore {
   private active = 0;
   private readonly waiters: Array<() => void> = [];
@@ -172,10 +175,6 @@ export class AforgeProvider implements HarnessProvider {
           root,
           '--timeout',
           String(innerTimeout(outerTimeout)),
-          '--context-fill',
-          '60',
-          '--completion-reserve',
-          '65536',
         ]
       : [
           this.bin,
@@ -187,6 +186,15 @@ export class AforgeProvider implements HarnessProvider {
           '--timeout',
           String(innerTimeout(outerTimeout)),
         ];
+    // --turns exists only on exec, not do. Aforge's --budget is a token budget,
+    // not a USD cap, so maxBudgetUsd has no honest mapping.
+    if (command === 'exec' && typeof options.maxTurns === 'number'
+      && Number.isFinite(options.maxTurns) && options.maxTurns > 0) {
+      cmd.push('--turns', String(Math.trunc(options.maxTurns)));
+    }
+    if (command === 'exec') {
+      cmd.push('--context-fill', '60', '--completion-reserve', '65536');
+    }
     if (command === 'exec' && typeof systemPrompt === 'string' && systemPrompt.trim()) {
       cmd.push('--system', systemPrompt.trim());
     }
@@ -207,6 +215,8 @@ export class AforgeProvider implements HarnessProvider {
       }
     }
     Object.assign(env, stringOptions(options.env));
+
+    const effectiveModel = model || env.AFORGE_MODEL || AFORGE_DEFAULT_MODEL;
 
     const startApi = Date.now();
     try {
@@ -253,7 +263,7 @@ export class AforgeProvider implements HarnessProvider {
           cacheReadTokens,
           cacheCreationTokens: 0,
           totalTokens: inputTokens + outputTokens,
-          model,
+          model: effectiveModel,
         }),
         isError,
         errorMessage: isError ? crashMessage(exitCode, blockedOn || stop, resultText, stderr) : undefined,
