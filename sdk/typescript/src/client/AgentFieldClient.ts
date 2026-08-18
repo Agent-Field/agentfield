@@ -13,6 +13,7 @@ import {
   type ExecutionLogTransportPayload
 } from '../observability/ExecutionLogger.js';
 import { httpAgent, httpsAgent } from '../utils/httpAgents.js';
+import { resolveAgentFieldUrl } from '../utils/agentFieldUrl.js';
 import type { UsageSummaryWire } from '../usage/costTracker.js';
 import { DIDAuthenticator } from './DIDAuthenticator.js';
 import { normalizeStatus as normalizeExecutionStatus, isTerminal as isTerminalExecutionStatus } from '../status/ExecutionStatus.js';
@@ -151,8 +152,8 @@ export class AgentFieldClient {
   private didAuthenticator: DIDAuthenticator;
 
   constructor(config: AgentConfig) {
-    const baseURL = (config.agentFieldUrl ?? 'http://localhost:8080').replace(/\/$/, '');
-this.http = axios.create({
+    const baseURL = resolveAgentFieldUrl(config.agentFieldUrl);
+    this.http = axios.create({
       baseURL,
       timeout: 30000,
       httpAgent,

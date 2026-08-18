@@ -54,6 +54,7 @@ import { DidInterface } from '../did/DidInterface.js';
 import { DidManager } from '../did/DidManager.js';
 import { matchesPattern } from '../utils/pattern.js';
 import { toJsonSchema } from '../utils/schema.js';
+import { resolveAgentFieldUrl } from '../utils/agentFieldUrl.js';
 import { WorkflowReporter } from '../workflow/WorkflowReporter.js';
 import type { DiscoveryOptions } from '../types/agent.js';
 import {
@@ -155,9 +156,9 @@ export class Agent {
   constructor(config: AgentConfig) {
     this.config = {
       port: 8001,
-      agentFieldUrl: 'http://localhost:8080',
       host: '0.0.0.0',
       ...config,
+      agentFieldUrl: resolveAgentFieldUrl(config.agentFieldUrl),
       didEnabled: config.didEnabled ?? true,
       deploymentType: config.deploymentType ?? 'long_running',
       asyncExecution: config.asyncExecution ?? true
@@ -169,7 +170,7 @@ export class Agent {
     this.aiClient = new AIClient(this.config.aiConfig);
     this.agentFieldClient = new AgentFieldClient(this.config);
     this.approvalClient = new ApprovalClient({
-      baseURL: this.config.agentFieldUrl ?? 'http://localhost:8080',
+      baseURL: resolveAgentFieldUrl(this.config.agentFieldUrl),
       nodeId: this.config.nodeId,
       apiKey: this.config.apiKey,
       headers: this.sanitizeDefaultHeaders(this.config.defaultHeaders)
@@ -511,7 +512,7 @@ export class Agent {
     const execMetadata = metadata ?? execCtx?.metadata;
     if (!execMetadata) return;
 
-    const baseUrl = (this.config.agentFieldUrl ?? 'http://localhost:8080').replace(/\/$/, '');
+    const baseUrl = resolveAgentFieldUrl(this.config.agentFieldUrl);
     let uiApiUrl = baseUrl.replace(/\/api\/v1$/, '/api/ui/v1');
     if (!uiApiUrl.includes('/api/ui/v1')) {
       uiApiUrl = `${baseUrl}/api/ui/v1`;

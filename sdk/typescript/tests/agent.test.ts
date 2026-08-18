@@ -1,9 +1,58 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { Agent } from '../src/agent/Agent.js';
 import { AgentRouter } from '../src/router/AgentRouter.js';
 import type { MemoryChangeEvent } from '../src/memory/MemoryInterface.js';
 
+const originalAgentFieldServer = process.env.AGENTFIELD_SERVER;
+const originalAgentFieldServerUrl = process.env.AGENTFIELD_SERVER_URL;
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+beforeEach(() => {
+  delete process.env.AGENTFIELD_SERVER;
+  delete process.env.AGENTFIELD_SERVER_URL;
+});
+
+afterEach(() => {
+  restoreEnv('AGENTFIELD_SERVER', originalAgentFieldServer);
+  restoreEnv('AGENTFIELD_SERVER_URL', originalAgentFieldServerUrl);
+});
+
 describe('Agent', () => {
+  it('uses AGENTFIELD_SERVER for every control-plane client', () => {
+    process.env.AGENTFIELD_SERVER = 'http://cp:9000/';
+
+    const agent = new Agent({ nodeId: 'test-agent' });
+
+    expect(agent.config.agentFieldUrl).toBe('http://cp:9000');
+    expect((agent as any).agentFieldClient.http.defaults.baseURL).toBe('http://cp:9000');
+  });
+
+  it('prefers an explicit agentFieldUrl over the environment', () => {
+    process.env.AGENTFIELD_SERVER = 'http://env:9000';
+
+    const agent = new Agent({ nodeId: 'test-agent', agentFieldUrl: 'http://explicit:9001/' });
+
+    expect(agent.config.agentFieldUrl).toBe('http://explicit:9001');
+  });
+
+  it('uses AGENTFIELD_SERVER_URL when AGENTFIELD_SERVER is unset', () => {
+    process.env.AGENTFIELD_SERVER_URL = 'http://legacy-cp:9002/';
+
+    const agent = new Agent({ nodeId: 'test-agent' });
+
+    expect(agent.config.agentFieldUrl).toBe('http://legacy-cp:9002');
+  });
+
+  it('defaults the control-plane URL to localhost', () => {
+    const agent = new Agent({ nodeId: 'test-agent' });
+
+    expect(agent.config.agentFieldUrl).toBe('http://localhost:8080');
+  });
+
   it('registers reasoners and skills directly', () => {
     const agent = new Agent({ nodeId: 'test-agent', devMode: true });
     agent.reasoner('hello', async () => ({ ok: true }));
