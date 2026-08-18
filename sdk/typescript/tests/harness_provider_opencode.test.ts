@@ -162,6 +162,7 @@ describe('opencode provider', () => {
       'HTTP-Referer': 'https://agentfield.ai',
       'X-OpenRouter-Title': 'AgentField AI',
       'X-Title': 'AgentField AI',
+      'X-OpenRouter-Categories': 'cli-agent,programming-app',
     });
   });
 

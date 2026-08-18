@@ -175,8 +175,10 @@ class TestOpenRouterVideoHappyPath:
     def test_media_requests_include_openrouter_attribution(self, monkeypatch):
         monkeypatch.delenv("AGENTFIELD_OPENROUTER_SITE_URL", raising=False)
         monkeypatch.delenv("AGENTFIELD_OPENROUTER_APP_NAME", raising=False)
+        monkeypatch.delenv("AGENTFIELD_OPENROUTER_CATEGORIES", raising=False)
         monkeypatch.delenv("OR_SITE_URL", raising=False)
         monkeypatch.delenv("OR_APP_NAME", raising=False)
+        monkeypatch.delenv("OR_CATEGORIES", raising=False)
 
         resp = _make_response(200, {"choices": []})
         session = CaptureSession(resp)
@@ -190,6 +192,7 @@ class TestOpenRouterVideoHappyPath:
         assert headers["HTTP-Referer"] == "https://agentfield.ai"
         assert headers["X-OpenRouter-Title"] == "AgentField AI"
         assert headers["X-Title"] == "AgentField AI"
+        assert headers["X-OpenRouter-Categories"] == "cli-agent,programming-app"
 
 
 class TestOpenRouterVideoDownloadSafety:

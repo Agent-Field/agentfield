@@ -421,6 +421,7 @@ func TestOpenCodeProvider_OpenRouterConfigOverlay(t *testing.T) {
 	assert.Equal(t, "https://agentfield.ai", headers["HTTP-Referer"])
 	assert.Equal(t, "AgentField AI", headers["X-OpenRouter-Title"])
 	assert.Equal(t, "AgentField AI", headers["X-Title"])
+	assert.Equal(t, defaultOpenRouterCategories, headers["X-OpenRouter-Categories"])
 }
 
 // --- Codex provider tests ---

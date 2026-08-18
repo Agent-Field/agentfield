@@ -7,9 +7,16 @@ import (
 )
 
 const (
-	defaultOpenRouterSiteURL = "https://agentfield.ai"
-	defaultOpenRouterAppName = "AgentField AI"
+	defaultOpenRouterSiteURL    = "https://agentfield.ai"
+	defaultOpenRouterAppName    = "AgentField AI"
+	defaultOpenRouterCategories = "cli-agent,programming-app"
 )
+
+type resolvedOpenRouterAttribution struct {
+	siteURL    string
+	appName    string
+	categories string
+}
 
 func openRouterAttributionEnabled() bool {
 	value := strings.TrimSpace(os.Getenv("AGENTFIELD_OPENROUTER_ATTRIBUTION"))
@@ -24,37 +31,46 @@ func openRouterAttributionEnabled() bool {
 	}
 }
 
-func resolveOpenRouterAttribution(siteURL, siteName string) (string, string, bool) {
+func resolveOpenRouterAttribution(siteURL, siteName string) (resolvedOpenRouterAttribution, bool) {
 	if !openRouterAttributionEnabled() {
-		return "", "", false
+		return resolvedOpenRouterAttribution{}, false
 	}
 
-	resolvedURL := firstNonEmpty(
-		siteURL,
-		os.Getenv("AGENTFIELD_OPENROUTER_SITE_URL"),
-		os.Getenv("OR_SITE_URL"),
-		defaultOpenRouterSiteURL,
-	)
-	resolvedName := firstNonEmpty(
-		siteName,
-		os.Getenv("AGENTFIELD_OPENROUTER_APP_NAME"),
-		os.Getenv("OR_APP_NAME"),
-		defaultOpenRouterAppName,
-	)
-	return resolvedURL, resolvedName, true
+	return resolvedOpenRouterAttribution{
+		siteURL: firstNonEmpty(
+			siteURL,
+			os.Getenv("AGENTFIELD_OPENROUTER_SITE_URL"),
+			os.Getenv("OR_SITE_URL"),
+			defaultOpenRouterSiteURL,
+		),
+		appName: firstNonEmpty(
+			siteName,
+			os.Getenv("AGENTFIELD_OPENROUTER_APP_NAME"),
+			os.Getenv("OR_APP_NAME"),
+			defaultOpenRouterAppName,
+		),
+		categories: firstNonEmpty(
+			os.Getenv("AGENTFIELD_OPENROUTER_CATEGORIES"),
+			os.Getenv("OR_CATEGORIES"),
+			defaultOpenRouterCategories,
+		),
+	}, true
 }
 
 func applyOpenRouterAttributionHeaders(header http.Header, siteURL, siteName string) {
-	resolvedURL, resolvedName, ok := resolveOpenRouterAttribution(siteURL, siteName)
+	resolved, ok := resolveOpenRouterAttribution(siteURL, siteName)
 	if !ok {
 		return
 	}
-	if resolvedURL != "" {
-		header.Set("HTTP-Referer", resolvedURL)
+	if resolved.siteURL != "" {
+		header.Set("HTTP-Referer", resolved.siteURL)
 	}
-	if resolvedName != "" {
-		header.Set("X-OpenRouter-Title", resolvedName)
-		header.Set("X-Title", resolvedName)
+	if resolved.appName != "" {
+		header.Set("X-OpenRouter-Title", resolved.appName)
+		header.Set("X-Title", resolved.appName)
+	}
+	if resolved.categories != "" {
+		header.Set("X-OpenRouter-Categories", resolved.categories)
 	}
 }
 

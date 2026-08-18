@@ -90,15 +90,17 @@ async def test_run_cli_works_without_explicit_env(monkeypatch):
 def test_run_cli_merges_openrouter_attribution_defaults(monkeypatch):
     monkeypatch.delenv("AGENTFIELD_OPENROUTER_SITE_URL", raising=False)
     monkeypatch.delenv("AGENTFIELD_OPENROUTER_APP_NAME", raising=False)
+    monkeypatch.delenv("AGENTFIELD_OPENROUTER_CATEGORIES", raising=False)
     monkeypatch.delenv("OR_SITE_URL", raising=False)
     monkeypatch.delenv("OR_APP_NAME", raising=False)
+    monkeypatch.delenv("OR_CATEGORIES", raising=False)
 
     stdout, _stderr, returncode = asyncio.run(
         run_cli(
             [
                 "bash",
                 "-c",
-                "echo $AGENTFIELD_OPENROUTER_SITE_URL:$AGENTFIELD_OPENROUTER_APP_NAME:$OR_SITE_URL:$OR_APP_NAME",
+                "echo $AGENTFIELD_OPENROUTER_SITE_URL:$AGENTFIELD_OPENROUTER_APP_NAME:$AGENTFIELD_OPENROUTER_CATEGORIES:$OR_SITE_URL:$OR_APP_NAME:$OR_CATEGORIES",
             ],
             timeout=10.0,
         )
@@ -106,7 +108,8 @@ def test_run_cli_merges_openrouter_attribution_defaults(monkeypatch):
 
     assert returncode == 0
     assert stdout.strip() == (
-        "https://agentfield.ai:AgentField AI:https://agentfield.ai:AgentField AI"
+        "https://agentfield.ai:AgentField AI:cli-agent,programming-app:"
+        "https://agentfield.ai:AgentField AI:cli-agent,programming-app"
     )
 
 

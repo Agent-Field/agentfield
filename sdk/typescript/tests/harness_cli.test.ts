@@ -80,8 +80,10 @@ describe('harness cli utilities', () => {
       env: expect.objectContaining({
         AGENTFIELD_OPENROUTER_SITE_URL: 'https://agentfield.ai',
         AGENTFIELD_OPENROUTER_APP_NAME: 'Caller App',
+        AGENTFIELD_OPENROUTER_CATEGORIES: 'cli-agent,programming-app',
         OR_SITE_URL: 'https://agentfield.ai',
-        OR_APP_NAME: 'Caller App'
+        OR_APP_NAME: 'Caller App',
+        OR_CATEGORIES: 'cli-agent,programming-app'
       }),
       cwd: undefined,
       stdio: ['ignore', 'pipe', 'pipe']
