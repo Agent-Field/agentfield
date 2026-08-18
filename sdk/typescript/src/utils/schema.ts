@@ -1,5 +1,6 @@
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { ZodType } from 'zod';
+import { isZod4Schema, zod4ToJsonSchema } from './zod-schema.js';
 
 /**
  * Check if a value is a Zod schema by looking for Zod's internal structure.
@@ -23,6 +24,11 @@ function isZodSchema(value: unknown): value is ZodType {
 export function toJsonSchema(schema: unknown): Record<string, unknown> {
   if (schema === undefined || schema === null) {
     return {};
+  }
+
+  if (isZod4Schema(schema)) {
+    const { $schema, ...rest } = zod4ToJsonSchema(schema);
+    return rest;
   }
 
   if (isZodSchema(schema)) {
