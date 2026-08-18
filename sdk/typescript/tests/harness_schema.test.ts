@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import * as z4 from 'zod/v4';
 
 import {
   LARGE_SCHEMA_TOKEN_THRESHOLD,
@@ -51,6 +52,21 @@ describe('harness schema', () => {
 
     const plain = { type: 'object', properties: { name: { type: 'string' } } };
     expect(schemaToJsonSchema(plain)).toEqual(plain);
+  });
+
+  it('converts a zod 4 schema with the native converter', () => {
+    const jsonSchema = schemaToJsonSchema(
+      z4.object({ name: z4.string(), count: z4.number().optional() }),
+    );
+
+    expect(jsonSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        count: { type: 'number' },
+      },
+      required: ['name'],
+    });
   });
 
   it('detects large schema threshold', () => {

@@ -25,14 +25,10 @@ func NewGeminiProvider(binPath string) *GeminiProvider {
 func (p *GeminiProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
 	cmd := []string{p.BinPath}
 
-	if options.Cwd != "" {
-		cmd = append(cmd, "-C", options.Cwd)
-	} else if options.ProjectDir != "" {
-		cmd = append(cmd, "-C", options.ProjectDir)
-	}
-
 	if options.PermissionMode == "auto" {
-		cmd = append(cmd, "--sandbox")
+		cmd = append(cmd, "--yolo")
+	} else if options.PermissionMode == "plan" {
+		cmd = append(cmd, "--approval-mode", "plan")
 	}
 
 	// gemini has no reasoning-effort flag; strip any "#variant" suffix so

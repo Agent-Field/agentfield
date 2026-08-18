@@ -548,18 +548,44 @@ func TestGeminiProvider_NonZeroExit(t *testing.T) {
 
 func TestGeminiProvider_WithModel(t *testing.T) {
 	dir := t.TempDir()
-	script := writeTestScript(t, dir, "gemini", "#!/bin/sh\necho \"args: $@\"\n")
+	script := writeTestScript(t, dir, "gemini", "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
 
-	p := NewGeminiProvider(script)
-	raw, err := p.Execute(context.Background(), "test prompt", Options{
-		Model:          "gemini-2.5-pro",
-		PermissionMode: "auto",
-	})
-	assert.NoError(t, err)
-	assert.False(t, raw.IsError)
-	assert.Contains(t, raw.Result, "-m")
-	assert.Contains(t, raw.Result, "gemini-2.5-pro")
-	assert.Contains(t, raw.Result, "--sandbox")
+	tests := []struct {
+		name    string
+		options Options
+		want    []string
+	}{
+		{
+			name:    "auto uses yolo",
+			options: Options{Cwd: dir, PermissionMode: "auto"},
+			want:    []string{"--yolo", "-p", "test prompt"},
+		},
+		{
+			name:    "plan precedes stripped model and prompt",
+			options: Options{PermissionMode: "plan", Model: "gemini-2.5-pro#high"},
+			want:    []string{"--approval-mode", "plan", "-m", "gemini-2.5-pro", "-p", "test prompt"},
+		},
+		{
+			name: "unset permission mode adds no flag",
+			want: []string{"-p", "test prompt"},
+		},
+		{
+			name:    "unknown permission mode adds no flag",
+			options: Options{PermissionMode: "unknown", Model: "gemini-2.5-flash"},
+			want:    []string{"-m", "gemini-2.5-flash", "-p", "test prompt"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := NewGeminiProvider(script).Execute(context.Background(), "test prompt", tc.options)
+			require.NoError(t, err)
+			assert.False(t, raw.IsError)
+			assert.Equal(t, tc.want, strings.Split(raw.Result, "\n"))
+			assert.NotContains(t, raw.Result, "-C")
+			assert.NotContains(t, raw.Result, "--sandbox")
+		})
+	}
 }
 
 // --- BuildProvider factory tests ---

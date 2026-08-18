@@ -6,6 +6,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.131-rc.2] - 2026-08-18
+
+
+### Fixed
+
+- Fix(sdk/typescript): convert zod 4 schemas with the native toJSONSchema (#935)
+
+* fix(sdk/typescript): convert zod 4 schemas with the native toJSONSchema
+
+harness()/ai() schema conversion only knew zod-to-json-schema, which does
+not understand zod 4 instances (a fresh `npm i zod` is 4.x), so zod 4
+schemas were serialized as zod internals. Detect zod 4 schemas (`_zod`) and
+convert with zod's own toJSONSchema (zod, then zod/v4); zod 3 keeps using
+zod-to-json-schema unchanged; plain JSON Schema still passes through. No
+dependency or lockfile changes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): resolve zod 4's toJSONSchema from the application's zod copy first
+
+The schema instance is built by the app's zod; converting it with a
+different copy (e.g. the SDK's nested zod 3.25 via `zod/v4`) keeps the
+structure but drops registry-backed metadata — `.describe()` descriptions
+and the `.int()` refinement (`integer` → `number`). Try the zod resolvable
+from the working directory before the SDK-relative copies. Verified end to
+end with zod 4.4.3: the provider now receives `description` and `integer`.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a9d634d)
+
+- Fix(sdk/typescript): opencode surfaces exit-0 stderr failures and signals as errors (#933)
+
+TS only treated (exit != 0 && no output) as an error. Python and Go also
+flag: a negative exit code (killed by signal), and exit 0 with empty output
+whose stderr matches opencode's known failure patterns (^Error:, Model not
+found, AuthenticationError, Unauthorized, APIError) — surfacing the matching
+stderr window instead of an empty non-error result. Same pattern list as the
+other two SDKs; ANSI stripped before matching; failureType set.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (83e2921)
+
+- Fix(sdk/go,sdk/typescript): gemini argv — drop the nonexistent -C flag, map permission modes like Python (#932)
+
+The Gemini CLI has no -C flag; both providers passed `-C <cwd>` (the cwd is
+already applied as the subprocess working directory) and mapped
+permission_mode=auto to --sandbox, which restricts execution rather than
+granting it. Match the Python provider (agentfield#687): no -C, auto → --yolo,
+plan → --approval-mode plan, then -m <model> and -p <prompt>. Tests that
+pinned the old argv are rewritten table-driven from the CLI's real flags.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ff6e28c)
+
+- Fix(sdk/typescript): pass claude-code options to claude-agent-sdk in camelCase (#931)
+
+The provider built the query() options with snake_case keys (max_turns,
+allowed_tools, system_prompt, max_budget_usd, permission_mode).
+@anthropic-ai/claude-agent-sdk's Options type is camelCase (maxTurns,
+allowedTools, systemPrompt, maxBudgetUsd, permissionMode), so unknown keys
+were dropped and turn caps, USD budget, tool allowlist, system prompt and
+permission mode were silently ignored on TypeScript. The existing test
+asserted the snake_case keys; it now asserts the contract at the SDK boundary.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (23a6965)
+
 ## [0.1.131-rc.1] - 2026-08-18
 
 
