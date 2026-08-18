@@ -139,9 +139,13 @@ func (a *Agent) recordHarnessUsage(ctx context.Context, result *harness.Result, 
 	if provider == "" && a.cfg.HarnessConfig != nil {
 		provider = a.cfg.HarnessConfig.Provider
 	}
+	provider = harness.ResolveProviderName(provider)
 	harnessName := strings.ReplaceAll(provider, "-", "_")
 
-	model := opts.Model
+	model := result.Model
+	if model == "" {
+		model = opts.Model
+	}
 	if model == "" && a.cfg.HarnessConfig != nil {
 		model = a.cfg.HarnessConfig.Model
 	}
