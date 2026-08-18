@@ -42,11 +42,11 @@ describe('ClaudeCodeProvider', () => {
     expect(captured.options).toEqual({
       model: 'sonnet',
       cwd: '/tmp/work',
-      max_turns: 8,
-      allowed_tools: ['Read', 'Write'],
-      system_prompt: 'system',
-      max_budget_usd: 3,
-      permission_mode: 'bypassPermissions',
+      maxTurns: 8,
+      allowedTools: ['Read', 'Write'],
+      systemPrompt: 'system',
+      maxBudgetUsd: 3,
+      permissionMode: 'bypassPermissions',
       env: { A: '1' },
     });
     expect(raw.isError).toBe(false);
@@ -55,6 +55,65 @@ describe('ClaudeCodeProvider', () => {
     expect(raw.metrics.numTurns).toBe(4);
     expect(raw.metrics.sessionId).toBe('sess-1');
     expect(raw.messages).toHaveLength(2);
+  });
+
+  it.each([
+    ['auto', 'bypassPermissions'],
+    ['plan', 'plan'],
+    ['default', 'default'],
+  ])('maps permission mode %s to %s', async (permissionMode, expected) => {
+    const captured: { options?: Record<string, unknown> } = {};
+
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: ({ options }: { prompt: string; options: Record<string, unknown> }) => {
+          captured.options = options;
+          return (async function* stream() {
+            yield { type: 'result', result: 'final' };
+          })();
+        },
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const provider = new ClaudeCodeProvider();
+    await provider.execute('hello', { permissionMode });
+
+    expect(captured.options).toEqual({ permissionMode: expected });
+  });
+
+  it('omits undefined options from the SDK request', async () => {
+    const captured: { options?: Record<string, unknown> } = {};
+
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: ({ options }: { prompt: string; options: Record<string, unknown> }) => {
+          captured.options = options;
+          return (async function* stream() {
+            yield { type: 'result', result: 'final' };
+          })();
+        },
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const provider = new ClaudeCodeProvider();
+    await provider.execute('hello', {
+      model: undefined,
+      cwd: undefined,
+      maxTurns: undefined,
+      tools: undefined,
+      systemPrompt: undefined,
+      maxBudgetUsd: undefined,
+      permissionMode: undefined,
+      env: undefined,
+    });
+
+    expect(captured.options).toEqual({});
   });
 
   it('strips a #variant model suffix before handing the model to the SDK', async () => {
