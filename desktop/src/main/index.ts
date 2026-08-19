@@ -385,7 +385,9 @@ async function provisionBundledAgents(): Promise<void> {
         })
         await saveSettings(settingsFile(), settings)
       },
-      log: (message) => console.log(`bundled: ${message}`)
+      // bundledAgents.ts already prefixes every line with "bundled: " — the
+      // module owns its own log voice, the way autostart.ts does.
+      log: (message) => console.log(message)
     }
   )
 }
