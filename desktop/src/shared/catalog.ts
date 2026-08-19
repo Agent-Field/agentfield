@@ -1,3 +1,4 @@
+import { BUNDLED_NODES } from './bundled'
 import type { CatalogEntry } from './types'
 
 // Curated list of installable agent nodes, shown in the app's Install view.
@@ -15,12 +16,15 @@ import type { CatalogEntry } from './types'
 // One row per product, sourced at the bare repo URL. A repo that ships more
 // than one implementation of the same node says which one it wants installed
 // with `superseded_by:` in its root manifest — the redirect that makes
-// `af install <repo>` land on the maintained node (SWE-AF and pr-af both
-// point their root at `//go`). Naming `//go` here would install that same
-// node, but it would skip the redirect, and the redirect is what carries a
-// user who already has the superseded node across: it installs the successor
-// first, migrates node-scoped secrets, and only then retires the old package.
-// So the catalog names the repo and lets the manifest decide.
+// `af install <repo>` land on the maintained node. Naming the subdirectory
+// here would install that same node, but it would skip the redirect, and the
+// redirect is what carries a user who already has the superseded node across:
+// it installs the successor first, migrates node-scoped secrets, and only then
+// retires the old package. So the catalog names the repo and lets the manifest
+// decide. shared/bundled.ts follows the identical rule for the nodes that ship
+// with the app (SWE-AF and pr-af both point their root at `//go`), which is
+// why they are no longer rows here: they are provisioned on first launch
+// instead of being offered as marketplace cards.
 //
 // `name` MUST equal the name the package ends up REGISTERED under once the
 // install settles — that is how the app detects installed state. Note that is
@@ -30,19 +34,6 @@ import type { CatalogEntry } from './types'
 // this list never names. It is often not the repo name either
 // (SWE-AF → swe-planner).
 export const CATALOG: CatalogEntry[] = [
-  {
-    name: 'swe-planner',
-    description:
-      'Software factory — turn any issue into a production-ready pull request, end to end',
-    source: 'https://github.com/Agent-Field/SWE-AF',
-    language: 'go'
-  },
-  {
-    name: 'pr-af',
-    description: 'Code review — deep, evidence-backed review of any GitHub pull request',
-    source: 'https://github.com/Agent-Field/pr-af',
-    language: 'go'
-  },
   {
     name: 'sec-af',
     description:
@@ -59,7 +50,16 @@ export const CATALOG: CatalogEntry[] = [
   }
 ]
 
-/** Look up a catalog entry by name. Returns undefined for unknown names. */
+/**
+ * Look up an installable entry by name, across the marketplace catalog AND the
+ * nodes bundled with the app. Returns undefined for unknown names.
+ *
+ * Both lists are hard-coded, so widening the lookup does not widen the trust
+ * boundary: main/installer.ts still only ever turns a vetted name into a
+ * vetted source. Including BUNDLED_NODES is load-bearing — it is what keeps a
+ * bundled node installable and `--force` updatable from the Agents view, even
+ * though it never appears as a marketplace card.
+ */
 export function catalogEntry(name: string): CatalogEntry | undefined {
-  return CATALOG.find((entry) => entry.name === name)
+  return [...CATALOG, ...BUNDLED_NODES].find((entry) => entry.name === name)
 }
