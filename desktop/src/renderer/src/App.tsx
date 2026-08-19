@@ -48,6 +48,20 @@ const VIEW_TITLES: Record<View, string> = {
   cloud: 'Remote'
 }
 
+/**
+ * Cold-launch landing view. Bundled nodes still provisioning win: their rows
+ * live in the Agents library and watching them arrive is the first thing a
+ * brand-new user should see — dropping them into the marketplace instead would
+ * ask them to install what the app is already installing. Otherwise an empty
+ * library opens add-mode (the `install` view, DESIGN.md §4.11) and a stocked
+ * one opens Home.
+ */
+export function defaultView(bundledCount: number, agentCount: number): View {
+  if (bundledCount > 0) return 'agents'
+  if (agentCount === 0) return 'install'
+  return 'home'
+}
+
 // ⌘1–⌘5 (Ctrl on Win/Linux) in nav order (DESIGN.md §4.17).
 const SHORTCUT_VIEWS: View[] = ['home', 'agents', 'activity', 'settings', 'cloud']
 
@@ -117,15 +131,19 @@ export default function App() {
     return () => clearInterval(timer)
   }, [refresh])
 
-  // Cold-launch default: Agents add-mode (via the `install` view) when the
-  // library is empty, otherwise Home. Deep links win; do not re-apply on
+  // Bundled nodes still being provisioned this launch (shared/bundled.ts).
+  // Derived before the routing effect because the cold-launch view and the
+  // add-mode decision both hang off it.
+  const bundled = snapshot?.bundled ?? []
+
+  // Cold-launch default (see defaultView). Deep links win; do not re-apply on
   // later polls or remember the last view.
   useEffect(() => {
     if (!snapshot || defaultRouteApplied.current) return
     defaultRouteApplied.current = true
     if (deepLinkHandled.current) return
-    setView(snapshot.registry.agents.length === 0 ? 'install' : 'home')
-  }, [snapshot])
+    setView(defaultView(bundled.length, snapshot.registry.agents.length))
+  }, [snapshot, bundled.length])
 
   const handleStartControlPlane = useCallback(async () => {
     setStartingCp(true)
@@ -147,10 +165,15 @@ export default function App() {
 
   // Agents view, two modes (DESIGN.md §4.11). Add-mode when: the install
   // deep link addressed it, "+ Add agent" was clicked, or the library is
-  // empty (the marketplace IS the empty state).
+  // empty (the marketplace IS the empty state). A launch with bundled nodes
+  // still arriving is not empty — flipping it into add-mode would hide the
+  // very rows the app is filling in.
   const agentsSelected = view === 'agents' || view === 'install'
   const libraryEmpty =
-    snapshot !== null && !snapshot.registry.error && agents.length === 0
+    snapshot !== null &&
+    !snapshot.registry.error &&
+    agents.length === 0 &&
+    bundled.length === 0
   const agentsAddMode = agentsSelected && (view === 'install' || addAgentOpen || libraryEmpty)
 
   // Navigation from the sidebar or in-view CTAs closes add-mode so the
@@ -273,6 +296,7 @@ export default function App() {
                 ) : (
                   <AgentsPanel
                     registry={snapshot?.registry ?? null}
+                    bundled={bundled}
                     onChanged={() => void refresh()}
                   />
                 ))}

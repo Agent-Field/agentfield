@@ -771,6 +771,35 @@ section > .section-title {
   color: var(--warn);
 }
 
+/* Bundled nodes provisioning on first launch. Accent tint, not a semantic
+   warning: a node that is still arriving is progress, not a fault. Only a
+   provisioning run that actually failed drops to danger. */
+.badge.provisioning {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.badge.provisioning.failed {
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+/* Live-work indicator (DESIGN.md §5.2) sized for a badge dot; the global
+   reduced-motion rule already stills it. */
+.badge.provisioning.installing .badge-dot {
+  animation: badge-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes badge-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
 .badge-dot {
   width: 6px;
   height: 6px;
