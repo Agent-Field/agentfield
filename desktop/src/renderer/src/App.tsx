@@ -63,6 +63,22 @@ export function defaultView(bundledCount: number, agentCount: number): View {
   return 'home'
 }
 
+export function shouldRerouteToBundled(args: {
+  view: View
+  bundledCount: number
+  deepLinkHandled: boolean
+  userNavigated: boolean
+  alreadyRerouted: boolean
+}): boolean {
+  return (
+    args.view === 'install' &&
+    args.bundledCount > 0 &&
+    !args.deepLinkHandled &&
+    !args.userNavigated &&
+    !args.alreadyRerouted
+  )
+}
+
 // ⌘1–⌘5 (Ctrl on Win/Linux) in nav order (DESIGN.md §4.17).
 const SHORTCUT_VIEWS: View[] = ['home', 'agents', 'activity', 'settings', 'cloud']
 
@@ -95,6 +111,8 @@ export default function App() {
   const [keysBannerShowing, setKeysBannerShowing] = useState(false)
   const defaultRouteApplied = useRef(false)
   const deepLinkHandled = useRef(false)
+  const userNavigated = useRef(false)
+  const bundledRerouted = useRef(false)
 
   useEffect(() => {
     // Lets styles.css inset window chrome for macOS traffic lights vs the
@@ -153,6 +171,23 @@ export default function App() {
     setView(defaultView(bundled.length, snapshot.registry.agents.length))
   }, [snapshot, bundled.length])
 
+  useEffect(() => {
+    // The first snapshot normally arrives before main has seeded provisioning
+    // rows, so the cold-launch default may already have selected add-mode.
+    if (
+      shouldRerouteToBundled({
+        view,
+        bundledCount: bundled.length,
+        deepLinkHandled: deepLinkHandled.current,
+        userNavigated: userNavigated.current,
+        alreadyRerouted: bundledRerouted.current
+      })
+    ) {
+      bundledRerouted.current = true
+      setView('agents')
+    }
+  }, [view, bundled.length])
+
   const handleStartControlPlane = useCallback(async () => {
     setStartingCp(true)
     setIpcError(null)
@@ -187,11 +222,13 @@ export default function App() {
   // Navigation from the sidebar or in-view CTAs closes add-mode so the
   // Agents view comes back in library mode next time.
   const navigate = useCallback((v: View) => {
+    userNavigated.current = true
     setAddAgentOpen(false)
     setView(v)
   }, [])
 
   const closeAddMode = useCallback(() => {
+    userNavigated.current = true
     setAddAgentOpen(false)
     setView('agents')
   }, [])

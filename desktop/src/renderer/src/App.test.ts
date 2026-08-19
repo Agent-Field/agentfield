@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { controlPlaneStatus, defaultView } from './App'
+import { controlPlaneStatus, defaultView, shouldRerouteToBundled } from './App'
 import type { AgentFieldSnapshot } from '../../shared/types'
 
 describe('defaultView', () => {
@@ -17,6 +17,31 @@ describe('defaultView', () => {
 
   it('opens Home once the library has agents', () => {
     expect(defaultView(0, 1)).toBe('home')
+  })
+})
+
+describe('shouldRerouteToBundled', () => {
+  const base = {
+    view: 'install' as const,
+    bundledCount: 1,
+    deepLinkHandled: false,
+    userNavigated: false,
+    alreadyRerouted: false
+  }
+
+  it('reroutes an untouched add-mode launch when bundled rows arrive', () => {
+    expect(shouldRerouteToBundled(base)).toBe(true)
+  })
+
+  it.each([
+    { ...base, view: 'agents' as const },
+    { ...base, view: 'home' as const },
+    { ...base, bundledCount: 0 },
+    { ...base, deepLinkHandled: true },
+    { ...base, userNavigated: true },
+    { ...base, alreadyRerouted: true }
+  ])('does not reroute after another routing decision: $view', (args) => {
+    expect(shouldRerouteToBundled(args)).toBe(false)
   })
 })
 
