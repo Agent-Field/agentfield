@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { AnimatePresence, m, useReducedMotion } from 'motion/react'
-import type { AgentEnvReport, AgentFieldSnapshot, SnapshotAgent } from '../../../shared/types'
+import type {
+  AgentEnvReport,
+  AgentFieldSnapshot,
+  BundledPhase,
+  BundledStatus,
+  SnapshotAgent
+} from '../../../shared/types'
 import { EnvEditor } from './EnvEditor'
 import { MenuPopover } from './MenuPopover'
 import { SkeletonRows } from './Skeleton'
@@ -11,6 +17,12 @@ type AgentAction = 'start' | 'stop' | 'restart' | 'uninstall'
 
 interface AgentsPanelProps {
   registry: AgentFieldSnapshot['registry'] | null
+  /**
+   * Bundled nodes the app is provisioning for this launch (shared/bundled.ts).
+   * They are not in the registry yet, so they ride above the installed rows as
+   * read-only progress until the install lands and the real row replaces them.
+   */
+  bundled: BundledStatus[]
   /** Called after a lifecycle action so the snapshot refreshes promptly. */
   onChanged: () => void
 }
@@ -31,15 +43,28 @@ const BUSY_LABEL: Record<AgentAction, string> = {
   uninstall: 'Uninstalling…'
 }
 
-export function AgentsPanel({ registry, onChanged }: AgentsPanelProps): ReactElement {
+// First-launch provisioning reads as calm progress, never as a broken agent:
+// the badge says what the app is doing, not that something is wrong.
+const BUNDLED_LABEL: Record<BundledPhase, string> = {
+  pending: 'Queued',
+  installing: 'Installing…',
+  installed: 'Installed',
+  failed: 'Install failed'
+}
+
+// A failed bundled node is not marked provisioned, so the next launch tries
+// again — say so instead of leaving a dead-looking row.
+const BUNDLED_FAILED_TITLE = 'This node is retried automatically on the next launch.'
+
+export function AgentsPanel({ registry, bundled, onChanged }: AgentsPanelProps): ReactElement {
   return (
     <div className="panel">
-      <AgentsBody registry={registry} onChanged={onChanged} />
+      <AgentsBody registry={registry} bundled={bundled} onChanged={onChanged} />
     </div>
   )
 }
 
-function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
+function AgentsBody({ registry, bundled, onChanged }: AgentsPanelProps) {
   const [busy, setBusy] = useState<{ name: string; action: AgentAction } | null>(null)
   const [failure, setFailure] = useState<{ name: string; message: string } | null>(null)
   const [envReports, setEnvReports] = useState<Record<string, AgentEnvReport>>({})
@@ -84,7 +109,9 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
   }
   // Rarely rendered: App shows the Agents add-mode (marketplace) whenever the
   // library is empty, so this only covers odd registry states mid-refresh.
-  if (!registry.exists || registry.agents.length === 0) {
+  // A launch that is still provisioning bundled nodes is not empty — it is
+  // not finished — so the provisioning rows suppress this state.
+  if ((!registry.exists || registry.agents.length === 0) && bundled.length === 0) {
     return (
       <EmptyState
         variant="orbit"
@@ -125,6 +152,14 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
 
   return (
     <ul className="row-list">
+      {/* Bundled nodes first: on a first launch these two rows are the whole
+          view, so the user watches the install stream instead of an empty
+          panel. They leave the list once the registry carries the real row. */}
+      <AnimatePresence initial={false}>
+        {bundled.map((node) => (
+          <BundledRow key={node.name} node={node} />
+        ))}
+      </AnimatePresence>
       {registry.agents.map((agent) => (
         <AgentRow
           key={agent.name}
@@ -147,6 +182,59 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
         />
       ))}
     </ul>
+  )
+}
+
+/**
+ * A bundled node mid-provisioning. Deliberately inert: there is nothing to
+ * start, stop, or configure until the install finishes, and offering buttons
+ * that cannot work would read as a broken agent.
+ */
+function BundledRow({ node }: { node: BundledStatus }) {
+  const reducedMotion = useReducedMotion()
+  const failed = node.phase === 'failed'
+
+  return (
+    <m.li
+      className="row-item"
+      // Row arrival (DESIGN.md §5.2): fade + 4px settle, exit reversed when
+      // the installed row takes over.
+      initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <div className="row">
+        <div className="row-main">
+          <div className="env-row-head">
+            <BundledBadge phase={node.phase} />
+            <span className="row-title">{node.name}</span>
+            {node.language ? <span className="chip lang">{node.language}</span> : null}
+          </div>
+          {node.description && <span className="row-sub">{node.description}</span>}
+          {node.message && (
+            <span
+              className={`row-progress${failed ? ' error-text' : ''}`}
+              aria-live="polite"
+            >
+              {node.message}
+            </span>
+          )}
+        </div>
+      </div>
+    </m.li>
+  )
+}
+
+function BundledBadge({ phase }: { phase: BundledPhase }) {
+  return (
+    <span
+      className={`badge provisioning ${phase}`}
+      title={phase === 'failed' ? BUNDLED_FAILED_TITLE : undefined}
+    >
+      <span className="badge-dot" aria-hidden="true" />
+      {BUNDLED_LABEL[phase]}
+    </span>
   )
 }
 
