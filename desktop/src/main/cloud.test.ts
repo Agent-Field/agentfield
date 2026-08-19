@@ -157,6 +157,30 @@ describe('applyConnectionProfile', () => {
     expect(getApiKey()).toBeNull()
   })
 
+  it('seeds the local port from the configured or last-used port', () => {
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, controlPlanePort: 18480 })
+    expect(getBaseUrl()).toBe('http://localhost:18480')
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, lastControlPlanePort: 8090 })
+    expect(getBaseUrl()).toBe('http://localhost:8090')
+    // A configured port beats the remembered one.
+    applyConnectionProfile({
+      ...DEFAULT_SETTINGS,
+      controlPlanePort: 18480,
+      lastControlPlanePort: 8090
+    })
+    expect(getBaseUrl()).toBe('http://localhost:18480')
+    // Cloud still wins while enabled, and the seeded port is what a switch
+    // back to local returns to.
+    applyConnectionProfile({
+      ...DEFAULT_SETTINGS,
+      controlPlanePort: 18480,
+      cloud: { enabled: true, serverUrl: 'https://cp.example', apiKey: 'k' }
+    })
+    expect(getBaseUrl()).toBe('https://cp.example')
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, controlPlanePort: 18480 })
+    expect(getBaseUrl()).toBe('http://localhost:18480')
+  })
+
   it('carries a configured local API key on the local profile', () => {
     applyConnectionProfile({ ...DEFAULT_SETTINGS, localApiKey: 'local-secret' })
     expect(getBaseUrl()).toBe('http://localhost:8080')
