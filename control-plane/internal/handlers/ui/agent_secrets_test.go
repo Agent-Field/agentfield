@@ -87,6 +87,20 @@ func TestAgentSecretsListProcessEnvironmentResolution(t *testing.T) {
 	]}`, response.Body.String())
 }
 
+// A handler built without an injected lookup (a zero-value struct rather than
+// the constructor) must still consult the real process environment.
+func TestAgentSecretsListDefaultsToProcessEnvironment(t *testing.T) {
+	router, _ := newAgentSecretsTestRouterWithLookup(t, nil)
+	t.Setenv("OPENAI_API_KEY", "from-process")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	response := agentSecretsRequest(t, router, http.MethodGet, "/agents/agent-x/secrets?include=env", "")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.NotContains(t, response.Body.String(), "from-process")
+	require.Contains(t, response.Body.String(), `{"key":"OPENAI_API_KEY","is_set":true,"env":true,`)
+	require.Contains(t, response.Body.String(), `{"key":"ANTHROPIC_API_KEY","is_set":false,`)
+}
+
 func agentSecretsRequest(t *testing.T, router http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
