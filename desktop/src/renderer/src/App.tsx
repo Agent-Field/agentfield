@@ -9,6 +9,7 @@ import { ActivityPanel } from './components/ActivityPanel'
 import { InstallPanel } from './components/InstallPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { CloudPanel } from './components/CloudPanel'
+import { KeysBanner } from './components/KeysBanner'
 import { StarBanner } from './components/StarBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 
@@ -249,6 +250,9 @@ export default function App() {
           )}
         </header>
         <UpdateBanner />
+        {/* Blocked-agents warning sits above the star ask: one reports the
+            product cannot work, the other is a favour. */}
+        <KeysBanner snapshot={snapshot} view={navView} onNavigate={navigate} />
         <StarBanner snapshot={snapshot} />
         <div className="view-body">
           {ipcError && <div className="callout error">{ipcError}</div>}
