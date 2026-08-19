@@ -1,6 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { BundledStatus } from '../shared/types'
 import type { CpClient, PackageInfo } from './cpClient'
 import {
   DEFAULT_BASE_URL,
@@ -736,6 +737,29 @@ describe('getSnapshot', () => {
     // Usage is only fetched against a recognized control plane.
     expect(snapshot.usage).toBeNull()
     expect(requested.some((url) => url.includes('/usage/stats'))).toBe(false)
+  })
+
+  // Bundled provisioning rows are main-process state (main/bundledAgents.ts),
+  // so getSnapshot only passes them through — same contract as skillSync.
+  it('carries the bundled provisioning rows, defaulting to none', async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new TypeError('fetch failed')
+    }
+    const bundled: BundledStatus[] = [
+      {
+        name: 'swe-planner',
+        description: 'Software factory',
+        language: 'go',
+        phase: 'installing',
+        message: 'Cloning…'
+      }
+    ]
+
+    const without = await getSnapshot({ cpClient: packagesClient(), fetchImpl })
+    expect(without.bundled).toEqual([])
+
+    const with_ = await getSnapshot({ cpClient: packagesClient(), fetchImpl, bundled })
+    expect(with_.bundled).toEqual(bundled)
   })
 
   it('reports an unreachable control plane and an absent registry gracefully', async () => {
