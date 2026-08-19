@@ -18,6 +18,7 @@ describe('normalizeSettings', () => {
       localApiKey: 'local-secret',
       lastControlPlanePort: 8081,
       autostartAgents: ['a', 'b'],
+      provisionedBundled: ['swe-planner'],
       installSkills: false,
       trayCompanion: false,
       dismissedUpdateVersion: '0.1.110',
@@ -86,6 +87,18 @@ describe('normalizeSettings', () => {
     ).toEqual(['a', 'b'])
   })
 
+  // provisionedBundled is what makes uninstalling a bundled node stick, so a
+  // hand-edited or corrupt list must degrade to "provision it again", never to
+  // a shape that could suppress or duplicate first-launch provisioning.
+  it('coerces provisionedBundled like autostartAgents', () => {
+    expect(normalizeSettings({}).provisionedBundled).toEqual([])
+    expect(
+      normalizeSettings({ provisionedBundled: ['pr-af', 7, 'pr-af', null, 'swe-planner'] })
+        .provisionedBundled
+    ).toEqual(['pr-af', 'swe-planner'])
+    expect(normalizeSettings({ provisionedBundled: 'pr-af' }).provisionedBundled).toEqual([])
+  })
+
   it('coerces a bad dismissed update version to null', () => {
     expect(normalizeSettings({ dismissedUpdateVersion: 42 }).dismissedUpdateVersion).toBeNull()
     expect(normalizeSettings({ dismissedUpdateVersion: '' }).dismissedUpdateVersion).toBeNull()
@@ -125,6 +138,13 @@ describe('mergeSettings', () => {
     expect(merged.openAtLogin).toBe(false)
   })
 
+  it('sanitizes a provisionedBundled patch', () => {
+    const merged = mergeSettings(DEFAULT_SETTINGS, {
+      provisionedBundled: ['pr-af', { evil: true }, 'pr-af']
+    })
+    expect(merged.provisionedBundled).toEqual(['pr-af'])
+  })
+
   it('merges star prompt patches', () => {
     const done = mergeSettings(DEFAULT_SETTINGS, { starPrompt: 'done' })
     expect(done.starPrompt).toBe('done')
@@ -148,6 +168,7 @@ describe('load/save round trip', () => {
       localApiKey: 'round-trip-local-key',
       lastControlPlanePort: 9091,
       autostartAgents: ['swe-planner'],
+      provisionedBundled: ['swe-planner', 'pr-af'],
       installSkills: true,
       trayCompanion: true,
       dismissedUpdateVersion: null,

@@ -81,6 +81,23 @@ export interface CatalogEntry {
   language?: string
 }
 
+/** Where a bundled node is in its first-launch provisioning. */
+export type BundledPhase = 'pending' | 'installing' | 'installed' | 'failed'
+
+/**
+ * One bundled node the app is provisioning (see shared/bundled.ts). These are
+ * not registry rows: they describe work in flight, so the Agents view can show
+ * the two nodes that ship with the app arriving before they exist on disk.
+ */
+export interface BundledStatus {
+  name: string
+  description: string
+  language?: string
+  phase: BundledPhase
+  /** Latest progress line, or the error text when phase is 'failed'. '' when none. */
+  message: string
+}
+
 /** Terminal states of an install kicked off from the app. */
 export interface InstallResult {
   ok: boolean
@@ -201,6 +218,12 @@ export interface DesktopSettings {
   lastControlPlanePort: number | null
   /** Installed agent names to start once the control plane is healthy. */
   autostartAgents: string[]
+  /**
+   * Bundled node names this app has already provisioned at least once. A name
+   * recorded here is never auto-installed again, so uninstalling a bundled
+   * node sticks across launches instead of coming back on the next start.
+   */
+  provisionedBundled: string[]
   /**
    * Keep the AgentField skill catalog (building agents, personal agents,
    * calling installed ones) installed in detected coding agents (Claude
@@ -355,6 +378,12 @@ export interface AgentFieldSnapshot {
    * existing poll delivers it without a second polling loop in the renderer.
    */
   skillSync: SkillSyncRecord | null
+  /**
+   * Bundled nodes still being provisioned this launch. Empty once each one is
+   * installed or was deliberately uninstalled by the user. Main-process state
+   * like skillSync, riding the existing snapshot poll rather than a second one.
+   */
+  bundled: BundledStatus[]
   /** ISO timestamp of when this snapshot was assembled. */
   fetchedAt: string
 }
