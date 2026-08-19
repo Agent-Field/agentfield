@@ -67,6 +67,7 @@ function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
     dismissedUpdateVersion: null,
     starPrompt: 'pending',
     starPromptSnoozedUntil: null,
+    keyNoticeShown: [],
     ...overrides
   }
 }
