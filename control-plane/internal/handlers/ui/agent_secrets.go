@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 
@@ -23,18 +24,20 @@ var agentSecretKeyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 type AgentSecretsHandler struct {
 	storage        storage.StorageProvider
 	agentfieldHome string
+	lookupEnv      func(string) (string, bool)
 }
 
 // NewAgentSecretsHandler creates an AgentSecretsHandler.
 func NewAgentSecretsHandler(storage storage.StorageProvider, agentfieldHome string) *AgentSecretsHandler {
-	return &AgentSecretsHandler{storage: storage, agentfieldHome: agentfieldHome}
+	return &AgentSecretsHandler{storage: storage, agentfieldHome: agentfieldHome, lookupEnv: os.LookupEnv}
 }
 
 type agentSecretStatus struct {
 	Key   string `json:"key"`
 	IsSet bool   `json:"is_set"`
+	Env   bool   `json:"env,omitempty"`
 	// Scope reports where the stored value lives ("node" or "global");
-	// empty when the key is not set anywhere.
+	// empty when there is no stored value, including environment-only keys.
 	Scope            string `json:"scope,omitempty"`
 	DeclaredScope    string `json:"declared_scope,omitempty"`
 	Description      string `json:"description,omitempty"`
@@ -66,9 +69,10 @@ type setAgentSecretRequest struct {
 }
 
 // ListAgentSecretsHandler lists secret names and whether each resolves for
-// this agent. Resolution mirrors the runner (EnvResolver): node scope first,
-// then global. Undeclared node-scoped keys are included because the runner
-// injects them; undeclared global keys are not injected, so they are omitted.
+// this agent. Resolution mirrors the runner (EnvResolver): a non-empty process
+// environment value first, then node store, then global store. Values are never
+// returned. Undeclared node-scoped keys are included because the runner injects
+// them; undeclared global keys are not injected, so they are omitted.
 func (h *AgentSecretsHandler) ListAgentSecretsHandler(c *gin.Context) {
 	agentPackage, ok := h.resolveAgentPackage(c)
 	if !ok {
@@ -123,9 +127,17 @@ func (h *AgentSecretsHandler) ListAgentSecretsHandler(c *gin.Context) {
 	}
 	sort.Strings(keys)
 
+	lookupEnv := h.lookupEnv
+	if lookupEnv == nil {
+		lookupEnv = os.LookupEnv
+	}
 	secrets := make([]agentSecretStatus, 0, len(keys))
 	for _, key := range keys {
 		status := agentSecretStatus{Key: key}
+		if value, ok := lookupEnv(key); ok && value != "" {
+			status.Env = true
+			status.IsSet = true
+		}
 		switch {
 		case inNode[key]:
 			status.IsSet = true

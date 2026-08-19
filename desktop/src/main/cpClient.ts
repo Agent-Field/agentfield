@@ -126,6 +126,7 @@ export type SecretScope = 'node' | 'global'
 export interface AgentSecretStatus {
   key: string
   is_set: boolean
+  env?: boolean
   scope?: SecretScope
   declared_scope?: SecretScope
   description?: string

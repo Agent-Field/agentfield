@@ -199,6 +199,17 @@ export async function getEnvReports(
       const { secrets } = await deps.cpClient.listAgentSecrets(pkg.id)
       const hasEnvMetadata = secrets.some((secret) => Boolean(secret.requirement))
       const vars: AgentEnvVar[] = secrets.map((secret) => {
+        // `scope` names where a STORED value lives (node/global). A control
+        // plane that predates the `scope` field reports is_set without one, so
+        // a stored value with no scope still counts as global — but a value
+        // the control plane's own process environment supplies (`env`, never
+        // stored) has no scope to delete from.
+        const storedScopes = secret.scope
+          ? [secret.scope === 'node' ? pkg.name : secret.scope]
+          : secret.is_set && !secret.env
+            ? [GLOBAL_SCOPE]
+            : []
+        const envOnly = Boolean(secret.env) && storedScopes.length === 0
         if (!hasEnvMetadata) {
           return {
             name: secret.key,
@@ -206,18 +217,19 @@ export async function getEnvReports(
             secret: true,
             scope: secret.scope ?? GLOBAL_SCOPE,
             required: true,
-            status: secret.is_set ? 'stored' : 'missing',
-            storedScopes: secret.is_set
-              ? [secret.scope === 'node' ? pkg.name : secret.scope ?? GLOBAL_SCOPE]
-              : []
+            status: envOnly ? 'env' : secret.is_set ? 'stored' : 'missing',
+            storedScopes
           }
         }
 
-        const status: EnvVarStatus = secret.is_set
-          ? 'stored'
-          : secret.default
-            ? 'default'
-            : 'missing'
+        const status: EnvVarStatus = envOnly
+          ? 'env'
+          : secret.is_set
+            ? 'stored'
+            : secret.default
+              ? 'default'
+              : 'missing'
+
         return {
           name: secret.key,
           description: secret.description ?? '',
@@ -231,9 +243,7 @@ export async function getEnvReports(
           groupDescription:
             secret.requirement === 'one_of' ? secret.group_description || undefined : undefined,
           status,
-          storedScopes: secret.is_set
-            ? [secret.scope === 'node' ? pkg.name : secret.scope ?? GLOBAL_SCOPE]
-            : []
+          storedScopes
         }
       })
       const groups = new Set(vars.flatMap((variable) => variable.group ? [variable.group] : []))
