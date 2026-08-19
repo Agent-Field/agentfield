@@ -20,7 +20,8 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   trayCompanion: true,
   dismissedUpdateVersion: null,
   starPrompt: 'pending',
-  starPromptSnoozedUntil: null
+  starPromptSnoozedUntil: null,
+  keyNoticeShown: []
 }
 
 /** A usable TCP port, or null for anything else (auto mode / not recorded). */
@@ -49,6 +50,11 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
   const provisionedBundled = Array.isArray(obj.provisionedBundled)
     ? [...new Set(obj.provisionedBundled.filter((n): n is string => typeof n === 'string'))]
     : DEFAULT_SETTINGS.provisionedBundled
+  // Same again for the once-only key notice: a corrupt list must neither
+  // suppress the notification forever nor grow duplicates.
+  const keyNoticeShown = Array.isArray(obj.keyNoticeShown)
+    ? [...new Set(obj.keyNoticeShown.filter((n): n is string => typeof n === 'string'))]
+    : DEFAULT_SETTINGS.keyNoticeShown
   return {
     cloud: {
       enabled: Boolean(cloud.enabled),
@@ -84,7 +90,8 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
       obj.starPromptSnoozedUntil !== '' &&
       Number.isFinite(Date.parse(obj.starPromptSnoozedUntil))
         ? obj.starPromptSnoozedUntil
-        : null
+        : null,
+    keyNoticeShown
   }
 }
 

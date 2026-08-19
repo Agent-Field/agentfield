@@ -248,6 +248,13 @@ export interface DesktopSettings {
   starPrompt: 'pending' | 'done'
   /** ISO timestamp until which the star prompt is snoozed (Later = +7 days). null = not snoozed. */
   starPromptSnoozedUntil: string | null
+  /**
+   * Agent names the app has already warned about over a native notification
+   * after provisioning them without the API keys they require. A name recorded
+   * here is never announced again, so the notice fires once per provisioning
+   * event instead of on every launch (see main/keyNotice.ts).
+   */
+  keyNoticeShown: string[]
 }
 
 export interface CloudTestResult {

@@ -23,7 +23,8 @@ describe('normalizeSettings', () => {
       trayCompanion: false,
       dismissedUpdateVersion: '0.1.110',
       starPrompt: 'done' as const,
-      starPromptSnoozedUntil: '2026-08-01T00:00:00.000Z'
+      starPromptSnoozedUntil: '2026-08-01T00:00:00.000Z',
+      keyNoticeShown: ['swe-planner']
     }
     expect(normalizeSettings(s)).toEqual(s)
   })
@@ -173,7 +174,8 @@ describe('load/save round trip', () => {
       trayCompanion: true,
       dismissedUpdateVersion: null,
       starPrompt: 'pending' as const,
-      starPromptSnoozedUntil: null
+      starPromptSnoozedUntil: null,
+      keyNoticeShown: []
     }
     await saveSettings(file, s)
     expect(await loadSettings(file)).toEqual(s)

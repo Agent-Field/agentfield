@@ -1,6 +1,6 @@
 import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
-import { BrowserWindow, Menu, app, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
+import { BrowserWindow, Menu, Notification, app, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
 import { CATALOG } from '../shared/catalog'
 import { RAILWAY_TEMPLATE_URL } from '../shared/cloudLinks'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
@@ -15,6 +15,7 @@ import { isCloudActive } from './connection'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { initUserPath } from './env'
 import { installAgent, installFromSource, updateAgent } from './installer'
+import { notifyUnresolvedKeys } from './keyNotice'
 import {
   getEnvReports,
   listStoredSecrets,
@@ -346,6 +347,10 @@ async function provisionBundledAgents(): Promise<void> {
   // answered as an AgentField. It is read here rather than before autostart
   // because the active port may have moved (adopted, or freshly picked).
   const snapshot = await getSnapshot()
+  // What this run actually installed, collected from onInstalled below —
+  // ensureBundledAgents plans internally and reports nothing back, and the
+  // key notice must speak only for the nodes that just arrived.
+  const justProvisioned: string[] = []
   await ensureBundledAgents(
     {
       installed: snapshot.registry.agents.map((agent) => agent.name),
@@ -380,6 +385,7 @@ async function provisionBundledAgents(): Promise<void> {
       // here would only produce a dead node and an alarming badge; the Agents
       // row's "Needs keys" chip is the affordance that actually helps.
       onInstalled: async (name) => {
+        justProvisioned.push(name)
         settings = mergeSettings(settings, {
           autostartAgents: [...settings.autostartAgents, name]
         })
@@ -390,6 +396,35 @@ async function provisionBundledAgents(): Promise<void> {
       log: (message) => console.log(message)
     }
   )
+
+  // Nothing was started above, on purpose — both bundled nodes need an API key
+  // the first-launch user has not entered. On a login-item launch the app is
+  // hidden in the tray, so the Agents row's "Needs keys" chip is telling an
+  // empty room. One OS notification is the only thing that reaches the user
+  // here. keyNotice.ts decides; this is just the Electron effect.
+  await notifyUnresolvedKeys(justProvisioned, settings.keyNoticeShown, {
+    // The one authoritative source: composed from the control plane's
+    // per-agent secrets endpoint, i.e. the encrypted store `af run` reads.
+    reports: () => getEnvReports(),
+    supported: () => Notification.isSupported(),
+    show: ({ title, body }) => {
+      const notice = new Notification({ title, body })
+      // The notice names keys; the Keys editor lives on the Agents rows, so
+      // that is where a click has to land. navigate() also un-hides the
+      // window, which is the whole point on a tray-only launch.
+      notice.on('click', () => navigate('agents'))
+      notice.show()
+    },
+    // The at-most-once latch: an announced name is persisted, and keyNotice.ts
+    // filters on it, so no launch can raise the same notice twice.
+    markNotified: async (agents) => {
+      settings = mergeSettings(settings, {
+        keyNoticeShown: [...settings.keyNoticeShown, ...agents]
+      })
+      await saveSettings(settingsFile(), settings)
+    },
+    log: (message) => console.log(message)
+  })
 }
 
 // Register (or clear) the OS login item. Dev builds skip it — registering
