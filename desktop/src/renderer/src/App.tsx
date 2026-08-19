@@ -63,6 +63,23 @@ export function defaultView(bundledCount: number, agentCount: number): View {
   return 'home'
 }
 
+/**
+ * Whether a snapshot carries enough to decide the cold-launch route. The
+ * registry is read through the control plane, so the first poll after a cold
+ * autostart sees "no registry" while the server is still coming up — routing
+ * on that would send a user with a stocked library to the marketplace every
+ * time. Wait for a readable registry (or provisioning rows, which only exist
+ * once the control plane answered); until then the initial Home view and its
+ * control-plane status callout are the right thing to show.
+ */
+export function canDecideDefaultRoute(args: {
+  registryExists: boolean
+  registryError: string | null | undefined
+  bundledCount: number
+}): boolean {
+  return (args.registryExists && !args.registryError) || args.bundledCount > 0
+}
+
 export function shouldRerouteToBundled(args: {
   view: View
   bundledCount: number
@@ -166,6 +183,15 @@ export default function App() {
   // later polls or remember the last view.
   useEffect(() => {
     if (!snapshot || defaultRouteApplied.current) return
+    if (
+      !canDecideDefaultRoute({
+        registryExists: snapshot.registry.exists,
+        registryError: snapshot.registry.error,
+        bundledCount: bundled.length
+      })
+    ) {
+      return
+    }
     defaultRouteApplied.current = true
     if (deepLinkHandled.current) return
     setView(defaultView(bundled.length, snapshot.registry.agents.length))

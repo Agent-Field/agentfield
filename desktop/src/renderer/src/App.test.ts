@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { controlPlaneStatus, defaultView, shouldRerouteToBundled } from './App'
+import { canDecideDefaultRoute, controlPlaneStatus, defaultView, shouldRerouteToBundled } from './App'
 import type { AgentFieldSnapshot } from '../../shared/types'
 
 describe('defaultView', () => {
@@ -17,6 +17,29 @@ describe('defaultView', () => {
 
   it('opens Home once the library has agents', () => {
     expect(defaultView(0, 1)).toBe('home')
+  })
+})
+
+describe('canDecideDefaultRoute', () => {
+  it('waits while the registry is unreadable and nothing is provisioning', () => {
+    expect(
+      canDecideDefaultRoute({ registryExists: false, registryError: 'down', bundledCount: 0 })
+    ).toBe(false)
+    expect(
+      canDecideDefaultRoute({ registryExists: false, registryError: undefined, bundledCount: 0 })
+    ).toBe(false)
+  })
+
+  it('decides once the registry reads cleanly, even when empty', () => {
+    expect(
+      canDecideDefaultRoute({ registryExists: true, registryError: undefined, bundledCount: 0 })
+    ).toBe(true)
+  })
+
+  it('decides as soon as provisioning rows exist', () => {
+    expect(
+      canDecideDefaultRoute({ registryExists: false, registryError: 'down', bundledCount: 2 })
+    ).toBe(true)
   })
 })
 
