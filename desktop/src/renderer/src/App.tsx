@@ -86,6 +86,13 @@ export default function App() {
   const [startingCp, setStartingCp] = useState(false)
   /** Agents add-mode opened via the "+ Add agent" header action. */
   const [addAgentOpen, setAddAgentOpen] = useState(false)
+  /**
+   * The keys banner is on screen. Only App sees the whole banner stack, so it
+   * carries the signal from the banner that computes it to the one that has to
+   * yield — the star prompt must not ask for a favour while installed agents
+   * cannot run.
+   */
+  const [keysBannerShowing, setKeysBannerShowing] = useState(false)
   const defaultRouteApplied = useRef(false)
   const deepLinkHandled = useRef(false)
 
@@ -252,8 +259,13 @@ export default function App() {
         <UpdateBanner />
         {/* Blocked-agents warning sits above the star ask: one reports the
             product cannot work, the other is a favour. */}
-        <KeysBanner snapshot={snapshot} view={navView} onNavigate={navigate} />
-        <StarBanner snapshot={snapshot} />
+        <KeysBanner
+          snapshot={snapshot}
+          view={navView}
+          onNavigate={navigate}
+          onShowingChange={setKeysBannerShowing}
+        />
+        <StarBanner snapshot={snapshot} keysBannerShowing={keysBannerShowing} />
         <div className="view-body">
           {ipcError && <div className="callout error">{ipcError}</div>}
           {cp.tone === 'red' ? (

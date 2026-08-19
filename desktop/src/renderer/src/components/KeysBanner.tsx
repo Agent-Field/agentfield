@@ -31,6 +31,14 @@ interface KeysBannerProps {
   /** Current view — leaving the Agents view is a "done editing keys" signal. */
   view: View
   onNavigate: (view: View) => void
+  /**
+   * Told whenever this banner starts or stops showing. Only App can order the
+   * banner stack, and the star prompt must not sit under a "your agents cannot
+   * run" strip — asking for a favour while the product is broken reads badly.
+   * Reported upward rather than re-derived in StarBanner because getEnvReports
+   * fans out to the control plane per package; one caller is enough.
+   */
+  onShowingChange?: (showing: boolean) => void
 }
 
 /**
@@ -47,7 +55,7 @@ interface KeysBannerProps {
  * furniture, and a user who does not want those agents can uninstall them,
  * which removes the banner along with the agents.
  */
-export function KeysBanner({ snapshot, view, onNavigate }: KeysBannerProps) {
+export function KeysBanner({ snapshot, view, onNavigate, onShowingChange }: KeysBannerProps) {
   const [message, setMessage] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
 
@@ -83,7 +91,13 @@ export function KeysBanner({ snapshot, view, onNavigate }: KeysBannerProps) {
     return load()
   }, [healthy, roster, view, load])
 
-  if (!loaded || !healthy || !message) return null
+  const showing = loaded && healthy && message !== null
+
+  useEffect(() => {
+    onShowingChange?.(showing)
+  }, [showing, onShowingChange])
+
+  if (!showing) return null
 
   return (
     <div className="update-banner keys-banner" role="status">

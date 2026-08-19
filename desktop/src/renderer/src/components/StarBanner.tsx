@@ -38,13 +38,20 @@ function milestoneReached(snapshot: AgentFieldSnapshot | null): boolean {
 
 interface StarBannerProps {
   snapshot: AgentFieldSnapshot | null
+  /**
+   * The keys banner is showing (App tracks it). Agents that cannot run are a
+   * blocker, and a star prompt stacked under one asks for a favour while the
+   * product is broken — so it yields, the same way it yields to an update.
+   */
+  keysBannerShowing?: boolean
 }
 
 /**
  * Quiet milestone ask for a GitHub star. Reuses the update-banner material;
- * never coexists with an undismissed app update (update wins).
+ * never coexists with an undismissed app update (update wins) or with the
+ * "needs API keys" banner (a blocked product wins).
  */
-export function StarBanner({ snapshot }: StarBannerProps) {
+export function StarBanner({ snapshot, keysBannerShowing = false }: StarBannerProps) {
   const [settings, setSettings] = useState<DesktopSettings | null>(null)
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -65,6 +72,7 @@ export function StarBanner({ snapshot }: StarBannerProps) {
   if (isSnoozed(settings.starPromptSnoozedUntil)) return null
   if (!snapshot?.controlPlane.healthy) return null
   if (updateBannerWouldShow(updateStatus, settings.dismissedUpdateVersion)) return null
+  if (keysBannerShowing) return null
   if (!milestoneReached(snapshot)) return null
 
   const consume = (patch: Partial<DesktopSettings>) => {
