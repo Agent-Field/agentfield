@@ -6,7 +6,8 @@ import {
   planControlPlaneLaunch,
   runAgentAction,
   uninstallAgent,
-  startControlPlane
+  startControlPlane,
+  serverSpawnEnv
 } from './agents'
 import { CpApiError, type CpClient } from './cpClient'
 
@@ -243,6 +244,19 @@ describe('startControlPlane', () => {
     expect(result).toEqual({
       ok: false,
       message: 'control plane did not become healthy in time'
+    })
+  })
+})
+
+describe('serverSpawnEnv', () => {
+  it('pins the port and tells the server its own URL for the agents it starts', () => {
+    expect(serverSpawnEnv(8080)).toEqual({
+      AGENTFIELD_PORT: '8080',
+      AGENTFIELD_SERVER: 'http://localhost:8080'
+    })
+    expect(serverSpawnEnv(18480)).toEqual({
+      AGENTFIELD_PORT: '18480',
+      AGENTFIELD_SERVER: 'http://localhost:18480'
     })
   })
 })
