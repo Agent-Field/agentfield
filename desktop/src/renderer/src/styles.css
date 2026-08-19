@@ -1674,6 +1674,12 @@ section > .section-title {
   color: var(--text);
 }
 
+/* Blocked agents are not an offer: the warn tint separates "you must act
+   before this works" from the accent-soft update/community banners. */
+.keys-banner {
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+}
+
 /* --- callouts / empty -------------------------------------------------------- */
 
 .callout {
