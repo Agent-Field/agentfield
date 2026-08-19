@@ -56,6 +56,18 @@ const BUNDLED_LABEL: Record<BundledPhase, string> = {
 // again — say so instead of leaving a dead-looking row.
 const BUNDLED_FAILED_TITLE = 'This node is retried automatically on the next launch.'
 
+export function rosterKey(names: readonly string[]): string {
+  return [...new Set(names)].sort().join('\0')
+}
+
+export function visibleBundledRows(
+  bundled: BundledStatus[],
+  registryNames: readonly string[]
+): BundledStatus[] {
+  const installed = new Set(registryNames)
+  return bundled.filter((node) => !installed.has(node.name))
+}
+
 export function AgentsPanel({ registry, bundled, onChanged }: AgentsPanelProps): ReactElement {
   return (
     <div className="panel">
@@ -71,10 +83,15 @@ function AgentsBody({ registry, bundled, onChanged }: AgentsPanelProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [confirmUninstall, setConfirmUninstall] = useState<string | null>(null)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const registryRosterKey = rosterKey(registry?.agents.map((agent) => agent.name) ?? [])
+  const visibleBundled = visibleBundledRows(
+    bundled,
+    registry?.agents.map((agent) => agent.name) ?? []
+  )
 
   // Env/secret statuses come from the af CLI + manifests — refreshed on
-  // mount and after any change, not on the snapshot poll (each refresh
-  // shells out to `af secrets ls`).
+  // mount, when the registry roster changes, and after any action. The stable
+  // set key avoids shelling out to `af secrets ls` on ordinary snapshot polls.
   const loadEnv = useCallback(() => {
     window.agentfield
       .getEnvReports()
@@ -85,7 +102,7 @@ function AgentsBody({ registry, bundled, onChanged }: AgentsPanelProps) {
       })
       .catch(() => {})
   }, [])
-  useEffect(loadEnv, [loadEnv])
+  useEffect(loadEnv, [loadEnv, registryRosterKey])
 
   useEffect(() => {
     if (openMenu === null) return
@@ -111,7 +128,7 @@ function AgentsBody({ registry, bundled, onChanged }: AgentsPanelProps) {
   // library is empty, so this only covers odd registry states mid-refresh.
   // A launch that is still provisioning bundled nodes is not empty — it is
   // not finished — so the provisioning rows suppress this state.
-  if ((!registry.exists || registry.agents.length === 0) && bundled.length === 0) {
+  if ((!registry.exists || registry.agents.length === 0) && visibleBundled.length === 0) {
     return (
       <EmptyState
         variant="orbit"
@@ -156,7 +173,7 @@ function AgentsBody({ registry, bundled, onChanged }: AgentsPanelProps) {
           view, so the user watches the install stream instead of an empty
           panel. They leave the list once the registry carries the real row. */}
       <AnimatePresence initial={false}>
-        {bundled.map((node) => (
+        {visibleBundled.map((node) => (
           <BundledRow key={node.name} node={node} />
         ))}
       </AnimatePresence>
