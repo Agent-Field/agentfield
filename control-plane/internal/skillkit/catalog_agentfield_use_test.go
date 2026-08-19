@@ -89,8 +89,8 @@ func TestAgentfieldUseSourceFallbackContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse source frontmatter: %v", err)
 	}
-	if frontmatter.Name != "agentfield-use" || frontmatter.Version != "0.6.0" {
-		t.Fatalf("source frontmatter = %+v, want name=agentfield-use version=0.6.0", frontmatter)
+	if frontmatter.Name != "agentfield-use" || frontmatter.Version != "0.7.0" {
+		t.Fatalf("source frontmatter = %+v, want name=agentfield-use version=0.7.0", frontmatter)
 	}
 
 	// The offer is available only after coverage is conclusively checked, it
@@ -143,6 +143,35 @@ func TestAgentfieldUseDispatchPreconditions(t *testing.T) {
 	} {
 		if !strings.Contains(content, needle) {
 			t.Fatalf("agentfield-use SKILL.md is missing dispatch-precondition text %q", needle)
+		}
+	}
+}
+
+// Contract for 0.7.0: an installed-but-unstarted node is the DEFAULT first-run
+// state (the desktop ships swe-planner/pr-af provisioned but not started), so
+// the skill must start the node before dispatching and must treat the resulting
+// missing-key error as a blocking handoff. Without this the agent only ever
+// sees "agent 'X' not found" and silently substitutes something else.
+func TestAgentfieldUseMissingKeyHandoffContract(t *testing.T) {
+	content := string(skillSource(t, "agentfield-use"))
+	for _, needle := range []string{
+		// Start before dispatch, and why the start attempt is the diagnostic.
+		"### Start it before you dispatch — the start attempt is the diagnostic",
+		"run `af run <name>` BEFORE dispatching",
+		"missing required environment variables: OPENROUTER_API_KEY",
+		// The store-blind commands must stay called out by name.
+		"Do not use `af doctor` or `af config <pkg> --list` to decide",
+		// Blocking handoff, never a workaround.
+		"A missing key is a blocking handoff, not a problem to route around.",
+		"AgentField Desktop → Agents → <node> →",
+		"do NOT substitute a",
+		"Never ask the user to paste the secret value into the conversation",
+		// The observed not-found responses must be recognizable.
+		"agent 'X' not found",
+		"target \"X.y\" not found",
+	} {
+		if !strings.Contains(content, needle) {
+			t.Fatalf("agentfield-use SKILL.md is missing missing-key handoff text %q", needle)
 		}
 	}
 }

@@ -1,6 +1,6 @@
 ---
 name: agentfield-use
-version: 0.6.0
+version: 0.7.0
 description: "Discover and call agents already running on a local or cloud AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Resolves the right control plane (desktop-configured cloud first), fetches the reasoner's exact contract before dispatching, and only calls entry-point reasoners. Not for building new agents — that is the agentfield skill."
 ---
 
@@ -137,9 +137,49 @@ Three gotchas:
 - Discovery lists **every registered agent, including dead ones** — check
   `health_status` and only dispatch to `"active"` agents. Dispatching to an
   `inactive`/`unknown` agent queues work that never runs.
-- Installed-but-never-started agents may not appear at all. The local registry
-  is the source of truth for what's installed: `af list`, start with
-  `af run <name>` (it detaches; the agent keeps running after the CLI exits).
+- Installed-but-never-started agents may not appear at all. Discovery lists
+  what is RUNNING; `af list` is the source of truth for what is INSTALLED.
+  This is the normal first-run state, not an edge case — the desktop app
+  ships `swe-planner` and `pr-af` pre-provisioned but deliberately NOT
+  started, because they need API keys the user hasn't entered yet.
+
+### Start it before you dispatch — the start attempt is the diagnostic
+
+If the node you need is in `af list` but absent from discovery, or its
+`health_status` isn't `active`, run `af run <name>` BEFORE dispatching (it
+detaches; the agent keeps running after the CLI exits). Do this first, not as
+a fallback after a failed call: a node blocked on an unset key never registers,
+so every call to it comes back as the useless `agent 'X' not found`, while
+`af run` names the exact variable and exits 1.
+
+`af run` reads the encrypted store (`~/.agentfield/secrets/*.enc`) — the same
+store that gates startup — so it is the only authoritative check that a node's
+keys are set. **Do not use `af doctor` or `af config <pkg> --list` to decide
+whether a key is configured**: doctor reads only the process environment
+(`os.Getenv`) and `config --list` reads the package `.env` file, so both report
+a correctly-stored key as `✗ unset`, and neither renders `require_one_of`
+groups. `af secrets ls` shows what IS stored but never cross-references
+manifests, so it can't tell you a required key is missing.
+
+**A missing key is a blocking handoff, not a problem to route around.** When
+`af run` fails with
+
+```
+node swe-planner: missing required environment variables: OPENROUTER_API_KEY (af secrets set OPENROUTER_API_KEY --node swe-planner)
+```
+
+— or, for an alternatives group, `at least one of ANTHROPIC_API_KEY or
+OPENROUTER_API_KEY is required — set one with: …` — the value exists only in
+the user's head. Stop and tell them: the exact variable(s) the error names, the
+exact `af secrets set … --node <name>` command copied verbatim from it, and
+that the same key can be entered in AgentField Desktop → Agents → <node> →
+Keys. Then wait.
+
+Do NOT retry `af run`, do NOT dispatch to the node anyway, do NOT substitute a
+different agent, and do NOT quietly do the job yourself instead — a silent
+substitution is the worst outcome, because the user believes their agent ran.
+Never ask the user to paste the secret value into the conversation; the CLI
+prompt and the desktop form take it directly.
 
 ### Too many reasoners to scan? Search, don't dump
 
@@ -401,7 +441,10 @@ resolve from the `X-Workflow-ID` / `X-Session-ID` / `X-Actor-ID` headers).
 | desktop-configured cloud unreachable | cloud deployment down, or URL/key stale | stop and tell the user (§0) — never silently retarget local |
 | 401/403 from a cloud target | missing or wrong `X-API-Key` | key from desktop `settings.json` `cloud.apiKey`, or `af auth login --server <url>` |
 | agent `inactive` in discovery / missing | node installed but not running (or not installed) | `af list`, then `af run <name>` — or `af install <source>` |
-| `missing required environment variables: X` from `af run` | required key not configured | `af secrets set X` (value via stdin/arg; `--node <name>` for node-scoped) — or desktop app → Agents → Keys |
+| HTTP **400** `{"error":"agent 'X' not found","error_category":"internal_error"}` | the node never registered — usually installed but not started (it's 400, not 404) | `af list` → `af run <name>` → read the error it prints → hand off if it's a missing key |
+| MCP: `target "X.y" not found. Call discover_agents to list available agents and reasoners.` | same cause, seen through MCP | same path: `af list` → `af run <name>` → hand off |
+| `missing required environment variables: X` from `af run` | required key not configured; the node cannot start | **stop and hand off** — give the user the `af secrets set X --node <name>` line verbatim, or desktop → Agents → <node> → Keys. Never retry, substitute another agent, or do the work yourself |
+| `af doctor` / `af config --list` reports a key as unset | they read `os.Getenv` and the package `.env`, not the encrypted store | ignore them for this question — `af run <name>` is the only authoritative check |
 | HTTP 502 with `error_message` | the agent itself errored | read `af logs <name>`, fix, retry |
 | execution `running` but latest_activity stale & logs quiet | wedged run | wedge protocol above: cancel-tree → restart agent → re-submit |
 | result claims success with zero findings/output on nontrivial input | possible silent tool failure inside the agent | check `af logs <name>` for that run before trusting it |
@@ -419,7 +462,7 @@ af agent agent-summary --id <name>   # full contract: reasoners, schemas, health
 af ps                      # in-flight runs across all agents (af ps --agent <name>)
 af run <name>              # start (detached); af stop <name>
 af logs <name>             # agent logs (-f follows; no per-run filter — grep by run_id)
-af secrets set KEY         # store an API key (encrypted; prompts for value)
+af secrets set KEY [--node <name>]   # store an API key (encrypted; prompts for value)
 af secrets ls              # what's configured (values never shown)
 af install <git-url>       # install a new agent node
 ```
@@ -447,7 +490,10 @@ is enabled), and verify offline with `af verify audit.json`.
 - Kwargs live under `"input"`. Empty input is `{"input": {}}`.
 - Async + poll for anything that might exceed a few seconds; sync is for quick
   lookups only. Independent async calls go out together, not one at a time.
-- Only dispatch to agents whose discovery `health_status` is `"active"`.
+- Only dispatch to agents whose discovery `health_status` is `"active"`. If it
+  isn't there, `af run <name>` first — and if that reports a missing required
+  environment variable, stop and hand off to the user with the exact key name
+  and `af secrets set` command. Never retry it, work around it, or substitute.
 - Don't guess endpoints. The surface above is the contract; if something is
   missing, ask `GET /api/v1/agentic/discover?q=<keyword>` before inventing a route.
 - Building or modifying an agent (new reasoners, scaffolds, deploys) is the

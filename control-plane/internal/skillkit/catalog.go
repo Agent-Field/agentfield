@@ -52,7 +52,7 @@ read this skill first`,
 	},
 	{
 		Name:        "agentfield-use",
-		Version:     "0.6.0",
+		Version:     "0.7.0",
 		Description: "Discover and call agents already running on a local or cloud AgentField control plane. Resolves the target server first (a desktop-configured cloud beats the local default, and an unreachable one is a stop-and-report, never a silent fallback), zero-setup MCP endpoint at <server>/mcp, health check, capability discovery, ranked reasoner search (af agent search), the reasoner's exact contract fetched before the first dispatch, entry-point-only targeting, concurrent sync/async execution, load-aware pacing (meta.load), in-flight visibility (af ps / executions/active), wedged-run triage (cancel-tree), sessions, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
 		EmbedRoot:   "skill_data/agentfield-use",
 		EntryFile:   "SKILL.md",
