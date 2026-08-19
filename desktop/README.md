@@ -104,6 +104,38 @@ Three rules make this safe to run on every launch:
 
 `AGENTFIELD_SKIP_BUNDLED=1` disables provisioning entirely.
 
+### Telling the user a key is missing
+
+An installed agent that cannot start is invisible where it matters most: it
+never registers with the control plane, so a coding agent calling it gets
+`HTTP 400 agent 'swe-planner' not found` with no hint that the cause was an
+unset key. Three surfaces close that gap, each covering a case the others
+cannot:
+
+- **`src/main/keyNotice.ts`** fires one native notification when provisioning
+  finishes and a node it just installed still has unresolved required keys —
+  the only signal that reaches a user whose app launched hidden at login.
+  Scoped to the names installed by that run and recorded in
+  `settings.keyNoticeShown`, so it never nags; a bundled node added in a later
+  release still gets its own notice.
+- **`components/KeysBanner.tsx`** names the blocked agents across the top of
+  the window for as long as they are blocked. Not dismissible: unlike the
+  update banner it does not advertise something optional, it reports that
+  installed agents cannot run. It is self-clearing, and uninstalling the
+  agents removes it honestly.
+- **The `agentfield-use` skill** (repo root `skills/`) tells Claude Code and
+  Codex to run `af run <name>` before dispatching to a node that is installed
+  but absent from discovery, and to treat the resulting
+  `missing required environment variables:` as a blocking handoff — name the
+  key, hand over the `af secrets set` line, and never retry or substitute
+  another agent.
+
+All three read the same authority: `getEnvReports()` →
+`GET /api/ui/v1/agents/:agentId/secrets?include=env` → the encrypted store
+that actually gates `af run`. Note that `af doctor` and `af config --list` do
+**not** — they read the process environment and the package `.env` file
+respectively, and will report a correctly-stored key as unset.
+
 ## Agent keys (secrets)
 
 Agents declare the environment they need (API keys, tokens) in their
