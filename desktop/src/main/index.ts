@@ -12,6 +12,7 @@ import { runAutostart } from './autostart'
 import { bundledStatuses, ensureBundledAgents } from './bundledAgents'
 import { testCloudConnection, applyConnectionProfile } from './cloud'
 import { isCloudActive } from './connection'
+import { createCpClient } from './cpClient'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { initUserPath } from './env'
 import { installAgent, installFromSource, updateAgent } from './installer'
@@ -357,9 +358,11 @@ async function provisionBundledAgents(): Promise<void> {
       provisioned: settings.provisionedBundled,
       skipEnv: process.env.AGENTFIELD_SKIP_BUNDLED,
       cliCommand: getCliCommand(),
+      cloudActive: isCloudActive(),
       // recognized, not reachable: an unrelated service holding the port
       // would answer, and installing through it would fail every time.
-      controlPlaneReachable: snapshot.controlPlane.recognized
+      controlPlaneReachable: snapshot.controlPlane.recognized,
+      registryReadable: snapshot.registry.exists && !snapshot.registry.error
     },
     {
       // Shares the app-wide install mutex, waiting when the user started an
@@ -380,6 +383,7 @@ async function provisionBundledAgents(): Promise<void> {
         })
         await saveSettings(settingsFile(), settings)
       },
+      hasInstallApi: () => createCpClient().hasInstallApi(),
       // Start it from the NEXT launch on, not now. Both bundled nodes need an
       // API key the first-launch user has not entered yet, so starting one
       // here would only produce a dead node and an alarming badge; the Agents

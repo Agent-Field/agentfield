@@ -36,26 +36,46 @@ export interface BundledPlanInput {
   cliCommand: string | null
   /** The control plane answered as a recognized AgentField. */
   controlPlaneReachable: boolean
+  /** Whether the active control plane is a configured cloud connection. */
+  cloudActive: boolean
+  /** The installed-agent registry was read successfully. */
+  registryReadable: boolean
 }
 
 export interface BundledPlan {
   /** Bundled node names to install, in order. */
   install: string[]
+  /** Already-installed bundled node names to record as provisioned. */
+  adopt: string[]
   /** One line for the log explaining the decision. */
   reason: string
 }
 
 export function planBundledInstalls(input: BundledPlanInput): BundledPlan {
   if (input.skipEnv === '1') {
-    return { install: [], reason: 'AGENTFIELD_SKIP_BUNDLED=1 — skipping bundled nodes' }
+    return { install: [], adopt: [], reason: 'AGENTFIELD_SKIP_BUNDLED=1 — skipping bundled nodes' }
   }
   if (input.cliCommand === null || input.cliCommand.trim() === '') {
-    return { install: [], reason: 'no usable af CLI — skipping bundled nodes' }
+    return { install: [], adopt: [], reason: 'no usable af CLI — skipping bundled nodes' }
+  }
+  if (input.cloudActive) {
+    return {
+      install: [],
+      adopt: [],
+      reason: 'cloud control plane active — bundled nodes are provisioned on the local control plane only'
+    }
   }
   // The install API lives on the control plane, so there is nothing to talk to
   // until it is up and recognized. Not an error: the next launch retries.
   if (!input.controlPlaneReachable) {
-    return { install: [], reason: 'control plane unavailable — skipping bundled nodes' }
+    return { install: [], adopt: [], reason: 'control plane unavailable — skipping bundled nodes' }
+  }
+  if (!input.registryReadable) {
+    return {
+      install: [],
+      adopt: [],
+      reason: 'could not read the installed-agent registry — skipping bundled nodes'
+    }
   }
 
   // Two independent reasons to leave a node alone: it is already in the
@@ -63,13 +83,19 @@ export function planBundledInstalls(input: BundledPlanInput): BundledPlan {
   // has since removed it (their choice must stick across launches).
   const installed = new Set(input.installed)
   const provisioned = new Set(input.provisioned)
+  const adopt = BUNDLED_NODES.map((entry) => entry.name).filter(
+    (name) => installed.has(name) && !provisioned.has(name)
+  )
   const install = BUNDLED_NODES.map((entry) => entry.name).filter(
     (name) => !installed.has(name) && !provisioned.has(name)
   )
-  if (install.length === 0) {
-    return { install: [], reason: 'bundled nodes already provisioned' }
+  if (install.length === 0 && adopt.length === 0) {
+    return { install: [], adopt: [], reason: 'bundled nodes already provisioned' }
   }
-  return { install, reason: `provisioning bundled nodes: ${install.join(', ')}` }
+  const reasons: string[] = []
+  if (adopt.length > 0) reasons.push(`adopting already-installed bundled nodes: ${adopt.join(', ')}`)
+  if (install.length > 0) reasons.push(`provisioning bundled nodes: ${install.join(', ')}`)
+  return { install, adopt, reason: reasons.join('; ') }
 }
 
 export interface BundledDeps {
@@ -77,6 +103,8 @@ export interface BundledDeps {
   install: (name: string, onLine: (line: string) => void) => Promise<InstallResult>
   /** Persist one name into settings.provisionedBundled. */
   markProvisioned: (name: string) => Promise<void>
+  /** Whether this control plane supports installing agent packages. */
+  hasInstallApi?: () => Promise<boolean>
   /** Called after a node installs successfully, before the next one starts. */
   onInstalled?: (name: string) => Promise<void>
   log: (message: string) => void
@@ -126,9 +154,35 @@ export async function ensureBundledAgents(
   try {
     const plan = planBundledInstalls(input)
     deps.log(`bundled: ${plan.reason}`)
-    if (plan.install.length === 0) return
+    if (plan.install.length === 0 && plan.adopt.length === 0) return
 
     running = true
+    for (const name of plan.adopt) {
+      try {
+        await deps.markProvisioned(name)
+        deps.log(`bundled: adopted ${name} (already installed)`)
+      } catch (err) {
+        deps.log(`bundled: could not record ${name} as provisioned — ${String(err)}`)
+      }
+    }
+
+    if (plan.install.length === 0) return
+
+    if (deps.hasInstallApi) {
+      let hasInstallApi = false
+      try {
+        hasInstallApi = await deps.hasInstallApi()
+      } catch {
+        // An unreadable capability endpoint is equivalent to no usable API.
+      }
+      if (!hasInstallApi) {
+        deps.log(
+          'bundled: control plane has no install API — skipping bundled nodes (update the control plane)'
+        )
+        return
+      }
+    }
+
     // Seed every planned row up front so the Agents view shows both nodes
     // immediately, rather than revealing the second one minutes later.
     statuses = plan.install.map((name) => {

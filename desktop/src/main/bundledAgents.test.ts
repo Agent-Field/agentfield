@@ -18,7 +18,9 @@ const baseInput: BundledPlanInput = {
   provisioned: [],
   skipEnv: undefined,
   cliCommand: '/managed/af',
-  controlPlaneReachable: true
+  cloudActive: false,
+  controlPlaneReachable: true,
+  registryReadable: true
 }
 
 describe('BUNDLED_NODES', () => {
@@ -49,6 +51,7 @@ describe('planBundledInstalls', () => {
   it('installs every bundled node on a clean first launch', () => {
     expect(planBundledInstalls(baseInput)).toEqual({
       install: NAMES,
+      adopt: [],
       reason: `provisioning bundled nodes: ${NAMES.join(', ')}`
     })
   })
@@ -56,6 +59,7 @@ describe('planBundledInstalls', () => {
   it('skips only when AGENTFIELD_SKIP_BUNDLED is exactly 1', () => {
     expect(planBundledInstalls({ ...baseInput, skipEnv: '1' })).toEqual({
       install: [],
+      adopt: [],
       reason: 'AGENTFIELD_SKIP_BUNDLED=1 — skipping bundled nodes'
     })
     expect(planBundledInstalls({ ...baseInput, skipEnv: '0' }).install).toEqual(NAMES)
@@ -66,6 +70,7 @@ describe('planBundledInstalls', () => {
     for (const cliCommand of [null, '', '   ']) {
       expect(planBundledInstalls({ ...baseInput, cliCommand })).toEqual({
         install: [],
+        adopt: [],
         reason: 'no usable af CLI — skipping bundled nodes'
       })
     }
@@ -74,6 +79,7 @@ describe('planBundledInstalls', () => {
   it('skips while the control plane is unavailable', () => {
     expect(planBundledInstalls({ ...baseInput, controlPlaneReachable: false })).toEqual({
       install: [],
+      adopt: [],
       reason: 'control plane unavailable — skipping bundled nodes'
     })
   })
@@ -92,10 +98,30 @@ describe('planBundledInstalls', () => {
     ).toBe('no usable af CLI — skipping bundled nodes')
   })
 
+  it('skips cloud control planes before consulting reachability or the registry', () => {
+    const plan = planBundledInstalls({
+      ...baseInput,
+      cloudActive: true,
+      controlPlaneReachable: false,
+      registryReadable: false
+    })
+    expect(plan.install).toEqual([])
+    expect(plan.adopt).toEqual([])
+    expect(plan.reason).toContain('cloud')
+  })
+
+  it('skips when the installed-agent registry could not be read', () => {
+    const plan = planBundledInstalls({ ...baseInput, registryReadable: false })
+    expect(plan.install).toEqual([])
+    expect(plan.adopt).toEqual([])
+    expect(plan.reason).toContain('registry')
+  })
+
   it('leaves alone nodes already in the registry', () => {
-    expect(planBundledInstalls({ ...baseInput, installed: [NAMES[0]] }).install).toEqual([
-      NAMES[1]
-    ])
+    expect(planBundledInstalls({ ...baseInput, installed: [NAMES[0]] })).toMatchObject({
+      adopt: [NAMES[0]],
+      install: [NAMES[1]]
+    })
   })
 
   // Uninstalling a bundled node must stick: it is in provisionedBundled but no
@@ -106,8 +132,22 @@ describe('planBundledInstalls', () => {
     ])
     expect(planBundledInstalls({ ...baseInput, provisioned: NAMES })).toEqual({
       install: [],
+      adopt: [],
       reason: 'bundled nodes already provisioned'
     })
+  })
+
+  it('does not reinstall nodes removed after adoption', () => {
+    expect(planBundledInstalls({ ...baseInput, provisioned: NAMES })).toMatchObject({
+      install: [],
+      adopt: []
+    })
+  })
+
+  it('does not adopt an already-recorded installed node twice', () => {
+    expect(
+      planBundledInstalls({ ...baseInput, installed: [NAMES[0]], provisioned: [NAMES[0]] })
+    ).toMatchObject({ adopt: [], install: [NAMES[1]] })
   })
 })
 
@@ -240,6 +280,39 @@ describe('ensureBundledAgents', () => {
     expect(deps.install).not.toHaveBeenCalled()
     expect(bundledStatuses()).toEqual([])
     expect(deps.lines).toEqual(['bundled: AGENTFIELD_SKIP_BUNDLED=1 — skipping bundled nodes'])
+  })
+
+  it('adopts installed nodes without installing or creating status rows', async () => {
+    const deps = fakeDeps()
+    await ensureBundledAgents({ ...baseInput, installed: NAMES }, deps)
+
+    expect(deps.markProvisioned.mock.calls.map((c) => c[0])).toEqual(NAMES)
+    expect(deps.install).not.toHaveBeenCalled()
+    expect(bundledStatuses()).toEqual([])
+    expect(deps.lines.filter((line) => line.includes('adopted'))).toHaveLength(NAMES.length)
+  })
+
+  it('adopts nodes but skips installs when the control plane has no install API', async () => {
+    const deps = fakeDeps()
+    deps.hasInstallApi = vi.fn(async () => false)
+
+    await ensureBundledAgents({ ...baseInput, installed: [NAMES[0]] }, deps)
+
+    expect(deps.markProvisioned).toHaveBeenCalledWith(NAMES[0])
+    expect(deps.install).not.toHaveBeenCalled()
+    expect(bundledStatuses()).toEqual([])
+    expect(deps.lines.some((line) => line.includes('install API'))).toBe(true)
+  })
+
+  it('treats a rejecting install API check as unavailable without throwing', async () => {
+    const deps = fakeDeps()
+    deps.hasInstallApi = vi.fn(async () => {
+      throw new Error('probe failed')
+    })
+
+    await expect(ensureBundledAgents(baseInput, deps)).resolves.toBeUndefined()
+    expect(deps.install).not.toHaveBeenCalled()
+    expect(bundledStatuses()).toEqual([])
   })
 
   it('works without the optional onInstalled hook', async () => {

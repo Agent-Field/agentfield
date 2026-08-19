@@ -73,7 +73,10 @@ and `src/main/bundledAgents.ts` provisions them on first launch: after
 autostart has a control plane up, each missing node is installed in sequence
 through the same control-plane install API the Install view drives, sharing
 the same single-install mutex so a user-initiated install can never collide
-with it.
+with it. Provisioning targets the local control plane only and is skipped while
+a cloud control plane is active. Nodes that were already installed are adopted
+so uninstalling them sticks, and a control plane without the install API is
+skipped instead of producing install errors on every launch.
 
 Delivery is fetch-on-first-launch, not baked into the installer. The DMG and
 the NSIS package carry no agent payload — that keeps the download small, and
