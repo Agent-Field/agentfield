@@ -2,6 +2,7 @@ import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
 import { BrowserWindow, Menu, Notification, app, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
 import { CATALOG } from '../shared/catalog'
+import { BUNDLED_NODES } from '../shared/bundled'
 import { RAILWAY_TEMPLATE_URL } from '../shared/cloudLinks'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type { DesktopSettings } from '../shared/types'
@@ -516,7 +517,8 @@ function main(): void {
     ipcMain.handle('agentfield:snapshot', () =>
       getSnapshot({ skillSync: skillSync.last(), bundled: bundledStatuses() })
     )
-    ipcMain.handle('agentfield:catalog', () => CATALOG)
+    // Bundled nodes stay listed so an uninstalled one can be reinstalled from the curated UI.
+    ipcMain.handle('agentfield:catalog', () => [...BUNDLED_NODES, ...CATALOG])
     ipcMain.handle('agentfield:install', async (event, name: unknown) => {
       if (typeof name !== 'string') {
         return { ok: false, message: 'invalid install request' }

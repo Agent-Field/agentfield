@@ -37,6 +37,7 @@ function InstallCheck() {
 // there is no separate Install view anymore.
 interface InstallPanelProps {
   installedNames: string[]
+  provisioningNames: string[]
   onInstalled: () => void
   /** Installed agents count — labels the "Back to installed (N)" affordance. */
   libraryCount: number
@@ -119,6 +120,7 @@ export function parseRepoSource(input: string): ParsedRepo | null {
 
 export function InstallPanel({
   installedNames,
+  provisioningNames,
   onInstalled,
   libraryCount,
   onBackToLibrary
@@ -387,6 +389,7 @@ export function InstallPanel({
               key={entry.name}
               entry={entry}
               installed={installedNames.includes(entry.name)}
+              provisioning={provisioningNames.includes(entry.name)}
               installing={installing}
               phase={phase}
               confirming={confirming === entry.name}
@@ -417,6 +420,7 @@ export function InstallPanel({
 function FeaturedCard({
   entry,
   installed,
+  provisioning,
   installing,
   phase,
   confirming,
@@ -430,6 +434,7 @@ function FeaturedCard({
 }: {
   entry: CatalogEntry
   installed: boolean
+  provisioning: boolean
   installing: boolean
   phase: InstallPhase
   confirming: boolean
@@ -498,7 +503,11 @@ function FeaturedCard({
         ) : (
           <span className="market-source">{sourceLabel}</span>
         )}
-        {installed ? (
+        {provisioning ? (
+          <button className="install-button" disabled>
+            Installing…
+          </button>
+        ) : installed ? (
           confirming ? (
             <div className="row-actions">
               <button className="action-button danger" disabled={installing} onClick={onUninstall}>

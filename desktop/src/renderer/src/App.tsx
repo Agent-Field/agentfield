@@ -205,6 +205,9 @@ export default function App() {
   const cp = controlPlaneStatus(snapshot)
   const agents = snapshot?.registry.agents ?? []
   const installedNames = agents.map((a) => a.name)
+  const provisioningNames = bundled
+    .filter((node) => node.phase === 'pending' || node.phase === 'installing')
+    .map((node) => node.name)
 
   // Agents view, two modes (DESIGN.md §4.11). Add-mode when: the install
   // deep link addressed it, "+ Add agent" was clicked, or the library is
@@ -342,6 +345,7 @@ export default function App() {
                 (agentsAddMode ? (
                   <InstallPanel
                     installedNames={installedNames}
+                    provisioningNames={provisioningNames}
                     onInstalled={() => void refresh()}
                     libraryCount={agents.length}
                     onBackToLibrary={agents.length > 0 ? closeAddMode : undefined}
