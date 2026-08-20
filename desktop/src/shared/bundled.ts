@@ -16,7 +16,7 @@ import type { CatalogEntry } from './types'
 // hard-coded here in main-process-trusted source.
 //
 // Sourcing follows the same rule catalog.ts documents at length: name the BARE
-// repo URL, never the `//go` subdirectory. Both repos' root manifests carry
+// repo URL, never the `//go` subdirectory. All four repos' root manifests carry
 // `superseded_by: …//go`, and that redirect is what carries a user who already
 // has the older Python node across — it installs the successor, migrates
 // node-scoped secrets, and only then retires the predecessor. Naming `//go`
@@ -37,6 +37,20 @@ export const BUNDLED_NODES: readonly CatalogEntry[] = [
     name: 'pr-af',
     description: 'Code review — deep, evidence-backed review of any GitHub pull request',
     source: 'https://github.com/Agent-Field/pr-af',
+    language: 'go'
+  },
+  {
+    name: 'sec-af',
+    description:
+      'Security auditor — find vulnerabilities in your codebase and prove which ones are exploitable',
+    source: 'https://github.com/Agent-Field/sec-af',
+    language: 'go'
+  },
+  {
+    name: 'cloudsecurity-af',
+    description:
+      'Cloud security — map real attack paths across your AWS, GCP, and Azure accounts',
+    source: 'https://github.com/Agent-Field/cloudsecurity-af',
     language: 'go'
   }
 ]

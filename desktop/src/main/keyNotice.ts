@@ -2,10 +2,10 @@
 // still cannot run for want of an API key.
 //
 // The app is designed to open at login, hidden, in the tray (applyLoginItem in
-// index.ts). On such a launch bundledAgents.ts installs swe-planner and pr-af,
-// deliberately does NOT start them — both need a key the user has not entered —
+// index.ts). On such a launch bundledAgents.ts installs the bundled nodes,
+// deliberately does NOT start them — each needs a key the user has not entered —
 // and puts a "Needs keys" chip on their Agents rows. Nobody is looking at that
-// window. Without a push the two nodes sit there unusable and the user finds
+// window. Without a push the new nodes sit there unusable and the user finds
 // out later, from a coding agent that could not call them. One native
 // notification closes that loop: name the keys, name where to enter them.
 //

@@ -546,9 +546,14 @@ describe('fetchUsageStats', () => {
 })
 
 describe('install catalog', () => {
+  // catalogEntry resolves over the marketplace CATALOG and the bundled roster
+  // alike, so the shape and uniqueness invariants hold across their union.
+  // CATALOG itself is currently empty — every vetted node ships with the app.
+  const VETTED = [...CATALOG, ...BUNDLED_NODES]
+
   it('every entry has a name, description, and an https or af:// source', () => {
-    expect(CATALOG.length).toBeGreaterThan(0)
-    for (const entry of CATALOG) {
+    expect(VETTED.length).toBeGreaterThan(0)
+    for (const entry of VETTED) {
       expect(entry.name).toMatch(/^[a-z0-9][a-z0-9-]*$/)
       expect(entry.description.length).toBeGreaterThan(0)
       expect(entry.source).toMatch(/^(https:\/\/|af:\/\/)/)
@@ -556,12 +561,12 @@ describe('install catalog', () => {
   })
 
   it('entry names are unique', () => {
-    const names = CATALOG.map((e) => e.name)
+    const names = VETTED.map((e) => e.name)
     expect(new Set(names).size).toBe(names.length)
   })
 
   it('catalogEntry resolves known names and rejects unknown ones', () => {
-    expect(catalogEntry(CATALOG[0].name)).toEqual(CATALOG[0])
+    expect(catalogEntry(VETTED[0].name)).toEqual(VETTED[0])
     expect(catalogEntry('definitely-not-real')).toBeUndefined()
   })
 
@@ -576,7 +581,9 @@ describe('install catalog', () => {
   // return to the Install view.
   it.each([
     { repo: 'Agent-Field/SWE-AF', name: 'swe-planner', retired: 'swe-planner-go' },
-    { repo: 'Agent-Field/pr-af', name: 'pr-af', retired: 'pr-af-go' }
+    { repo: 'Agent-Field/pr-af', name: 'pr-af', retired: 'pr-af-go' },
+    { repo: 'Agent-Field/sec-af', name: 'sec-af', retired: 'sec-af-go' },
+    { repo: 'Agent-Field/cloudsecurity-af', name: 'cloudsecurity-af', retired: 'cloudsecurity-af-go' }
   ])('ships $name as one product-named bundled node sourced at the bare repo', (tc) => {
     const entries = BUNDLED_NODES.filter((e) => e.source.includes(tc.repo))
     expect(entries).toHaveLength(1)
@@ -594,9 +601,9 @@ describe('installCommand', () => {
   // Contract: the renderer sends catalog *names* over IPC; only vetted
   // sources ever reach spawn, and unknown names are refused.
   it('builds a control-plane install preview for a catalog name', () => {
-    expect(installCommand(CATALOG[0].name)).toEqual({
+    expect(installCommand(BUNDLED_NODES[0].name)).toEqual({
       command: 'control-plane',
-      args: ['install', CATALOG[0].source]
+      args: ['install', BUNDLED_NODES[0].source]
     })
   })
 

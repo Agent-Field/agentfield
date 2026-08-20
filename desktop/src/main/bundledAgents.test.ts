@@ -24,8 +24,8 @@ const baseInput: BundledPlanInput = {
 }
 
 describe('BUNDLED_NODES', () => {
-  it('ships swe-planner and pr-af as go nodes sourced at the bare repo', () => {
-    expect(NAMES).toEqual(['swe-planner', 'pr-af'])
+  it('ships the four agent nodes as go nodes sourced at the bare repo', () => {
+    expect(NAMES).toEqual(['swe-planner', 'pr-af', 'sec-af', 'cloudsecurity-af'])
     for (const entry of BUNDLED_NODES) {
       expect(entry.name).toMatch(/^[a-z0-9][a-z0-9-]*$/)
       expect(entry.description.length).toBeGreaterThan(0)
@@ -42,7 +42,7 @@ describe('BUNDLED_NODES', () => {
       expect(catalogEntry(name)).toEqual(bundledEntry(name))
       expect(isBundled(name)).toBe(true)
     }
-    expect(isBundled('sec-af')).toBe(false)
+    expect(isBundled('definitely-not-real')).toBe(false)
     expect(bundledEntry('definitely-not-real')).toBeUndefined()
   })
 })
@@ -120,16 +120,16 @@ describe('planBundledInstalls', () => {
   it('leaves alone nodes already in the registry', () => {
     expect(planBundledInstalls({ ...baseInput, installed: [NAMES[0]] })).toMatchObject({
       adopt: [NAMES[0]],
-      install: [NAMES[1]]
+      install: NAMES.slice(1)
     })
   })
 
   // Uninstalling a bundled node must stick: it is in provisionedBundled but no
   // longer in the registry, and it must not come back on the next launch.
   it('never re-installs a node already provisioned once', () => {
-    expect(planBundledInstalls({ ...baseInput, provisioned: [NAMES[0]] }).install).toEqual([
-      NAMES[1]
-    ])
+    expect(planBundledInstalls({ ...baseInput, provisioned: [NAMES[0]] }).install).toEqual(
+      NAMES.slice(1)
+    )
     expect(planBundledInstalls({ ...baseInput, provisioned: NAMES })).toEqual({
       install: [],
       adopt: [],
@@ -147,7 +147,7 @@ describe('planBundledInstalls', () => {
   it('does not adopt an already-recorded installed node twice', () => {
     expect(
       planBundledInstalls({ ...baseInput, installed: [NAMES[0]], provisioned: [NAMES[0]] })
-    ).toMatchObject({ adopt: [], install: [NAMES[1]] })
+    ).toMatchObject({ adopt: [], install: NAMES.slice(1) })
   })
 })
 
@@ -223,7 +223,7 @@ describe('ensureBundledAgents', () => {
       return { ok: true, message: `${name} installed` }
     })
 
-    await ensureBundledAgents({ ...baseInput, installed: [NAMES[1]] }, deps)
+    await ensureBundledAgents({ ...baseInput, installed: NAMES.slice(1) }, deps)
 
     expect(mid).toHaveLength(1)
     expect(mid[0]).toMatchObject({ name: NAMES[0], phase: 'installing', message: 'building' })
@@ -245,8 +245,8 @@ describe('ensureBundledAgents', () => {
     ])
     // The failure must not stop the next node, and must not be recorded —
     // that is what makes the next launch retry it.
-    expect(deps.markProvisioned.mock.calls.map((c) => c[0])).toEqual([NAMES[1]])
-    expect(deps.install).toHaveBeenCalledTimes(2)
+    expect(deps.markProvisioned.mock.calls.map((c) => c[0])).toEqual(NAMES.slice(1))
+    expect(deps.install).toHaveBeenCalledTimes(NAMES.length)
     expect(deps.lines.some((l) => l.includes('clone failed'))).toBe(true)
   })
 
@@ -268,7 +268,7 @@ describe('ensureBundledAgents', () => {
 
     await expect(ensureBundledAgents(baseInput, deps)).resolves.toBeUndefined()
 
-    expect(deps.install).toHaveBeenCalledTimes(2)
+    expect(deps.install).toHaveBeenCalledTimes(NAMES.length)
     expect(bundledStatuses()).toEqual([])
     expect(deps.lines.some((l) => l.includes('disk full'))).toBe(true)
     expect(deps.lines.some((l) => l.includes('autostart failed'))).toBe(true)
@@ -344,7 +344,7 @@ describe('ensureBundledAgents', () => {
       await tick()
     }
     await first
-    expect(deps.install).toHaveBeenCalledTimes(2)
+    expect(deps.install).toHaveBeenCalledTimes(NAMES.length)
   })
 
   it('resetBundledState clears rows left by a previous run', async () => {

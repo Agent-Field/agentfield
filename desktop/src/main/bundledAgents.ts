@@ -1,6 +1,7 @@
 // Provision the agent nodes that ship with the app (shared/bundled.ts) on
-// first launch, so a fresh install already has swe-planner and pr-af in the
-// Agents library instead of an empty view and a marketplace to shop in.
+// first launch, so a fresh install already has swe-planner, pr-af, sec-af and
+// cloudsecurity-af in the Agents library instead of an empty view and a
+// marketplace to shop in.
 //
 // Delivery is "fetch on first launch", not "baked into the installer": the app
 // installs them through the same control-plane install API a user-initiated

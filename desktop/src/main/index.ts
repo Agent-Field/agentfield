@@ -385,7 +385,7 @@ async function provisionBundledAgents(): Promise<void> {
         await saveSettings(settingsFile(), settings)
       },
       hasInstallApi: () => createCpClient().hasInstallApi(),
-      // Start it from the NEXT launch on, not now. Both bundled nodes need an
+      // Start it from the NEXT launch on, not now. Every bundled node needs an
       // API key the first-launch user has not entered yet, so starting one
       // here would only produce a dead node and an alarming badge; the Agents
       // row's "Needs keys" chip is the affordance that actually helps.
@@ -402,7 +402,7 @@ async function provisionBundledAgents(): Promise<void> {
     }
   )
 
-  // Nothing was started above, on purpose — both bundled nodes need an API key
+  // Nothing was started above, on purpose — the bundled nodes need API keys
   // the first-launch user has not entered. On a login-item launch the app is
   // hidden in the tray, so the Agents row's "Needs keys" chip is telling an
   // empty room. One OS notification is the only thing that reaches the user

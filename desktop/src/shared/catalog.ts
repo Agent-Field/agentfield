@@ -22,9 +22,9 @@ import type { CatalogEntry } from './types'
 // it installs the successor first, migrates node-scoped secrets, and only then
 // retires the old package. So the catalog names the repo and lets the manifest
 // decide. shared/bundled.ts follows the identical rule for the nodes that ship
-// with the app (SWE-AF and pr-af both point their root at `//go`), which is
-// why they are no longer rows here: they are provisioned on first launch
-// instead of being offered as marketplace cards.
+// with the app (all four point their root at `//go`), which is why they are no
+// longer rows here: they are provisioned on first launch instead of being
+// offered as marketplace cards.
 //
 // `name` MUST equal the name the package ends up REGISTERED under once the
 // install settles — that is how the app detects installed state. Note that is
@@ -33,22 +33,11 @@ import type { CatalogEntry } from './types'
 // predecessor's name (an in-place rename), and it may live in a subdirectory
 // this list never names. It is often not the repo name either
 // (SWE-AF → swe-planner).
-export const CATALOG: CatalogEntry[] = [
-  {
-    name: 'sec-af',
-    description:
-      'Security auditor — find vulnerabilities in your codebase and prove which ones are exploitable',
-    source: 'https://github.com/Agent-Field/sec-af',
-    language: 'python'
-  },
-  {
-    name: 'cloudsecurity-af',
-    description:
-      'Cloud security — map real attack paths across your AWS, GCP, and Azure accounts',
-    source: 'https://github.com/Agent-Field/cloudsecurity-af',
-    language: 'python'
-  }
-]
+//
+// Currently empty: every vetted node ships with the app (shared/bundled.ts).
+// The list stays because it is the seam the next marketplace-only node — and
+// eventually the remote catalog fetch — lands in.
+export const CATALOG: CatalogEntry[] = []
 
 /**
  * Look up an installable entry by name, across the marketplace catalog AND the
