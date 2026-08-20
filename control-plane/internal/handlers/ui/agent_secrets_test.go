@@ -112,6 +112,10 @@ func agentSecretsRequest(t *testing.T, router http.Handler, method, path, body s
 
 // Validation contract 1: PUT writes the node scope consumed by runner-side resolution.
 func TestAgentSecretsPutResolvesForRunner(t *testing.T) {
+	// EnvResolver prefers a non-empty process env value, so a developer
+	// machine with this key exported would resolve the host value instead of
+	// the stored one. Empty counts as unset; this keeps the test hermetic.
+	t.Setenv("OPENAI_API_KEY", "")
 	router, home := newAgentSecretsTestRouter(t)
 	response := agentSecretsRequest(t, router, http.MethodPut, "/agents/agent-x/secrets",
 		`{"key":"OPENAI_API_KEY","value":"sk-test"}`)
