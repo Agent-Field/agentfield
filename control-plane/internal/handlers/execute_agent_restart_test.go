@@ -199,7 +199,23 @@ func (s *restartingStore) readCount() int {
 	return s.reads
 }
 
-// healthMarkingStore records the demotion the dispatcher asks for.
+// peekAgent returns the record a read would currently observe, without
+// advancing the read counter — for assertions and conditional checks that
+// must not perturb the switch-over bookkeeping.
+func (s *restartingStore) peekAgent(ctx context.Context, id string) (*types.AgentNode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.after != nil && s.reads >= s.readsAt {
+		return s.after, nil
+	}
+	return s.testExecutionStorage.GetAgent(ctx, id)
+}
+
+// healthMarkingStore records the demotion the dispatcher asks for. It mirrors
+// LocalStorage.UpdateAgentHealthAtomic's optimistic locking: when the caller
+// passes an expected heartbeat, the write is rejected unless it matches the
+// node's current LastHeartbeat, so tests exercise the same conditional
+// semantics production storage enforces.
 type healthMarkingStore struct {
 	*restartingStore
 	mu     sync.Mutex
@@ -207,11 +223,20 @@ type healthMarkingStore struct {
 	err    error
 }
 
-func (s *healthMarkingStore) UpdateAgentHealthAtomic(_ context.Context, _ string, status types.HealthStatus, _ *time.Time) error {
+func (s *healthMarkingStore) UpdateAgentHealthAtomic(ctx context.Context, id string, status types.HealthStatus, expectedLastHeartbeat *time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return s.err
+	}
+	if expectedLastHeartbeat != nil {
+		current, err := s.restartingStore.peekAgent(ctx, id)
+		if err != nil || current == nil {
+			return fmt.Errorf("agent %s not found for conditional health update", id)
+		}
+		if !current.LastHeartbeat.Equal(*expectedLastHeartbeat) {
+			return fmt.Errorf("conditional health update rejected: heartbeat advanced")
+		}
 	}
 	s.marked = append(s.marked, status)
 	return nil
@@ -384,6 +409,151 @@ func TestMarkAgentUnreachableToleratesStoreWithoutHealthSupport(t *testing.T) {
 		c.markAgentUnreachable(context.Background(), &preparedExecution{target: &parsedTarget{NodeID: "demoproj"}})
 		assert.Empty(t, store.markedStatuses())
 	})
+}
+
+// A cancel that lands while the dispatch is waiting out a restart must win:
+// the replay is never sent, so the agent does no work the caller already
+// disowned.
+func TestDispatchAgentRequestHonoursCancelDuringTheWait(t *testing.T) {
+	withRestartGrace(t, 5*time.Second)
+
+	dead := &types.AgentNode{
+		ID:             "demoproj",
+		BaseURL:        "http://" + deadAddress(t),
+		DeploymentType: "long_running",
+		InstanceID:     "instance-old",
+		LastHeartbeat:  time.Now().Add(-time.Second),
+	}
+
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	revived := *dead
+	revived.BaseURL = server.URL
+	revived.InstanceID = "instance-new"
+
+	store := &restartingStore{
+		testExecutionStorage: newTestExecutionStorage(dead),
+		after:                &revived,
+		readsAt:              1,
+	}
+	// The execution was cancelled while the node was down.
+	store.executionRecords["exec_1"] = &types.Execution{
+		ExecutionID: "exec_1",
+		RunID:       "run_1",
+		Status:      types.ExecutionStatusCancelled,
+	}
+	controller := newExecutionController(store, nil, nil, 0, "")
+
+	start := time.Now()
+	resp, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "cancelled")
+	assert.Zero(t, hits.Load(), "a cancelled execution must never be replayed to the agent")
+	assert.Less(t, time.Since(start), 5*time.Second, "the cancel ends the wait early")
+}
+
+// Once the node's record says the node is definitively down — the health
+// checker or another dispatch's expired grace demoted it — waiting longer
+// cannot help, and every queued dispatch aimed at it must stop burning its
+// full grace on a verdict that is already in.
+func TestDispatchAgentRequestStopsWaitingOnceTheNodeIsDemoted(t *testing.T) {
+	withRestartGrace(t, 10*time.Second)
+
+	dead := &types.AgentNode{
+		ID:             "demoproj",
+		BaseURL:        "http://" + deadAddress(t),
+		DeploymentType: "long_running",
+		InstanceID:     "instance-old",
+		LastHeartbeat:  time.Now().Add(-time.Second),
+	}
+	demoted := *dead
+	demoted.HealthStatus = types.HealthStatusInactive
+
+	store := &restartingStore{
+		testExecutionStorage: newTestExecutionStorage(dead),
+		after:                &demoted,
+		readsAt:              1,
+	}
+	controller := newExecutionController(store, nil, nil, 0, "")
+
+	start := time.Now()
+	_, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
+	require.Error(t, err)
+	assert.True(t, isDialFailure(err), "the original dial failure is preserved for classification")
+	assert.Less(t, time.Since(start), 3*time.Second, "a demoted node ends the wait long before the grace expires")
+}
+
+// Serverless nodes have no heartbeat loop and are never polled by the health
+// monitor, so their recorded health goes inactive as a matter of course. The
+// fail-fast gate must not apply to them: a serverless target whose record
+// says inactive must still be invoked.
+func TestExecuteStillDispatchesServerlessDespiteInactiveHealth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var hits atomic.Int64
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`{"result":{"ok":true}}`))
+	}))
+	defer backend.Close()
+
+	agent := &types.AgentNode{
+		ID:              "lambda",
+		BaseURL:         backend.URL,
+		DeploymentType:  "serverless",
+		HealthStatus:    types.HealthStatusInactive,
+		LifecycleStatus: types.AgentStatusOffline,
+		Reasoners:       []types.ReasonerDefinition{{ID: "echo"}},
+	}
+	store := newTestExecutionStorage(agent)
+	router := gin.New()
+	router.POST("/execute/:target", ExecuteHandler(store, nil, nil, 0, ""))
+
+	req := httptest.NewRequest(http.MethodPost, "/execute/lambda.echo",
+		strings.NewReader(`{"input":{"message":"hi"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.NotEqual(t, http.StatusServiceUnavailable, rec.Code,
+		"serverless must not be rejected by the node-health gate; body: %s", rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "node_unavailable")
+	assert.Equal(t, int64(1), hits.Load(), "the serverless backend must be invoked")
+}
+
+// A replay request is served from the recorded run without contacting the
+// agent, so the target node being down must not reject it. (A replay miss
+// dials and fails exactly as it did before the gate existed.)
+func TestExecuteReplayRequestBypassesTheNodeHealthGate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	agent := &types.AgentNode{
+		ID:              "demoproj",
+		BaseURL:         "http://" + deadAddress(t),
+		DeploymentType:  "long_running",
+		HealthStatus:    types.HealthStatusInactive,
+		LifecycleStatus: types.AgentStatusOffline,
+		Reasoners:       []types.ReasonerDefinition{{ID: "echo"}},
+	}
+	store := newTestExecutionStorage(agent)
+	router := gin.New()
+	router.POST("/execute/:target", ExecuteHandler(store, nil, nil, 0, ""))
+
+	req := httptest.NewRequest(http.MethodPost, "/execute/demoproj.echo",
+		strings.NewReader(`{"input":{"message":"hi"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AgentField-Replay-Source-Run-ID", "run_recorded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.NotContains(t, rec.Body.String(), "node_unavailable",
+		"a replay request must not be rejected by the node-health gate")
 }
 
 // The end-to-end contract: a call aimed at a node we already know is down is

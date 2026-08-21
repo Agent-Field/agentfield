@@ -220,11 +220,18 @@ func (c *executionController) agentMayRestart(plan *preparedExecution) bool {
 // on a different port, so re-reading the record is what makes the retry land
 // on the right process at the right address.
 //
-// Note on the orphan reaper: re-registration also fails this execution's row
-// via MarkAgentExecutionsOrphaned. That is harmless here — completeExecution
-// overwrites a non-cancelled row with the terminal result, so a successful
-// retry still lands as succeeded, and the reaper publishes no event, so no
-// spurious failure is reported.
+// Note on the orphan reaper: re-registration also triggers
+// MarkAgentExecutionsOrphaned, which is why markExecutionAwaitingRestart
+// stamps the row before the wait begins. If a re-registration lands in the
+// short window between the failed dial and that stamp, the reaper fails the
+// row first: the `executions` table is then repaired by completeExecution
+// (UpdateExecutionRecord applies no transition validation), but the
+// workflow_executions row cannot leave `failed` — its state machine has no
+// exits from terminal states — so the DAG UI keeps the reaped failure while
+// the execution record shows the retry's real outcome. That residual race is
+// narrow (one dial failure followed by a re-registration within milliseconds)
+// and strictly better than the pre-grace behaviour, where the same sequence
+// failed the run outright.
 func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *preparedExecution, dialErr error) (*http.Response, error) {
 	observedInstance := plan.agent.InstanceID
 	observedHeartbeat := plan.agent.LastHeartbeat
@@ -249,6 +256,10 @@ func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *
 	for {
 		select {
 		case <-ctx.Done():
+			// ctx is dead, so release the hold on a detached context; the
+			// caller is about to fail the execution and the reaper exemption
+			// must not outlive the wait.
+			c.clearExecutionAwaitingRestartDetached(plan)
 			return nil, lastErr
 		case <-ticker.C:
 		}
@@ -261,12 +272,36 @@ func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *
 			continue
 		}
 		if !agentCameBack(agent, observedInstance, observedHeartbeat) {
+			// While we were waiting, the health checker (or another dispatch
+			// whose grace expired first) may have declared the node down.
+			// Waiting longer cannot help — it would only serialize behind a
+			// verdict that has already been reached — so surface the dial
+			// error now instead of burning the rest of the grace.
+			if agent.HealthStatus == types.HealthStatusInactive || agent.LifecycleStatus == types.AgentStatusOffline {
+				break
+			}
 			continue
+		}
+
+		// The node is back, but the execution may have moved on while we
+		// waited: a cancel must win over the replay (mirroring the check
+		// callAgent performs before the first dispatch), and a paused
+		// execution waits for its resume before any work is handed out.
+		if currentExec, execErr := c.store.GetExecutionRecord(ctx, plan.exec.ExecutionID); execErr == nil && currentExec != nil {
+			if currentExec.Status == types.ExecutionStatusCancelled {
+				return nil, fmt.Errorf("execution cancelled while waiting for agent restart")
+			}
+			if currentExec.Status == types.ExecutionStatusPaused {
+				if resumeErr := c.waitForResume(ctx, plan.exec.ExecutionID); resumeErr != nil {
+					return nil, fmt.Errorf("execution paused during agent restart and then cancelled or timed out: %w", resumeErr)
+				}
+			}
 		}
 
 		plan.agent = agent
 		req, reqErr := c.newAgentRequest(ctx, plan, buildAgentURL(agent, plan.target))
 		if reqErr != nil {
+			c.clearExecutionAwaitingRestart(ctx, plan)
 			return nil, reqErr
 		}
 		resp, callErr := c.httpClient.Do(req)
@@ -279,6 +314,7 @@ func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *
 			return resp, nil
 		}
 		if !isDialFailure(callErr) {
+			c.clearExecutionAwaitingRestart(ctx, plan)
 			return nil, callErr
 		}
 		// The node announced itself but is not serving yet. Keep waiting
@@ -309,6 +345,14 @@ func (c *executionController) markExecutionAwaitingRestart(ctx context.Context, 
 // clearExecutionAwaitingRestart releases the claim once the wait is over, so a
 // row that goes on to succeed does not carry a stale reason.
 func (c *executionController) clearExecutionAwaitingRestart(ctx context.Context, plan *preparedExecution) {
+	c.setExecutionRestartReason(ctx, plan, "")
+}
+
+// clearExecutionAwaitingRestartDetached releases the claim when the caller's
+// context is already cancelled and could not carry the write.
+func (c *executionController) clearExecutionAwaitingRestartDetached(plan *preparedExecution) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	c.setExecutionRestartReason(ctx, plan, "")
 }
 

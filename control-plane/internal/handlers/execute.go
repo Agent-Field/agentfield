@@ -1544,17 +1544,27 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 		}
 	}
 
+	if agent.DeploymentType == "" && agent.Metadata.Custom != nil {
+		if v, ok := agent.Metadata.Custom["serverless"]; ok && fmt.Sprint(v) == "true" {
+			agent.DeploymentType = "serverless"
+		}
+	}
+
 	// Reject a call to a node we already know is down BEFORE the execution
 	// record is created. Dispatching into a dead node would persist a row and
 	// then fail it, charging the caller for a failed execution when nothing
 	// was ever attempted. See execute_agent_restart.go.
-	if err := ensureAgentDispatchable(agent); err != nil {
-		return nil, err
-	}
-
-	if agent.DeploymentType == "" && agent.Metadata.Custom != nil {
-		if v, ok := agent.Metadata.Custom["serverless"]; ok && fmt.Sprint(v) == "true" {
-			agent.DeploymentType = "serverless"
+	//
+	// Serverless nodes are exempt: they have no heartbeat loop and the health
+	// monitor never polls them, so the presence sweep marks every serverless
+	// node inactive shortly after registration — their recorded health says
+	// nothing about whether an invocation would succeed. Replay requests are
+	// also exempt: a replay hit is served from the recorded run without ever
+	// contacting the agent, so the node being down must not reject it (a
+	// replay miss simply dials and fails exactly as it did before this gate).
+	if agent.DeploymentType != "serverless" && strings.TrimSpace(headers.replaySourceRunID) == "" {
+		if err := ensureAgentDispatchable(agent); err != nil {
+			return nil, err
 		}
 	}
 	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
