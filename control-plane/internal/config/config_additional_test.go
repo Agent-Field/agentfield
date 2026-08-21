@@ -606,3 +606,46 @@ func TestShutdownTimeoutEnvOverrideIgnoresInvalidValue(t *testing.T) {
 		t.Fatalf("expected invalid shutdown timeout env value to be ignored, got %v", cfg.AgentField.ShutdownTimeout)
 	}
 }
+
+func TestAgentRestartGrace(t *testing.T) {
+	writeMinimalConfig := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "agentfield.yaml")
+		if err := os.WriteFile(path, []byte("agentfield:\n  port: 8080\n"), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		return path
+	}
+
+	t.Run("is unset by default so the handler default applies", func(t *testing.T) {
+		cfg, err := LoadConfig(writeMinimalConfig(t))
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		if cfg.AgentField.NodeHealth.AgentRestartGrace != 0 {
+			t.Fatalf("expected an unset restart grace, got %s", cfg.AgentField.NodeHealth.AgentRestartGrace)
+		}
+	})
+
+	t.Run("is overridable from the environment", func(t *testing.T) {
+		t.Setenv("AGENTFIELD_AGENT_RESTART_GRACE", "25s")
+		cfg, err := LoadConfig(writeMinimalConfig(t))
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		if cfg.AgentField.NodeHealth.AgentRestartGrace != 25*time.Second {
+			t.Fatalf("expected 25s restart grace, got %s", cfg.AgentField.NodeHealth.AgentRestartGrace)
+		}
+	})
+
+	t.Run("ignores an unparseable value", func(t *testing.T) {
+		t.Setenv("AGENTFIELD_AGENT_RESTART_GRACE", "soon")
+		cfg, err := LoadConfig(writeMinimalConfig(t))
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		if cfg.AgentField.NodeHealth.AgentRestartGrace != 0 {
+			t.Fatalf("expected an unparseable value to be ignored, got %s", cfg.AgentField.NodeHealth.AgentRestartGrace)
+		}
+	})
+}

@@ -130,6 +130,18 @@ const (
 	ErrorCategoryAgentUnreachable ErrorCategory = "agent_unreachable"
 	ErrorCategoryBadResponse      ErrorCategory = "bad_response"
 	ErrorCategoryInternal         ErrorCategory = "internal_error"
+	// ErrorCategoryTargetNotFound marks a call aimed at a node or reasoner
+	// that does not exist. It is the caller's mistake, not an internal fault,
+	// and it is the single most common first-run error: the user runs the
+	// quickstart curl before starting their agent, so the node has never
+	// registered. Reporting it as internal_error made a normal mistake look
+	// like a broken control plane.
+	ErrorCategoryTargetNotFound ErrorCategory = "target_not_found"
+	// ErrorCategoryNodeUnavailable marks a request we refused to dispatch
+	// because the target node is known to be down. It is deliberately distinct
+	// from agent_unreachable: that one means we tried and could not reach the
+	// process, this one means we never tried. See ensureAgentDispatchable.
+	ErrorCategoryNodeUnavailable ErrorCategory = "node_unavailable"
 )
 
 // executionPreconditionError carries both an HTTP status code and message.

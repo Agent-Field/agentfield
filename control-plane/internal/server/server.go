@@ -137,6 +137,9 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 	// Configure execution event payload redaction from logging config.
 	handlers.SetRedactPayloads(cfg.Logging.ShouldRedactPayloads())
+	if grace := cfg.AgentField.NodeHealth.AgentRestartGrace; grace != 0 {
+		handlers.SetAgentRestartGrace(grace)
+	}
 
 	Router := gin.Default()
 
