@@ -229,13 +229,21 @@ class ResultCache:
         task = self._cleanup_task
         shutdown_event = self._shutdown_event
         owning_loop = self._loop
+        cleanup_error: Optional[Exception] = None
 
         # Signal the loop to exit promptly when we're on its own loop; the
         # shared helper then cancels + awaits it there. Cross-loop, the helper
         # cancels on the owning loop without awaiting.
         if shutdown_event is not None and owning_loop is current_loop:
-            shutdown_event.set()
-        await cancel_and_await_if_same_loop(task, owning_loop)
+            try:
+                shutdown_event.set()
+            except Exception as exc:
+                cleanup_error = exc
+        try:
+            await cancel_and_await_if_same_loop(task, owning_loop)
+        except Exception as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
 
         # Compare-before-clear: only null the references if they're still the
         # ones we snapshotted. A concurrent start() on another thread/loop
@@ -248,11 +256,18 @@ class ResultCache:
         if self._loop is owning_loop:
             self._loop = None
 
-        with timed_lock(self._lock, "result_cache"):
-            self._cache.clear()
-            self.metrics.size = 0
+        try:
+            with timed_lock(self._lock, "result_cache"):
+                self._cache.clear()
+                self.metrics.size = 0
+        except Exception as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
 
         logger.info("ResultCache stopped")
+
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def get(self, key: str) -> Optional[Any]:
         """

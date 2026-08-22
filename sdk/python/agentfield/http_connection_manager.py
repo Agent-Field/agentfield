@@ -243,23 +243,50 @@ class ConnectionManager:
                     return
                 self._closed = True
 
+            cleanup_error: Optional[Exception] = None
+
             # Cancel background tasks (same loop — safe to await).
-            await cancel_and_await_if_same_loop(self._health_check_task, owning_loop)
-            self._health_check_task = None
-            await cancel_and_await_if_same_loop(self._cleanup_task, owning_loop)
-            self._cleanup_task = None
+            try:
+                await cancel_and_await_if_same_loop(
+                    self._health_check_task, owning_loop
+                )
+            except Exception as exc:
+                cleanup_error = exc
+            finally:
+                self._health_check_task = None
+
+            try:
+                await cancel_and_await_if_same_loop(self._cleanup_task, owning_loop)
+            except Exception as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+            finally:
+                self._cleanup_task = None
 
             # Close session and connector
             if self._session:
-                await self._session.close()
-                self._session = None
+                try:
+                    await self._session.close()
+                except Exception as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+                finally:
+                    self._session = None
 
             if self._connector:
-                await self._connector.close()
-                self._connector = None
+                try:
+                    await self._connector.close()
+                except Exception as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+                finally:
+                    self._connector = None
 
             self._loop = None
             logger.info("ConnectionManager closed")
+
+            if cleanup_error is not None:
+                raise cleanup_error
 
     def _close_cross_loop(self, owning_loop: asyncio.AbstractEventLoop) -> None:
         """Tear down from a foreign loop by scheduling real teardown on the owner.

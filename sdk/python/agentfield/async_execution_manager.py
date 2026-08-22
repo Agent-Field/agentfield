@@ -341,12 +341,21 @@ class AsyncExecutionManager:
 
         current_loop = current_running_loop()
         owning_loop = self._loop
+        cleanup_error: Optional[Exception] = None
+
+        def remember_cleanup_error(exc: Exception) -> None:
+            nonlocal cleanup_error
+            if cleanup_error is None:
+                cleanup_error = exc
 
         # Signal shutdown only when we're on the owning loop — asyncio.Event
         # is not safe to set from a foreign loop, and the loop-aware cancel
         # below tears the tasks down regardless.
         if self._shutdown_event is not None and owning_loop is current_loop:
-            self._shutdown_event.set()
+            try:
+                self._shutdown_event.set()
+            except Exception as exc:
+                remember_cleanup_error(exc)
 
         # Cancel background tasks, awaiting only when safe (same loop).
         tasks_to_cancel = [
@@ -357,12 +366,16 @@ class AsyncExecutionManager:
         ]
 
         for task in tasks_to_cancel:
-            await cancel_and_await_if_same_loop(task, owning_loop)
+            try:
+                await cancel_and_await_if_same_loop(task, owning_loop)
+            except Exception as exc:
+                remember_cleanup_error(exc)
 
         self._polling_task = None
         self._cleanup_task = None
         self._metrics_task = None
         self._event_stream_task = None
+        self._shutdown_event = None
         self._loop = None
 
         # Cancel all active executions. The _execution_lock is an asyncio.Lock
@@ -371,11 +384,17 @@ class AsyncExecutionManager:
         # schedule the cancellation on the owning loop so executions are
         # actually terminated rather than left dangling.
         if owning_loop is current_loop:
-            async with self._execution_lock:
-                for execution in self._executions.values():
-                    if execution.is_active:
-                        execution.cancel("Manager shutdown")
-                        self._release_capacity_for_execution(execution)
+            try:
+                async with self._execution_lock:
+                    for execution in self._executions.values():
+                        if execution.is_active:
+                            try:
+                                execution.cancel("Manager shutdown")
+                                self._release_capacity_for_execution(execution)
+                            except Exception as exc:
+                                remember_cleanup_error(exc)
+            except Exception as exc:
+                remember_cleanup_error(exc)
         elif owning_loop is not None and not owning_loop.is_closed():
             # Schedule execution cancellation on the owning loop so it runs
             # under the correct lock. Fire-and-forget — we can't await it.
@@ -386,17 +405,29 @@ class AsyncExecutionManager:
                             if execution.is_active:
                                 execution.cancel("Manager shutdown (cross-loop)")
                                 self._release_capacity_for_execution(execution)
+
                 owning_loop.create_task(_do_cancel())
+
             try:
                 owning_loop.call_soon_threadsafe(_cancel_on_owner)
             except Exception:
                 logger.debug("Could not schedule cross-loop execution cancel", exc_info=True)
 
         # Stop components
-        await self.connection_manager.close()
-        await self.result_cache.stop()
+        try:
+            await self.connection_manager.close()
+        except Exception as exc:
+            remember_cleanup_error(exc)
+
+        try:
+            await self.result_cache.stop()
+        except Exception as exc:
+            remember_cleanup_error(exc)
 
         logger.info("AsyncExecutionManager stopped")
+
+        if cleanup_error is not None:
+            raise cleanup_error
 
     async def submit_execution(
         self,
