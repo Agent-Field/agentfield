@@ -235,22 +235,23 @@ class ResultCache:
         # cancels on the owning loop without awaiting.
         if shutdown_event is not None and owning_loop is current_loop:
             shutdown_event.set()
-        await cancel_and_await_if_same_loop(task, owning_loop)
+        try:
+            await cancel_and_await_if_same_loop(task, owning_loop)
+        finally:
+            # Compare-before-clear: only null the references if they're still
+            # the ones we snapshotted. A concurrent start() on another
+            # thread/loop could have installed fresh references in between;
+            # clobbering those would orphan the new cleanup task (#623).
+            if self._cleanup_task is task:
+                self._cleanup_task = None
+            if self._shutdown_event is shutdown_event:
+                self._shutdown_event = None
+            if self._loop is owning_loop:
+                self._loop = None
 
-        # Compare-before-clear: only null the references if they're still the
-        # ones we snapshotted. A concurrent start() on another thread/loop
-        # could have installed fresh references in between; clobbering those
-        # would orphan the new cleanup task (#623 review feedback).
-        if self._cleanup_task is task:
-            self._cleanup_task = None
-        if self._shutdown_event is shutdown_event:
-            self._shutdown_event = None
-        if self._loop is owning_loop:
-            self._loop = None
-
-        with timed_lock(self._lock, "result_cache"):
-            self._cache.clear()
-            self.metrics.size = 0
+            with timed_lock(self._lock, "result_cache"):
+                self._cache.clear()
+                self.metrics.size = 0
 
         logger.info("ResultCache stopped")
 
@@ -490,9 +491,7 @@ class ResultCache:
                     expired_count = self._cleanup_expired()
 
                 if expired_count > 0:
-                    logger.debug(
-                        f"Cleaned up {expired_count} expired cache entries"
-                    )
+                    logger.debug(f"Cleaned up {expired_count} expired cache entries")
 
                 # Log cache stats if performance logging is enabled
                 if self.config.enable_performance_logging:

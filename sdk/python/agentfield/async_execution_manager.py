@@ -21,7 +21,12 @@ from .async_lifecycle import (
     cancel_and_await_if_same_loop,
     current_running_loop,
 )
-from .execution_state import ExecuteError, ExecutionPriority, ExecutionState, ExecutionStatus
+from .execution_state import (
+    ExecuteError,
+    ExecutionPriority,
+    ExecutionState,
+    ExecutionStatus,
+)
 from .exceptions import (
     AgentFieldClientError,
     ExecutionCancelledError,
@@ -245,9 +250,7 @@ class AsyncExecutionManager:
 
         # Polling coordination
         self._polling_task: Optional[asyncio.Task] = None
-        self._polling_semaphore = LazySemaphore(
-            lambda: self.config.max_active_polls
-        )
+        self._polling_semaphore = LazySemaphore(lambda: self.config.max_active_polls)
         self._shutdown_event: Optional[asyncio.Event] = None
 
         # Metrics and monitoring
@@ -356,45 +359,53 @@ class AsyncExecutionManager:
             self._event_stream_task,
         ]
 
-        for task in tasks_to_cancel:
-            await cancel_and_await_if_same_loop(task, owning_loop)
+        try:
+            for task in tasks_to_cancel:
+                await cancel_and_await_if_same_loop(task, owning_loop)
+        finally:
+            self._polling_task = None
+            self._cleanup_task = None
+            self._metrics_task = None
+            self._event_stream_task = None
+            self._loop = None
 
-        self._polling_task = None
-        self._cleanup_task = None
-        self._metrics_task = None
-        self._event_stream_task = None
-        self._loop = None
-
-        # Cancel all active executions. The _execution_lock is an asyncio.Lock
-        # bound to the owning loop — taking it from a foreign loop would raise
-        # "got Future attached to a different loop". On a cross-loop stop we
-        # schedule the cancellation on the owning loop so executions are
-        # actually terminated rather than left dangling.
-        if owning_loop is current_loop:
-            async with self._execution_lock:
-                for execution in self._executions.values():
-                    if execution.is_active:
-                        execution.cancel("Manager shutdown")
-                        self._release_capacity_for_execution(execution)
-        elif owning_loop is not None and not owning_loop.is_closed():
-            # Schedule execution cancellation on the owning loop so it runs
-            # under the correct lock. Fire-and-forget — we can't await it.
-            def _cancel_on_owner():
-                async def _do_cancel():
+            try:
+                # Cancel all active executions. The _execution_lock is an
+                # asyncio.Lock bound to the owning loop — taking it from a
+                # foreign loop would raise. On a cross-loop stop, schedule
+                # cancellation on the owning loop instead.
+                if owning_loop is current_loop:
                     async with self._execution_lock:
                         for execution in self._executions.values():
                             if execution.is_active:
-                                execution.cancel("Manager shutdown (cross-loop)")
+                                execution.cancel("Manager shutdown")
                                 self._release_capacity_for_execution(execution)
-                owning_loop.create_task(_do_cancel())
-            try:
-                owning_loop.call_soon_threadsafe(_cancel_on_owner)
-            except Exception:
-                logger.debug("Could not schedule cross-loop execution cancel", exc_info=True)
+                elif owning_loop is not None and not owning_loop.is_closed():
 
-        # Stop components
-        await self.connection_manager.close()
-        await self.result_cache.stop()
+                    def _cancel_on_owner():
+                        async def _do_cancel():
+                            async with self._execution_lock:
+                                for execution in self._executions.values():
+                                    if execution.is_active:
+                                        execution.cancel(
+                                            "Manager shutdown (cross-loop)"
+                                        )
+                                        self._release_capacity_for_execution(execution)
+
+                        owning_loop.create_task(_do_cancel())
+
+                    try:
+                        owning_loop.call_soon_threadsafe(_cancel_on_owner)
+                    except Exception:
+                        logger.debug(
+                            "Could not schedule cross-loop execution cancel",
+                            exc_info=True,
+                        )
+            finally:
+                try:
+                    await self.connection_manager.close()
+                finally:
+                    await self.result_cache.stop()
 
         logger.info("AsyncExecutionManager stopped")
 
@@ -429,7 +440,9 @@ class AsyncExecutionManager:
 
         # Check circuit breaker
         if self._is_circuit_breaker_open():
-            raise AgentFieldClientError("Circuit breaker is open - too many recent failures")
+            raise AgentFieldClientError(
+                "Circuit breaker is open - too many recent failures"
+            )
 
         # Reserve capacity slot; released once terminal
         await self._capacity_semaphore.acquire()
@@ -453,7 +466,10 @@ class AsyncExecutionManager:
         body_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
         # Add DID authentication headers if configured
-        if self._did_authenticator is not None and self._did_authenticator.is_configured:
+        if (
+            self._did_authenticator is not None
+            and self._did_authenticator.is_configured
+        ):
             did_headers = self._did_authenticator.sign_headers(body_bytes)
             request_headers.update(did_headers)
 
@@ -477,8 +493,14 @@ class AsyncExecutionManager:
                         error_body = None
                     body_msg = ""
                     if isinstance(error_body, dict):
-                        body_msg = error_body.get("message") or error_body.get("error") or ""
-                    msg = f"{response.status}, {body_msg}" if body_msg else str(response.status)
+                        body_msg = (
+                            error_body.get("message") or error_body.get("error") or ""
+                        )
+                    msg = (
+                        f"{response.status}, {body_msg}"
+                        if body_msg
+                        else str(response.status)
+                    )
                     raise ExecuteError(response.status, msg, error_body)
                 result = await response.json()
 
@@ -656,9 +678,7 @@ class AsyncExecutionManager:
             async with self._execution_lock:
                 execution = self._executions.get(execution_id)
                 if execution is not None:
-                    previous_pause_clock = getattr(
-                        execution, "_pause_clock", None
-                    )
+                    previous_pause_clock = getattr(execution, "_pause_clock", None)
                     execution._pause_clock = pause_clock
                     attached_pause_clock = True
         try:
@@ -1256,9 +1276,7 @@ class AsyncExecutionManager:
             kwargs: Dict[str, Any] = {"timeout": self.config.polling_timeout}
             if self._auth_headers:
                 kwargs["headers"] = dict(self._auth_headers)
-            response = await self.connection_manager.request(
-                "GET", url, **kwargs
-            )
+            response = await self.connection_manager.request("GET", url, **kwargs)
             duration = time.time() - start_time
 
             await self._process_poll_response(execution, response, duration)
@@ -1342,10 +1360,10 @@ class AsyncExecutionManager:
 
         old_status = execution.status
 
-        should_apply_terminal_payload = new_status != old_status or (
-            new_status == ExecutionStatus.SUCCEEDED and execution.result is None
-        ) or (
-            new_status == ExecutionStatus.FAILED and not execution.error_message
+        should_apply_terminal_payload = (
+            new_status != old_status
+            or (new_status == ExecutionStatus.SUCCEEDED and execution.result is None)
+            or (new_status == ExecutionStatus.FAILED and not execution.error_message)
         )
 
         # Update status and terminal payloads. Replay-hit executions can be
