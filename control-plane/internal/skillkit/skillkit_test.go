@@ -437,7 +437,7 @@ func TestHelpersAndTargets(t *testing.T) {
 	if !opencode.Detected() {
 		t.Fatal("opencode target should be detected")
 	}
-	if _, err := opencode.Install(skill, filepath.Join(home, "canonical", "current")); err != nil {
+	if _, err := opencode.Install(skill, filepath.Join(home, "canonical", skill.Version)); err != nil {
 		t.Fatalf("opencode install: %v", err)
 	}
 	if installed, version, err := opencode.Status(); err != nil || !installed || version != skill.Version {
