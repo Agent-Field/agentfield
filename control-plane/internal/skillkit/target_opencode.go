@@ -65,10 +65,15 @@ func (t opencodeTarget) Install(skill Skill, canonicalCurrentDir string) (Instal
 }
 
 func (t opencodeTarget) Uninstall() error {
+	// Resolve the target root before iterating so configuration errors (such as
+	// an unset HOME) are reported consistently with the other targets.
+	if _, err := t.TargetPath(); err != nil {
+		return err
+	}
 	for _, s := range Catalog {
 		link, err := t.skillLink(s)
 		if err != nil {
-			continue
+			return err
 		}
 		if info, err := os.Lstat(link); err == nil && (info.Mode()&os.ModeSymlink != 0 || info.IsDir() || info.Mode().IsRegular()) {
 			if err := os.RemoveAll(link); err != nil {
@@ -94,9 +99,10 @@ func (t opencodeTarget) Status() (bool, string, error) {
 	if info.Mode()&os.ModeSymlink == 0 {
 		return true, "manual", nil
 	}
-	dest, err := os.Readlink(link)
-	if err != nil {
+	if _, err := os.Readlink(link); err != nil {
 		return false, "", err
 	}
-	return true, filepath.Base(dest), nil
+	// The canonical directory is intentionally named "current"; the installed
+	// skill version is the version baked into the catalog used to create it.
+	return true, Catalog[0].Version, nil
 }
