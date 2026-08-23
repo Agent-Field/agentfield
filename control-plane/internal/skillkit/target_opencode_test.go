@@ -26,6 +26,9 @@ func TestOpenCodeTargetInstallsSkillSymlink(t *testing.T) {
 	if err != nil || got != canonical {
 		t.Fatalf("OpenCode link = %q, %v; want %q", got, err, canonical)
 	}
+	if installed, version, err := target.Status(); err != nil || !installed || version != "1.2.3" {
+		t.Fatalf("OpenCode status = %v %q %v", installed, version, err)
+	}
 	if err := target.Uninstall(); err != nil {
 		t.Fatal(err)
 	}

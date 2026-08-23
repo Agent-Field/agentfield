@@ -65,14 +65,9 @@ func (t opencodeTarget) Install(skill Skill, canonicalCurrentDir string) (Instal
 }
 
 func (t opencodeTarget) Uninstall() error {
-<<<<<<< HEAD
-	// Resolve the target root before iterating so configuration errors (such as
-	// an unset HOME) are reported consistently with the other targets.
-=======
 	// Resolve the target root up front so failures (for example, an
 	// unavailable home directory) are reported to the caller instead of
 	// being silently ignored while iterating over the catalog.
->>>>>>> bde4c576 (fix(skillkit): propagate OpenCode uninstall home errors)
 	if _, err := t.TargetPath(); err != nil {
 		return err
 	}
@@ -105,10 +100,13 @@ func (t opencodeTarget) Status() (bool, string, error) {
 	if info.Mode()&os.ModeSymlink == 0 {
 		return true, "manual", nil
 	}
-	if _, err := os.Readlink(link); err != nil {
+	dest, err := os.Readlink(link)
+	if err != nil {
 		return false, "", err
 	}
-	// The canonical directory is intentionally named "current"; the installed
-	// skill version is the version baked into the catalog used to create it.
-	return true, Catalog[0].Version, nil
+	resolved, err := filepath.EvalSymlinks(dest)
+	if err != nil {
+		return false, "", err
+	}
+	return true, filepath.Base(resolved), nil
 }
