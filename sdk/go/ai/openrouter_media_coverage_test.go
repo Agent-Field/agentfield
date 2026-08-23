@@ -21,6 +21,9 @@ func TestBaseURLEmptyUsesDefault(t *testing.T) {
 }
 
 func TestOpenRouterMediaProviderHeadersIncludeAttribution(t *testing.T) {
+	t.Setenv("AGENTFIELD_OPENROUTER_CATEGORIES", "")
+	t.Setenv("OR_CATEGORIES", "")
+
 	var received http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received = r.Header
@@ -48,6 +51,7 @@ func TestOpenRouterMediaProviderHeadersIncludeAttribution(t *testing.T) {
 	assert.Equal(t, "https://media.example", received.Get("HTTP-Referer"))
 	assert.Equal(t, "Media App", received.Get("X-OpenRouter-Title"))
 	assert.Equal(t, "Media App", received.Get("X-Title"))
+	assert.Equal(t, defaultOpenRouterCategories, received.Get("X-OpenRouter-Categories"))
 }
 
 // GenerateVideo exercises every optional payload field.

@@ -150,22 +150,57 @@ async def test_note_sends_async_request(monkeypatch):
     context = SimpleNamespace(to_headers=lambda: {"X-Workflow-ID": "wf"})
     monkeypatch.setattr(agent, "_get_current_execution_context", lambda: context)
 
-    tasks = []
-
-    class DummyLoop:
-        def is_running(self):
-            return True
-
-        def create_task(self, coro):
-            task = asyncio.ensure_future(coro)
-            tasks.append(task)
-            return task
-
-    monkeypatch.setattr("asyncio.get_event_loop", lambda: DummyLoop())
-
     agent.note("hello", tags=["debug"])
-    await asyncio.gather(*tasks)
+    # fire_and_forget creates a task on the running loop; give it a tick.
+    await asyncio.sleep(0.1)
 
     assert called["url"].startswith("http://agentfield/api/v1")
     assert called["json"]["message"] == "hello"
     assert called["json"]["tags"] == ["debug"]
+
+
+def _agent_stub_for_del(cleanup_coro_factory):
+    """Bare Agent instance carrying only what ``Agent.__del__`` touches."""
+    agent = object.__new__(Agent)
+    agent._async_execution_manager = SimpleNamespace(name="manager")
+    agent._cleanup_async_resources = cleanup_coro_factory
+    return agent
+
+
+def test_del_runs_cleanup_to_completion_when_no_loop_is_running():
+    """C1: with no running event loop (the destructor-at-exit case), cleanup
+    must have finished by the time __del__ returns — handing it to a daemon
+    thread would let the interpreter kill it before it does any work."""
+    state = {"finished": False}
+
+    async def cleanup():
+        # Yield at least once so a half-run coroutine would be observable.
+        await asyncio.sleep(0)
+        state["finished"] = True
+
+    agent = _agent_stub_for_del(cleanup)
+
+    Agent.__del__(agent)
+
+    assert state["finished"] is True
+
+
+@pytest.mark.asyncio
+async def test_del_schedules_cleanup_on_the_running_loop_without_blocking():
+    """C2: with a loop already running, __del__ must not block it (and must
+    not raise); the cleanup runs as soon as the loop gets control back."""
+    state = {"finished": False}
+
+    async def cleanup():
+        state["finished"] = True
+
+    agent = _agent_stub_for_del(cleanup)
+
+    Agent.__del__(agent)
+
+    # Still scheduled, not executed: the destructor handed off without
+    # blocking the running loop.
+    assert state["finished"] is False
+
+    await asyncio.sleep(0.05)
+    assert state["finished"] is True

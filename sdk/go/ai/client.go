@@ -16,8 +16,30 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// ClientOption configures an AI client during construction.
+type ClientOption func(*Client)
+
+// WithHTTPClient uses the supplied HTTP client for AI requests.
+func WithHTTPClient(httpClient *http.Client) ClientOption {
+	return func(c *Client) {
+		if httpClient != nil {
+			c.httpClient = httpClient
+		}
+	}
+}
+
+// WithTransport uses the supplied round tripper while preserving the default
+// HTTP client's timeout and other settings.
+func WithTransport(transport http.RoundTripper) ClientOption {
+	return func(c *Client) {
+		if transport != nil {
+			c.httpClient.Transport = transport
+		}
+	}
+}
+
 // NewClient creates a new AI client with the given configuration.
-func NewClient(config *Config) (*Client, error) {
+func NewClient(config *Config, opts ...ClientOption) (*Client, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
@@ -26,12 +48,20 @@ func NewClient(config *Config) (*Client, error) {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
-	return &Client{
+	client := &Client{
 		config: config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
-	}, nil
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(client)
+		}
+	}
+
+	return client, nil
 }
 
 // Model returns the client's configured default model slug.
@@ -110,9 +140,12 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 
-	// Add OpenRouter-specific headers if applicable
-	if c.config.IsOpenRouter() {
+	// Add gateway-specific attribution headers if applicable
+	switch {
+	case c.config.IsOpenRouter():
 		applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+	case c.config.IsInfron():
+		applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 	}
 
 	// Execute request
@@ -129,12 +162,8 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 	}
 
 	// Check for errors
-	if httpResp.StatusCode >= 400 {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err != nil {
-			return nil, fmt.Errorf("API error (%d): %s", httpResp.StatusCode, string(respBody))
-		}
-		return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
+	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+		return nil, newAPIError(httpResp.StatusCode, respBody)
 	}
 
 	// Parse response
@@ -142,6 +171,7 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
+	response.normalizeNativeCost()
 
 	return &response, nil
 }
@@ -207,9 +237,12 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		httpReq.Header.Set("Accept", "text/event-stream")
 
-		// Add OpenRouter-specific headers if applicable
-		if c.config.IsOpenRouter() {
+		// Add gateway-specific attribution headers if applicable
+		switch {
+		case c.config.IsOpenRouter():
 			applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+		case c.config.IsInfron():
+			applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 		}
 
 		// Execute request
@@ -221,9 +254,9 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 		defer httpResp.Body.Close()
 
 		// Check for errors
-		if httpResp.StatusCode >= 400 {
+		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 			respBody, _ := io.ReadAll(httpResp.Body)
-			errCh <- fmt.Errorf("API error (%d): %s", httpResp.StatusCode, string(respBody))
+			errCh <- newAPIError(httpResp.StatusCode, respBody)
 			return
 		}
 
@@ -288,6 +321,7 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 				if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 					continue // Skip malformed chunks
 				}
+				chunk.normalizeNativeCost()
 
 				return chunk, nil
 			}

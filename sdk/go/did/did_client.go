@@ -21,6 +21,7 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	token      string
+	apiKey     string
 	signFn     SignRequestFunc
 }
 
@@ -40,6 +41,14 @@ func WithHTTPClient(c *http.Client) ClientOption {
 func WithToken(token string) ClientOption {
 	return func(dc *Client) {
 		dc.token = token
+	}
+}
+
+// WithAPIKey sets the X-API-Key header for authenticated requests. A control
+// plane running with an API key rejects DID and VC calls without it.
+func WithAPIKey(apiKey string) ClientOption {
+	return func(dc *Client) {
+		dc.apiKey = apiKey
 	}
 }
 
@@ -127,6 +136,9 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any, out 
 
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
 	}
 
 	// Apply DID authentication if configured.

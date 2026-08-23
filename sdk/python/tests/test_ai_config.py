@@ -59,15 +59,19 @@ def test_ai_config_get_litellm_params_uses_overrides_and_prunes_none():
 def test_ai_config_get_litellm_params_adds_openrouter_attribution(monkeypatch):
     monkeypatch.delenv("AGENTFIELD_OPENROUTER_SITE_URL", raising=False)
     monkeypatch.delenv("AGENTFIELD_OPENROUTER_APP_NAME", raising=False)
+    monkeypatch.delenv("AGENTFIELD_OPENROUTER_CATEGORIES", raising=False)
     monkeypatch.delenv("OR_SITE_URL", raising=False)
     monkeypatch.delenv("OR_APP_NAME", raising=False)
+    monkeypatch.delenv("OR_CATEGORIES", raising=False)
 
     params = AIConfig(model="openrouter/openai/gpt-4o").get_litellm_params()
 
     assert params["headers"]["HTTP-Referer"] == "https://agentfield.ai"
     assert params["headers"]["X-OpenRouter-Title"] == "AgentField AI"
     assert params["headers"]["X-Title"] == "AgentField AI"
+    assert params["headers"]["X-OpenRouter-Categories"] == "cli-agent,programming-app"
     assert params["extra_headers"]["HTTP-Referer"] == "https://agentfield.ai"
+    assert params["extra_headers"]["X-OpenRouter-Categories"] == "cli-agent,programming-app"
 
 
 def test_ai_config_openrouter_attribution_preserves_explicit_headers():
@@ -85,8 +89,19 @@ def test_ai_config_openrouter_attribution_preserves_explicit_headers():
 
     assert params["headers"]["HTTP-Referer"] == "https://caller.example"
     assert params["headers"]["X-OpenRouter-Title"] == "Override App"
+    assert params["headers"]["X-OpenRouter-Categories"] == "cli-agent,programming-app"
     assert params["extra_headers"]["x-openrouter-title"] == "Caller Title"
     assert params["extra_headers"]["HTTP-Referer"] == "https://override.example"
+    assert params["extra_headers"]["X-OpenRouter-Categories"] == "cli-agent,programming-app"
+
+
+def test_ai_config_openrouter_categories_env_override(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_OPENROUTER_CATEGORIES", "research,translation")
+
+    params = AIConfig(model="openrouter/openai/gpt-4o").get_litellm_params()
+
+    assert params["headers"]["X-OpenRouter-Categories"] == "research,translation"
+    assert params["extra_headers"]["X-OpenRouter-Categories"] == "research,translation"
 
 
 def test_ai_config_get_litellm_params_skips_non_openrouter():

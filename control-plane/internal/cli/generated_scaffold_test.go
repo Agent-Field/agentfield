@@ -24,7 +24,7 @@ func TestGeneratedScaffoldsHaveInstallableV1Manifests(t *testing.T) {
 	}
 	wantStarts := map[string]string{
 		"python":     "python main.py",
-		"go":         "go run .",
+		"go":         "bin/representative-node",
 		"typescript": "npm run start",
 	}
 
@@ -69,6 +69,9 @@ func TestGeneratedScaffoldsHaveInstallableV1Manifests(t *testing.T) {
 			}
 			if metadata.AgentNode.NodeID != data.NodeID || metadata.AgentNode.DefaultPort != data.AgentPort || metadata.Entrypoint.Start != wantStart || metadata.HealthcheckPath() != "/health" {
 				t.Fatalf("unexpected executable metadata: %#v", metadata)
+			}
+			if language == "go" && metadata.Entrypoint.Build != "." {
+				t.Fatalf("Go build target = %q, want .", metadata.Entrypoint.Build)
 			}
 			if len(metadata.UserEnvironment.Required) != 0 {
 				t.Fatalf("required environment = %#v, want empty", metadata.UserEnvironment.Required)

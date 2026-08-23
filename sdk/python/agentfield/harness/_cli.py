@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
 import signal
 import subprocess
-from typing import Any, Dict, List, Optional, Tuple
+from collections import deque
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from agentfield.openrouter_attribution import apply_subprocess_env
+
+logger = logging.getLogger("agentfield.harness.cli")
 
 _ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
@@ -100,9 +104,86 @@ def _resolve_idle_seconds(idle_seconds: Optional[float]) -> Optional[float]:
     return idle_seconds if idle_seconds and idle_seconds > 0 else None
 
 
+# Cap on captured bytes PER STREAM (stdout and stderr each). Providers hold
+# the joined text plus its parsed JSONL events in memory, so an unbounded
+# child stream is buffered several times over — and N concurrent harness
+# calls multiply that (the pr-af#65 OOM). Real provider streams are
+# completion-boundary events (hundreds of KB), so 16MB is ~50x headroom
+# while bounding the pathological case. <= 0 disables the cap.
+_DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+# Keep-head fraction on overflow: the head carries session/model info and the
+# first error, but the FINAL events (result text, cumulative usage) live at
+# the tail, so the tail gets most of the budget.
+_TRUNCATION_HEAD_FRACTION = 0.25
+
+
+def _resolve_max_output_bytes() -> int:
+    raw = os.environ.get("AGENTFIELD_HARNESS_MAX_OUTPUT_BYTES")
+    if raw is not None:
+        try:
+            return int(raw)
+        except ValueError:
+            return _DEFAULT_MAX_OUTPUT_BYTES
+    return _DEFAULT_MAX_OUTPUT_BYTES
+
+
+class _BoundedChunks:
+    """Chunk accumulator with a byte cap that keeps the stream's head and tail.
+
+    Below the cap, ``joined()`` is byte-identical to the stream. Above it, the
+    first ``head`` budget bytes and the most recent bytes within the remaining
+    budget are kept, spliced around a marker line. The marker (and any partial
+    line at the seam) parses as invalid JSON, which ``parse_jsonl`` skips — so
+    the final result/usage events at the tail stay extractable.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        self._max = max_bytes
+        self._head_budget = (
+            int(max_bytes * _TRUNCATION_HEAD_FRACTION) if max_bytes > 0 else 0
+        )
+        self._tail_budget = max(0, max_bytes - self._head_budget)
+        self._head: List[bytes] = []
+        self._head_bytes = 0
+        self._tail: Deque[bytes] = deque()
+        self._tail_bytes = 0
+        self.dropped_bytes = 0
+
+    def append(self, chunk: bytes) -> None:
+        if self._max <= 0:
+            self._head.append(chunk)
+            return
+        if self._head_bytes < self._head_budget:
+            take = min(len(chunk), self._head_budget - self._head_bytes)
+            self._head.append(chunk[:take])
+            self._head_bytes += take
+            chunk = chunk[take:]
+            if not chunk:
+                return
+        self._tail.append(chunk)
+        self._tail_bytes += len(chunk)
+        # Always retain at least the newest chunk, even if it alone exceeds
+        # the tail budget — the newest bytes are the ones that matter.
+        while self._tail_bytes > self._tail_budget and len(self._tail) > 1:
+            evicted = self._tail.popleft()
+            self._tail_bytes -= len(evicted)
+            self.dropped_bytes += len(evicted)
+
+    def joined(self) -> bytes:
+        head = b"".join(self._head)
+        tail = b"".join(self._tail)
+        if not self.dropped_bytes:
+            return head + tail
+        marker = (
+            b"\n[agentfield: output truncated, %d bytes dropped]\n"
+            % self.dropped_bytes
+        )
+        return head + marker + tail
+
+
 async def _drain(
     stream: Optional[asyncio.StreamReader],
-    chunks: List[bytes],
+    chunks: _BoundedChunks,
     last_activity: List[float],
 ) -> None:
     """Read a stream incrementally, recording each chunk and its arrival time."""
@@ -200,6 +281,11 @@ async def run_cli(
     without it stdin is /dev/null. Providers use this to hand over prompts too
     large for a command line — on Windows an npm ``.cmd`` shim runs via
     cmd.exe, which caps the command line at ~8k characters.
+
+    Captured output is bounded per stream (env
+    ``AGENTFIELD_HARNESS_MAX_OUTPUT_BYTES``, default 16MB; <= 0 disables):
+    on overflow the head and tail are kept around a truncation marker, so
+    the final JSONL result/usage events remain parseable.
     """
     merged_env = {**os.environ}
     if env:
@@ -221,8 +307,9 @@ async def run_cli(
         start_new_session=True,
     )
 
-    stdout_chunks: List[bytes] = []
-    stderr_chunks: List[bytes] = []
+    max_output_bytes = _resolve_max_output_bytes()
+    stdout_chunks = _BoundedChunks(max_output_bytes)
+    stderr_chunks = _BoundedChunks(max_output_bytes)
     last_activity = [asyncio.get_event_loop().time()]
 
     # Pump all pipes concurrently to avoid a pipe-buffer deadlock (a large
@@ -317,9 +404,19 @@ async def run_cli(
     returncode = proc.returncode
     if returncode is None:
         returncode = fallback_returncode
+    for name, buf in (("stdout", stdout_chunks), ("stderr", stderr_chunks)):
+        if buf.dropped_bytes:
+            logger.warning(
+                "CLI %s exceeded the %d-byte capture cap; dropped %d bytes "
+                "from the middle of the stream: %s",
+                name,
+                max_output_bytes,
+                buf.dropped_bytes,
+                " ".join(cmd[:3]),
+            )
     return (
-        b"".join(stdout_chunks).decode("utf-8", errors="replace"),
-        b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+        stdout_chunks.joined().decode("utf-8", errors="replace"),
+        stderr_chunks.joined().decode("utf-8", errors="replace"),
         returncode if returncode is not None else -1,
     )
 

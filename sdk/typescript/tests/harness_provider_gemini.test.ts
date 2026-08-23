@@ -9,7 +9,46 @@ afterEach(() => {
 });
 
 describe('gemini provider', () => {
-  it('constructs command and maps result', async () => {
+  it.each([
+    {
+      name: 'auto mode uses yolo and applies cwd only to the subprocess',
+      options: { cwd: '/tmp/work', permissionMode: 'auto', env: { A: '1' } },
+      expectedArgv: ['/usr/local/bin/gemini', '--yolo', '-p', 'hello'],
+      expectedRunOptions: { cwd: '/tmp/work', env: { A: '1' } },
+    },
+    {
+      name: 'plan mode uses approval-mode plan before model and prompt',
+      options: { permissionMode: 'plan', model: 'gemini-2.5-pro#high' },
+      expectedArgv: [
+        '/usr/local/bin/gemini',
+        '--approval-mode',
+        'plan',
+        '-m',
+        'gemini-2.5-pro',
+        '-p',
+        'hello',
+      ],
+      expectedRunOptions: { cwd: undefined, env: undefined },
+    },
+    {
+      name: 'unset permission mode adds no permission flag',
+      options: {},
+      expectedArgv: ['/usr/local/bin/gemini', '-p', 'hello'],
+      expectedRunOptions: { cwd: undefined, env: undefined },
+    },
+    {
+      name: 'unknown permission mode adds no permission flag',
+      options: { permissionMode: 'unknown', model: 'gemini-2.5-flash' },
+      expectedArgv: [
+        '/usr/local/bin/gemini',
+        '-m',
+        'gemini-2.5-flash',
+        '-p',
+        'hello',
+      ],
+      expectedRunOptions: { cwd: undefined, env: undefined },
+    },
+  ])('$name', async ({ options, expectedArgv, expectedRunOptions }) => {
     vi.spyOn(cli, 'runCli').mockResolvedValue({
       stdout: 'final text\n',
       stderr: '',
@@ -17,16 +56,11 @@ describe('gemini provider', () => {
     });
 
     const provider = new GeminiProvider('/usr/local/bin/gemini');
-    const result = await provider.execute('hello', {
-      cwd: '/tmp/work',
-      permissionMode: 'auto',
-      env: { A: '1' },
-    });
+    const result = await provider.execute('hello', options);
 
-    expect(cli.runCli).toHaveBeenCalledWith(
-      ['/usr/local/bin/gemini', '-C', '/tmp/work', '--sandbox', '-p', 'hello'],
-      { cwd: '/tmp/work', env: { A: '1' } }
-    );
+    expect(cli.runCli).toHaveBeenCalledWith(expectedArgv, expectedRunOptions);
+    expect(expectedArgv).not.toContain('-C');
+    expect(expectedArgv).not.toContain('--sandbox');
     expect(result.isError).toBe(false);
     expect(result.result).toBe('final text');
     expect(result.metrics.numTurns).toBe(1);

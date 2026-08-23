@@ -16,6 +16,11 @@ from agentfield.exceptions import HarnessProviderUnavailable
 
 logger = logging.getLogger("agentfield.harness.claude")
 
+# Claude Code's historical default in AgentField. HarnessConfig.model used to
+# default to "sonnet"; now the default is empty and each provider owns its own
+# default, so claude-code keeps sonnet here.
+DEFAULT_CLAUDE_MODEL = "sonnet"
+
 
 def _get_claude_sdk() -> Any:
     """Lazy import of claude_agent_sdk."""
@@ -75,8 +80,7 @@ class ClaudeCodeProvider:
 
         agent_options: dict[str, object] = {}
         model_value, variant_value = resolve_model_and_variant(options)
-        if model_value is not None:
-            agent_options["model"] = model_value
+        agent_options["model"] = model_value or DEFAULT_CLAUDE_MODEL
         if variant_value:
             # claude_agent_sdk has no reasoning-effort knob; drop the variant
             # rather than passing an invalid "model#variant" model id.

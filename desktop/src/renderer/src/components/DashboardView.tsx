@@ -4,6 +4,7 @@ import type {
   AgentEnvReport,
   AgentFieldSnapshot,
   ExecutionSummary,
+  SkillSyncRecord,
   UsageGroup
 } from '../../../shared/types'
 import type { View } from './Sidebar'
@@ -149,6 +150,33 @@ function formatHarnessSpend(entry: UsageGroup): string {
   return `${entry.key} ${formatTokens(entry.totalTokens)} tok`
 }
 
+/** What the Skills row says, from the setting AND the last sync's outcome. */
+export interface SkillRowState {
+  /** 'off' renders the enable-in-Settings link; the rest are plain values. */
+  tone: 'loading' | 'off' | 'pending' | 'ok' | 'failed'
+  label: string
+  /** Full failure text for the title attribute (the label is elided). */
+  detail?: string
+}
+
+/**
+ * The row used to claim "Installed for coding agents" from the settings
+ * boolean alone, which said nothing about whether `af skill install` had ever
+ * run, let alone succeeded. Report what actually happened: installed only
+ * after a sync that exited 0, a warning (with the CLI's message) after one
+ * that didn't, and a neutral pending state until a sync has finished.
+ */
+export function skillRowState(
+  installSkills: boolean | null,
+  sync: SkillSyncRecord | null | undefined
+): SkillRowState {
+  if (installSkills === null) return { tone: 'loading', label: '…' }
+  if (!installSkills) return { tone: 'off', label: 'Off — enable in Settings' }
+  if (!sync) return { tone: 'pending', label: 'Installing…' }
+  if (sync.ok) return { tone: 'ok', label: 'Installed for coding agents' }
+  return { tone: 'failed', label: `Install failed — ${sync.message}`, detail: sync.message }
+}
+
 function pickRecentRows(
   executions: AgentFieldSnapshot['executions']
 ): Array<{ run: ExecutionSummary; live: boolean }> {
@@ -231,6 +259,9 @@ export function DashboardView({ snapshot, onNavigate }: DashboardViewProps): Rea
       : null
 
   const recentRows = pickRecentRows(executions)
+  // Skills state rides the snapshot (main/skills.ts records every sync), so
+  // the existing poll refreshes it — no extra loop, no settings-only guess.
+  const skillRow = skillRowState(installSkills, snapshot?.skillSync)
 
   const attentionChips: Array<{ key: string; label: string; view: View }> = []
   if (cp && !cp.healthy) {
@@ -404,17 +435,22 @@ export function DashboardView({ snapshot, onNavigate }: DashboardViewProps): Rea
             </div>
             <div className="connect-row">
               <span className="connect-label">Skills</span>
-              {installSkills === false ? (
+              {skillRow.tone === 'off' ? (
                 <button
                   type="button"
                   className="link-button"
                   onClick={() => onNavigate('settings')}
                 >
-                  Off — enable in Settings
+                  {skillRow.label}
                 </button>
               ) : (
-                <span className="connect-value">
-                  {installSkills === null ? '…' : 'Installed for coding agents'}
+                <span
+                  className={
+                    skillRow.tone === 'failed' ? 'connect-value warn-text' : 'connect-value'
+                  }
+                  title={skillRow.detail}
+                >
+                  {skillRow.label}
                 </span>
               )}
             </div>

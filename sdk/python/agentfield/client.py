@@ -813,10 +813,30 @@ class AgentFieldClient:
         """
         Blocking version of execute used by synchronous callers.
 
+        Warning: This method uses blocking I/O (requests + time.sleep). If
+        called from within a running asyncio event loop, it will block the
+        loop and may cause deadlocks. Use the async ``execute()`` method
+        instead when inside an async context.
+
         Raises:
             AgentFieldClientError: If submission or polling fails.
             ExecutionTimeoutError: If execution does not complete in time.
+            RuntimeWarning: (logged) If called from within a running event loop.
         """
+        # Warn if called from within a running loop — this will block the
+        # loop and likely cause timeouts or hangs (#620).
+        try:
+            import asyncio
+            asyncio.get_running_loop()
+            import warnings
+            warnings.warn(
+                "execute_sync() called from within a running event loop. "
+                "This will block the loop. Use 'await client.execute()' instead.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        except RuntimeError:
+            pass  # No running loop — safe to proceed
 
         execution_headers = self._prepare_execution_headers(headers)
         submission = self._submit_execution_sync(target, input_data, execution_headers)

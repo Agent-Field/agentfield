@@ -212,9 +212,7 @@ func (a *Agent) Discover(ctx context.Context, opts ...DiscoveryOption) (*types.D
 	} else {
 		req.Header.Set("Accept", "application/json")
 	}
-	if a.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
-	}
+	a.applyControlPlaneAuth(req)
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {

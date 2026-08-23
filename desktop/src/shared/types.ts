@@ -81,6 +81,23 @@ export interface CatalogEntry {
   language?: string
 }
 
+/** Where a bundled node is in its first-launch provisioning. */
+export type BundledPhase = 'pending' | 'installing' | 'installed' | 'failed'
+
+/**
+ * One bundled node the app is provisioning (see shared/bundled.ts). These are
+ * not registry rows: they describe work in flight, so the Agents view can show
+ * the two nodes that ship with the app arriving before they exist on disk.
+ */
+export interface BundledStatus {
+  name: string
+  description: string
+  language?: string
+  phase: BundledPhase
+  /** Latest progress line, or the error text when phase is 'failed'. '' when none. */
+  message: string
+}
+
 /** Terminal states of an install kicked off from the app. */
 export interface InstallResult {
   ok: boolean
@@ -185,6 +202,14 @@ export interface DesktopSettings {
    */
   controlPlanePort: number | null
   /**
+   * API key for the LOCAL control plane, or '' when it needs none. A local
+   * server started without AGENTFIELD_API_KEY authenticates this app by its
+   * loopback address, so this stays empty for almost everyone; set it when
+   * you run your own server with authentication enabled. Like cloud.apiKey,
+   * the value lives in main-process settings on this computer.
+   */
+  localApiKey: string
+  /**
    * The port of the control plane this app last started or adopted. App-
    * managed, not a user preference: it lets a restarted app rediscover a
    * control plane it put on a non-default port instead of starting a second
@@ -193,6 +218,12 @@ export interface DesktopSettings {
   lastControlPlanePort: number | null
   /** Installed agent names to start once the control plane is healthy. */
   autostartAgents: string[]
+  /**
+   * Bundled node names this app has already provisioned at least once. A name
+   * recorded here is never auto-installed again, so uninstalling a bundled
+   * node sticks across launches instead of coming back on the next start.
+   */
+  provisionedBundled: string[]
   /**
    * Keep the AgentField skill catalog (building agents, personal agents,
    * calling installed ones) installed in detected coding agents (Claude
@@ -217,6 +248,13 @@ export interface DesktopSettings {
   starPrompt: 'pending' | 'done'
   /** ISO timestamp until which the star prompt is snoozed (Later = +7 days). null = not snoozed. */
   starPromptSnoozedUntil: string | null
+  /**
+   * Agent names the app has already warned about over a native notification
+   * after provisioning them without the API keys they require. A name recorded
+   * here is never announced again, so the notice fires once per provisioning
+   * event instead of on every launch (see main/keyNotice.ts).
+   */
+  keyNoticeShown: string[]
 }
 
 export interface CloudTestResult {
@@ -224,8 +262,17 @@ export interface CloudTestResult {
   healthy: boolean
   authOk: boolean
   installApi: boolean
+  furrowAvailable: boolean
+  /** Present only when the server health payload advertised a furrow address. */
+  furrowReported?: boolean
   version?: string
   message: string
+}
+
+export interface CloudImageUpdate {
+  current: string | null
+  latest: string | null
+  updateAvailable: boolean
 }
 
 export interface RailwayStatus {
@@ -238,6 +285,7 @@ export interface RailwayStatus {
 export interface CloudDeployResult {
   ok: boolean
   url?: string
+  furrowAddress?: string
   message: string
 }
 
@@ -266,6 +314,22 @@ export interface AppUpdateStatus {
   /** Whole percent 0-100 while downloading, null otherwise. */
   progress: number | null
   error: string | null
+}
+
+/**
+ * Result of the last `af skill install --non-interactive` this app ran (see
+ * main/skills.ts). In-memory, per session: null means no sync has finished
+ * since launch, which the UI must show as pending rather than as installed.
+ */
+export interface SkillSyncRecord {
+  /** ISO timestamp of when the sync finished. */
+  at: string
+  /** The CLI exited 0 — every skill reached every detected coding agent. */
+  ok: boolean
+  /** Exit code, or null when the CLI never ran (spawn error / timeout). */
+  exitCode: number | null
+  /** One line: what the sync reported, or why it failed. */
+  message: string
 }
 
 /** Headline numbers from GET /api/ui/v1/dashboard/summary. */
@@ -315,6 +379,18 @@ export interface AgentFieldSnapshot {
    * response could not be parsed — UI hides Spend/Usage entirely.
    */
   usage: UsageStats | null
+  /**
+   * Last coding-agent skill sync, or null when none has finished this session.
+   * Main-process state, not control-plane data — it rides the snapshot so the
+   * existing poll delivers it without a second polling loop in the renderer.
+   */
+  skillSync: SkillSyncRecord | null
+  /**
+   * Bundled nodes still being provisioned this launch. Empty once each one is
+   * installed or was deliberately uninstalled by the user. Main-process state
+   * like skillSync, riding the existing snapshot poll rather than a second one.
+   */
+  bundled: BundledStatus[]
   /** ISO timestamp of when this snapshot was assembled. */
   fetchedAt: string
 }
@@ -325,6 +401,7 @@ export interface AgentFieldApi {
   /** Open the guided Railway deployment flow for a hosted control plane. */
   cloudDeployRailway(): Promise<boolean>
   railwayStatus(): Promise<RailwayStatus>
+  checkCloudImageUpdate(): Promise<CloudImageUpdate>
   railwayLogin(): Promise<{ ok: boolean; message: string; workspaces?: RailwayStatus['workspaces'] }>
   railwayLogout(): Promise<void>
   cloudDeploy(workspaceId: string): Promise<CloudDeployResult>

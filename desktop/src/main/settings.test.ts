@@ -15,13 +15,16 @@ describe('normalizeSettings', () => {
       appearance: 'dark' as const,
       autostartControlPlane: false,
       controlPlanePort: 9091,
+      localApiKey: 'local-secret',
       lastControlPlanePort: 8081,
       autostartAgents: ['a', 'b'],
+      provisionedBundled: ['swe-planner'],
       installSkills: false,
       trayCompanion: false,
       dismissedUpdateVersion: '0.1.110',
       starPrompt: 'done' as const,
-      starPromptSnoozedUntil: '2026-08-01T00:00:00.000Z'
+      starPromptSnoozedUntil: '2026-08-01T00:00:00.000Z',
+      keyNoticeShown: ['swe-planner']
     }
     expect(normalizeSettings(s)).toEqual(s)
   })
@@ -35,6 +38,12 @@ describe('normalizeSettings', () => {
     expect(normalizeSettings({ controlPlanePort: '8080' }).controlPlanePort).toBeNull()
     expect(normalizeSettings({ lastControlPlanePort: -1 }).lastControlPlanePort).toBeNull()
     expect(normalizeSettings({ lastControlPlanePort: 9091 }).lastControlPlanePort).toBe(9091)
+  })
+
+  it('keeps a trimmed local API key and drops non-strings', () => {
+    expect(normalizeSettings({}).localApiKey).toBe('')
+    expect(normalizeSettings({ localApiKey: '  af_local_key  ' }).localApiKey).toBe('af_local_key')
+    expect(normalizeSettings({ localApiKey: 42 }).localApiKey).toBe('')
   })
 
   it('defaults trayCompanion on and coerces non-booleans', () => {
@@ -79,6 +88,18 @@ describe('normalizeSettings', () => {
     ).toEqual(['a', 'b'])
   })
 
+  // provisionedBundled is what makes uninstalling a bundled node stick, so a
+  // hand-edited or corrupt list must degrade to "provision it again", never to
+  // a shape that could suppress or duplicate first-launch provisioning.
+  it('coerces provisionedBundled like autostartAgents', () => {
+    expect(normalizeSettings({}).provisionedBundled).toEqual([])
+    expect(
+      normalizeSettings({ provisionedBundled: ['pr-af', 7, 'pr-af', null, 'swe-planner'] })
+        .provisionedBundled
+    ).toEqual(['pr-af', 'swe-planner'])
+    expect(normalizeSettings({ provisionedBundled: 'pr-af' }).provisionedBundled).toEqual([])
+  })
+
   it('coerces a bad dismissed update version to null', () => {
     expect(normalizeSettings({ dismissedUpdateVersion: 42 }).dismissedUpdateVersion).toBeNull()
     expect(normalizeSettings({ dismissedUpdateVersion: '' }).dismissedUpdateVersion).toBeNull()
@@ -118,6 +139,13 @@ describe('mergeSettings', () => {
     expect(merged.openAtLogin).toBe(false)
   })
 
+  it('sanitizes a provisionedBundled patch', () => {
+    const merged = mergeSettings(DEFAULT_SETTINGS, {
+      provisionedBundled: ['pr-af', { evil: true }, 'pr-af']
+    })
+    expect(merged.provisionedBundled).toEqual(['pr-af'])
+  })
+
   it('merges star prompt patches', () => {
     const done = mergeSettings(DEFAULT_SETTINGS, { starPrompt: 'done' })
     expect(done.starPrompt).toBe('done')
@@ -138,13 +166,16 @@ describe('load/save round trip', () => {
       appearance: 'light' as const,
       autostartControlPlane: true,
       controlPlanePort: null,
+      localApiKey: 'round-trip-local-key',
       lastControlPlanePort: 9091,
       autostartAgents: ['swe-planner'],
+      provisionedBundled: ['swe-planner', 'pr-af'],
       installSkills: true,
       trayCompanion: true,
       dismissedUpdateVersion: null,
       starPrompt: 'pending' as const,
-      starPromptSnoozedUntil: null
+      starPromptSnoozedUntil: null,
+      keyNoticeShown: []
     }
     await saveSettings(file, s)
     expect(await loadSettings(file)).toEqual(s)

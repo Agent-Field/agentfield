@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -217,6 +218,146 @@ func TestAgentSummaryHandler(t *testing.T) {
 		assert.Equal(t, float64(2), metrics["status_counts"].(map[string]interface{})["completed"])
 		assert.Equal(t, float64(1), metrics["status_counts"].(map[string]interface{})["failed"])
 		store.AssertExpectations(t)
+	})
+
+	t.Run("execution query is bounded and payload free", func(t *testing.T) {
+		var captured types.ExecutionFilter
+		store := &handlerTestStorage{
+			mockStatusStorage: &mockStatusStorage{},
+			getAgentFn: func(context.Context, string) (*types.AgentNode, error) {
+				return &types.AgentNode{ID: "agent-1"}, nil
+			},
+		}
+		store.On("QueryExecutionRecords", mock.Anything, mock.MatchedBy(func(filter types.ExecutionFilter) bool {
+			captured = filter
+			return true
+		})).Return([]*types.Execution{}, nil)
+
+		router := gin.New()
+		router.GET("/agents/:agent_id/summary", AgentSummaryHandler(store))
+
+		req := httptest.NewRequest(http.MethodGet, "/agents/agent-1/summary", nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		// Without both of these the summary inlines full payloads for every
+		// execution of the last 24h.
+		assert.True(t, captured.ExcludePayloads, "payloads must be excluded")
+		// The query is bounded by the metrics guardrail, not by the much smaller
+		// serialized-list cap — metrics must stay exact over the window.
+		assert.Equal(t, agentSummaryMetricsQueryLimit, captured.Limit)
+		// A limit is only meaningful with a newest-first ordering.
+		assert.Equal(t, "started_at", captured.SortBy)
+		assert.True(t, captured.SortDescending)
+		// The 24h window is preserved.
+		require.NotNil(t, captured.StartTime)
+		assert.WithinDuration(t, time.Now().Add(-24*time.Hour), *captured.StartTime, time.Minute)
+	})
+
+	t.Run("metrics cover the window while the list stays short", func(t *testing.T) {
+		// More executions than the serialized cap, so the two counts diverge.
+		const total = agentSummaryRecentExecutionsLimit + 7
+		duration := int64(100)
+		completedAt := time.Now()
+		execs := make([]*types.Execution, 0, total)
+		for i := 0; i < total; i++ {
+			status := "completed"
+			if i%3 == 0 {
+				status = "failed"
+			}
+			execs = append(execs, &types.Execution{
+				ExecutionID: fmt.Sprintf("exec-%d", i),
+				Status:      status,
+				CompletedAt: &completedAt,
+				DurationMS:  &duration,
+			})
+		}
+
+		store := &handlerTestStorage{
+			mockStatusStorage: &mockStatusStorage{},
+			getAgentFn: func(context.Context, string) (*types.AgentNode, error) {
+				return &types.AgentNode{ID: "agent-1"}, nil
+			},
+		}
+		store.On("QueryExecutionRecords", mock.Anything, mock.Anything).Return(execs, nil)
+
+		router := gin.New()
+		router.GET("/agents/:agent_id/summary", AgentSummaryHandler(store))
+
+		req := httptest.NewRequest(http.MethodGet, "/agents/agent-1/summary", nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		resp := decodeEnvelope(t, rec.Body)
+		data := resp.Data.(map[string]interface{})
+
+		// The list is clipped...
+		listed := data["recent_executions"].([]interface{})
+		assert.Len(t, listed, agentSummaryRecentExecutionsLimit)
+		assert.Equal(t, "exec-0", listed[0].(map[string]interface{})["execution_id"], "newest rows are kept")
+
+		// ...but the metrics still describe every row the query returned.
+		metrics := data["metrics_24h"].(map[string]interface{})
+		assert.Equal(t, float64(total), metrics["total_executions"])
+		statusCounts := metrics["status_counts"].(map[string]interface{})
+		assert.Equal(t, float64(9), statusCounts["failed"])
+		assert.Equal(t, float64(total-9), statusCounts["completed"])
+		assert.Equal(t, float64(total-9), metrics["completed_count"])
+		assert.Equal(t, float64(100), metrics["avg_duration_ms"])
+	})
+
+	t.Run("reasoner descriptions use the legacy metadata fallback", func(t *testing.T) {
+		agent := &types.AgentNode{
+			ID: "agent-1",
+			Reasoners: []types.ReasonerDefinition{
+				{ID: "registered", Description: "declared by the SDK"},
+				{ID: "legacy"},
+				{ID: "undocumented"},
+			},
+			Metadata: types.AgentMetadata{
+				Custom: map[string]interface{}{
+					"descriptions": map[string]interface{}{
+						"legacy":     "  carried in agent metadata  ",
+						"registered": "should not win over the registered field",
+					},
+				},
+			},
+		}
+		store := &handlerTestStorage{
+			mockStatusStorage: &mockStatusStorage{},
+			getAgentFn: func(context.Context, string) (*types.AgentNode, error) {
+				return agent, nil
+			},
+		}
+		store.On("QueryExecutionRecords", mock.Anything, mock.Anything).Return([]*types.Execution{}, nil)
+
+		router := gin.New()
+		router.GET("/agents/:agent_id/summary", AgentSummaryHandler(store))
+
+		req := httptest.NewRequest(http.MethodGet, "/agents/agent-1/summary", nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		resp := decodeEnvelope(t, rec.Body)
+		data := resp.Data.(map[string]interface{})
+		reasoners := data["agent"].(map[string]interface{})["reasoners"].([]interface{})
+		require.Len(t, reasoners, 3)
+
+		descriptions := map[string]string{}
+		for _, raw := range reasoners {
+			entry := raw.(map[string]interface{})
+			desc, _ := entry["description"].(string)
+			descriptions[entry["id"].(string)] = desc
+		}
+		assert.Equal(t, "declared by the SDK", descriptions["registered"])
+		assert.Equal(t, "carried in agent metadata", descriptions["legacy"])
+		assert.Empty(t, descriptions["undocumented"])
+
+		// The stored record must not be rewritten by the response shaping.
+		assert.Empty(t, agent.Reasoners[1].Description)
 	})
 }
 

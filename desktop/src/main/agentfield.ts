@@ -8,12 +8,14 @@ import path from 'node:path'
 import type {
   AgentBadge,
   AgentFieldSnapshot,
+  BundledStatus,
   ControlPlaneStatus,
   DashboardMetrics,
   ExecutionsResult,
   ExecutionSummary,
   InstalledAgent,
   RegistryResult,
+  SkillSyncRecord,
   UsageGroup,
   UsageStats
 } from '../shared/types'
@@ -354,6 +356,18 @@ export interface SnapshotOptions {
   baseUrl?: string
   fetchImpl?: FetchLike
   cpClient?: CpClient
+  /**
+   * Last skill-sync result, passed through onto the snapshot. It is main-
+   * process state (main/skills.ts), not something this module can read, so the
+   * IPC handler supplies it; callers that don't care (autostart) leave it out.
+   */
+  skillSync?: SkillSyncRecord | null
+  /**
+   * First-launch provisioning rows for the bundled nodes, passed through the
+   * same way as skillSync: it is main-process state (main/bundledAgents.ts),
+   * so the IPC handler supplies it and callers that don't care omit it.
+   */
+  bundled?: BundledStatus[]
 }
 
 /**
@@ -396,6 +410,8 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
     executions,
     metrics,
     usage,
+    skillSync: options.skillSync ?? null,
+    bundled: options.bundled ?? [],
     fetchedAt: new Date().toISOString()
   }
 }

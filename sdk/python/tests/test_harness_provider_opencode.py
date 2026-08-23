@@ -205,6 +205,55 @@ async def test_opencode_cost_prefers_stream_cost_when_present(
 
 
 @pytest.mark.asyncio
+async def test_opencode_sums_part_nested_token_usage(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    stdout = "\n".join(
+        [
+            '{"type":"step_finish","part":{"cost":0.01,"tokens":{"input":123,"output":456,"reasoning":78,"cache":{"read":9,"write":10}}}}',
+            '{"type":"step_finish","part":{"cost":0.02}}',
+            '{"type":"text","part":{"text":"done"}}',
+            '{"type":"step_finish","part":{"cost":0.03,"tokens":{"input":7,"output":8,"reasoning":2,"cache":{"read":3,"write":4}}}}',
+        ]
+    )
+
+    async def fake_run_cli(*_args, **_kwargs):
+        return stdout, "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    raw = await OpenCodeProvider().execute("hello", {})
+
+    assert raw.metrics.input_tokens == 130
+    assert raw.metrics.output_tokens == 544
+    assert raw.metrics.cache_read_tokens == 12
+    assert raw.metrics.cache_creation_tokens == 14
+
+
+@pytest.mark.asyncio
+async def test_opencode_token_usage_falls_back_without_part_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    stdout = "\n".join(
+        [
+            '{"type":"step_finish","part":{"cost":0.01}}',
+            '{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":12,"cached_input_tokens":13,"cache_creation_input_tokens":14}}',
+            '{"type":"result","result":"done"}',
+        ]
+    )
+
+    async def fake_run_cli(*_args, **_kwargs):
+        return stdout, "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    raw = await OpenCodeProvider().execute("hello", {})
+
+    assert raw.metrics.input_tokens == 11
+    assert raw.metrics.output_tokens == 12
+    assert raw.metrics.cache_read_tokens == 13
+    assert raw.metrics.cache_creation_tokens == 14
+
+
+@pytest.mark.asyncio
 async def test_opencode_cost_none_without_model(monkeypatch: pytest.MonkeyPatch):
     """Without a model, cost estimation returns None (not 0)."""
 

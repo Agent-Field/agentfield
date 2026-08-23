@@ -45,14 +45,14 @@ export class ClaudeCodeProvider implements HarnessProvider {
     const { model: modelValue } = resolveModelAndVariant(options);
     if (modelValue !== undefined) agentOptions.model = modelValue;
     if (options.cwd !== undefined) agentOptions.cwd = options.cwd;
-    if (options.maxTurns !== undefined) agentOptions.max_turns = options.maxTurns;
-    if (options.tools !== undefined) agentOptions.allowed_tools = options.tools;
-    if (options.systemPrompt !== undefined) agentOptions.system_prompt = options.systemPrompt;
-    if (options.maxBudgetUsd !== undefined) agentOptions.max_budget_usd = options.maxBudgetUsd;
+    if (options.maxTurns !== undefined) agentOptions.maxTurns = options.maxTurns;
+    if (options.tools !== undefined) agentOptions.allowedTools = options.tools;
+    if (options.systemPrompt !== undefined) agentOptions.systemPrompt = options.systemPrompt;
+    if (options.maxBudgetUsd !== undefined) agentOptions.maxBudgetUsd = options.maxBudgetUsd;
     if (options.permissionMode !== undefined) {
       const modeMap: Record<string, string> = { auto: 'bypassPermissions', plan: 'plan' };
       const raw = String(options.permissionMode);
-      agentOptions.permission_mode = modeMap[raw] ?? raw;
+      agentOptions.permissionMode = modeMap[raw] ?? raw;
     }
     if (options.env !== undefined) agentOptions.env = options.env;
 

@@ -375,7 +375,10 @@ class MemoryEventClient:
                 return events
 
         except ImportError:
-            # Fallback to synchronous requests
+            # Fallback to synchronous requests — offloaded to a thread
+            # executor since this is an async function and blocking here
+            # would freeze the event loop (#620).
+            import asyncio
             import requests
 
             headers = self.execution_context.to_headers()
@@ -383,7 +386,7 @@ class MemoryEventClient:
                 headers["X-API-Key"] = self.api_key
 
             # Build query parameters
-            params = {"limit": limit}
+            params: dict = {"limit": limit}
             if patterns:
                 if isinstance(patterns, str):
                     patterns = [patterns]
@@ -402,16 +405,21 @@ class MemoryEventClient:
                 http_url = "http://" + self.base_url[len("ws://") :]
             else:
                 http_url = self.base_url
-            response = requests.get(
-                f"{http_url}/api/v1/memory/events/history",
-                params=params,
-                headers=headers,
-                timeout=10.0,
-            )
-            response.raise_for_status()
+
+            def _fetch_sync():
+                resp = requests.get(
+                    f"{http_url}/api/v1/memory/events/history",
+                    params=params,
+                    headers=headers,
+                    timeout=10.0,
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+            loop = asyncio.get_running_loop()
+            events_data = await loop.run_in_executor(None, _fetch_sync)
 
             # Parse response
-            events_data = response.json()
             events = []
 
             if isinstance(events_data, list):

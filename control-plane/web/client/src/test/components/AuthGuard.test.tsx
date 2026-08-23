@@ -94,7 +94,7 @@ describe("AuthGuard", () => {
     expect(apiFns.setGlobalApiKey).toHaveBeenCalledWith("stored-key");
   });
 
-  it("submits credentials, persists the admin token, and shows validation state", async () => {
+  it("submits the API key and shows validation state", async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
     } as Response);
@@ -105,8 +105,11 @@ describe("AuthGuard", () => {
       </AuthGuard>,
     );
 
+    // The login screen only asks for the API key; the admin token is prompted
+    // for on Access management, and only when the server enforces one.
+    expect(screen.queryByLabelText(/Admin Token/i)).not.toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "hax_live_123" } });
-    fireEvent.change(screen.getByLabelText(/Admin Token/i), { target: { value: "  root-token  " } });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     expect(screen.getByRole("button", { name: /Validating/i })).toBeDisabled();
@@ -118,7 +121,6 @@ describe("AuthGuard", () => {
     });
 
     expect(authState.setApiKey).toHaveBeenCalledWith("hax_live_123");
-    expect(authState.setAdminToken).toHaveBeenCalledWith("root-token");
     expect(apiFns.setGlobalApiKey).toHaveBeenCalledWith("hax_live_123");
   });
 

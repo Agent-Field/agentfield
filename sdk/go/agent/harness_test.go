@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"path/filepath"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
@@ -112,28 +113,31 @@ func TestHarnessRunner_ConcurrentAccess(t *testing.T) {
 }
 
 func TestHarness_ErrorWithoutProvider(t *testing.T) {
-	// Harness() should fail when no provider is configured.
-	// The runner will return an error about a missing provider.
+	// With no provider configured, Harness() defaults to aforge and reaches
+	// provider execution. A missing binary may fail, but provider resolution does not.
+	t.Setenv(harness.ProviderEnvVar, "")
 	a := newTestAgentForHarness(t)
 
-	_, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "provider")
+	missingAforge := filepath.Join(t.TempDir(), "missing-aforge")
+	result, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{BinPath: missingAforge})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ErrorMessage, "missing-aforge")
+	assert.NotContains(t, result.ErrorMessage, "no harness provider specified")
 }
 
 func TestHarness_PassesOptsToRunner(t *testing.T) {
 	// Verify that per-call Options are forwarded to the runner.
 	// Using a non-existent provider triggers a provider-build error,
-	// which confirms the Options reached Run() (otherwise we'd get
-	// the "no harness provider specified" error instead).
+	// which confirms the Options reached Run().
 	a := newTestAgentForHarness(t)
 
 	_, err := a.Harness(context.Background(), "test", nil, nil, harness.Options{
 		Provider: "nonexistent-provider",
 	})
 	assert.Error(t, err)
-	// Should be a provider-build error, NOT the "no harness provider specified" error
-	assert.NotContains(t, err.Error(), "no harness provider specified")
+	assert.Contains(t, err.Error(), "unknown harness provider")
 }
 
 func TestHarnessConfig_PartialOverride(t *testing.T) {

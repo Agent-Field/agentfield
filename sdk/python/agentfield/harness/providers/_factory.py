@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from agentfield.harness.providers._base import HarnessProvider
     from agentfield.types import HarnessConfig
 
-SUPPORTED_PROVIDERS = {"claude-code", "codex", "gemini", "opencode"}
+SUPPORTED_PROVIDERS = {"aforge", "claude-code", "codex", "gemini", "opencode", "grok"}
 
 
 def build_provider(config: "HarnessConfig") -> "HarnessProvider":
@@ -16,6 +16,10 @@ def build_provider(config: "HarnessConfig") -> "HarnessProvider":
             f"Unknown harness provider: {provider_name!r}. Supported providers: "
             f"{', '.join(sorted(SUPPORTED_PROVIDERS))}"
         )
+    if provider_name == "aforge":
+        from agentfield.harness.providers.aforge import AforgeProvider
+
+        return AforgeProvider(bin_path=getattr(config, "aforge_bin", "aforge"))
     if provider_name == "claude-code":
         from agentfield.harness.providers.claude import ClaudeCodeProvider
 
@@ -34,4 +38,8 @@ def build_provider(config: "HarnessConfig") -> "HarnessProvider":
         return OpenCodeProvider(
             bin_path=getattr(config, "opencode_bin", "opencode"),
         )
+    if provider_name == "grok":
+        from agentfield.harness.providers.grok import GrokProvider
+
+        return GrokProvider(bin_path=getattr(config, "grok_bin", "grok"))
     raise NotImplementedError(f"Provider {provider_name!r} is not yet implemented.")

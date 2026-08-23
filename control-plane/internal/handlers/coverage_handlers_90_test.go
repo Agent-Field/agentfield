@@ -158,10 +158,15 @@ func TestWorkflowExecutionEventHandler_ErrorBranches(t *testing.T) {
 		router.ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
-		require.Contains(t, rec.Body.String(), "failed to create execution")
+		require.Contains(t, rec.Body.String(), "failed to persist execution event")
 	})
 
-	t.Run("update existing nil execution creates replacement", func(t *testing.T) {
+	// A store that perpetually reports a row on read but has nothing to
+	// update is inconsistent; the handler must exhaust its bounded retries
+	// and fail rather than loop or fabricate success. The realistic
+	// transient version of this (row vanishes once, then re-creates) is
+	// covered by TestWorkflowExecutionEventHandler_RowVanishedBetweenReadAndUpdate.
+	t.Run("perpetually vanishing execution exhausts retries", func(t *testing.T) {
 		store := &updateNilExecutionStore{}
 		router := gin.New()
 		router.POST("/events", WorkflowExecutionEventHandler(store))
@@ -171,10 +176,9 @@ func TestWorkflowExecutionEventHandler_ErrorBranches(t *testing.T) {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
-		require.Equal(t, http.StatusOK, rec.Code)
-		require.NotNil(t, store.updated)
-		require.Equal(t, "exec-2", store.updated.ExecutionID)
-		require.Equal(t, "task", store.updated.AgentNodeID)
+		require.Equal(t, http.StatusInternalServerError, rec.Code)
+		require.Contains(t, rec.Body.String(), "failed to persist execution event")
+		require.Nil(t, store.updated)
 	})
 }
 

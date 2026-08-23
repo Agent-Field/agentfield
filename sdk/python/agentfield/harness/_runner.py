@@ -10,6 +10,7 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
+from agentfield.harness._defaults import resolve_harness_provider
 from agentfield.harness._result import FailureType, HarnessResult, RawResult
 from agentfield.harness._schema import (
     build_followup_prompt,
@@ -171,9 +172,11 @@ def _resolve_options(
             "env",
             "cwd",
             "project_dir",
+            "aforge_bin",
             "codex_bin",
             "gemini_bin",
             "opencode_bin",
+            "grok_bin",
             "schema_max_retries",
             "schema_mode",
         ]:
@@ -209,10 +212,12 @@ def _accumulate_metrics(
         if raw.metrics.session_id:
             session_id = raw.metrics.session_id
         all_messages.extend(raw.messages)
-        tokens["input_tokens"] += raw.metrics.input_tokens
-        tokens["output_tokens"] += raw.metrics.output_tokens
-        tokens["cache_read_tokens"] += raw.metrics.cache_read_tokens
-        tokens["cache_creation_tokens"] += raw.metrics.cache_creation_tokens
+        # Coerce None → 0: some CLI providers omit token fields and previously
+        # leaked None into Metrics, crashing aggregation with int += None.
+        tokens["input_tokens"] += raw.metrics.input_tokens or 0
+        tokens["output_tokens"] += raw.metrics.output_tokens or 0
+        tokens["cache_read_tokens"] += raw.metrics.cache_read_tokens or 0
+        tokens["cache_creation_tokens"] += raw.metrics.cache_creation_tokens or 0
         if raw.metrics.model and not tokens["model"]:
             tokens["model"] = raw.metrics.model
 
@@ -271,12 +276,8 @@ class HarnessRunner:
         }
         options = _resolve_options(self._config, overrides)
 
-        resolved_provider = options.get("provider")
-        if not resolved_provider:
-            raise ValueError(
-                "No harness provider specified. Set 'provider' in HarnessConfig "
-                "or pass it to .harness() call."
-            )
+        resolved_provider = resolve_harness_provider(options.get("provider"))
+        options["provider"] = resolved_provider
 
         resolved_cwd = str(options.get("cwd") or ".")
         provider_instance = self._build_provider(str(resolved_provider), options)
@@ -284,22 +285,20 @@ class HarnessRunner:
         # Where the schema output file (.agentfield_output.json) is written and
         # read back. It MUST sit inside the agent's allowed root, or providers
         # like OpenCode reject the write as an external-directory access
-        # (agentfield#684). When project_dir is set, the agent's root is
-        # project_dir (see each provider's --dir / -C handling), which may differ
-        # from cwd — so the output file goes in an isolated temp dir *under*
-        # project_dir, never in a sibling/nested cwd. When project_dir is unset,
-        # cwd is the root and the output file goes directly in cwd (unchanged).
-        # This mirrors the Go SDK runner.
+        # (agentfield#684). Always isolate it in a per-run temp dir under
+        # project_dir, or cwd when project_dir is unset. Besides keeping the file
+        # inside the agent root, this prevents concurrent runs sharing one cwd
+        # from overwriting or deleting each other's fixed output filename.
         resolved_project_dir = options.get("project_dir")
-        temp_output_dir: Optional[str] = None
         if isinstance(resolved_project_dir, str) and resolved_project_dir:
-            os.makedirs(resolved_project_dir, exist_ok=True)
-            temp_output_dir = tempfile.mkdtemp(
-                prefix=".agentfield-out-", dir=resolved_project_dir
-            )
-            output_dir = temp_output_dir
+            base_dir = resolved_project_dir
         else:
-            output_dir = resolved_cwd
+            base_dir = resolved_cwd
+        os.makedirs(base_dir, exist_ok=True)
+        temp_output_dir: Optional[str] = tempfile.mkdtemp(
+            prefix=".agentfield-out-", dir=base_dir
+        )
+        output_dir = temp_output_dir
 
         # schema_mode selects how the agent is asked to produce the output:
         #   "single"      — one Write of the whole object (default, cheapest)

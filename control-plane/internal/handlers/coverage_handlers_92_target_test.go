@@ -66,15 +66,15 @@ func (s *executionVCStoreStub) ListExecutionVCs(_ context.Context, _ types.VCFil
 
 type cancelHandlerErrorStorage struct {
 	storage.StorageProvider
-	exec               *types.Execution
-	wfExec             *types.WorkflowExecution
-	getExecErr         error
-	getWorkflowErr     error
-	updateExecErr      error
-	updateWorkflowErr  error
-	storeEventErr      error
-	updatedExecStatus  string
-	updatedReason      *string
+	exec                *types.Execution
+	wfExec              *types.WorkflowExecution
+	getExecErr          error
+	getWorkflowErr      error
+	updateExecErr       error
+	updateWorkflowErr   error
+	storeEventErr       error
+	updatedExecStatus   string
+	updatedReason       *string
 	storedWorkflowEvent *types.WorkflowExecutionEvent
 }
 
@@ -163,14 +163,14 @@ func (s *cancelHandlerErrorStorage) StoreWorkflowExecutionEvent(_ context.Contex
 
 type workflowEventStoreStub struct {
 	storage.StorageProvider
-	exec              *types.Execution
-	getErr            error
-	createErr         error
-	updateErr         error
-	storeWorkflowErr  error
-	createdExec       *types.Execution
-	storedWorkflow    *types.WorkflowExecution
-	updatedExecution  *types.Execution
+	exec             *types.Execution
+	getErr           error
+	createErr        error
+	updateErr        error
+	storeWorkflowErr error
+	createdExec      *types.Execution
+	storedWorkflow   *types.WorkflowExecution
+	updatedExecution *types.Execution
 }
 
 func (s *workflowEventStoreStub) GetExecutionRecord(_ context.Context, _ string) (*types.Execution, error) {
@@ -273,11 +273,11 @@ func TestExecutionControllerSavePayload(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		store       services.PayloadStore
-		data        []byte
-		wantURI     *string
-		wantSaves   int
+		name      string
+		store     services.PayloadStore
+		data      []byte
+		wantURI   *string
+		wantSaves int
 	}{
 		{
 			name:      "nil store returns nil",
@@ -649,7 +649,7 @@ func TestWorkflowExecutionEventHandlerAdditionalBranches(t *testing.T) {
 		router.ServeHTTP(resp, req)
 
 		require.Equal(t, http.StatusInternalServerError, resp.Code)
-		assert.Contains(t, resp.Body.String(), "failed to create execution")
+		assert.Contains(t, resp.Body.String(), "failed to persist execution event")
 	})
 
 	t.Run("workflow execution store failure is non fatal on create", func(t *testing.T) {

@@ -1,0 +1,3 @@
+# Built binaries — the example is built from source (see Dockerfile), never committed.
+triggers-demo-go
+triggers-demo-go.exe

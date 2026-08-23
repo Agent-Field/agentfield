@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
@@ -215,6 +216,9 @@ func (s *AgentFieldServer) healthCheckHandler(c *gin.Context) {
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"version":   "1.0.0", // TODO: Get from build info
 		"checks":    gin.H{},
+	}
+	if furrowPublicAddr := os.Getenv("FURROW_PUBLIC_ADDR"); furrowPublicAddr != "" {
+		healthStatus["furrow_public_addr"] = furrowPublicAddr
 	}
 
 	allHealthy := true

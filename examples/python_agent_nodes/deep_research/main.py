@@ -28,19 +28,24 @@ app.include_router(research_router)
 
 
 if __name__ == "__main__":
+    search_provider = os.getenv("SEARCH_PROVIDER", "tavily").strip().lower() or "tavily"
+    search_provider_label = {
+        "tavily": "Tavily",
+        "parallel": "Parallel Search",
+    }.get(search_provider, search_provider)
     print("🔬 Deep Research Agent")
     print("🧠 Node ID: deep-research")
     print(f"🌐 Control Plane: {app.agentfield_server}")
     print("\n🎯 Architecture: Recursive Planning + Research Execution")
     print("  1. Recursive Task Decomposition → Breaks research into subtasks")
     print("  2. Topological Graph → Identifies dependencies and parallelization")
-    print("  3. Research Execution → Tavily search with citation tracking")
+    print(f"  3. Research Execution → {search_provider_label} with citation tracking")
     print("  4. Findings Synthesis → Structured results with sources")
     print("\n✨ Features:")
     print("  - Recursive task breakdown with configurable depth")
     print("  - Automatic dependency detection")
     print("  - Parallel execution planning")
-    print("  - Web search integration (Tavily)")
+    print(f"  - Web search integration ({search_provider_label})")
     print("  - Citation tracking and structured findings")
     print("  - Elegant and simple AgentField primitives")
 

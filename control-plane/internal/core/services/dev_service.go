@@ -18,6 +18,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 )
 
 type DefaultDevService struct {
@@ -196,6 +197,11 @@ func (ds *DefaultDevService) startDevProcess(packagePath string, port int, optio
 	}
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", resolveServerURL()))
 	env = append(env, "AGENTFIELD_DEV_MODE=true")
+	// Same contract as `af run`: pass the resolved API key through so the agent
+	// can register against a control plane with authentication enabled.
+	if key := packages.ResolveAPIKey(); key != "" {
+		env = append(env, fmt.Sprintf("AGENTFIELD_API_KEY=%s", key))
+	}
 
 	// Load environment variables from package .env file
 	if envVars, err := ds.loadDevEnvFile(packagePath); err == nil {

@@ -22,20 +22,32 @@ type fakeTarget struct {
 	installCalls int
 }
 
-func (f *fakeTarget) Name() string       { return f.name }
+func (f *fakeTarget) Name() string        { return f.name }
 func (f *fakeTarget) DisplayName() string { return f.displayName }
-func (f *fakeTarget) Method() string     { return f.method }
-func (f *fakeTarget) Detected() bool     { return f.detected }
+func (f *fakeTarget) Method() string      { return f.method }
+func (f *fakeTarget) Detected() bool      { return f.detected }
 func (f *fakeTarget) TargetPath() (string, error) {
 	if f.path == "" {
 		return "", errors.New("missing path")
 	}
 	return f.path, nil
 }
-func (f *fakeTarget) Install(skill Skill, _ string) (InstalledTarget, error) {
+func (f *fakeTarget) Install(skill Skill, canonicalCurrentDir string) (InstalledTarget, error) {
 	f.installCalls++
 	if f.installErr != nil {
 		return InstalledTarget{}, f.installErr
+	}
+	// Write the artifact the recorded method claims exists. The installer only
+	// skips an already-current target when its artifact really is on disk, so a
+	// fake that records a marker-block install without writing one would be
+	// permanently "invalid" and never exercise the skip path.
+	if f.method == "marker-block" {
+		inst, err := installMarkerBlock(skill, canonicalCurrentDir, f.path)
+		if err != nil {
+			return InstalledTarget{}, err
+		}
+		inst.TargetName = f.name
+		return inst, nil
 	}
 	return InstalledTarget{
 		TargetName:  f.name,
@@ -59,9 +71,20 @@ func withTempHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	withEnv(t, "HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows; without it the package-wide
+	// isolated home from TestMain would leak across this narrower one there.
+	withEnv(t, "USERPROFILE", home)
 	withEnv(t, "AGENTFIELD_HOME", filepath.Join(home, ".agentfield-home"))
 	withEnv(t, "PATH", filepath.Join(home, "bin"))
 	return home
+}
+
+// fakeTargetPath returns a writable temp path for a fake target's artifact.
+// Fakes must never point at a shared location like /tmp/<name>: their installs
+// are real file writes now.
+func fakeTargetPath(t *testing.T, name string) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), name+".md")
 }
 
 func captureStdout(t *testing.T, fn func()) string {
@@ -152,7 +175,7 @@ func TestStateFunctions(t *testing.T) {
 				InstalledAt:       time.Now().UTC(),
 				AvailableVersions: []string{Catalog[0].Version},
 				Targets: map[string]InstalledTarget{
-					"zeta": {TargetName: "zeta"},
+					"zeta":  {TargetName: "zeta"},
 					"alpha": {TargetName: "alpha"},
 				},
 			},
@@ -328,17 +351,26 @@ func TestHelpersAndTargets(t *testing.T) {
 		t.Fatalf("mkdir codex dir: %v", err)
 	}
 	codex := codexTarget{}
-	if codex.DisplayName() != "Codex (OpenAI)" || codex.Method() != "marker-block" {
+	// Codex reads ~/.codex/skills/<name>/SKILL.md natively (the cross-tool
+	// skills standard), so it installs by symlink like Claude Code.
+	if codex.DisplayName() != "Codex (OpenAI)" || codex.Method() != "symlink" {
 		t.Fatalf("unexpected codex metadata: %q %q", codex.DisplayName(), codex.Method())
 	}
 	if !codex.Detected() {
 		t.Fatal("codex target should be detected")
 	}
 	codexPath, _ := codex.TargetPath()
-	if _, err := codex.Install(skill, filepath.Join(home, "canonical", "current")); err != nil {
+	codexInst, err := codex.Install(skill, filepath.Join(home, "canonical", "current"))
+	if err != nil {
 		t.Fatalf("codex install: %v", err)
 	}
-	if installed, version, err := codex.Status(); err != nil || !installed || version != skill.Version {
+	if codexInst.Method != "symlink" || codexInst.Path != filepath.Join(home, ".codex", "skills", skill.Name) {
+		t.Fatalf("unexpected codex install result: %+v", codexInst)
+	}
+	if dest, err := os.Readlink(codexInst.Path); err != nil || dest != filepath.Join(home, "canonical", "current") {
+		t.Fatalf("codex link dest = %q err=%v", dest, err)
+	}
+	if installed, version, err := codex.Status(); err != nil || !installed || version != "current" {
 		t.Fatalf("codex status = %v %q %v", installed, version, err)
 	}
 	if err := codex.Uninstall(); err != nil {
@@ -347,7 +379,7 @@ func TestHelpersAndTargets(t *testing.T) {
 	if installed, _, _ := codex.Status(); installed {
 		t.Fatal("codex should not be installed after uninstall")
 	}
-	if !strings.HasSuffix(codexPath, filepath.Join(".codex", "AGENTS.override.md")) {
+	if !strings.HasSuffix(codexPath, filepath.Join(".codex", "skills")) {
 		t.Fatalf("unexpected codex path: %q", codexPath)
 	}
 
@@ -513,9 +545,9 @@ func TestResolveTargetsAndInstallLifecycle(t *testing.T) {
 	origTargets := allTargets
 	t.Cleanup(func() { allTargets = origTargets })
 
-	success := &fakeTarget{name: "success", displayName: "Success", method: "marker-block", detected: true, path: "/tmp/success"}
-	failing := &fakeTarget{name: "failing", displayName: "Failing", method: "marker-block", detected: true, path: "/tmp/failing", installErr: errors.New("boom")}
-	skippedTarget := &fakeTarget{name: "skipped", displayName: "Skipped", method: "marker-block", detected: false, path: "/tmp/skipped"}
+	success := &fakeTarget{name: "success", displayName: "Success", method: "marker-block", detected: true, path: fakeTargetPath(t, "success")}
+	failing := &fakeTarget{name: "failing", displayName: "Failing", method: "marker-block", detected: true, path: fakeTargetPath(t, "failing"), installErr: errors.New("boom")}
+	skippedTarget := &fakeTarget{name: "skipped", displayName: "Skipped", method: "marker-block", detected: false, path: fakeTargetPath(t, "skipped")}
 	allTargets = []Target{success, failing, skippedTarget}
 
 	selected, skipped, err := resolveTargets(InstallOptions{AllDetected: true})

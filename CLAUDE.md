@@ -201,10 +201,14 @@ af run
 ```go
 import agentfieldagent "github.com/Agent-Field/agentfield/sdk/go/agent"
 
-agent, _ := agentfieldagent.New(agentfieldagent.Config{
-    NodeID:   "my-agent",
+agent, err := agentfieldagent.New(agentfieldagent.Config{
+    NodeID:        "my-agent",
+    Version:       "1.0.0", // required — New returns an error without it
     AgentFieldURL: "http://localhost:8080",
 })
+if err != nil {
+    log.Fatal(err)
+}
 agent.RegisterSkill("greet", func(ctx context.Context, input map[string]any) (any, error) {
     return map[string]any{"message": "hello"}, nil
 })

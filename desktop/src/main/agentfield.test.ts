@@ -1,6 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { BundledStatus } from '../shared/types'
 import type { CpClient, PackageInfo } from './cpClient'
 import {
   DEFAULT_BASE_URL,
@@ -19,8 +20,9 @@ import {
 } from './agentfield'
 import { DEFAULT_CONTROL_PLANE_PORT } from './ports'
 import { installCommand, sanitizeInstallOutput } from './installer'
+import { BUNDLED_NODES } from '../shared/bundled'
 import { CATALOG, catalogEntry } from '../shared/catalog'
-import { setCloudConnection } from './connection'
+import { setCloudConnection, setLocalApiKey } from './connection'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -72,7 +74,21 @@ describe('active base URL', () => {
 })
 
 describe('raw control-plane fetch authentication', () => {
-  afterEach(() => setActiveControlPlanePort(DEFAULT_CONTROL_PLANE_PORT))
+  afterEach(() => {
+    setLocalApiKey(null)
+    setActiveControlPlanePort(DEFAULT_CONTROL_PLANE_PORT)
+  })
+
+  function readerFetch(): FetchLike {
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
+      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
+      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
+      if (url.includes('/dashboard/summary')) return jsonResponse({})
+      return jsonResponse({ totals: {} })
+    }) as FetchLike
+  }
 
   async function callRawReaders(fetchImpl: FetchLike): Promise<void> {
     await checkControlPlane(undefined, fetchImpl)
@@ -84,14 +100,7 @@ describe('raw control-plane fetch authentication', () => {
 
   it('adds X-API-Key to every raw reader in cloud mode', async () => {
     setCloudConnection('https://cp.example', 'cloud-key')
-    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
-      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
-      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
-      if (url.includes('/dashboard/summary')) return jsonResponse({})
-      return jsonResponse({ totals: {} })
-    }) as FetchLike
+    const fetchImpl = readerFetch()
     await callRawReaders(fetchImpl)
     expect(vi.mocked(fetchImpl).mock.calls).toHaveLength(5)
     for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
@@ -99,19 +108,25 @@ describe('raw control-plane fetch authentication', () => {
     }
   })
 
+  // Default local mode has no key: the control plane authenticates the app by
+  // its loopback address, so nothing must be sent.
   it('omits X-API-Key from every raw reader in local mode', async () => {
     setActiveControlPlanePort(8080)
-    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
-      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
-      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
-      if (url.includes('/dashboard/summary')) return jsonResponse({})
-      return jsonResponse({ totals: {} })
-    }) as FetchLike
+    const fetchImpl = readerFetch()
     await callRawReaders(fetchImpl)
     for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
       expect(new Headers(init?.headers).has('X-API-Key')).toBe(false)
+    }
+  })
+
+  it('adds X-API-Key to every raw reader when the local server needs one', async () => {
+    setActiveControlPlanePort(8080)
+    setLocalApiKey('local-secret')
+    const fetchImpl = readerFetch()
+    await callRawReaders(fetchImpl)
+    expect(vi.mocked(fetchImpl).mock.calls).toHaveLength(5)
+    for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
+      expect(new Headers(init?.headers).get('X-API-Key')).toBe('local-secret')
     }
   })
 })
@@ -531,9 +546,14 @@ describe('fetchUsageStats', () => {
 })
 
 describe('install catalog', () => {
+  // catalogEntry resolves over the marketplace CATALOG and the bundled roster
+  // alike, so the shape and uniqueness invariants hold across their union.
+  // CATALOG itself is currently empty — every vetted node ships with the app.
+  const VETTED = [...CATALOG, ...BUNDLED_NODES]
+
   it('every entry has a name, description, and an https or af:// source', () => {
-    expect(CATALOG.length).toBeGreaterThan(0)
-    for (const entry of CATALOG) {
+    expect(VETTED.length).toBeGreaterThan(0)
+    for (const entry of VETTED) {
       expect(entry.name).toMatch(/^[a-z0-9][a-z0-9-]*$/)
       expect(entry.description.length).toBeGreaterThan(0)
       expect(entry.source).toMatch(/^(https:\/\/|af:\/\/)/)
@@ -541,13 +561,39 @@ describe('install catalog', () => {
   })
 
   it('entry names are unique', () => {
-    const names = CATALOG.map((e) => e.name)
+    const names = VETTED.map((e) => e.name)
     expect(new Set(names).size).toBe(names.length)
   })
 
   it('catalogEntry resolves known names and rejects unknown ones', () => {
-    expect(catalogEntry(CATALOG[0].name)).toEqual(CATALOG[0])
+    expect(catalogEntry(VETTED[0].name)).toEqual(VETTED[0])
     expect(catalogEntry('definitely-not-real')).toBeUndefined()
+  })
+
+  // A repo that ships both a Python node and its Go counterpart is offered as
+  // a single install, named for the product and sourced at the bare repo URL —
+  // the root manifest's `superseded_by:` redirect decides which node lands and
+  // carries an existing install across. Both such products now SHIP WITH the
+  // app (shared/bundled.ts) and are provisioned on first launch, so the
+  // invariant lives there now: a second entry for the same repo, the old
+  // implementation-suffixed name creeping back in, or either product
+  // reappearing as a marketplace card must fail here rather than quietly
+  // return to the Install view.
+  it.each([
+    { repo: 'Agent-Field/SWE-AF', name: 'swe-planner', retired: 'swe-planner-go' },
+    { repo: 'Agent-Field/pr-af', name: 'pr-af', retired: 'pr-af-go' },
+    { repo: 'Agent-Field/sec-af', name: 'sec-af', retired: 'sec-af-go' },
+    { repo: 'Agent-Field/cloudsecurity-af', name: 'cloudsecurity-af', retired: 'cloudsecurity-af-go' }
+  ])('ships $name as one product-named bundled node sourced at the bare repo', (tc) => {
+    const entries = BUNDLED_NODES.filter((e) => e.source.includes(tc.repo))
+    expect(entries).toHaveLength(1)
+    expect(entries[0].name).toBe(tc.name)
+    expect(entries[0].source).toBe(`https://github.com/${tc.repo}`)
+    expect(entries[0].language).toBe('go')
+    expect([...CATALOG, ...BUNDLED_NODES].map((e) => e.name)).not.toContain(tc.retired)
+    expect(CATALOG.map((e) => e.name)).not.toContain(tc.name)
+    // Still installable and --force updatable from the Agents view.
+    expect(catalogEntry(tc.name)).toEqual(entries[0])
   })
 })
 
@@ -555,9 +601,9 @@ describe('installCommand', () => {
   // Contract: the renderer sends catalog *names* over IPC; only vetted
   // sources ever reach spawn, and unknown names are refused.
   it('builds a control-plane install preview for a catalog name', () => {
-    expect(installCommand(CATALOG[0].name)).toEqual({
+    expect(installCommand(BUNDLED_NODES[0].name)).toEqual({
       command: 'control-plane',
-      args: ['install', CATALOG[0].source]
+      args: ['install', BUNDLED_NODES[0].source]
     })
   })
 
@@ -698,6 +744,29 @@ describe('getSnapshot', () => {
     // Usage is only fetched against a recognized control plane.
     expect(snapshot.usage).toBeNull()
     expect(requested.some((url) => url.includes('/usage/stats'))).toBe(false)
+  })
+
+  // Bundled provisioning rows are main-process state (main/bundledAgents.ts),
+  // so getSnapshot only passes them through — same contract as skillSync.
+  it('carries the bundled provisioning rows, defaulting to none', async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new TypeError('fetch failed')
+    }
+    const bundled: BundledStatus[] = [
+      {
+        name: 'swe-planner',
+        description: 'Software factory',
+        language: 'go',
+        phase: 'installing',
+        message: 'Cloning…'
+      }
+    ]
+
+    const without = await getSnapshot({ cpClient: packagesClient(), fetchImpl })
+    expect(without.bundled).toEqual([])
+
+    const with_ = await getSnapshot({ cpClient: packagesClient(), fetchImpl, bundled })
+    expect(with_.bundled).toEqual(bundled)
   })
 
   it('reports an unreachable control plane and an absent registry gracefully', async () => {

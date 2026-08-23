@@ -58,13 +58,13 @@ func NewOpenRouterMediaProvider(apiKey string) (*OpenRouterMediaProvider, error)
 	if apiKey == "" {
 		return nil, fmt.Errorf("OpenRouter API key required: pass apiKey or set OPENROUTER_API_KEY")
 	}
-	siteURL, siteName, _ := resolveOpenRouterAttribution("", "")
+	attr, _ := resolveOpenRouterAttribution("", "")
 	return &OpenRouterMediaProvider{
 		APIKey:   apiKey,
 		BaseURL:  defaultOpenRouterBaseURL,
 		Client:   &http.Client{Timeout: 60 * time.Second},
-		SiteURL:  siteURL,
-		SiteName: siteName,
+		SiteURL:  attr.siteURL,
+		SiteName: attr.appName,
 	}, nil
 }
 

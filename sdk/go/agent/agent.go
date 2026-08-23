@@ -24,6 +24,7 @@ import (
 	"github.com/Agent-Field/agentfield/sdk/go/client"
 	"github.com/Agent-Field/agentfield/sdk/go/did"
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
+	triggerspkg "github.com/Agent-Field/agentfield/sdk/go/triggers"
 	"github.com/Agent-Field/agentfield/sdk/go/types"
 )
 
@@ -153,6 +154,12 @@ type Reasoner struct {
 	// nil/empty = inherit default ("warn"), "true" = explicitly opt in, "false" = explicitly refuse.
 	// Auto-set to "true" if any Triggers are declared.
 	AcceptsWebhook *string
+
+	// triggerBindings stores the full triggers.Binding values (including the
+	// non-serialisable Transform function) for dispatch-time use. Populated
+	// by withTriggersBinding / OnEvent / OnSchedule. Not exported because
+	// the wire payload uses Triggers (types.TriggerBinding) above.
+	triggerBindings []triggerspkg.Binding
 }
 
 // EventTrigger describes an external event source binding for a reasoner.
@@ -185,13 +192,27 @@ func captureCodeOrigin(skip int) string {
 }
 
 // WithTriggers is the canonical decorator-equivalent for declaring trigger
-// bindings on a Go reasoner. Pass a mix of EventTrigger and ScheduleTrigger
-// values; unknown types are silently ignored so adding new kinds later is
-// backward compatible.
-func WithTriggers(triggers ...any) ReasonerOption {
+// bindings on a Go reasoner. Pass a mix of EventTrigger, ScheduleTrigger,
+// or triggers.Binding values; unknown types are silently ignored so adding
+// new kinds later is backward compatible.
+func WithTriggers(trigs ...any) ReasonerOption {
 	codeOrigin := captureCodeOrigin(2)
 	return func(r *Reasoner) {
-		for _, t := range triggers {
+		for _, t := range trigs {
+			// If it's a triggers.Binding, store both the wire binding AND
+			// the full Binding (preserving Transform) for dispatch-time use.
+			if tb, ok := t.(triggerspkg.Binding); ok {
+				wire := bindingToWire(tb)
+				if wire.CodeOrigin == "" {
+					wire.CodeOrigin = codeOrigin
+				}
+				if tb.CodeOrigin == "" {
+					tb.CodeOrigin = codeOrigin
+				}
+				r.Triggers = append(r.Triggers, wire)
+				r.triggerBindings = append(r.triggerBindings, tb)
+				continue
+			}
 			binding, ok := triggerToBinding(t)
 			if !ok {
 				continue
@@ -280,6 +301,8 @@ func triggerToBinding(t any) (types.TriggerBinding, bool) {
 			"timezone":   tz,
 		})
 		return types.TriggerBinding{Source: "cron", Config: cfg}, true
+	case triggerspkg.Binding:
+		return bindingToWire(v), true
 	default:
 		return types.TriggerBinding{}, false
 	}
@@ -356,6 +379,14 @@ type Config struct {
 	// Optional. Default: empty (no auth). When set, the token is sent as
 	// an Authorization: Bearer <token> header on control-plane requests.
 	Token string
+
+	// APIKey authenticates control-plane requests via the X-API-Key header.
+	// Optional. Defaults to the AGENTFIELD_API_KEY environment variable, which
+	// `af run` exports for the agents it starts, so an agent registers against
+	// an authenticated control plane without carrying the key in its code.
+	// Unlike Token this is only ever sent outbound; it is not used to validate
+	// incoming requests.
+	APIKey string
 
 	// DeploymentType describes how the agent runs (affects execution behavior).
 	// Optional. Default: "long_running". Common values: "long_running",
@@ -526,6 +557,9 @@ type Agent struct {
 	procLogRing *processLogRing
 	procLogOnce sync.Once
 
+	spanEventCh   chan types.WorkflowExecutionEvent
+	spanEventOnce sync.Once
+
 	initMu        sync.Mutex
 	initialized   bool
 	leaseLoopOnce sync.Once
@@ -559,6 +593,9 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if cfg.TeamID == "" {
 		cfg.TeamID = "default"
+	}
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		cfg.APIKey = strings.TrimSpace(os.Getenv("AGENTFIELD_API_KEY"))
 	}
 	if cfg.ListenAddress == "" {
 		cfg.ListenAddress = ":8001"
@@ -629,12 +666,22 @@ func New(cfg Config) (*Agent, error) {
 		if refreshInterval <= 0 {
 			refreshInterval = 5 * time.Minute
 		}
-		a.localVerifier = NewLocalVerifier(cfg.AgentFieldURL, refreshInterval, cfg.Token)
+		// NewLocalVerifier sends its third argument as X-API-Key. Prefer the
+		// dedicated APIKey, falling back to Token so existing callers that
+		// used it as the key keep working.
+		verifierKey := strings.TrimSpace(cfg.APIKey)
+		if verifierKey == "" {
+			verifierKey = cfg.Token
+		}
+		a.localVerifier = NewLocalVerifier(cfg.AgentFieldURL, refreshInterval, verifierKey)
 		cfg.Logger.Printf("Local verification enabled (refresh every %s)", refreshInterval)
 	}
 
 	if strings.TrimSpace(cfg.AgentFieldURL) != "" {
 		opts := []client.Option{client.WithHTTPClient(httpClient), client.WithBearerToken(cfg.Token)}
+		if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
+			opts = append(opts, client.WithAPIKey(apiKey))
+		}
 		if cfg.DID != "" && cfg.PrivateKeyJWK != "" {
 			opts = append(opts, client.WithDIDAuth(cfg.DID, cfg.PrivateKeyJWK))
 		}
@@ -763,6 +810,10 @@ func (a *Agent) Execute(ctx context.Context, reasonerName string, input map[stri
 	if input == nil {
 		input = make(map[string]any)
 	}
+	// Trigger dispatch: honour the envelope shape here too so a caller that
+	// forwards a raw dispatcher payload through Execute() gets the same
+	// unwrap + Transform + context injection as the HTTP paths.
+	ctx, input = applyTriggerDispatch(ctx, reasoner, input)
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting local reasoner execution", map[string]any{
 		"reasoner_id": reasonerName,
 		"mode":        "direct",
@@ -822,6 +873,10 @@ func (a *Agent) HandleServerlessEvent(ctx context.Context, event map[string]any,
 	if !ok {
 		return map[string]any{"error": "reasoner not found"}, http.StatusNotFound, nil
 	}
+
+	// Trigger dispatch: serverless deployments receive the dispatcher envelope
+	// directly in the platform event, so unwrap here as well.
+	ctx, input = applyTriggerDispatch(ctx, handler, input)
 
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting serverless reasoner execution", map[string]any{
 		"reasoner_id": reasoner,
@@ -1178,6 +1233,10 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 	tracker := NewCostTracker()
 	ctx = contextWithCostTracker(ctx, tracker)
 
+	// Trigger dispatch: the /execute route can also carry the dispatcher
+	// envelope, so unwrap + Transform + inject here as well.
+	ctx, input = applyTriggerDispatch(ctx, reasoner, input)
+
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
 		"reasoner_id": reasonerName,
@@ -1402,6 +1461,12 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	tracker := NewCostTracker()
 	ctx = contextWithCostTracker(ctx, tracker)
 
+	// Trigger dispatch: unwrap the {event, _meta} envelope when present,
+	// apply the binding's Transform, and attach *triggers.Context to ctx so
+	// the handler can read it via triggers.FromContext(ctx). Direct calls
+	// pass through unchanged.
+	ctx, input = applyTriggerDispatch(ctx, reasoner, input)
+
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
 		"reasoner_id": name,
@@ -1520,6 +1585,11 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	// callback. Concurrent executions each get their own tracker.
 	tracker := NewCostTracker()
 	ctx = contextWithCostTracker(ctx, tracker)
+
+	// Trigger dispatch: same unwrap + Transform + context injection as the
+	// sync path, so both paths deliver identical semantics to the handler.
+	ctx, input = applyTriggerDispatch(ctx, reasoner, input)
+
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting asynchronous reasoner execution", map[string]any{
 		"reasoner_id": reasoner.Name,
@@ -1617,6 +1687,26 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	}
 }
 
+// applyControlPlaneAuth sets the auth headers a control plane accepts on a
+// request this package builds by hand.
+//
+// Everything that goes through the shared client (sdk/go/client) already gets
+// these — see client.do. A handful of paths construct their own *http.Request
+// and have to mirror it, or a control plane running with an API key rejects
+// them with 401. Token and APIKey are separate settings and either may be set
+// alone, so both headers are applied independently.
+func (a *Agent) applyControlPlaneAuth(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if token := strings.TrimSpace(a.cfg.Token); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if apiKey := strings.TrimSpace(a.cfg.APIKey); apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+}
+
 func (a *Agent) sendExecutionStatus(executionID string, payload map[string]any) error {
 	base := strings.TrimSpace(a.cfg.AgentFieldURL)
 	if executionID == "" || base == "" {
@@ -1642,9 +1732,7 @@ func (a *Agent) postExecutionStatus(ctx context.Context, callbackURL string, pay
 		req.Header.Set("Content-Type", "application/json")
 
 		// Include API auth headers (Bearer token / API key)
-		if a.cfg.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
-		}
+		a.applyControlPlaneAuth(req)
 
 		// Sign request with DID auth headers if configured
 		if a.client != nil {
@@ -1913,9 +2001,7 @@ func (a *Agent) applyCallHeaders(req *http.Request, execCtx ExecutionContext, ru
 	// Include caller agent identity for permission middleware
 	req.Header.Set("X-Caller-Agent-ID", a.cfg.NodeID)
 
-	if a.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
-	}
+	a.applyControlPlaneAuth(req)
 }
 
 // submitAsyncExecution POSTs to /api/v1/execute/async/{target} and returns the
@@ -2435,9 +2521,7 @@ func (a *Agent) sendWorkflowEvent(event types.WorkflowExecutionEvent) error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if a.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
-	}
+	a.applyControlPlaneAuth(req)
 
 	// Sign request with DID auth headers if configured
 	if a.client != nil {

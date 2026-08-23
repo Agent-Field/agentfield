@@ -114,12 +114,46 @@ aiConfig := &ai.Config{
 }
 ```
 
+### Infron Configuration
+
+Infron is an OpenAI-compatible gateway that serves the standard
+`<provider>/<model>` ids, so wiring it up is a base URL and a model prefix:
+
+```go
+aiConfig := &ai.Config{
+    APIKey:   os.Getenv("INFRON_API_KEY"),
+    BaseURL:  "https://llm.onerouter.pro/v1",
+    Model:    "moonshotai/kimi-k2.6", // the id as published by the model vendor
+    SiteURL:  "https://myapp.com",    // app attribution
+    SiteName: "My AI App",
+}
+```
+
+`ai.DefaultConfig()` picks this up from `INFRON_API_KEY` automatically. A
+gateway key already present in the environment keeps precedence.
+
+An `infron/` model prefix is accepted as a routing marker for callers that
+select a gateway by model string, and is stripped before the request goes out
+(the gateway serves the bare id):
+
+```go
+Model: "infron/moonshotai/kimi-k2.6"  // sent as moonshotai/kimi-k2.6
+```
+
+Note that Infron reports native cost at the top level of the body (and of the
+final stream chunk) rather than nested under `usage.cost`. The SDK normalizes
+both shapes into `Usage.Cost`, so cost tracking reads the same either way.
+
 ## API Reference
 
 ### AI Client
 
-#### `ai.NewClient(config *Config) (*Client, error)`
+#### `ai.NewClient(config *Config, opts ...ClientOption) (*Client, error)`
 Creates a new AI client with the given configuration.
+
+Use `ai.WithHTTPClient` to provide a custom `*http.Client`, or
+`ai.WithTransport` to provide a custom `http.RoundTripper` while retaining the
+default client's timeout.
 
 #### `client.Complete(ctx context.Context, prompt string, opts ...Option) (*Response, error)`
 Makes a chat completion request.

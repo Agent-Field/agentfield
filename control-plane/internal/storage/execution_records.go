@@ -1102,6 +1102,16 @@ func parseTimeString(value string) (time.Time, error) {
 // INVARIANT: callers must ensure updated_at is bumped on every meaningful execution activity.
 // If updated_at is not maintained, active executions may be incorrectly reaped.
 // Uses COALESCE(updated_at, created_at, started_at) to handle rows where updated_at may be NULL.
+//
+// An execution that is merely BLOCKED ON A CHILD is not stale, so rows with a
+// non-terminal child are skipped. A parent's own updated_at stops moving while
+// it waits, so without this a long child call — one agent doing many minutes of
+// work in a single request — reaps its whole ancestor chain even though real
+// work is happening. Deliberately no recency test on the child: the chain
+// unwinds bottom-up instead. If work genuinely stops, the leaf goes stale and
+// is reaped first, which makes its parent childless and eligible on the next
+// sweep, and so on up. Nothing is stuck forever; it just takes one sweep per
+// level.
 func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
 	if limit <= 0 {
 		return 0, nil
@@ -1115,9 +1125,14 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 	db := ls.requireSQLDB()
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
-		FROM executions
+		FROM executions e
 		WHERE status IN ('running', 'pending', 'queued')
 		  AND COALESCE(updated_at, created_at, started_at) <= ?
+		  AND NOT EXISTS (
+		      SELECT 1 FROM executions c
+		      WHERE c.parent_execution_id = e.execution_id
+		        AND c.status IN ('running', 'pending', 'queued')
+		  )
 		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {
@@ -1208,7 +1223,8 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 // when their updated_at timestamp exceeds the staleAfter threshold. This catches orphaned
 // child executions whose parent failed without cascading cancellation.
 //
-// See MarkStaleExecutions for the updated_at invariant and COALESCE fallback rationale.
+// See MarkStaleExecutions for the updated_at invariant, the COALESCE fallback
+// rationale, and why a row with a non-terminal child is skipped rather than reaped.
 func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
 	if limit <= 0 {
 		return 0, nil
@@ -1222,10 +1238,15 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	db := ls.requireSQLDB()
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
-		FROM workflow_executions
+		FROM workflow_executions w
 		WHERE status IN ('running', 'pending', 'queued', 'waiting')
 		  AND COALESCE(updated_at, created_at, started_at) <= ?
 		  AND COALESCE(approval_status, '') != 'pending'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM workflow_executions c
+		      WHERE c.parent_execution_id = w.execution_id
+		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
+		  )
 		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {
@@ -1345,6 +1366,11 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 // status used is "failed" (the agent restarted mid-execution; the work was
 // not completed and was not a deadline timeout).
 //
+// Executions marked ExecutionReasonAwaitingAgentRestart are deliberately
+// exempt: those are the ones the dispatcher is holding open ACROSS this very
+// restart and is about to re-send. Reaping them would fail the run that the
+// restart-absorbing retry exists to save.
+//
 // Two single bulk UPDATEs — workflow_executions is the source of truth for
 // the DAG UI; the legacy `executions` table is mirrored best-effort so any
 // older code path reading it sees a consistent picture. We deliberately do
@@ -1365,8 +1391,10 @@ func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNo
 		UPDATE workflow_executions
 		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
 		WHERE agent_node_id = ?
-		  AND status IN ('running', 'pending', 'queued', 'waiting')`,
+		  AND status IN ('running', 'pending', 'queued', 'waiting')
+		  AND COALESCE(status_reason, '') <> ?`,
 		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+		types.ExecutionReasonAwaitingAgentRestart,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("update orphaned workflow executions: %w", err)
@@ -1381,8 +1409,10 @@ func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNo
 		UPDATE executions
 		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
 		WHERE agent_node_id = ?
-		  AND status IN ('running', 'pending', 'queued', 'waiting')`,
+		  AND status IN ('running', 'pending', 'queued', 'waiting')
+		  AND COALESCE(status_reason, '') <> ?`,
 		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+		types.ExecutionReasonAwaitingAgentRestart,
 	)
 
 	return int(affected), nil

@@ -70,6 +70,10 @@ type installer interface {
 	GetPackageInfo(name string) (*domain.InstalledPackage, error)
 }
 
+type resultInstaller interface {
+	InstallPackageWithResult(source string, options domain.InstallOptions) (string, error)
+}
+
 type Manager struct {
 	mu             sync.RWMutex
 	installer      installer
@@ -218,7 +222,22 @@ func (m *Manager) run(jobID string, force bool) {
 	before := m.installedNames()
 	if err == nil {
 		installSource, options := splitSubdir(source, force)
-		err = m.installer.InstallPackage(installSource, options)
+		if reporting, ok := m.installer.(resultInstaller); ok {
+			var installedName string
+			installedName, err = reporting.InstallPackageWithResult(installSource, options)
+			// The installer is authoritative about what it installed, and an
+			// update is where that matters most: a `superseded_by` redirect in
+			// the recorded source can retire the package being updated and put
+			// a differently-named successor in its place. Following the
+			// installer here means the job reports — and restarts — the node
+			// that now exists, rather than the name that went in and no longer
+			// resolves.
+			if err == nil && installedName != "" {
+				packageName = installedName
+			}
+		} else {
+			err = m.installer.InstallPackage(installSource, options)
+		}
 	}
 	if err == nil && packageName == "" {
 		packageName = m.discoverPackageName(before)

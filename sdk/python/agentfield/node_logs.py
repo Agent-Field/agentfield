@@ -16,13 +16,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Deque, Iterable, Iterator, List, Optional, TextIO, cast
 
+from .lock_utils import timed_lock
+
 # Optional: follow subscribers wake on new lines
 _follow_queues: List["queue.Queue[None]"] = []
 _follow_lock = threading.Lock()
 
 
 def _notify_followers() -> None:
-    with _follow_lock:
+    with timed_lock(_follow_lock, "node_logs_follow"):
         for q in _follow_queues:
             try:
                 q.put_nowait(None)
@@ -31,12 +33,12 @@ def _notify_followers() -> None:
 
 
 def register_follow_queue(q: "queue.Queue[None]") -> None:
-    with _follow_lock:
+    with timed_lock(_follow_lock, "node_logs_follow"):
         _follow_queues.append(q)
 
 
 def unregister_follow_queue(q: "queue.Queue[None]") -> None:
-    with _follow_lock:
+    with timed_lock(_follow_lock, "node_logs_follow"):
         try:
             _follow_queues.remove(q)
         except ValueError:
@@ -92,7 +94,7 @@ class ProcessLogRing:
             raw = raw_bytes.decode("utf-8", errors="replace")
             truncated = True
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        with self._lock:
+        with timed_lock(self._lock, "node_logs"):
             self._seq += 1
             entry = LogEntry(
                 seq=self._seq, ts=ts, stream=stream, line=raw, truncated=truncated
@@ -107,20 +109,20 @@ class ProcessLogRing:
     def snapshot_after(
         self, since_seq: int, limit: Optional[int] = None
     ) -> List[LogEntry]:
-        with self._lock:
+        with timed_lock(self._lock, "node_logs"):
             items = [e for e in self._entries if e.seq > since_seq]
             if limit is not None and limit > 0:
                 items = items[-limit:]
             return list(items)
 
     def tail(self, n: int) -> List[LogEntry]:
-        with self._lock:
+        with timed_lock(self._lock, "node_logs"):
             if n <= 0:
                 return []
             return list(self._entries)[-n:]
 
     def max_seq(self) -> int:
-        with self._lock:
+        with timed_lock(self._lock, "node_logs"):
             return self._seq
 
 

@@ -562,3 +562,71 @@ type testExecutionStorageWithoutEventBus struct {
 func (s *testExecutionStorageWithoutEventBus) GetExecutionEventBus() *events.ExecutionEventBus {
 	return nil
 }
+
+// TestUpdateExecutionStatusHandler_WebhookTriggeredFromStore validates the fix
+// for issue #936: webhook delivery must be triggered based on the
+// execution_webhooks table, not the in-memory WebhookRegistered field (which
+// is not persisted due to db:"-" tag).
+func TestUpdateExecutionStatusHandler_WebhookTriggeredFromStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	agent := &types.AgentNode{
+		ID:        "node-1",
+		BaseURL:   "http://agent.example",
+		Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}},
+	}
+
+	store := newTestExecutionStorage(agent)
+	payloads := services.NewFilePayloadStore(t.TempDir())
+
+	webhookCalled := false
+	mockWebhook := &mockWebhookDispatcher{
+		notifyFunc: func(ctx context.Context, executionID string) error {
+			webhookCalled = true
+			return nil
+		},
+	}
+
+	// Create execution WITHOUT WebhookRegistered set (simulates loading from DB
+	// where the field is always false due to db:"-").
+	execution := &types.Execution{
+		ExecutionID:       "exec-wh-store",
+		RunID:             "run-1",
+		Status:            types.ExecutionStatusRunning,
+		StartedAt:         time.Now().UTC(),
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		WebhookRegistered: false, // Explicitly false — as if loaded from DB
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	// Register webhook in the store (separate table)
+	secret := "test-secret"
+	webhook := &types.ExecutionWebhook{
+		ExecutionID: "exec-wh-store",
+		URL:         "https://example.com/webhook",
+		Secret:      &secret,
+	}
+	require.NoError(t, store.RegisterExecutionWebhook(context.Background(), webhook))
+
+	router := gin.New()
+	router.PUT("/api/v1/executions/:execution_id/status", UpdateExecutionStatusHandler(store, payloads, mockWebhook, 90*time.Second))
+
+	reqBody := `{
+		"status": "succeeded",
+		"result": {"output": "done"}
+	}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/executions/exec-wh-store/status", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.True(t, webhookCalled, "webhook must be triggered even when WebhookRegistered is false on the execution record (issue #936)")
+
+	// Also verify the status response reports webhook_registered=true
+	var statusResp ExecutionStatusResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &statusResp))
+	require.True(t, statusResp.WebhookRegistered, "GET status must report webhook_registered=true from the webhooks table")
+}

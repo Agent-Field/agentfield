@@ -178,6 +178,26 @@ function realRunCommand(command: string, args: string[]): Promise<RunResult> {
  * (the same file the macOS launchd agent uses). The returned promise resolves
  * only if the spawn itself errors; otherwise it stays pending.
  */
+/**
+ * Environment pinned onto a spawned `af server`.
+ *
+ * AGENTFIELD_PORT pins the server to the port this app will poll. Without
+ * it, an agentfield.yaml that sets its own port makes `af server` bind there
+ * while the app waits on the chosen port forever — a healthy server and a
+ * spinner that never resolves.
+ *
+ * AGENTFIELD_SERVER is the URL the server hands to every agent it starts
+ * (control-plane resolveServerURL reads its own environment and otherwise
+ * falls back to http://localhost:8080 regardless of the port it listens on).
+ * Without it, a control plane on any other port — the auto-picked one when
+ * 8080 is busy, or a configured one — tells swe-planner, pr-af and every
+ * other node to register with localhost:8080, i.e. with whatever else is
+ * there, or nothing.
+ */
+export function serverSpawnEnv(port: number): NodeJS.ProcessEnv {
+  return { AGENTFIELD_PORT: String(port), AGENTFIELD_SERVER: `http://localhost:${port}` }
+}
+
 function defaultSpawnServer(port: number): Promise<AgentActionResult> {
   return new Promise((resolve) => {
     let log: number
@@ -189,15 +209,11 @@ function defaultSpawnServer(port: number): Promise<AgentActionResult> {
       resolve({ ok: false, message: `could not open control-plane log: ${String(err)}` })
       return
     }
-    // Pin the spawned server to the port this app will poll. Without it, an
-    // agentfield.yaml that sets its own port makes `af server` bind there
-    // while the app waits on the chosen port forever — a healthy server and
-    // a spinner that never resolves.
     const child = spawn(getCliCommand(), ['server'], {
       windowsHide: true,
       detached: true,
       stdio: ['ignore', log, log],
-      env: childEnv({ AGENTFIELD_PORT: String(port) })
+      env: childEnv(serverSpawnEnv(port))
     })
     child.on('error', (err: NodeJS.ErrnoException) => {
       resolve({

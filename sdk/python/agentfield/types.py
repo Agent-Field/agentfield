@@ -273,12 +273,29 @@ class DiscoveryResult:
     xml: Optional[str] = None
 
 
+def _default_harness_provider() -> str:
+    # Imported lazily: agentfield.harness imports agentfield.types.
+    from agentfield.harness._defaults import resolve_harness_provider
+
+    return resolve_harness_provider()
+
+
 class HarnessConfig(BaseModel):
     provider: str = Field(
-        ...,
-        description='Coding agent provider: "claude-code" | "codex" | "gemini" | "opencode"',
+        default_factory=_default_harness_provider,
+        description=(
+            'Coding agent provider: "aforge" (default) | "claude-code" | "codex" | '
+            '"gemini" | "opencode" | "grok". Unset resolves to the '
+            'AGENTFIELD_HARNESS_PROVIDER env var when present, else "aforge".'
+        ),
     )
-    model: str = Field(default="sonnet", description="Default model identifier.")
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model identifier. None/empty means the provider's own default "
+            "(aforge picks its own; claude-code uses sonnet)."
+        ),
+    )
     max_turns: int = Field(default=30, description="Maximum agent iterations.")
     max_budget_usd: Optional[float] = Field(
         default=None, description="Cost cap in USD."
@@ -311,15 +328,19 @@ class HarnessConfig(BaseModel):
         default=None,
         description=(
             "Project directory for the coding agent to explore (e.g. a target "
-            "repository path). Maps to --dir in opencode. When set, cwd is used "
-            "only for output file placement while project_dir controls the "
-            "agent's working context."
+            "repository path). Maps to --dir in opencode. When set, it controls "
+            "the agent's working context and contains the isolated schema output "
+            "directory."
         ),
     )
     codex_bin: str = Field(default="codex", description="Path to codex binary.")
     gemini_bin: str = Field(default="gemini", description="Path to gemini binary.")
     opencode_bin: str = Field(
         default="opencode", description="Path to opencode binary."
+    )
+    aforge_bin: str = Field(default="aforge", description="Path to aforge binary.")
+    grok_bin: str = Field(
+        default="grok", description="Path to Grok Build CLI binary."
     )
     schema_mode: str = Field(
         default="single",

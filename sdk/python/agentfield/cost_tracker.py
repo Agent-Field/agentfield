@@ -7,6 +7,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from .lock_utils import timed_lock
+
 # Reserved envelope key used to attach the serialized usage summary to a
 # synchronous 200 result body. Namespaced so it cannot collide with user data:
 # a plain "usage" key in an agent's own result dict is user payload and must
@@ -90,7 +92,7 @@ class CostTracker:
         """
         if provider is None:
             provider = derive_provider(model)
-        with self._lock:
+        with timed_lock(self._lock, "cost_tracker"):
             self._entries.append(
                 CostEntry(
                     model=model,
@@ -111,29 +113,29 @@ class CostTracker:
     @property
     def total_cost_usd(self) -> float:
         """Total accumulated cost in USD (unknown costs count as zero)."""
-        with self._lock:
+        with timed_lock(self._lock, "cost_tracker"):
             return sum(e.cost_usd or 0.0 for e in self._entries)
 
     @property
     def total_tokens(self) -> int:
         """Total tokens used across all calls."""
-        with self._lock:
+        with timed_lock(self._lock, "cost_tracker"):
             return sum(e.total_tokens for e in self._entries)
 
     @property
     def call_count(self) -> int:
         """Number of calls tracked."""
-        with self._lock:
+        with timed_lock(self._lock, "cost_tracker"):
             return len(self._entries)
 
     @property
     def has_entries(self) -> bool:
-        with self._lock:
+        with timed_lock(self._lock, "cost_tracker"):
             return bool(self._entries)
 
     def summary(self) -> Dict[str, Any]:
         """Return the legacy summary dict (kept backward compatible)."""
-        with self._lock:
+        with timed_lock(self._lock, "cost_tracker"):
             by_model: Dict[str, Dict[str, Any]] = {}
             total_cost = 0.0
             total_tokens = 0
@@ -170,7 +172,7 @@ class CostTracker:
                             cost_source} ]
             }
         """
-        with self._lock:
+        with timed_lock(self._lock, "cost_tracker"):
             entries: List[Dict[str, Any]] = []
             total_input = 0
             total_output = 0
@@ -215,7 +217,7 @@ class CostTracker:
 
     def reset(self) -> None:
         """Clear all tracked entries."""
-        with self._lock:
+        with timed_lock(self._lock, "cost_tracker"):
             self._entries.clear()
 
 

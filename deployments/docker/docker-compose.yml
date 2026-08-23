@@ -26,6 +26,14 @@ services:
       AGENTFIELD_STORAGE_POSTGRES_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
       AGENTFIELD_DATABASE_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
       AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
+      # A client on the host reaches this container over the bridge network, so
+      # it is not a local caller as far as the control plane is concerned, and
+      # the endpoints that install packages or handle credentials refuse it.
+      # Set AGENTFIELD_API_KEY in the environment (or a .env file next to this
+      # compose file) to manage this control plane from the host or anywhere
+      # else. Empty keeps the previous behaviour: no authentication, and those
+      # endpoints reachable only from inside the container.
+      AGENTFIELD_API_KEY: "${AGENTFIELD_API_KEY:-}"
       AGENTFIELD_TELEMETRY_ENABLED: "${AGENTFIELD_TELEMETRY_ENABLED:-true}"
       AGENTFIELD_TELEMETRY_ENDPOINT: "${AGENTFIELD_TELEMETRY_ENDPOINT:-https://agentfield.ai/api/oss/telemetry}"
     ports:

@@ -58,13 +58,16 @@ function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
     appearance: 'system',
     autostartControlPlane: true,
     controlPlanePort: null,
+    localApiKey: '',
     lastControlPlanePort: null,
     autostartAgents: [],
+    provisionedBundled: [],
     installSkills: true,
     trayCompanion: true,
     dismissedUpdateVersion: null,
     starPrompt: 'pending',
     starPromptSnoozedUntil: null,
+    keyNoticeShown: [],
     ...overrides
   }
 }

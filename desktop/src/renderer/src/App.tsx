@@ -9,6 +9,7 @@ import { ActivityPanel } from './components/ActivityPanel'
 import { InstallPanel } from './components/InstallPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { CloudPanel } from './components/CloudPanel'
+import { KeysBanner } from './components/KeysBanner'
 import { StarBanner } from './components/StarBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 
@@ -48,6 +49,53 @@ const VIEW_TITLES: Record<View, string> = {
   cloud: 'Remote'
 }
 
+/**
+ * Cold-launch landing view. Bundled nodes still provisioning win: their rows
+ * live in the Agents library and watching them arrive is the first thing a
+ * brand-new user should see — dropping them into the marketplace instead would
+ * ask them to install what the app is already installing. Otherwise an empty
+ * library opens add-mode (the `install` view, DESIGN.md §4.11) and a stocked
+ * one opens Home.
+ */
+export function defaultView(bundledCount: number, agentCount: number): View {
+  if (bundledCount > 0) return 'agents'
+  if (agentCount === 0) return 'install'
+  return 'home'
+}
+
+/**
+ * Whether a snapshot carries enough to decide the cold-launch route. The
+ * registry is read through the control plane, so the first poll after a cold
+ * autostart sees "no registry" while the server is still coming up — routing
+ * on that would send a user with a stocked library to the marketplace every
+ * time. Wait for a readable registry (or provisioning rows, which only exist
+ * once the control plane answered); until then the initial Home view and its
+ * control-plane status callout are the right thing to show.
+ */
+export function canDecideDefaultRoute(args: {
+  registryExists: boolean
+  registryError: string | null | undefined
+  bundledCount: number
+}): boolean {
+  return (args.registryExists && !args.registryError) || args.bundledCount > 0
+}
+
+export function shouldRerouteToBundled(args: {
+  view: View
+  bundledCount: number
+  deepLinkHandled: boolean
+  userNavigated: boolean
+  alreadyRerouted: boolean
+}): boolean {
+  return (
+    args.view === 'install' &&
+    args.bundledCount > 0 &&
+    !args.deepLinkHandled &&
+    !args.userNavigated &&
+    !args.alreadyRerouted
+  )
+}
+
 // ⌘1–⌘5 (Ctrl on Win/Linux) in nav order (DESIGN.md §4.17).
 const SHORTCUT_VIEWS: View[] = ['home', 'agents', 'activity', 'settings', 'cloud']
 
@@ -71,8 +119,17 @@ export default function App() {
   const [startingCp, setStartingCp] = useState(false)
   /** Agents add-mode opened via the "+ Add agent" header action. */
   const [addAgentOpen, setAddAgentOpen] = useState(false)
+  /**
+   * The keys banner is on screen. Only App sees the whole banner stack, so it
+   * carries the signal from the banner that computes it to the one that has to
+   * yield — the star prompt must not ask for a favour while installed agents
+   * cannot run.
+   */
+  const [keysBannerShowing, setKeysBannerShowing] = useState(false)
   const defaultRouteApplied = useRef(false)
   const deepLinkHandled = useRef(false)
+  const userNavigated = useRef(false)
+  const bundledRerouted = useRef(false)
 
   useEffect(() => {
     // Lets styles.css inset window chrome for macOS traffic lights vs the
@@ -117,15 +174,45 @@ export default function App() {
     return () => clearInterval(timer)
   }, [refresh])
 
-  // Cold-launch default: Agents add-mode (via the `install` view) when the
-  // library is empty, otherwise Home. Deep links win; do not re-apply on
+  // Bundled nodes still being provisioned this launch (shared/bundled.ts).
+  // Derived before the routing effect because the cold-launch view and the
+  // add-mode decision both hang off it.
+  const bundled = snapshot?.bundled ?? []
+
+  // Cold-launch default (see defaultView). Deep links win; do not re-apply on
   // later polls or remember the last view.
   useEffect(() => {
     if (!snapshot || defaultRouteApplied.current) return
+    if (
+      !canDecideDefaultRoute({
+        registryExists: snapshot.registry.exists,
+        registryError: snapshot.registry.error,
+        bundledCount: bundled.length
+      })
+    ) {
+      return
+    }
     defaultRouteApplied.current = true
     if (deepLinkHandled.current) return
-    setView(snapshot.registry.agents.length === 0 ? 'install' : 'home')
-  }, [snapshot])
+    setView(defaultView(bundled.length, snapshot.registry.agents.length))
+  }, [snapshot, bundled.length])
+
+  useEffect(() => {
+    // The first snapshot normally arrives before main has seeded provisioning
+    // rows, so the cold-launch default may already have selected add-mode.
+    if (
+      shouldRerouteToBundled({
+        view,
+        bundledCount: bundled.length,
+        deepLinkHandled: deepLinkHandled.current,
+        userNavigated: userNavigated.current,
+        alreadyRerouted: bundledRerouted.current
+      })
+    ) {
+      bundledRerouted.current = true
+      setView('agents')
+    }
+  }, [view, bundled.length])
 
   const handleStartControlPlane = useCallback(async () => {
     setStartingCp(true)
@@ -144,23 +231,33 @@ export default function App() {
   const cp = controlPlaneStatus(snapshot)
   const agents = snapshot?.registry.agents ?? []
   const installedNames = agents.map((a) => a.name)
+  const provisioningNames = bundled
+    .filter((node) => node.phase === 'pending' || node.phase === 'installing')
+    .map((node) => node.name)
 
   // Agents view, two modes (DESIGN.md §4.11). Add-mode when: the install
   // deep link addressed it, "+ Add agent" was clicked, or the library is
-  // empty (the marketplace IS the empty state).
+  // empty (the marketplace IS the empty state). A launch with bundled nodes
+  // still arriving is not empty — flipping it into add-mode would hide the
+  // very rows the app is filling in.
   const agentsSelected = view === 'agents' || view === 'install'
   const libraryEmpty =
-    snapshot !== null && !snapshot.registry.error && agents.length === 0
+    snapshot !== null &&
+    !snapshot.registry.error &&
+    agents.length === 0 &&
+    bundled.length === 0
   const agentsAddMode = agentsSelected && (view === 'install' || addAgentOpen || libraryEmpty)
 
   // Navigation from the sidebar or in-view CTAs closes add-mode so the
   // Agents view comes back in library mode next time.
   const navigate = useCallback((v: View) => {
+    userNavigated.current = true
     setAddAgentOpen(false)
     setView(v)
   }, [])
 
   const closeAddMode = useCallback(() => {
+    userNavigated.current = true
     setAddAgentOpen(false)
     setView('agents')
   }, [])
@@ -226,7 +323,15 @@ export default function App() {
           )}
         </header>
         <UpdateBanner />
-        <StarBanner snapshot={snapshot} />
+        {/* Blocked-agents warning sits above the star ask: one reports the
+            product cannot work, the other is a favour. */}
+        <KeysBanner
+          snapshot={snapshot}
+          view={navView}
+          onNavigate={navigate}
+          onShowingChange={setKeysBannerShowing}
+        />
+        <StarBanner snapshot={snapshot} keysBannerShowing={keysBannerShowing} />
         <div className="view-body">
           {ipcError && <div className="callout error">{ipcError}</div>}
           {cp.tone === 'red' ? (
@@ -266,6 +371,7 @@ export default function App() {
                 (agentsAddMode ? (
                   <InstallPanel
                     installedNames={installedNames}
+                    provisioningNames={provisioningNames}
                     onInstalled={() => void refresh()}
                     libraryCount={agents.length}
                     onBackToLibrary={agents.length > 0 ? closeAddMode : undefined}
@@ -273,6 +379,7 @@ export default function App() {
                 ) : (
                   <AgentsPanel
                     registry={snapshot?.registry ?? null}
+                    bundled={bundled}
                     onChanged={() => void refresh()}
                   />
                 ))}

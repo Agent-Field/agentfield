@@ -6,6 +6,4248 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.133-rc.4] - 2026-08-23
+
+
+### Fixed
+
+- Fix(go-sdk): preserve structured AI API errors (#948)
+
+* fix(go-sdk): preserve structured AI API errors
+
+* test(go-sdk): cover non-2xx error edges (1af112c)
+
+## [0.1.133-rc.3] - 2026-08-23
+
+
+### Fixed
+
+- Fix(execute): propagate agent 4xx in async lane instead of blanket 502 (#862) (#945)
+
+The async-completion branch in handleSync hardcoded HTTP 502 for all
+failed executions, making client-input rejections (e.g. 422)
+indistinguishable from upstream outages. The sync lane correctly
+propagated the agent's 4xx via writeExecutionError, but the async
+lane — which reads the execution from DB after the agent calls back —
+had no way to recover the original HTTP status.
+
+Root cause: the callError.statusCode is lost once the execution is
+persisted; the async lane only sees the stored record.
+
+Fix (two-pronged):
+
+Control plane:
+- Add error_status_code field to executionStatusUpdateRequest so the
+  SDK can forward the HTTP status in its failure callback.
+- When error_status_code is 4xx, encode it in StatusReason as
+  "agent_client_error:<code>" for persistence.
+- Add httpStatusForFailedExecution() helper that resolves the HTTP
+  status from StatusReason (encoded client errors, known categories)
+  and ErrorMessage ("agent error (NNN):" pattern fallback).
+- Replace hardcoded 502 in the async-completion branch with the helper.
+
+Python SDK:
+- In _execute_async_with_callback failure path, propagate
+  error_status_code from exception.status_code / exception.code when
+  the value is a valid HTTP status (400-599).
+
+Backward-compatible: SDKs that don't send error_status_code continue
+to get the existing behavior (502 default). SDKs that do send it get
+correct 4xx propagation immediately. (ad79ab5)
+
+## [0.1.133-rc.2] - 2026-08-22
+
+
+### Fixed
+
+- Fix(execute): resolve webhook not triggering on async status callback (#936) (#943)
+
+The WebhookRegistered field on types.Execution carries db:"-" and is
+never persisted to the database.  This caused two failures:
+
+1. Status callback path: when an async execution completes via the
+   agent's PUT /executions/:id/status callback, the handler checked
+   updated.WebhookRegistered (always false from DB) and therefore
+   never triggered webhook delivery.
+
+2. GET /executions/:id: renderStatus read the same unpersisted field,
+   so it always reported webhook_registered=false to polling clients.
+
+Fix: add HasExecutionWebhook to the ExecutionStore interface and use
+it in both the status-callback trigger path and renderStatusWithApproval
+to resolve the webhook state from the execution_webhooks table.
+
+Includes regression tests for both paths. (db3c285)
+
+- Fix(ci): stop functional-test runs from reporting to production telemetry (#942)
+
+Every functional-test run starts the control plane on a fresh /data volume,
+which mints a new anonymous install ID. With telemetry enabled by default,
+each CI run therefore appears in product metrics as a brand-new first-time
+user whose activity is the suite's fixed set of successful and failed
+executions — the same counts every run, drowning out real first-run signal.
+
+The test config is mounted by both the local and postgres compose stacks
+(and the log-demo one), so disabling telemetry here covers every functional
+CI path with one setting.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (0bd4a4a)
+
+## [0.1.133-rc.1] - 2026-08-21
+
+
+### Fixed
+
+- Fix(control-plane): stop counting agent restarts as failed executions (#941)
+
+* fix(control-plane): stop counting agent restarts as failed executions
+
+A long-running agent node restarts constantly during development — the user
+saves a file, hits Ctrl-C, or the process dies on a syntax error. The control
+plane kept believing the node was healthy for as long as it took the health
+checker to notice (~30s) or the heartbeat to go stale (60s). Every call that
+landed inside that window created an execution record, failed to dial the dead
+process, and was recorded as a failed execution. The user was charged a failure
+for a five-second restart, and it is the largest single source of failed
+executions a new user produces.
+
+Three changes, in the order a call meets them:
+
+1. Fail fast on a node we already know is down. prepareExecutionForTarget
+   checked pending-approval but never health, so a dispatch into a dead node
+   persisted a row and then failed it. It now returns 503 node_unavailable
+   BEFORE the execution record exists — a request we never dispatched is a
+   rejected request, not a failed execution. This mirrors the check
+   reasoners.go has always had on the legacy proxy route. Only definitively
+   down states are rejected: "unknown" (no heartbeat yet) still goes through,
+   or the first call of every session would fail.
+
+2. Absorb the restart when we do NOT know the node is down. A dial failure is
+   the one transport error that is unambiguously safe to retry — no bytes
+   reached the agent, so nothing can run twice — so the dispatch now waits for
+   the node to come back and replays against its current address, which may be
+   a different port. Recovery is read from the node record (a fresh
+   instance_id, or a heartbeat that advanced), not guessed by blind retrying.
+   Bounded by agent_restart_grace, default 15s, well inside the 90s agent call
+   timeout; serverless targets are excluded because they have no resident
+   process to come back.
+
+3. Close the detection gap. When the wait expires we demote the node to
+   inactive, conditional on the heartbeat we last observed, so the next caller
+   takes path 1 and fails fast instead of repeating the wait.
+
+Also exempts held executions from the orphan reaper. The re-registration that
+ENDS a restart is exactly what triggers MarkAgentExecutionsOrphaned, so the
+reaper was failing the very execution the retry was about to complete, and the
+sync caller received that failure even though the work went on to succeed.
+Executions marked awaiting_agent_restart are now skipped, on both the
+executions table and the workflow_executions row the DAG UI reads.
+
+Finally, "agent 'x' not found" now classifies as target_not_found rather than
+internal_error. That is the quickstart curl run before `python main.py`: a
+normal mistake that was being reported as a broken control plane. The category
+already existed in canonicalFailureCategory and nothing ever assigned it.
+
+Verified against a real Python SDK agent: a call fired while the agent was
+down, with the process returning 4s later, now returns HTTP 200 succeeded and
+emits execution_completed. Before this change the same sequence returned 502
+with an agent_restart_orphaned message. The documented quickstart runs clean
+end to end.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(control-plane): harden the restart-absorb path against review findings
+
+Four behavioral fixes to the agent-restart grace mechanism, each found by
+adversarial review of the original commit:
+
+1. Serverless nodes are exempt from the fail-fast health gate. They have no
+   heartbeat loop and the health monitor never polls them, so the presence
+   sweep marks every serverless node inactive shortly after registration —
+   the gate would have rejected every serverless invocation with 503
+   node_unavailable, permanently. The gate now runs after serverless
+   normalization and skips serverless targets entirely.
+
+2. Replay requests bypass the gate. A replay hit is served from the recorded
+   run without contacting the agent, so the node being down must not reject
+   it. A replay miss dials and fails exactly as before the gate existed.
+
+3. A cancel that lands during the restart wait now wins: the loop re-reads
+   the execution record before replaying (mirroring callAgent's pre-dispatch
+   check) and aborts without handing the agent work the caller disowned. A
+   pause similarly waits for its resume.
+
+4. The wait aborts as soon as the node record reports the node definitively
+   down (demoted by the health checker or by another dispatch whose grace
+   expired first). Queued dispatches aimed at one dead node no longer each
+   burn their full grace serially on the async worker pool.
+
+Also: the awaiting_agent_restart hold is now released on every exit path
+(including caller-context cancellation, via a detached write), the comment
+overstating what completeExecution can repair after an orphan-reaper race is
+corrected (workflow_executions has no exit from failed), and the test fake's
+UpdateAgentHealthAtomic now enforces the same conditional-heartbeat semantics
+as LocalStorage instead of discarding the argument.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (e486208)
+
+- Fix(assets): correct garbled text in README features-strip banner (#940)
+
+The AI-generated banner image read '90+ Production Features built into
+the controhe' — a garbled 'control plane'. Re-typeset the line as
+'built into the control plane' in Inter (the repo's UI typeface),
+matching the original colors, cap height, and starfield background.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (0f91495)
+
+
+
+### Other
+
+- Bundle sec-af and cloudsecurity-af with the desktop app (#939)
+
+Promote the two security nodes from marketplace catalog rows to
+BUNDLED_NODES, so a fresh install provisions all four agent nodes
+(swe-planner, pr-af, sec-af, cloudsecurity-af) on first launch. Both
+repos follow the same superseded_by //go redirect as SWE-AF and pr-af,
+and their maintained nodes are Go, so the stale python language chips
+go away with the move. CATALOG stays as the (now empty) seam for
+future marketplace-only rows.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (30f821e)
+
+## [0.1.132] - 2026-08-20
+
+## [0.1.132-rc.3] - 2026-08-20
+
+
+### Other
+
+- Ship the desktop app with bundled agent nodes, missing-key surfacing, and the offload-by-default skill (#937)
+
+* docs(desktop): document bundled agent nodes and first-launch provisioning
+
+Explain what ships with the app, why delivery is fetch-on-first-launch rather
+than a payload in the DMG, why the bundled nodes are named at their bare repo
+URL (the superseded_by redirect is what migrates an existing Python node), and
+the three rules that make provisioning safe to run on every launch: uninstall
+sticks, failure retries, nothing is auto-started into a guaranteed missing-keys
+failure.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): ship swe-planner and pr-af as bundled nodes
+
+The two flagship nodes stop being marketplace cards and become nodes that
+ship with the app: shared/bundled.ts lists them, and main/bundledAgents.ts
+provisions them on first launch through the existing control-plane install
+API (fetch on first launch, so no packaging changes).
+
+- shared/bundled.ts: BUNDLED_NODES / isBundled / bundledEntry, sourced at
+  the bare repo URL so each root manifest's superseded_by redirect still
+  migrates a user who has the older Python node.
+- shared/catalog.ts: CATALOG keeps only sec-af and cloudsecurity-af;
+  catalogEntry() now resolves over CATALOG + BUNDLED_NODES, which keeps a
+  bundled node installable and --force updatable from the Agents view
+  without widening the "renderer only passes a vetted name" boundary.
+- shared/types.ts: BundledPhase / BundledStatus, snapshot.bundled, and
+  settings.provisionedBundled.
+- main/settings.ts: provisionedBundled defaults to [] and is coerced like
+  autostartAgents, so uninstalling a bundled node sticks across launches.
+- main/bundledAgents.ts: pure planBundledInstalls() plus a sequential,
+  never-throwing ensureBundledAgents() driven by injected deps; failures
+  stay visible as rows and are not recorded, so the next launch retries.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): provision bundled agent nodes on first launch
+
+Wire the main process for the two nodes that ship with the app
+(swe-planner, pr-af): they are fetched through the existing install API
+after autostart has a control plane, instead of sitting in the
+marketplace grid.
+
+- getSnapshot() carries `bundled`, threaded through SnapshotOptions the
+  same way the skillSync extra is, so the renderer's existing 5s poll
+  delivers the provisioning rows with no new IPC channel.
+- Provisioning is chained onto the userPathReady/runAutostart promise
+  rather than started beside it — installing needs the control plane
+  autostart adopted or brought up.
+- installInFlight becomes a real mutex with a waiter queue: IPC handlers
+  still refuse a concurrent install outright (a click deserves an
+  answer), while provisioning parks and takes its turn.
+- markProvisioned records the node in settings so an uninstall sticks
+  across launches; onInstalled adds it to autostartAgents rather than
+  starting it now, because both nodes need API keys a first-launch user
+  has not entered yet.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): show bundled agent provisioning in the Agents view
+
+First launch fetches swe-planner and pr-af through the control-plane
+install API, so the Agents library must show them arriving instead of
+an empty panel or the marketplace.
+
+- AgentsPanel takes `bundled: BundledStatus[]` and renders those nodes
+  above the installed rows: name, provisioning badge, description, and
+  the streamed message as the row progress line (`.error-text` when the
+  install failed). The rows are inert — nothing to start or configure
+  until the install lands — and fade in/out per DESIGN.md §5.2.
+- The "No agents installed" empty state stays away while a bundled node
+  is still provisioning; that library is unfinished, not empty.
+- App passes `snapshot.bundled` through, keeps `libraryEmpty` false
+  while any bundled row exists, and routes a cold launch to the Agents
+  library when nodes are arriving (add-mode only when nothing is
+  installed and nothing is coming).
+- `.badge.provisioning` uses the accent tint from the shared tokens:
+  mid-install is calm progress, not a fault.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(desktop): drop the duplicate bundled log prefix
+
+bundledAgents.ts already prefixes each line; index.ts prefixing again produced
+"bundled: bundled: …".
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* docs(skill): make a missing agent key a blocking handoff in agentfield-use
+
+An installed-but-unstarted node is the default first-run state: the desktop
+app ships swe-planner and pr-af pre-provisioned but deliberately not started,
+because their API keys are not entered yet. A coding agent driven by this
+skill then saw only HTTP 400 `agent 'X' not found` (or the MCP `target ... not
+found` text), never learned the real cause, and retried or silently
+substituted a different approach.
+
+Bump agentfield-use to 0.7.0 and make the recovery path explicit:
+
+- Start before dispatch. If a node is in `af list` but absent from discovery,
+  or its health_status is not active, run `af run <name>` first. That start
+  attempt is the diagnostic: it reads the encrypted store that actually gates
+  startup and names the exact missing variable.
+- Missing key is a blocking handoff. Name the variable(s) and the verbatim
+  `af secrets set ... --node <name>` command, point at Desktop -> Agents ->
+  <node> -> Keys, then wait. Never retry, never substitute another agent,
+  never do the work silently instead, never ask for the value in chat.
+  Consistent with the agentfield-personal handoff convention.
+- Warn off the store-blind commands. `af doctor` reads os.Getenv and
+  `af config <pkg> --list` reads the package .env, so both report a
+  correctly-stored key as unset and neither renders require_one_of groups.
+- Extend the failure table with the actually-observed 400 body
+  (error_category: internal_error, not 404) and the MCP not-found text, both
+  routed to the same recovery.
+
+Adds a contract test pinning the new text, bumps the catalog version pins,
+and syncs the embedded skill_data mirror.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): warn on the top bar when installed agents need keys
+
+The bundled nodes are installed but never started, because both want API
+keys a first-launch user has not entered. Until now the only signal was
+the per-row "Needs keys" chip — invisible to someone who never opens the
+app and then asks a coding agent to review a PR.
+
+KeysBanner rides the existing banner slot and reads getEnvReports, the
+only store-aware source of truth (`af doctor` and .env are store-blind).
+The unreachable-control-plane sentinel and the metadata-blind
+`satisfied: true` fallback both stay silent, so the banner cannot cry
+wolf. It is not dismissible: unlike the update offer, this reports that
+the product cannot work, and it clears itself the moment keys resolve.
+
+Refresh is event-driven, not a second timer — reload on mount, on agent
+roster changes, and on view changes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(desktop): keep the star prompt from stacking under the keys banner
+
+StarBanner already yields to an undismissed app update; it knew nothing about
+the keys banner, so a first launch could show both — asking for a GitHub star
+directly under a strip saying the installed agents cannot run.
+
+KeysBanner reports its visibility upward and App carries the signal across,
+rather than StarBanner re-deriving it: getEnvReports fans out to the control
+plane per package, and one caller is enough.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): notify once when bundled agents land without their keys
+
+First-launch provisioning installs swe-planner and pr-af and deliberately
+does not start them, because both need an API key the user has not entered.
+On a login-item launch the app is hidden in the tray, so the Agents row's
+"Needs keys" chip is telling an empty room — the user finds out when a
+coding agent fails to call them.
+
+main/keyNotice.ts closes that loop with one native notification, in the
+planner/runner shape of aforge-companion.ts and bundledAgents.ts:
+planKeyNotice() is pure and unit-tested (which agents, notify or not, given
+the env reports and what was already announced), and the Electron
+Notification is a thin injected effect in index.ts. Clicking it opens the
+app on the Agents view.
+
+The verdict comes only from getEnvReports().satisfied — the control plane's
+per-agent secrets endpoint, i.e. the encrypted store `af run` actually
+reads — so a correctly stored key never triggers a notice, and the
+deliberate satisfied: true fallback for control planes too old to report
+requirement metadata is never notified on.
+
+At-most-once is a new settings.keyNoticeShown list, the provisionedBundled
+precedent: announced names are persisted and filtered out, so the notice
+belongs to the provisioning event and no launch can raise it twice.
+Notification.isSupported() is checked, nothing throws, and nothing here can
+delay or break startup.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* docs(desktop): document the three missing-key surfaces
+
+Provisioning installs the bundled nodes without starting them, so the README's
+"Nothing is started" needed the other half: how the user finds out a key is
+missing. Records why there are three surfaces (hidden-at-login, in-window, and
+coding-agent) and which single source of truth they all read — plus the warning
+that af doctor and af config --list are store-blind.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(skills): rewrite agentfield-use around offloading (0.8.0)
+
+Installed AgentField agents are subharnesses: workers a coding harness
+offloads to instead of doing the work inline. They run on smaller open
+models, in parallel, off the harness's own context, and every run is
+recorded on the control plane.
+
+The doctrine now leads the skill:
+
+- Offload by default. Coverage decides, not task size, and the fleet is
+  discovered at runtime rather than enumerated here — users install new
+  subharnesses at any time. One `af ls -e` answers "does anything cover
+  this?", cached per session.
+- Announce every offload with the run's live UI link
+  (<server>/ui/runs/<run_id>), which is for the user to watch in
+  parallel, never a substitute for the harness's own monitoring.
+- The user can always override; a failed or stalled run is reported and
+  asked about, never silently redone inline and presented as the
+  subharness's work.
+- Vocabulary rule: `agent`/`reasoner`/`node` in commands and fields,
+  "subharness" in what the harness says to its user.
+
+The golden path is now CLI-first and async: `af call --schema` →
+`af call --in … --async` (client-side schema validation before dispatch)
+→ a deliberate retrieval mode (wait / tail / group poll / webhook for
+services only, rendered as a decision table) → report. Adds the
+previously undocumented webhook body, scoped explicitly away from coding
+harnesses, and honest cost reporting: `duration_ms` is per-run truth,
+`/api/ui/v1/usage/stats` is a window aggregate and there is no per-run
+cost endpoint to quote.
+
+Every operational fact from 0.7.0 is preserved: server resolution, MCP,
+discovery gotchas, start-before-dispatch and the missing-key blocking
+handoff, entry-points-only, contract-before-call, no-coverage offer,
+concurrency/load/canary, workspace_handle/furrow, wedge protocol,
+sessions, audit trail, failure table (plus a row for `af wait` exit 2 =
+timeout, not failure) and hard rules.
+
+Frontmatter, catalog and mirror pins bumped to 0.8.0; adds contract
+tests for the offload doctrine and the async golden path.
+
+* fix(desktop): keep bundled provisioning local-only and make uninstall stick
+
+First-launch provisioning ran against whatever control plane was active, so
+a user with a cloud control plane configured would get swe-planner and pr-af
+installed onto the remote server on the first launch after upgrading, and
+the app-global provisionedBundled latch would then suppress local
+provisioning for good. planBundledInstalls now takes cloudActive and skips
+while a cloud connection is active; it also treats an unreadable registry
+as "not ready" instead of "nothing installed", and the runner asks the
+control plane whether it has the install API before seeding rows, so an
+older control plane is skipped once per launch instead of producing two red
+rows every time.
+
+"Uninstall sticks" only held for nodes the app itself installed: a node the
+user already had was skipped by the plan but never recorded, so removing it
+later brought it back on the next launch. Installed-but-unrecorded bundled
+nodes are now adopted into provisionedBundled before any install runs.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): land a first launch on the arriving bundled rows, not the marketplace
+
+The cold-launch default route is applied on the first snapshot, which the
+renderer fetches the moment it mounts — long before main has finished
+autostart and seeded any provisioning rows. defaultView therefore always
+saw bundled=0 / agents=0 on a fresh install, chose add-mode, and the user
+sat in a marketplace (now without swe-planner and pr-af) while the two
+nodes installed out of sight. Re-evaluate once: if the auto-applied view
+is still add-mode, no deep link or user navigation has happened, and
+bundled rows appear, switch to the Agents library. shouldRerouteToBundled
+is the pure decision with a truth-table test.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): refresh env reports when the registry gains a row; hide redundant bundled rows
+
+AgentsPanel loaded env reports on mount only. Provisioning is the first
+flow where registry rows appear while the panel stays mounted, so a
+freshly-landed bundled node rendered without its "Needs keys" chip or Keys
+button (both gated on a report) and without the pre-start key gate. The
+load effect is now keyed on a stable roster key (the set of agent names),
+so it re-runs exactly when a row is added or removed.
+
+A bundled node's 'installed' provisioning row was kept until the whole run
+finished, so it was rendered twice — provisioning row plus registry row —
+for the duration of the next node's install. visibleBundledRows drops any
+provisioning row whose name already has a registry row.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): keep bundled nodes reachable from the marketplace
+
+Removing swe-planner and pr-af from the curated catalog meant a user who
+uninstalled one had no curated way to get it back (the provisioned latch
+correctly never re-installs it). The catalog IPC now lists the bundled
+nodes ahead of the marketplace rows; installed ones render the usual
+"Installed" state, and a node the app is currently provisioning renders a
+disabled "Installing…" so the marketplace never asks the user to install
+what the app is already installing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane,desktop): report keys supplied by the control plane's environment as set
+
+GET /api/ui/v1/agents/:id/secrets computed is_set from the encrypted store
+alone, while the runner's EnvResolver resolves the control plane's own
+process environment first. A key exported in the shell (or a Windows user
+env var) therefore started the agent fine but was reported missing — which
+the desktop turned into a non-dismissible "needs API keys" banner, a
+"Needs keys" chip, a blocked Start button and a one-shot OS notification,
+all false. The handler now checks the process environment too (presence
+only, never values), reports it as `env: true`, and is_set reflects
+runtime truth; `scope` still names only where a STORED value lives. The
+desktop maps env-only keys to the existing 'env' status ("From
+environment") and keeps storedScopes store-backed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): tell a spawned control plane its own URL for the agents it starts
+
+The control plane hands every agent it starts the URL from its own
+AGENTFIELD_SERVER environment, falling back to http://localhost:8080
+regardless of the port it actually listens on. The app only pinned
+AGENTFIELD_PORT, so a control plane on any other port — the auto-picked one
+when 8080 is busy, or a configured one — told swe-planner, pr-af and the
+swe-pro engine to register with localhost:8080: with whatever else was there
+(observed live: the nodes joined an unrelated control plane on 8080), or
+nothing. Spawn the server with AGENTFIELD_SERVER=http://localhost:<port> too.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): seed the local control-plane port before the first poll
+
+Until autostart resolved the port, every early snapshot went to
+localhost:8080 — not the configured port, nor the one the last launch ended
+on. With something else on 8080 the renderer's first snapshot described a
+foreign server (a healthy control plane with an empty registry), and the
+cold-launch route was decided on it. applyConnectionProfile now seeds the
+local port from settings.controlPlanePort ?? lastControlPlanePort, so the
+first poll of a launch already targets this app's control plane.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): decide the cold-launch route only once the registry is readable
+
+The registry is read through the control plane, so the first poll after a
+cold autostart sees "no registry" while the server is coming up. Routing on
+that snapshot sent a user with a stocked library into the marketplace on
+every cold launch. canDecideDefaultRoute waits for a readable registry (or
+provisioning rows, which only exist once the control plane answered); until
+then the initial Home view with its control-plane status is what shows.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover the agent-secrets handler's default process-env lookup
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): make the runner-resolution secrets test hermetic
+
+EnvResolver prefers a non-empty process env value, so a developer machine
+with OPENAI_API_KEY exported resolved the host value instead of the stored
+sk-test and the assertion failed outside CI. Neutralize the variable with
+t.Setenv — empty counts as unset — so the test is deterministic everywhere.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+Co-authored-by: santoshkumarradha <eng@agentfield.ai>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (2bbf5ff)
+
+## [0.1.132-rc.2] - 2026-08-20
+
+
+### Fixed
+
+- Fix(install): disable VCS stamping when building Go agent nodes (#938)
+
+* fix(install): disable VCS stamping when building Go agent nodes
+
+The installed package copy under ~/.agentfield/packages is not a git
+checkout, so there is nothing truthful for go build's -buildvcs to stamp.
+Worse, the go tool's VCS auto-detection walks up PAST the package root:
+a .git anywhere above the packages dir — a dotfiles-managed $HOME, a
+stray /tmp/.git — either hard-fails the install with
+"error obtaining VCS status: exit status 128" or stamps an unrelated
+repository's revision into the node binary.
+
+Found live: a stock 'af install https://github.com/Agent-Field/sec-af'
+(and cloudsecurity-af) failed at the go-build step on a machine with an
+empty /tmp/.git directory. The regression test reproduces exactly that
+layout with the real toolchain and fails without the flag.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(templates): make the scaffold-build test immune to parent VCS state
+
+TestRenderedGoScaffoldBuilds runs a plain 'go build' inside t.TempDir(),
+so the same walk-up VCS detection fixed in InstallGoDependencies could
+fail this test for reasons unrelated to the template (reproduced on a
+machine with a stray /tmp/.git). Build the rendered scaffold with
+-buildvcs=false, mirroring what the installer now does with that same
+scaffold.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (eb522f7)
+
+## [0.1.132-rc.1] - 2026-08-18
+
+
+### Fixed
+
+- Fix(sdk/typescript): honour AGENTFIELD_SERVER for the default control-plane URL (#934)
+
+The TS SDK hardcoded http://localhost:8080 in three places and never read
+the environment, so nodes launched by `af run` / docker compose with
+AGENTFIELD_SERVER set registered against localhost. Resolve like Python:
+explicit agentFieldUrl > AGENTFIELD_SERVER > AGENTFIELD_SERVER_URL >
+localhost:8080, from one helper used by all three sites.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (513dd64)
+
+## [0.1.131] - 2026-08-18
+
+## [0.1.131-rc.3] - 2026-08-18
+
+
+### Fixed
+
+- Fix(sdk): send X-OpenRouter-Categories on OpenRouter requests (#930)
+
+All three SDKs now attach X-OpenRouter-Categories=cli-agent,programming-app
+on OpenRouter traffic, matching the control-plane defaults, with the same
+AGENTFIELD_OPENROUTER_CATEGORIES / OR_CATEGORIES env override chain used
+for site URL and app name.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (5718a25)
+
+## [0.1.131-rc.2] - 2026-08-18
+
+
+### Fixed
+
+- Fix(sdk/typescript): convert zod 4 schemas with the native toJSONSchema (#935)
+
+* fix(sdk/typescript): convert zod 4 schemas with the native toJSONSchema
+
+harness()/ai() schema conversion only knew zod-to-json-schema, which does
+not understand zod 4 instances (a fresh `npm i zod` is 4.x), so zod 4
+schemas were serialized as zod internals. Detect zod 4 schemas (`_zod`) and
+convert with zod's own toJSONSchema (zod, then zod/v4); zod 3 keeps using
+zod-to-json-schema unchanged; plain JSON Schema still passes through. No
+dependency or lockfile changes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): resolve zod 4's toJSONSchema from the application's zod copy first
+
+The schema instance is built by the app's zod; converting it with a
+different copy (e.g. the SDK's nested zod 3.25 via `zod/v4`) keeps the
+structure but drops registry-backed metadata — `.describe()` descriptions
+and the `.int()` refinement (`integer` → `number`). Try the zod resolvable
+from the working directory before the SDK-relative copies. Verified end to
+end with zod 4.4.3: the provider now receives `description` and `integer`.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a9d634d)
+
+- Fix(sdk/typescript): opencode surfaces exit-0 stderr failures and signals as errors (#933)
+
+TS only treated (exit != 0 && no output) as an error. Python and Go also
+flag: a negative exit code (killed by signal), and exit 0 with empty output
+whose stderr matches opencode's known failure patterns (^Error:, Model not
+found, AuthenticationError, Unauthorized, APIError) — surfacing the matching
+stderr window instead of an empty non-error result. Same pattern list as the
+other two SDKs; ANSI stripped before matching; failureType set.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (83e2921)
+
+- Fix(sdk/go,sdk/typescript): gemini argv — drop the nonexistent -C flag, map permission modes like Python (#932)
+
+The Gemini CLI has no -C flag; both providers passed `-C <cwd>` (the cwd is
+already applied as the subprocess working directory) and mapped
+permission_mode=auto to --sandbox, which restricts execution rather than
+granting it. Match the Python provider (agentfield#687): no -C, auto → --yolo,
+plan → --approval-mode plan, then -m <model> and -p <prompt>. Tests that
+pinned the old argv are rewritten table-driven from the CLI's real flags.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ff6e28c)
+
+- Fix(sdk/typescript): pass claude-code options to claude-agent-sdk in camelCase (#931)
+
+The provider built the query() options with snake_case keys (max_turns,
+allowed_tools, system_prompt, max_budget_usd, permission_mode).
+@anthropic-ai/claude-agent-sdk's Options type is camelCase (maxTurns,
+allowedTools, systemPrompt, maxBudgetUsd, permissionMode), so unknown keys
+were dropped and turn caps, USD budget, tool allowlist, system prompt and
+permission mode were silently ignored on TypeScript. The existing test
+asserted the snake_case keys; it now asserts the contract at the SDK boundary.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (23a6965)
+
+## [0.1.131-rc.1] - 2026-08-18
+
+
+### Fixed
+
+- Fix(sdk/go): attribute default-provider harness runs to aforge, prefer result.Model (#929)
+
+Since v0.1.130 the harness provider is optional (env AGENTFIELD_HARNESS_PROVIDER,
+else aforge). recordHarnessUsage still derived the `harness` column only from
+opts.Provider / HarnessConfig.Provider, so a default-provider run was recorded
+as harness="" and model="harness". Resolve the effective provider through
+harness.ResolveProviderName (same precedence the runner uses) and let the
+provider-reported result.Model win over the configured model, mirroring the
+Python fix in #928.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (937641a)
+
+## [0.1.130] - 2026-08-18
+
+## [0.1.130-rc.6] - 2026-08-18
+
+
+### Documentation
+
+- Docs: feature Person to Brief AF (#912) (bc290a4)
+
+
+
+### Fixed
+
+- Fix(harness): attribute default-provider runs to aforge, set HarnessResult.model, pass max_turns to aforge (#928)
+
+* fix(sdk/python): attribute default-provider harness runs to aforge
+
+`_record_harness_usage` resolved the provider from `self.harness_config`,
+which is None unless the caller built a HarnessConfig explicitly. On the
+default path that left the cost entry with harness=None and model="harness"
+even though aforge is what actually ran — the entries were unattributable.
+
+Resolve through `agentfield.harness._defaults.resolve_harness_provider`
+instead, which is the same precedence the runner uses to pick a provider:
+explicit value > AGENTFIELD_HARNESS_PROVIDER > "aforge". Explicit and
+configured providers keep winning; only the previously-empty case changes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): report the model aforge actually ran on every result
+
+The aforge providers only reported a model when the caller pinned one, so
+the default path — now the common one — produced results with no model at
+all. Go had no model field on Metrics/Result to report through in the first
+place.
+
+Report the effective model: the resolved caller model when given, else
+AFORGE_MODEL as it stands in the final env overlay (caller-supplied env
+wins), else aforge's own built-in default, pinned as a named constant per
+SDK. Go gains Metrics.Model and Result.Model, mirroring the Python SDK, with
+the same first-non-empty-wins aggregation across retries.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): pass max_turns through to aforge as --turns
+
+The aforge providers dropped the caller's turn cap, so a run asking for two
+turns got aforge's 200-turn runaway backstop instead. With aforge as the
+default provider that is now the ordinary path, not a corner case.
+
+Map a positive turn cap onto `--turns N`, right after `--timeout`, on the
+`exec` argv only — `aforge do` has no such flag and would fail to parse it.
+Cost caps stay unmapped on purpose: aforge's `--budget` counts tokens, not
+dollars, so there is no honest conversion from max_budget_usd.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ca88757)
+
+- Fix(harness): staging installs put aforge beside af; doctor exits 0 on a survey; doctor knows grok (#927)
+
+* fix(install): install aforge beside af on the staging channel
+
+The staging channel installs af into ~/.agentfield-staging/bin and adds only
+that directory to PATH, but install_aforge() delegates to `af aforge ensure`,
+which installs into $AGENTFIELD_HOME/bin — ~/.agentfield/bin by default. So a
+staging install downloaded aforge into a directory it never put on PATH, and
+the SDK's "run af aforge ensure" remedy could not fix it either, because the
+remedy resolves the same default home.
+
+Pin AGENTFIELD_HOME to the parent of INSTALL_DIR for the ensure call so aforge
+always lands beside the af that installed it. Production is unchanged:
+~/.agentfield/bin strips to ~/.agentfield, which is what ensure already
+defaulted to. install.ps1 has the same split whenever AGENTFIELD_INSTALL_DIR is
+set, so Install-Aforge pins and restores the variable the same way.
+
+--no-aforge / AFORGE_MODE=none is untouched: ensure is still never invoked.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): `af harness doctor` exits 0 when it is a survey
+
+Without --provider the command surveys the machine, but it still returned
+"requested harness provider is unavailable: <first missing>" for the first
+provider it could not use. A healthy fresh install that simply has not
+installed every coding harness therefore exited 1, and the message was printed
+three times: cobra's own copy, the AgentHintJSON "invalid_command" blob from
+main.go, and the zerolog error line.
+
+A bare doctor is informational — a machine legitimately has providers it has
+not installed — so the unusable gate now applies only when the caller named
+providers explicitly. When it does fire it returns cliExitError, which makes
+main.go print the plain message instead of the invalid_command blob (the
+command was invoked correctly), and SilenceErrors/SilenceUsage on the
+subcommand drops cobra's duplicate. `--provider unknown` is untouched: that
+really is a mis-invocation, so the agent hint stays.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): teach `af harness doctor` about the grok provider
+
+The Python SDK ships a grok entry in PROVIDER_SPECS
+(sdk/python/agentfield/harness/_availability.py), so an agent can be asked to
+run it, but the Go doctor's provider table did not list it: `af harness doctor`
+silently omitted grok and `--provider grok` was rejected as an unknown
+provider. Add the row and list it in the flag's help text, plus a test that
+pins the two lists to the same provider-name set so they cannot drift again.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (7f88434)
+
+- Fix(install): make --no-aforge / AFORGE_MODE=none actually skip the aforge download (#926)
+
+The installer only skipped its own explicit `af aforge ensure` step, but
+`af skill install --all` (which runs first) triggers the same best-effort
+aforge provisioning hook (skillkit/install.go), so a user who opted out
+still got the 35 MB binary downloaded into ~/.agentfield/bin. Regressed
+with #924, which added both the hook and the flag.
+
+Export AGENTFIELD_SKIP_AFORGE=1 for the whole run when AFORGE_MODE=none —
+that env gate is the single switch the Go side honours — so every `af`
+(and af-tray) invocation the script makes respects the opt-out.
+
+Verified against v0.1.130-rc.5 into an isolated HOME: patched installer
+with --no-aforge installs af + skills + furrow and no aforge; the
+unpatched script installs aforge despite the flag.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (4930075)
+
+- Fix(sdk/python): exclude litellm 1.97.0, which crashes on Python 3.10 (#925)
+
+litellm 1.97.0 (PyPI 2026-08-16) fails while constructing ModelResponse on
+Python 3.10 with pydantic 2.13:
+
+    PydanticUserError: `Message` is not fully defined; you should define
+    all referenced types, then call `Message.model_rebuild()`
+
+(BerriAI/litellm#36384). The SDK declares a bare `litellm` dependency, so a
+fresh `pip install agentfield` on 3.10 — a version we support and test —
+resolves to 1.97.0 and every `app.ai()` call dies inside
+`litellm.completion()` before reaching any provider. Verified standalone:
+1.97.0 breaks on 3.10, works on 3.11/3.12; 1.96.2 works on 3.10.
+
+Exclude just that release so pip resolves 1.96.2 (or a fixed 1.97.x+) and
+the docs quickstart works again on a clean install.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (b149cfd)
+
+## [0.1.130-rc.5] - 2026-08-17
+
+
+### Added
+
+- Feat(harness): make aforge the default provider across Python, Go, and TypeScript (#905)
+
+* feat(harness): add aforge do parity across SDKs
+
+* feat(harness): preserve TypeScript failure metadata
+
+* fix(harness): parse live aforge JSON envelopes
+
+* feat(harness): support aforge exec across SDKs
+
+* feat(harness): default aforge to exec
+
+* feat(harness): make aforge the default provider in the Python SDK
+
+`app.harness("...")` with nothing configured now runs AForge, AgentField's
+native coding harness, instead of raising "No harness provider specified".
+
+Provider precedence is explicit value > AGENTFIELD_HARNESS_PROVIDER >
+"aforge", implemented once in harness/_defaults.py and applied both where
+HarnessConfig materialises its default and where the runner resolves options
+(so a runner built without any config follows the same chain).
+
+HarnessConfig.model stops defaulting to "sonnet" — that was Claude-specific
+and wrong for every other provider. The default is now empty, meaning "use
+the provider's own default", and the claude-code provider carries "sonnet"
+internally so explicit claude-code users see no change.
+
+Also drops the private-repo build instruction from the aforge install hint;
+the binary ships alongside `af` and `af aforge ensure` (re)installs it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(harness): make aforge the default provider in the Go SDK
+
+Runner.Run no longer errors on an empty Options.Provider. BuildProvider and
+Run both route the name through ResolveProviderName, which applies the same
+precedence as the Python SDK: explicit value > AGENTFIELD_HARNESS_PROVIDER >
+DefaultProvider ("aforge"). The resolved name is written back onto the
+options so error messages and provider construction see the real provider.
+
+Model stays empty by default and means "the provider's own default"; the
+Harness doc example no longer suggests a Claude-specific "sonnet".
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(harness): lead with AForge as the default harness
+
+Rewrites the harness-providers lead so the zero-setup path is the headline:
+AForge is the default, `af aforge ensure` installs it alongside `af`, and
+picking Claude Code / Codex / Gemini CLI / OpenCode is an override of one
+option rather than a prerequisite. Documents the provider precedence chain
+(explicit > AGENTFIELD_HARNESS_PROVIDER > aforge) and that an unset model
+means the provider's own default.
+
+Drops the "go build -o aforge ./cmd/aforge" instruction — that repo is not
+public and is no longer how anyone gets the binary. Adds the grok row
+(Python SDK only) so the install table matches the supported provider set.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(harness): correct the v2 design doc's "provider is required" rule
+
+The design doc still asserted that HarnessConfig.provider has no implicit
+default and that a call without one raises. Both are false now: provider
+resolves through explicit > AGENTFIELD_HARNESS_PROVIDER > "aforge", and
+model defaults to the provider's own rather than "sonnet".
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(harness): make aforge the default provider in the TypeScript SDK
+
+HarnessRunner.run no longer throws when nothing sets a provider. Both the
+runner and buildProvider route the name through resolveProviderName, which
+applies the same precedence as the Python and Go SDKs: explicit value >
+AGENTFIELD_HARNESS_PROVIDER > DEFAULT_HARNESS_PROVIDER ("aforge"). The
+resolved name is written back onto the options so providers and error
+messages see the real provider.
+
+HarnessConfig.provider becomes optional to match, so `{}` is a complete
+config.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): stop pointing users at a private repo to get aforge
+
+The Go and TypeScript adapters told anyone hitting a missing binary to
+"Build it from https://github.com/Agent-Field/aforge-v2" — a repo they
+cannot open. AForge ships with `af`, so the message now names
+`af aforge ensure` and the AFORGE_BIN escape hatch, matching the Python
+install hint.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (6b8c9be)
+
+## [0.1.130-rc.4] - 2026-08-17
+
+
+### Added
+
+- Feat(install): provision the aforge harness binary alongside af (curl, desktop, docker) (#924)
+
+* feat(aforge): pinned-binary provisioner for the aforge coding harness
+
+AgentField's harness providers spawn `aforge exec --json`, but nothing in the
+product ever put that binary on a machine — every install surface assumed the
+user had built it from a private repo. This adds the provisioning half.
+
+Shaped on internal/furrow's provisioner (same lock, marker, atomic-rename and
+best-effort contract) with three deliberate differences:
+
+  * assets are distributed gzipped, so the stream is decompressed before it is
+    hashed — checksums.txt carries the sha256 of the UNCOMPRESSED binary — and
+    the decompressed size is capped so a bad endpoint cannot gzip-bomb us;
+  * all six platforms are mapped, not the three furrow happens to ship;
+  * Options.Force exists so `af aforge ensure --force` can bypass the marker.
+
+AGENTFIELD_AFORGE_BASE_URL overrides the whole base (mirrors, staging hosts);
+AGENTFIELD_SKIP_AFORGE=1 makes the whole thing a no-op.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): af aforge ensure, and teach the harness doctor about aforge
+
+`af aforge ensure` mirrors `af furrow ensure` — Ensure, not EnsureBestEffort,
+because someone who asks for the binary by name is owed the failure — plus a
+--force that bypasses the version marker.
+
+The doctor needed two new ideas to describe aforge honestly:
+
+  * VersionArgs, because providers do not agree on how to be asked. aforge
+    will answer `version`; every other provider answers `--version`.
+  * VersionOptional, because the pinned aforge build answers BOTH with its
+    whole usage banner on exit 1. A present, executable binary is enough to
+    call it usable; it reports version "unknown" with an informational
+    "version_unavailable" issue until the next aforge release adds the
+    subcommand. The probe requires exit 0 before it believes any output —
+    without that it would file the usage banner as the installed version.
+
+The probe also falls back to $AGENTFIELD_HOME/bin when PATH misses: the shell
+that just ran `af aforge ensure` has not re-read PATH, and reporting a binary
+we installed thirty seconds ago as missing is the wrong answer.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(install): provision aforge from the skill install and both shell installers
+
+Three entry points, one implementation. `af skill install --all`, the curl
+installer and the PowerShell installer all end up calling the same Go
+provisioner, so there is exactly one place that knows the pinned version, the
+download host and the checksum rules.
+
+The skillkit hook goes in InstallAll rather than install(): InstallAll is the
+one call every fresh machine makes, and hooking each skill would re-download a
+35MB binary once per catalog entry. --dry-run stays side-effect free.
+
+Both shell installers keep aforge strictly optional — a failed provision warns
+and moves on, because by that point the control plane is already installed and
+working. Opt out with --no-aforge / AFORGE_MODE=none (sh) or -NoAforge /
+$env:AFORGE_MODE='none' (ps1; a piped `iwr | iex` cannot pass a switch, hence
+the env var).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): ensure aforge on launch, once, without blocking startup
+
+A desktop-only install never runs the curl installer, so it would have had af
+and no harness. The app now shells out to `af aforge ensure` right after it
+resolves the CLI — no bundled payload, so there is one download path and the
+upgrade rules stay in Go.
+
+Deliberately not extraResources: bundling the binary would fork the install
+path and freeze the pinned version at package time, and the app would still
+need the runtime check for machines that already had an older copy.
+
+Shaped like tray-companion.ts: planAforge() is pure so the skip rules are unit
+tested, and the effect takes injected deps so no test ever spawns anything.
+Fire-and-forget with a once-per-launch latch set before the await, so a dead
+network delays nothing and two callers still produce one download.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(docker): ship aforge in the images that actually run agent nodes
+
+The cloud control plane (single-container topology), the python-agent image and
+the go-agent image all host agent nodes, and a node that reaches for a harness
+in a container without one fails at spawn. Dockerfile.control-plane is left
+alone: it is distroless, has no shell, and by construction runs agents
+elsewhere.
+
+Soft fetch, hard verify. The asset host goes live with the website deploy, so a
+404 has to degrade to "this image ships without aforge" rather than break every
+image build in the meantime — but a download that does land is always checked
+against the published sha256, taken after gunzip because checksums.txt hashes
+the uncompressed binary. A mismatch fails the build.
+
+The COPY takes the fetch stage's output DIRECTORY, not a fixed file path: when
+the fetch was skipped the directory is empty and the COPY is a no-op, instead
+of planting a zero-byte `aforge` on PATH that `af harness doctor` would
+cheerfully report as installed.
+
+aforge is a statically linked ELF, so the debian-built asset runs unchanged on
+the musl/alpine go-agent base.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(aforge): point every install hint at `af aforge ensure`
+
+The Python SDK told users to `go build -o aforge ./cmd/aforge` from a private
+repo when a harness call failed — advice nobody could follow. It now names the
+command that actually exists on their machine.
+
+Also documents the two knobs the provisioner reads (AGENTFIELD_AFORGE_BASE_URL
+for mirrors, AGENTFIELD_SKIP_AFORGE for air-gapped hosts) and the shell
+installers' equivalents.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(aforge): cover the provisioner's failure paths
+
+CI's patch-coverage gate came in at 79.00% against an 80% floor — all of the
+misses were the error branches of the new code, which is exactly the code you
+want covered: a provisioner is mostly failure handling.
+
+Adds tests for the paths that were only reachable by breaking something: an
+unwritable bin directory (MkdirAll and flock failures), a `bin/aforge` path
+occupied by a directory so the atomic rename fails, a marker path likewise, a
+corrupt/truncated/non-gzip body, an unreachable host, a checksums file with
+malformed hex or no line for the asset, and every branch of home resolution.
+Also exercises the default GOOS/GOARCH path and asserts — via a fake
+RoundTripper rather than a real request — that the default base URL is the one
+actually dialled.
+
+internal/aforge: 78.0% → 95.5% of statements. No production code changed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(aforge): pin the installer to aforge v0.1.0 and require a real version from the doctor
+
+aforge-v2 cut its first semver release, so every surface that provisioned
+build-9b3ff482de3f now provisions v0.1.0: the pinned constant in
+control-plane/internal/aforge, the AFORGE_VERSION build arg in the cloud
+control-plane / python-agent / go-agent images, and the base-URL example in
+.env.example.
+
+The release also ships a real `version` subcommand (and `--version`), which
+retires the reason aforge was allowed to be "usable" without one. Drop the
+aforge-only VersionOptional allowance from the harness doctor: a binary that
+cannot name itself is now version_probe_failed and unusable, exactly like
+every other provider. VersionArgs still tries "version" before "--version",
+and a non-zero exit is still rejected so a usage banner never lands in the
+version field.
+
+The Docker fetch stays soft-fail on a 404 (hard-verify on a hit) — that is a
+separate documented follow-up, not this change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (480342e)
+
+## [0.1.130-rc.3] - 2026-08-17
+
+
+### Fixed
+
+- Fix high-severity npm dependency alerts (#922)
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (efbaca3)
+
+## [0.1.130-rc.2] - 2026-08-17
+
+
+### Added
+
+- Feat(examples): triggers-demo-go end-to-end demo + Go skill docs (#516) (#917)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(examples): triggers-demo-go end-to-end demo + Go skill docs (#516)
+
+Go counterpart to examples/triggers-demo/ (Python) and
+examples/triggers-demo-ts/ (TypeScript), driven by the same unmodified
+scripts/fire-events.sh and producing equivalent memory writes.
+
+New examples/triggers-demo-go/:
+- main.go with three deterministic reasoners: handle_payment (stripe, with a
+  Transform flattening data.object), handle_pr (github), handle_tick (cron).
+  Memory keys and record shapes match the Python demo exactly, so the UI
+  surfaces read the same data regardless of which demo is running.
+- Dockerfile: multi-stage build against the in-tree SDK, CGO disabled, alpine
+  runtime with ca-certificates for outbound HTTPS.
+- docker-compose.yml: control plane plus Go agent, sharing the demo secrets so
+  signature verification roundtrips with no external configuration. DID enabled
+  so the run-detail trigger enrichment has a VC chain to walk.
+- scripts/fire-events.sh: byte-identical copy of the Python demo's script.
+- README.md: quick start, UI tour, memory-key table, and a note on the script's
+  Slack/HMAC/Bearer sections (they target a handle_inbound catch-all that this
+  demo, like the TypeScript one, does not define).
+- main_test.go: 24 tests exercising the reasoners through
+  triggers.SimulateEvent / SimulateSchedule / LoadFixture, doubling as a worked
+  example of testing trigger reasoners with no control plane.
+
+The reasoners are declared as eventReasoner / scheduleReasoner values that
+main() iterates, rather than inline inside registration calls, so the handlers
+and trigger wiring are testable without reaching into SDK internals.
+
+Collapses the duplicated transform matcher flagged in #915: SimulateEvent now
+uses the shared ApplyTransform and NewContext from dispatch.go instead of a
+private copy. This fixes a real defect the demo surfaced — the helpers attached
+the context under a private key while handlers read it via FromContext, so a
+handler that worked in production saw a nil context under test. Added a
+regression test asserting FromContext sees what SimulateEvent attaches.
+
+skills/agentfield-multi-reasoner-builder/references/triggers.md gains a Go
+section covering both declaration forms, Context fields, the FromContext
+accessor, the test helpers, and a three-way comparison table. Every Go snippet
+was compiled against the real SDK. Updated the shared wire-format and envelope
+sections from "both SDKs" to "all three".
+
+Verified: build, vet, gofmt, and go test -race clean on both modules;
+docker compose config valid; the Dockerfile's exact steps reproduced with
+-mod=readonly to confirm go.sum completeness; and the real binary registers all
+three triggers with the expected wire payload (sources, event types, secret env
+vars, cron config, accepts_webhook auto-set, code_origin stamped) against a
+stub control plane. Docker image build itself not run, as no daemon was
+available in this environment.
+
+Part of #508. Closes #516.
+
+* fix(examples): drop committed Windows binary from triggers-demo-go
+
+Removes examples/triggers-demo-go/triggers-demo-go.exe, an 11 MB build
+artifact that should never have been committed. It came from compiling the
+demo to verify it and was swept in by adding the directory rather than
+naming files.
+
+Adds a .gitignore for the binary so a local build cannot reintroduce it.
+The example remains buildable from source via the Dockerfile or `go build`.
+
+Addresses @santoshkumarradha's review on #917.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (a1dd50b)
+
+
+
+### Fixed
+
+- Fix(sdk): merge positional multimodal args with user prompt (#923) (243d906)
+
+## [0.1.130-rc.1] - 2026-08-14
+
+
+### Fixed
+
+- Fix(ui): only prompt for the admin token when the server enforces one (#920)
+
+* fix(ui): only prompt for the admin token when the server enforces one
+
+The Access management page rendered the admin-token input
+unconditionally, so deployments that never configured
+AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN were still asked for a token the
+server would never read (AdminTokenAuth is a no-op when the configured
+token is empty). Operators pasted whatever they had — usually the API
+key — into a field that does nothing.
+
+The governance probe already received the discriminating signal and
+threw it away: it collapsed the status of GET /api/v1/admin/policies
+into `status !== 404`, which also misread 401 (API-key problem) as
+"admin routes available".
+
+Replace the boolean probe with a tri-state one that deliberately omits
+X-Admin-Token — since AdminTokenAuth wraps the whole admin group, the
+tokenless status is authoritative for every admin route:
+
+- 404 → authorization feature disabled (existing banner, no prompt)
+- 403 → an admin token is enforced: the only state that shows the
+  prompt; policy/tag queries and mutations are gated until a token
+  is stored
+- 200 → no admin token enforced: prompt hidden, admin APIs just work;
+  a stored stale token gets a hint that it can be cleared
+- 401 → surfaced as an API-key error instead of "routes available"
+
+Also drop the "unchanged repo default is often admin-secret" hint
+copy: it is only true for a source checkout run from control-plane/
+(or a deploy pointing AGENTFIELD_CONFIG_FILE at the bundled YAML) and
+misled operators of env-configured deployments into pasting wrong
+values.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ui): drop the admin-token field from the login screen
+
+At sign-in the client cannot yet know whether the server enforces an
+admin token (an unauthenticated probe always 401s), so the "Admin
+Token (optional)" field was another unconditional prompt inviting
+wrong pastes. Access management now asks for the token in the one
+state where it is actually required, so the login screen only asks
+for the API key.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f3e5ec9)
+
+## [0.1.129] - 2026-08-13
+
+## [0.1.129-rc.1] - 2026-08-13
+
+
+### Fixed
+
+- Fix: repair broken quickstart flows — Go docs/examples, docker scaffolds, TS template (#918)
+
+* fix(examples): regenerate stale go.sum in Go example modules
+
+examples/go_agent_nodes and examples/go_harness_demo stopped building when
+sdk/go added jsonschema/v5 (#750) without their go.sum being refreshed:
+'missing go.sum entry for module providing package .../jsonschema/v5'.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/go): fix broken quickstart and approvals snippets
+
+- Quick Start omitted the required Config.Version, so a copy-paste run
+  exited with 'config.Version is required'; the CLAUDE.md variant also
+  discarded the error from New and nil-panicked on RegisterSkill.
+- Approvals snippet called client.New with one return value (it returns
+  (*Client, error)) and passed a nil variadic Option, which panics.
+
+Both snippets now compile and start against the current SDK.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): make 'af init --docker' work for Go and TypeScript scaffolds
+
+The generated docker-compose.yml builds the agent from 'dockerfile:
+Dockerfile' for every language, but only Python mapped a Dockerfile
+template — Go and TypeScript scaffolds failed at 'docker compose up'.
+
+- Add go.Dockerfile.tmpl and typescript.Dockerfile.tmpl and map them in
+  GetDockerTemplateFiles; the test now asserts every language maps
+  exactly one Dockerfile instead of codifying the gap.
+- Wire AGENT_CALLBACK_URL (set by the compose template) through to the
+  SDK's public URL in the Go and TypeScript scaffolds so the control
+  plane can reach containerized agents; Python already reads it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): TypeScript scaffold never started from a path containing spaces
+
+The main-module guard compared import.meta.url (percent-encoded) against
+a raw 'file://' + process.argv[1] string, so under any path with a space
+(e.g. 'My Projects/') the guard was false and 'npm run dev' exited
+silently without starting the agent. Compare against
+pathToFileURL(process.argv[1]).href instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): unify scaffold env var names on AGENTFIELD_SERVER / AGENT_NODE_ID
+
+The TypeScript scaffold read AGENTFIELD_URL/AGENT_ID while Python, Go,
+the docs, and the docker-compose template all use AGENTFIELD_SERVER/
+AGENT_NODE_ID — a TS agent given the documented variable silently
+registered with the default localhost:8080 instead. The old names are
+kept as fallbacks for existing setups.
+
+Python and Go .env.example advertised AGENTFIELD_CONTROL_PLANE_URL,
+which nothing reads; they now list the variables the scaffolds honor.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): scaffold polish — accurate next steps, current dep floors, ruff-clean output
+
+- Python next steps (README + af init output) told users to uncomment an
+  ai_config that the scaffold already ships enabled, and the README
+  promised port auto-discovery while main.py pins port 8001.
+- Fresh Python scaffolds failed 'ruff check' out of the box (F401 on
+  pydantic imports only used by the commented AI sample); the imports
+  now live inside that commented block.
+- TypeScript AI sample never passed the input text into the prompt.
+- Dep floors were stale: @agentfield/sdk pinned ^0.1.0 (128 releases
+  old) and requirements.txt had no floor at all. Both now sit at the
+  current release, and bump_version.py updates them on stable releases
+  the same way it already maintains go.mod.tmpl.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): close scaffold gaps found in verification
+
+- .dockerignore.tmpl (shared by all languages) did not exclude
+  node_modules, so a host install was COPY'd over the container's in the
+  TypeScript image, shadowing it with host-arch binaries; it now covers
+  Node and Python artifacts for every language.
+- The Go scaffold hardcoded NodeID, silently ignoring the AGENT_NODE_ID
+  override that the generated docker-compose.yml and .env.example set.
+- Uncommenting the Python AI sample tripped ruff E402 (mid-file import);
+  the commented import now carries noqa for when it is enabled.
+- .env.example now lists AGENT_NODE_ID (and AI_MODEL for Python) to
+  match what the scaffolds actually read.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(scripts): anchor agentfield matcher in bump_version + cover template updaters
+
+The requirements updater matched any line starting with 'agentfield',
+which would silently rewrite e.g. 'agentfield-cli>=1.0'; it now matches
+only the agentfield distribution (bare or with a version specifier).
+Adds regression tests for update_ts_template and the scaffold
+requirements floor, which previously had no coverage.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a5f1573)
+
+## [0.1.128] - 2026-08-13
+
+## [0.1.128-rc.4] - 2026-08-13
+
+
+### Added
+
+- Feat(sdk/go): add Agent.Span for traced in-process sub-executions (#916)
+
+* feat(sdk/go): add Agent.Span for traced in-process sub-executions
+
+Span(ctx, name, input, fn) runs fn as a child execution of the context
+carried by ctx and emits workflow events so it appears as a node in the
+run's DAG — CallLocal's lineage and event emission without requiring the
+target to be a registered reasoner. The child context is injected into
+fn's ctx, so nested Span/CallLocal/Note calls chain correctly and
+concurrent Spans become siblings.
+
+Terminal events are sent synchronously (a finished span can never be
+left dangling in "running"); start events go through a bounded async
+queue and are shed first under load, which is safe because the events
+endpoint upserts nodes from the terminal event alone. fn panics emit a
+"failed" terminal event and re-raise. Input/result payloads are size-
+capped agent-side (16KB, 4KB preview) since the events path stores them
+verbatim.
+
+Motivation: the deep-research Go agent runs its internal pipeline stages
+as plain function calls, so a 12-minute prepare_research_package renders
+as a single DAG node — while the Python SDK's decorator tracking gave
+every internal stage its own node. Span restores that trace parity for
+in-process stages.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): make Agent.Span nil-receiver safe
+
+A nil *Agent runs fn untraced instead of panicking in
+buildChildContext. Unit tests for wrapped pipeline functions commonly
+pass a nil agent for stages that never touch the LLM; those must keep
+working when the stage gains a Span wrapper.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): snapshot span input before handing it to the async event queue
+
+truncateTraceInput returned the caller's map by identity whenever it fit
+under the size cap, and enqueueSpanStart handed that same map to the
+background sender goroutine, which json.Marshals it at an unbounded delay.
+Any caller that mutates the input map after Span entry — including inside
+fn itself — raced that marshal; without -race that is a process-fatal
+'concurrent map read and map write'. Reproduced with go test -race.
+
+The traced input is now deep-copied from its marshaled bytes at Span
+entry, so events carry a consistent as-of-call snapshot and never alias
+caller memory. Also aligns enqueueSpanStart's control-plane-URL guard
+with emitWorkflowEvent's TrimSpace semantics.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): survive insert races and shed starts on the events endpoint
+
+The workflow events endpoint did Get→Create with no transaction. Two
+events for the same execution_id arriving concurrently — exactly what
+sdk/go Span produces, an async 'running' event racing the synchronous
+terminal event for any sub-millisecond span — both saw no row and raced
+to INSERT; the loser got a unique-violation 500 and was dropped. When the
+loser was the terminal event, the node stayed 'running' forever: the run
+never left /executions/active, and the stale-execution reaper eventually
+flipped it to timeout, making a finished run render as timed out.
+Reproduced live: 550-span flood → 11 nodes stranded, 30 dropped events.
+
+The handler now retries in a bounded loop: a failed create re-reads and
+merges through the update path (the row necessarily exists once the racing
+winner lands), and a row that vanishes between read and update re-creates
+instead of silently no-oping. Terminal-state immutability is unchanged.
+Post-fix the same flood persists 551/551 nodes terminal with zero errors.
+
+Also backdate StartedAt by duration_ms when a node is created from its
+terminal event alone (start event shed under queue pressure), so such
+nodes get a real timeline bar instead of a zero-width one at arrival time.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (526466c)
+
+- Feat(sdk/go): dispatch envelope unwrap + Context injection (#514) (#914)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(sdk/go): dispatch envelope unwrap + Context injection (#514)
+
+Wire the dispatch-side envelope unwrap and *triggers.Context injection into
+the Go SDK reasoner dispatch paths, so a webhook delivery from the control
+plane lands on the handler with the transformed payload and populated
+trigger metadata.
+
+New sdk/go/triggers/dispatch.go:
+- IsEnvelope(body) detects the dispatcher shape {event, _meta} (requires
+  _meta.trigger_id, so ordinary payloads are never misread)
+- Unwrap(body) peels the event and builds a *Context from _meta, with
+  multi-layout received_at parsing and a now() fallback
+- NewContext / FromContext propagate the trigger metadata through
+  context.Context, so HandlerFunc keeps its existing signature (no
+  breaking change for current reasoners)
+- ApplyTransform picks the best-matching binding (source match, exact or
+  dotted-prefix event type, specific beats catch-all) and runs its
+  Transform, recovering from a panicking transform to raw input
+
+Wired into every dispatch path via a single applyTriggerDispatch helper so
+they cannot drift: handleReasoner (sync HTTP), executeReasonerAsync (async
+goroutine), handleExecute (/execute route), Execute (local), and
+HandleServerlessEvent (serverless). CallLocal is deliberately left alone,
+since agent-to-agent calls are direct invocations by definition.
+
+Direct calls are unchanged: input passes through untouched, Transform is
+skipped, and FromContext returns nil.
+
+Tests: 17 tests in triggers/dispatch_test.go (envelope detection table,
+unwrap, timestamp fallbacks, context round-trip, transform matching,
+specificity, prefix match, panic recovery) plus 6 end-to-end tests in
+agent/agent_dispatch_triggers_test.go proving both shapes through the real
+Execute path. go build/vet clean, go test -race ./triggers/ green.
+
+Part of #508. Closes #514.
+
+* docs(sdk/go): drop EXPERIMENTAL caveats now that dispatch is wired (#514)
+
+The Context, Transform, and EventOpts.Transform docs carried EXPERIMENTAL
+notes saying dispatch-time execution and context injection would ship with
+#514. This PR is that work, so the caveats are now stale and describe the
+opposite of reality.
+
+Replaced with accurate contracts: FromContext(ctx) retrieval with the nil
+check distinguishing trigger dispatches from direct calls, Transform running
+before the handler on dispatches only, and the panic-degrades-to-passthrough
+behaviour. Kept the VCID caveat, which is still pending the DID/VC chain
+work tracked separately.
+
+Follows up on @AbirAbbas's review of #906, which flagged these docs as
+promising behaviour that was not yet wired.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (f6e6f11)
+
+- Feat(sdk/go): trigger test helpers + fixture library (#515) (#915)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(sdk/go): trigger test helpers + fixture library (#515)
+
+Add Go test helpers and a captured-fixture library so reasoners can be
+unit-tested without spinning up a control plane, mirroring the Python
+agentfield/testing.py surface.
+
+New sdk/go/triggers/testing.go:
+- SimulateEvent(t, handler, opts) builds the *Context the runtime would
+  have produced, applies the matching binding's Transform, and invokes the
+  handler with the context attached
+- SimulateSchedule(t, handler, opts) wraps SimulateEvent for cron handlers
+  (source "cron", event type "tick")
+- SimulatedContextFrom(ctx) retrieves the synthetic context in tests
+- Identifiers default to fresh random values so repeated simulations are
+  independently dedup-safe; every field is overridable
+- Transform matching mirrors the other SDKs exactly (source match, exact or
+  dotted-prefix event type, specific beats catch-all) and recovers from a
+  panicking transform to raw input
+
+New sdk/go/triggers/load_fixture.go:
+- LoadFixture(t, name) reads a captured payload, accepting "stripe" or
+  "stripe.json"
+- RawFixture(t, name) returns undecoded bytes for byte-level assertions
+- FixtureNames() lists all six sources for table-driven tests
+- Fixtures are embedded with go:embed rather than read from a relative
+  testdata path, so LoadFixture works from any caller's working directory
+  including the module cache
+
+New sdk/go/triggers/testdata/*.json: six fixtures (stripe, github, slack,
+cron, generic_hmac, generic_bearer) copied byte-for-byte from the Python SDK.
+
+Tests: 61 test cases covering all six fixtures through SimulateEvent, known
+field values per provider, transform application and source mismatch,
+identifier overrides and uniqueness, parent-context propagation, handler
+error propagation, non-object and panicking transforms, and the schedule
+helper. Includes a parity guard asserting the fixtures are byte-identical to
+the Python SDK copies, plus a check that FixtureNames() stays in sync with
+the embedded files. go test -race ./triggers/ green, build/vet clean.
+
+Part of #508. Closes #515.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (4a7529c)
+
+## [0.1.128-rc.3] - 2026-08-13
+
+
+### Added
+
+- Feat(sdk/go): triggers package + OnEvent/OnSchedule sugar (#513) (#906)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(sdk/go): triggers package + OnEvent/OnSchedule sugar (#513)
+
+Add the public triggers package and agent-level sugar methods for
+declaring inbound webhook and cron-schedule bindings on Go SDK reasoners.
+
+New sdk/go/triggers/ package:
+- Context type (TriggerID, Source, EventType, EventID, IdempotencyKey,
+  ReceivedAt, VCID) — nil for direct calls, populated by dispatch
+- EventOpts / ScheduleOpts configuration structs
+- Event() / Schedule() factory functions producing Binding values
+- Transform function type for pre-handler event transformation
+- BindingKind enum (EventBinding / ScheduleBinding)
+
+New agent sugar (sdk/go/agent/agent_triggers.go):
+- Agent.OnEvent(opts, name, handler) — registers a reasoner with an
+  event trigger binding in one call
+- Agent.OnSchedule(expression, name, handler, ...OnScheduleOption) —
+  registers a reasoner with a cron trigger binding
+- WithTimezone(tz) option for OnSchedule
+- withTriggersBinding() bridges triggers.Binding into the existing
+  ReasonerOption machinery
+- bindingToWire() converts triggers.Binding to types.TriggerBinding
+
+Modified sdk/go/agent/agent.go:
+- Added triggerBindings field to Reasoner (stores Transform for dispatch)
+- Import triggers package
+- triggerToBinding() now also accepts triggers.Binding (backward compat)
+
+Tests: 9 tests in triggers/triggers_test.go (types, factories, config,
+transform, defaults) + 6 tests in agent/agent_triggers_test.go (OnEvent,
+OnSchedule, WithTimezone, parity with WithTriggers, backward compat).
+All pass. go build/vet clean.
+
+Part of #508. Closes #513.
+
+* fix(sdk/go): address review feedback on triggers package (#513)
+
+1. WithTriggers(triggers.Event(...)) now stores triggerBindings (preserving
+   Transform) alongside the wire binding — parity with OnEvent path.
+   Added regression test.
+
+2. Schedule() always merges expression/timezone into Config, even when
+   custom Config is provided. Prevents silent loss of the cron expression.
+
+3. Renamed ScheduleOpts.Expression to ScheduleOpts.Cron for consistency
+   with the Python and TypeScript SDKs.
+
+4. Removed unused captureCallerOrigin function.
+
+5. Marked Context as EXPERIMENTAL until #514 ships the dispatch injection.
+
+Addresses @santoshkumarradha's review on #906.
+
+* docs(sdk/go): mark triggers Transform as experimental pending #514
+
+The Transform doc claimed the SDK runs Transform(rawEvent) before invoking
+the reasoner. Nothing on the Go side consumes TriggerBinding.TransformFn
+yet — the binding stores it and dispatch never executes it, so a reasoner
+invoked by an inbound event silently receives the raw event.
+
+Restate the doc to match reality and add the same EXPERIMENTAL caveat that
+Context already carries, on both the Transform type and EventOpts.Transform.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): keep Cron authoritative when merging schedule config
+
+Schedule() seeded the config map with expression/timezone and then merged
+custom Config over it, so a custom "expression" key silently replaced
+opts.Cron — the same silent cron loss the previous fix targeted, reached
+from the other direction.
+
+Merge custom keys first and apply Cron unconditionally afterwards.
+Timezone precedence is now explicit: opts.Timezone wins, else a custom
+"timezone" key survives, else the UTC default stands. Malformed and
+non-object Config is still ignored rather than propagated, which is now
+documented on ScheduleOpts.Config instead of being an implicit quirk.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* style(sdk/go): gofmt triggers files touched by this PR
+
+Two spots this branch introduced fail gofmt: the trailing blank line left
+in agent_triggers.go by the captureCallerOrigin removal, and struct-key
+alignment in triggers_test.go after the Expression -> Cron rename.
+
+Scoped to files this PR already touches; the other pre-existing gofmt
+offenders under sdk/go are left alone.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (081b53e)
+
+
+
+### Fixed
+
+- Fix(sdk/python): add lock timeouts + offload blocking requests fallback (#620) (#904)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* fix(sdk/python): add lock timeouts + offload blocking requests fallback (#620)
+
+Slice 4 of #620: prevents indefinite hangs from contended locks and
+offloads the remaining blocking HTTP call in an async function.
+
+Lock timeouts:
+- New agentfield/lock_utils.py: timed_lock() context manager that
+  acquires with a configurable timeout (default 30s, env var
+  AGENTFIELD_LOCK_TIMEOUT_SECONDS) and raises LockTimeoutError with
+  diagnostic info instead of hanging.
+- Applied to all lock sites in result_cache.py (11), cost_tracker.py (8),
+  node_logs.py (7) — the 26 highest-contention acquisitions.
+
+Blocking request offload:
+- memory_events.py history() fallback: the blocking requests.get() in
+  the async function's ImportError path is now offloaded to
+  loop.run_in_executor() so it doesn't freeze the event loop.
+- Removed the ASYNC210 per-file-ignore for memory_events.py (resolved).
+
+Running-loop guard:
+- client.execute_sync() now emits a RuntimeWarning when called from
+  within a running event loop, directing users to await execute() instead.
+
+Tests: 7 tests in test_lock_timeout.py covering timeout behaviour,
+reentrant locks, cross-thread contention, error attributes, and the
+execute_sync warning. 63 tests pass across the affected test surface.
+
+Part of #620.
+
+* fix(sdk/python): parse AGENTFIELD_LOCK_TIMEOUT_SECONDS defensively
+
+DEFAULT_LOCK_TIMEOUT was resolved with a bare float() at import time, so a
+malformed value took down `import agentfield` altogether. The empty-string
+case is the common one: `AGENTFIELD_LOCK_TIMEOUT_SECONDS=` in a compose
+`env:` block makes float("") raise from __init__.py -> result_cache.py ->
+lock_utils.py. A negative value imported fine but broke every lock op, since
+lock.acquire(timeout=-5) raises ValueError.
+
+Parsing now falls back to 30s for missing, empty, non-numeric, non-positive
+and non-finite values, warning through the module logger for the cases that
+look like a misconfiguration. Tests drive a fresh interpreter per value so
+the import-time path is the one under test.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): keep LockTimeoutError diagnostics visible on 3.11+
+
+On Python 3.11+ asyncio.TimeoutError is TimeoutError, so deriving from it
+made LockTimeoutError catchable by every `except asyncio.TimeoutError` up the
+stack. Agent.call wraps client.execute in asyncio.wait_for and that path goes
+through the result cache, so a real lock deadlock surfaced as "Execute call
+timed out" and the holder/wait diagnostics were lost.
+
+Deriving from RuntimeError instead keeps the message intact on all matrix
+versions. Nothing in the repo catches LockTimeoutError, so no call sites
+change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/python): harden execute_sync warning fixture, fix module docstring
+
+The __new__-based client only avoided real I/O by accident: execution died on
+a missing caller_agent_id attribute inside `except Exception: pass`. Give
+caller_agent_id a value and stub _submit_execution_sync with a sentinel, so
+the test asserts the RuntimeWarning and proves nothing was submitted — rather
+than depending on a crash that a class-level default would silence, turning
+the test into a live POST to localhost:8080 plus a polling loop.
+
+The module docstring also advertised a memory_events.history() test that was
+never written; say where that change is actually guarded instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (25821fc)
+
+- Fix(sdk/python): harden cross-loop teardown (#907)
+
+* fix(sdk/python): harden cross-loop teardown
+
+* fix(sdk/python): absorb both CPython cross-loop error wordings in task teardown
+
+cancel_and_await_if_same_loop only suppressed the asyncio/tasks.py wording
+("attached to a different loop"). CPython raises the same error class with a
+second wording from asyncio/mixins.py ("is bound to a different event loop")
+when a cancellation cleanup awaits a Lock/Event/Condition bound to a foreign
+loop, so that case re-raised out of teardown instead of being absorbed.
+
+Match both wordings. The regression test binds an asyncio.Event to a
+background thread's loop and awaits it from a cancelled task's cleanup on
+another loop, reproducing the mixins wording genuinely rather than raising a
+synthetic RuntimeError; the existing test asserting unrelated RuntimeErrors
+still propagate is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a2ea9e6)
+
+
+
+### Other
+
+- Seamless agent use: cloud-aware skill, native Codex install, self-healing skill sync (#910)
+
+* feat(skills): agentfield-use v0.6.0 — cloud-vs-local resolution, contract fetch, entry points only
+
+The skill now resolves which control plane work goes to before anything
+else: an explicit server or AGENTFIELD_SERVER wins, then the AgentField
+Desktop cloud config (settings.json cloud.enabled/serverUrl/apiKey, read
+from the per-OS app-data path), else the local default. A configured but
+unreachable cloud is a stop-and-report, never a silent fallback — the
+local and cloud fleets are disjoint. The target is passed explicitly per
+call (--server/-k), never exported.
+
+Dispatch gains two preconditions: fetch the reasoner's exact contract
+first (agent-summary / get_reasoner_schema; a vacuous schema means the
+description IS the contract), and only call entrypoint-tagged or
+described reasoners — undescribed run_* reasoners are internal pipeline
+stages. The workspace-handle flow is capability-gated (not every build
+ships get_workspace_handle), and process-wide serialization (swe-pro) is
+called out in the concurrency guidance.
+
+Also adds agentfield-personal to the embed sync script's list — edits to
+that skill previously never reached the embedded mirror.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skillkit): install Codex skills natively, self-heal broken targets, isolate tests from the real home
+
+Codex reads the cross-tool skills standard (~/.codex/skills/<name>/
+SKILL.md), not the AGENTS.override.md rules file the marker-block target
+wrote — so skills were never visible to Codex at all. The codex target
+now symlinks into ~/.codex/skills like claude-code, and install/update/
+uninstall strip any legacy agentfield marker block (deleting the rules
+file when only whitespace remains).
+
+Installs self-heal: the already-at-this-version skip now also requires
+the recorded artifact to be valid — symlinks must resolve inside the
+skill's canonical store, marker blocks must exist and point at a real
+SKILL.md, and a recorded method that differs from the target's current
+one is invalid by definition (which is what migrates legacy Codex
+entries). Machines in the wild carry state pointing at deleted temp
+directories; a matching version over a broken artifact previously meant
+the target was never repaired.
+
+Those deleted temp paths came from skillkit's own tests: they isolated
+AGENTFIELD_HOME but resolved targets against the real home, so go test
+rewrote real ~/.codex/AGENTS.override.md files. A package TestMain now
+pins HOME/USERPROFILE/AGENTFIELD_HOME to temp dirs, and a regression
+test runs a full InstallAll and fingerprints the real home before/after.
+
+af skill install/update now exit non-zero when any skill or target
+fails (report printed first), and InstallAll continues past a failing
+skill instead of abandoning the rest of the catalog.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(agentic): bound agent-summary payloads and return descriptions in reasoner search
+
+GET /api/v1/agentic/agent/:id/summary inlined every execution payload
+from the last 24h — unbounded, often megabytes — making the best
+contract-discovery surface unusable for coding agents. The query now
+excludes payloads, sorts newest-first, and is capped at 500 rows;
+metrics_24h stays exact over the window while recent_executions is
+sliced to 20. Reasoner descriptions in the summary now apply the same
+legacy-metadata fallback as discovery.
+
+Reasoner search results carry the (truncated) description — previously
+description was scored for ranking and then discarded, forcing a second
+round trip before dispatch — and the search index now prefers the
+registered description over the legacy metadata map, which also makes
+current-SDK descriptions searchable.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): observable skill sync with re-sync triggers and honest dashboard state
+
+Skill sync previously spawned af skill install with stdio ignored, an
+empty error handler, and no exit-code check, ran only once at launch,
+and the dashboard claimed skills were installed based on the settings
+boolean alone. A new SkillSync module captures output (64KB cap, 120s
+timeout), records the last sync result, appends to
+<logs>/skill-sync.log, and serializes concurrent triggers. Syncs run at
+launch, when installSkills flips on, and after a CLI update. The
+dashboard row now renders from the recorded result: installed only
+after an exit-0 sync, a visible failure message otherwise.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skills): §0 probes the Windows desktop config from WSL
+
+On WSL machines the desktop app usually lives on the Windows side, but a
+Linux-side settings.json (written by a Linux desktop install, often with
+no cloud key at all) can exist too. §0's "first file that exists" rule
+stopped there, never saw the Windows cloud config, and resolved to
+local — reproducing the exact silent-local-fallback incident this skill
+exists to prevent.
+
+§0 now checks every path that applies to the machine: a config file
+without an enabled cloud no longer ends the search, and under WSL
+(detected via /proc/version) the Windows side is probed at
+/mnt/c/Users/*/AppData/Roaming/agentfield-desktop/settings.json after
+the Linux path. First file declaring an enabled cloud wins.
+
+Found by rehearsing the desktop-to-cloud happy path on a WSL+Windows
+machine where the split-brain is live.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (0256b37)
+
+## [0.1.128-rc.2] - 2026-08-12
+
+
+### Added
+
+- Feat(harness): add Grok Build CLI provider (#861)
+
+* feat(harness): add Grok Build CLI provider
+
+Introduce a first-class harness provider for the local Grok Build CLI so
+AgentField can drive Grok headless sessions the same way it drives Codex,
+OpenCode, Gemini, and Claude Code.
+
+The provider wraps the Grok CLI with a PTY (via script) because plain pipes
+currently fail with "Device not configured", feeds prompts through
+--prompt-file to avoid argv limits, and normalizes missing token usage to
+zero so metrics aggregation does not crash on incomplete usage objects.
+
+* fix(harness): use util-linux script -c form on Linux for grok PTY wrapper
+
+`script -q /dev/null grok ...` only runs the command on BSD/macOS. util-linux
+`script` takes at most one positional (the typescript file) and ignores the
+rest, falling back to spawning $SHELL interactively — so on Linux runners the
+grok CLI never started and the process sat on a bash prompt until the harness
+idle watchdog killed it. Verified on util-linux 2.37.2: both
+`script -q /dev/null /bin/echo hi` and the `--`-separated
+`script -q /dev/null -- /bin/echo hi` hang on an interactive prompt and never
+echo.
+
+Route the wrapper through a `_pty_command` helper that picks the right form
+per flavor: `script -q -e -c "<cmd>" /dev/null` on Linux, the existing
+trailing-argv form on BSD/macOS, and the command untouched on Windows or when
+script(1) is absent. `-e` is required on util-linux, otherwise script exits 0
+regardless of the child's status and masks every non-zero grok exit from the
+returncode handling below it.
+
+The `-c` form goes through a shell, so argv is joined with shlex.quote: grok
+arguments carry caller-controlled text (--system-prompt-override, project
+paths) that must reach the CLI verbatim and never be re-interpreted as shell
+syntax. A round-trip test asserts shlex.split of the generated string equals
+the original argv for input containing quotes, spaces and shell metacharacters.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f3bc5c5)
+
+## [0.1.128-rc.1] - 2026-08-12
+
+
+### Fixed
+
+- Fix(go-sdk): allow custom HTTP clients for AI requests (#908) (5c369b5)
+
+## [0.1.127] - 2026-08-10
+
+## [0.1.127-rc.7] - 2026-08-10
+
+
+### Chores
+
+- Chore(deps): bump nanoid to 3.3.17 (#900)
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (5902d71)
+
+## [0.1.127-rc.6] - 2026-08-10
+
+
+### Fixed
+
+- Fix(harness): bound CLI output capture at 16MB per stream (#903)
+
+run_cli buffered a child's entire stdout/stderr unbounded — chunk list,
+joined str, and (in providers) the parsed JSONL event list all live at
+once, so a runaway stream is held in memory several times over, and N
+concurrent harness calls multiply that. This was one contributing layer in
+pr-af's OOM crash (Agent-Field/pr-af#65): 16 concurrent opencode calls,
+each buffering everything, on one container.
+
+Capture is now bounded per stream via AGENTFIELD_HARNESS_MAX_OUTPUT_BYTES
+(default 16MB, <=0 disables). Real provider streams are completion-boundary
+events (hundreds of KB), so normal runs stay byte-identical. On overflow
+the head (session/model info, first error) and the tail (final result +
+cumulative usage events) are kept around a truncation marker line; the
+marker and any partial seam line parse as invalid JSON, which parse_jsonl
+already skips, so extract_final_text and token extraction keep working on a
+truncated stream.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (33979de)
+
+## [0.1.127-rc.5] - 2026-08-10
+
+
+### Fixed
+
+- Fix(sdk/python): run destructor cleanup synchronously when no loop is running (#620 follow-up) (#902)
+
+* fix(sdk/python): retain and observe fire_and_forget tasks on a running loop
+
+fire_and_forget()'s running-loop branch did a bare loop.create_task(coro).
+asyncio only keeps a weak reference to a task, so the task could be
+garbage-collected mid-flight and silently never complete, and because
+nobody ever retrieved the result, a failing task printed the noisy
+"Task exception was never retrieved" traceback on collection — exactly
+what the thread branch of #899 fixed for the no-loop case.
+
+Hold the task in a module-level set and attach a done callback that drops
+the reference and logs any failure at debug level, matching the thread
+branch's message.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): run destructor cleanup synchronously when no loop is running
+
+#899 replaced the bare asyncio.run() in Agent.__del__ with
+fire_and_forget(). That fixed the running-loop case (previously it raised
+RuntimeError and the exception was swallowed), but regressed the common
+destructor case: with no running loop, fire_and_forget() hands the
+coroutine to a daemon thread, and at interpreter exit that thread is
+killed before it does any work. AsyncExecutionManager.stop(), the
+background-task gather and the notification dispatcher shutdown were all
+silently dropped.
+
+Dispatch on loop presence instead: asyncio.run() when there is no running
+loop so the cleanup actually completes before __del__ returns, and
+fire_and_forget() only when a loop is already running.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2523fae)
+
+## [0.1.127-rc.4] - 2026-08-10
+
+
+### Chores
+
+- Chore(deps): bump js-yaml to 4.3.1 (#898) (5e0da59)
+
+
+
+### Fixed
+
+- Fix(sdk/python): resolve ResultCache cross-loop deadlock (#623) (#799)
+
+* fix(sdk/python): resolve ResultCache cross-loop deadlock (#623)
+
+ResultCache mixed a threading.RLock (for its data) with loop-bound
+asyncio primitives (asyncio.Event for shutdown, asyncio.Task for the
+cleanup loop). When start() and stop() ran on different event loops —
+which happens when the AgentFieldClient's sync and async execution
+paths are mixed (#620) — stop() would raise 'got Future attached to a
+different loop' and could wedge the process waiting on a task it can
+never await.
+
+Fix: make the cache lifecycle loop-aware.
+- Record the event loop the cleanup task/shutdown event are bound to.
+- start() is now idempotent on the same loop and rebinds cleanly when
+  called on a new loop, discarding the stale task via
+  call_soon_threadsafe(task.cancel) on its owning loop — never a
+  cross-loop await.
+- stop() only awaits the cleanup task when on its owning loop; from a
+  different loop it cancels without awaiting. The cache is always
+  cleared regardless (that path only needs the thread lock).
+- Shrink the cleanup loop's critical section so stats logging no longer
+  runs while holding the lock, reducing contention with sync callers.
+
+Adds tests/test_result_cache_deadlock.py covering cross-loop stop,
+idempotent/rebinding start, concurrent sync access during cleanup, and
+the disabled-cache no-op path. result_cache.py coverage: 88% -> 95%.
+
+* fix(test): remove unused pytest import (ruff F401)
+
+* fix(sdk/python): extend loop-aware teardown to manager + connection pool (#623)
+
+Addresses review feedback on #799: the same foreign-loop
+'task.cancel(); await task' hazard that affected ResultCache also lived
+in AsyncExecutionManager.stop() and http_connection_manager
+ConnectionManager.close(). Since client.aclose() flows through
+manager.stop() -> connection_manager.close(), the end-to-end sync/async
+mixing case (#620/#623) still raised 'got Future attached to a different
+loop' one level up, before result_cache.stop() was reached.
+
+Changes:
+- New agentfield/async_lifecycle.py with shared loop-aware teardown
+  helpers: current_running_loop(), cancel_task_cross_loop(),
+  cancel_and_await_if_same_loop(). Single source of truth for the safe
+  pattern.
+- ResultCache refactored to use the shared helpers (behaviour unchanged).
+- AsyncExecutionManager records its owning loop at start(); stop() only
+  awaits background tasks / sets the shutdown Event on that loop, and
+  cancels cross-loop without awaiting otherwise.
+- http_connection_manager ConnectionManager records its owning loop at
+  start(); close() takes the async lock + awaits the session only on the
+  owning loop, and on a foreign loop schedules session/connector close on
+  the owning loop via call_soon_threadsafe without awaiting.
+
+Tests: new tests/test_async_lifecycle_deadlock.py covers cross-loop
+teardown of both components (3 of its 4 checks fail pre-fix on the
+merge-base). Full result_cache + manager + connection suite green
+(110 passed); result_cache.py coverage 98%.
+
+* fix(sdk/python): address review feedback — stop/start race + cross-loop lock (#623)
+
+1. ResultCache.stop(): compare-before-clear so a concurrent start()
+   that installs fresh references between the await and the cleanup
+   doesn't get its new task orphaned.
+
+2. AsyncExecutionManager.stop(): skip the _execution_lock section on
+   cross-loop stop — the lock is bound to the owning loop, taking it
+   from a foreign loop raises the same 'got Future attached to a
+   different loop' error one line below the fix.
+
+* fix(test): prevent flaky pending-task warnings in cross-loop tests
+
+Add time.sleep(0.2) before stopping loops to let scheduled cross-loop
+cancels process, and guard loop.close() against still-running threads.
+Addresses Copilot review feedback on test reliability.
+
+* fix(sdk/python): schedule real teardown on owning loop for cross-loop stop (#623)
+
+Addresses @santoshkumarradha's review: cross-loop stop/close now
+schedules the actual teardown work on the owning loop rather than
+skipping it or mutating state unserialized.
+
+AsyncExecutionManager.stop(): on cross-loop, schedules execution
+cancellation (under _execution_lock) on the owning loop via
+call_soon_threadsafe so active executions are actually terminated
+rather than left dangling.
+
+ConnectionManager._close_cross_loop(): moves _session/_connector
+mutation inside a coroutine scheduled on the owning loop under the
+async lock, so an in-flight get_session() on the owning loop never
+sees half-torn-down state. Only _closed is set immediately (to gate
+new requests); the rest is serialized on the correct loop. (29498e4)
+
+
+
+### Testing
+
+- Test: add coverage for GinLogger middleware (#557) (#895)
+
+* test: add coverage for GinLogger middleware (#557)
+
+* test(middleware): cover aborted-status and error-field logging in GinLogger (#557)
+
+Ports the non-200 case from #896 so that draft can close in favor of this
+one, and additionally asserts the error field is populated via c.Error(),
+a path neither draft covered. Also restores the missing trailing newline.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c3fd728)
+
+## [0.1.127-rc.3] - 2026-08-10
+
+
+### Added
+
+- Feat(harness): aforge provider + per-run isolation of the schema output file (#891)
+
+* fix(harness): isolate schema output file in a per-run temp dir for cwd-only runs
+
+With only cwd set, every harness call wrote the fixed
+cwd/.agentfield_output.json, so N concurrent .harness() calls sharing a
+cwd (e.g. pr-af fanning out 8 review dimensions over one checkout)
+overwrote each other's output and cleanup deleted the file from under
+still-running siblings — surfacing as spurious "schema parse failed"
+zero-finding results. Reuse the project_dir strategy unconditionally:
+mkdtemp(".agentfield-out-*") under project_dir or cwd, cleaned up per
+run. Mock providers in the runner tests now learn the output path from
+the prompt suffix, the same way real coding agents do.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(harness): add aforge coding-agent provider
+
+Registers aforge (github.com/Agent-Field/aforge-v2) as a harness
+provider alongside claude-code/codex/gemini/opencode. The provider
+invokes `aforge exec --json -w <root>` with the prompt over stdin, maps
+the JSON envelope (text/stop/usage/turns) onto RawResult/Metrics with
+provider-reported cost, translates model slugs to AFORGE_MODEL (leading
+openrouter/ prefix stripped) and #variant to AFORGE_EXEC_REASONING, and
+treats budget/turn-cap landings that still produced a final message as
+usable results while mapping all other non-zero exits to CRASH. The
+no-progress watchdog is disabled for this provider because aforge only
+writes stdout once, at completion. HarnessConfig grows aforge_bin, which
+is threaded through the runner's options whitelist, the factory, the
+availability spec (probed via `aforge version`, needs OPENROUTER_API_KEY),
+and the doctor.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f2dd31f)
+
+
+
+### Fixed
+
+- Fix(sdk/python): replace bare asyncio.run() with loop-aware helpers (#620) (#899)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* fix(sdk/python): replace bare asyncio.run() with loop-aware helpers (#620)
+
+Bare asyncio.run() raises RuntimeError when called from within an
+already-running event loop (e.g. a sync reasoner dispatched by FastAPI,
+a serverless handler wrapping an async framework, or a destructor on the
+loop thread). This is slice 3 of #620.
+
+New module agentfield/run_async.py provides two helpers:
+- run_coroutine(coro): blocks until result. If a loop is running, runs
+  in a new thread with its own loop so the caller can safely block.
+- fire_and_forget(coro): non-blocking. If a loop is running, creates a
+  task; otherwise spawns a daemon thread.
+
+Applied to all 6 asyncio.run() sites:
+- agent.py handle_serverless: run_coroutine() for async reasoners
+- agent_serverless.py: same pattern
+- agent_cli.py: run_coroutine() (safe for CLI, consistent API)
+- agent.py note(): fire_and_forget() replaces manual loop detection +
+  threading (was 15 lines, now 1 line)
+- agent.py destructor: fire_and_forget() for cleanup
+
+Tests: 9 tests in test_run_async.py covering both loop-running and
+no-loop cases, exception propagation, and fire-and-forget semantics.
+Updated test_agent_core.py to match new dispatch pattern.
+
+Part of #620.
+
+* fix(sdk/python): catch/log exceptions in fire_and_forget daemon thread
+
+Wrap the no-loop fire_and_forget() worker thread with try/except so
+exceptions are logged at debug level rather than leaking as unhandled
+thread exception tracebacks. Addresses @santoshkumarradha's review.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (ce137d1)
+
+## [0.1.127-rc.2] - 2026-08-10
+
+
+### Fixed
+
+- Fix(control-plane): make the execution cleanup initial delay testable (#897)
+
+cleanupLoop waited on a hardcoded 30 second timer before its first
+cleanup pass. That branch could not be reached by any test without
+sleeping for 30 seconds, so the first-pass path was never exercised.
+
+Move the value to a named constant and hold it in an unexported field
+that the constructor always populates. Production timing is unchanged:
+NewExecutionCleanupService is the only construction site, so every
+instance still gets 30 seconds, and no config or exported API surface
+is added. Tests in this package can shorten the field directly.
+
+A guard test asserts the default is still 30 seconds, so the value is
+now pinned by an assertion rather than left as an implicit assumption.
+
+Adds loop coverage for the initial-cleanup branch, the ticker branch,
+and the RetryStaleWorkflowExecutions error path. Each loop test
+neutralises the other timer so it can only pass for the right reason.
+
+execution_cleanup.go now reports 100% across all seven functions
+(cleanupLoop 84.6% -> 100%, performCleanup 97.9% -> 100%). (53bad8c)
+
+## [0.1.127-rc.1] - 2026-08-07
+
+
+### Other
+
+- Add request logging middleware for #557
+
+Replace gin's verbose stdout [GIN] logger with a structured zerolog
+middleware (middleware.GinLogger) that emits one DEBUG-level line per
+request, keeping default info output free of duplicated, overly verbose
+request logs. (0a0eaa4)
+
+## [0.1.126] - 2026-08-07
+
+## [0.1.126-rc.2] - 2026-08-07
+
+
+### Chores
+
+- Chore(deps): bump js-yaml (#892)
+
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [js-yaml](https://github.com/nodeca/js-yaml).
+
+
+Updates `js-yaml` from 4.3.0 to 4.3.1
+- [Changelog](https://github.com/nodeca/js-yaml/blob/4.3.1/CHANGELOG.md)
+- [Commits](https://github.com/nodeca/js-yaml/compare/4.3.0...4.3.1)
+
+---
+updated-dependencies:
+- dependency-name: js-yaml
+  dependency-version: 4.3.1
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (da525c3)
+
+
+
+### Other
+
+- Fix macOS Go scaffold happy path (#894) (902737b)
+
+## [0.1.126-rc.1] - 2026-08-07
+
+
+### Added
+
+- Feat: make the workspace handle reachable — provision furrow, fix the skill, expose the address (#890)
+
+* feat(af): provision the pinned furrow client from its release
+
+The workspace handle needs furrow on the CALLER's machine, and furrow had no
+distribution channel, so the only instruction anyone could give was "build it
+from Rust source" — which meant the feature was unreachable in practice.
+
+Download the pinned release asset into ~/.agentfield/bin, verified against the
+release's SHA256SUMS and written atomically. Unsupported platforms (Windows has
+no asset; furrow uses std::os::unix unconditionally) are a clean no-op, and the
+installed version is recorded beside the binary so bumping the pin actually
+upgrades machines that already have it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(af): install furrow with the skill that uses it, and expose af furrow ensure
+
+Provisioning belongs in the install path rather than in documentation that each
+caller re-implements. Ensure furrow when the agentfield-use skill installs —
+best-effort, so a failed download never fails the install — and add an explicit
+`af furrow ensure` for repair, which does surface the error since someone
+asking for it by name is owed the failure.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skills): sync the embedded agentfield-use mirror
+
+The workspace-handle section added in #885 landed in skills/ only, leaving the
+embedded copy the control plane actually serves 41 lines behind. Three skillkit
+tests have been failing on main since that merge.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): expose furrow address in health
+
+The desktop's workspace-sync probe (PR #885) reads furrow_public_addr from
+the health response body, but nothing emitted the field, so the probe could
+never report availability. Emit it from the shared health handler when the
+FURROW_PUBLIC_ADDR env var is set; omit the key entirely when it is not.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(skill): resolve furrow from where AgentField installs it
+
+furrow has no release channel today, so "use it only if furrow is on PATH"
+silently disabled the workspace handle for every caller. Point the lookup at
+`~/.agentfield/bin` (where provisioning puts it) and at a node's own vendored
+copy, and keep the silent-skip when neither exists. Provisioning itself belongs
+in the install path, not in this document.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(furrow): serialize concurrent installs and stop timing out slow downloads
+
+Two processes running Ensure at once (a desktop skill sync racing a manual
+af skill install, possibly different af versions) could interleave the
+binary rename and marker write, leaving an old binary marked as current —
+permanently skipping the repair. An flock around the whole check-download-
+install sequence serializes them, and the loser re-checks under the lock
+so it skips instead of re-downloading.
+
+The 15s client timeout bounded the entire request including the ~7.5MB
+body, failing spuriously below ~500KB/s. Phase timeouts (dial 10s, TLS
+10s, response header 30s) with a 3-minute ceiling replace it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skill): make the furrow resolver POSIX sh, honor AGENTFIELD_HOME, bump to 0.5.0
+
+The resolver snippet used {bin,go/bin} brace expansion, which dash leaves
+literal — any agent running it under sh would never find furrow-dial inside
+installed packages. Spell the two package dirs out. It also hardcoded
+~/.agentfield while provisioning honors AGENTFIELD_HOME, so a custom home
+could install furrow somewhere the skill never looks.
+
+The catalog says to bump Version on every content change; the furrow
+sections (here and #885) shipped on 0.4.0, leaving reconcilers no signal.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(deploy): opt the cloud image out of furrow client provisioning
+
+The furrow client is a laptop-side tool — cloud agents get furrowd vendored
+by their own packages, and nothing in the container clones workspaces. Any
+skill install run in the container would otherwise pull ~7.5MB from GitHub
+onto the volume for no consumer.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): tell users when a cloud upgrade exists, and stop skipping skill sync in cloud mode
+
+Re-run deploy has been a safe upgrade path since source_image pinning, but
+nothing said an upgrade existed — users had to know the button doubles as
+one. The panel now compares the deployed pin from Terraform state against
+the release tag Docker Hub resolves for :latest, shows 'Control plane
+vX -> vY available', and relabels the action 'Upgrade & redeploy' while
+one is pending. The connection test also gets a Workspace sync row, kept
+neutral when the server predates the health field it reads.
+
+syncSkills was skipped whenever a cloud profile was active — a guard the
+cloud-mode PR added wholesale. Skills (and the furrow client their install
+provisions) belong to local coding agents regardless of where the control
+plane runs; a cloud-connected laptop is exactly the machine that needs the
+workspace client.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(furrow): check or explicitly discard every error lint sees
+
+golangci-lint is advisory in CI, but the new provisioning code should not
+ship with its own errcheck noise.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(furrow): cover the provisioning error paths the patch gate flagged
+
+CI's 80% patch-coverage gate measured the furrow provisioning code at 74%:
+every error branch (unresolvable home, bin-dir collision, lock acquisition,
+missing or malformed checksums, failed binary download) and the
+runtime-platform defaulting path were untested. Exercise each of them, plus
+'af furrow ensure' end to end through cobra in both its silent-success and
+surfaced-failure shapes. The lock test lives behind a unix build tag because
+only the flock implementation can fail; the flock() syscall error itself
+stays uncovered rather than contorting the code to inject it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1fc0eb7)
+
+- Feat(desktop): open the workspace-sync port when we deploy a control plane (#885)
+
+* feat(desktop): open the workspace-sync port when we deploy a control plane
+
+SWE-AF can now mirror a build's workspace so the coding agent that started a run
+can read the files while the run is still going. Reaching it needs one exposed
+TCP port and an address the node can advertise, and neither exists on a
+deployment we provision today.
+
+The module now declares a railway_tcp_proxy for port 8802 and sets
+FURROW_PUBLIC_ADDR from its computed domain and port, so a managed deploy comes
+with workspace sync already on and nothing for the user to configure or even
+know about. This stays declarative rather than another GraphQL side-channel like
+the volume: the pinned provider (0.6.2) has railway_tcp_proxy, so it composes
+with destroy, and Railway's public GraphQL exposes no TCP-proxy create mutation
+anyway. A port-targeted HTTP domain is not an option either — railway_service_domain
+in this provider version has no port attribute.
+
+Workspace sync is an extra and is treated like one. Its outputs are read
+separately from the ones a deploy needs, so a control plane that is up and
+reachable is a success whether or not a furrow address came back with it —
+without that split, a Railway that declined the proxy would have reported the
+whole deployment as failed. testCloudConnection reports reachability as a
+status, never a health failure, so a user who brought their own control plane
+sees no change beyond one passive line.
+
+The agentfield-use skill now tells a coding agent what to do with a
+workspace_handle when it finds one in a result, and says nothing when there
+isn't one. That includes the one carve-out from "never POST to an agent's own
+port": the handle's endpoint is a furrow transport authorized by a per-run
+token, not the agent's HTTP surface.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): probe the workspace-sync port without disabling TLS validation
+
+The reachability probe opened a TLS connection with certificate validation
+turned off, because furrowd's default certificate is self-signed. CodeQL
+flagged it as a high-severity finding and was right to: the flag is a real
+security control, and "it is only a probe" is not a reason to switch one off.
+
+A plain TCP connect answers the same question — is anything listening on the
+advertised workspace-sync port — without weakening anything. Confidentiality
+here comes from furrow's payload encryption and the per-run token, neither of
+which this probe is involved in.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(skill): pair with the handle's path verbatim
+
+The handle now carries the run's own store directory rather than the root above
+it, so appending the run id to it points at nothing. Says so explicitly, since
+the wrong version fails with a message about a missing HEAD that gives no hint
+the path was the problem.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): keep the workspace-sync address stable across deploys
+
+The Railway provider returns the TCP proxy domain as an absolute FQDN when it
+creates the proxy — "altaria.proxy.rlwy.net." — and without the trailing dot
+when it later reads it back. Interpolating that value raw meant a fresh deploy
+wrote FURROW_PUBLIC_ADDR with the dot and the next deploy rewrote it without,
+and because a changed service variable restarts the service, a redeploy that
+should have been a no-op bounced the control plane.
+
+Normalising both places the domain is read makes the published address identical
+on create and on refresh, so the follow-up plan is empty.
+
+Found by applying the module against a real Railway account rather than reading
+the provider schema: create returned the dotted form, the next plan showed the
+variable changing underneath it. Both address forms do reach furrowd — a client
+on this machine cloned a workspace out of a Railway container over each — so
+this is about deploy idempotence, not reachability.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1515101)
+
+## [0.1.125] - 2026-08-05
+
+
+### Other
+
+- Make agent installs work on cloud deployments, and make re-run deploy a real upgrade path (#887)
+
+* fix(desktop): make re-run deploy a safe, actual upgrade path for remote deployments
+
+Remote deployments were frozen on whatever image existed the day they were
+created: the Terraform module pinned source_image to the floating :latest,
+Railway resolves a floating tag once and never re-pulls, and an unchanged
+string is a no-op apply — so 'Re-run deploy' could never upgrade anything.
+That is how a deployment from July kept failing SWE-AF installs with the
+pre-superseded_by 'requires Python >=3.12' error long after the redirect
+shipped in v0.1.121.
+
+- source_image is now a variable, set at deploy time by resolveCloudImage(),
+  which asks Docker Hub which release tag shares latest's digest and pins
+  that concrete tag. A new release changes the string, the diff redeploys
+  the service (the provider calls redeployAllInstances on update), and
+  re-running deploy becomes the upgrade path.
+- A failed lookup returns null and falls back to the pin already recorded in
+  state — never rewriting a working deployment's image to :latest, which
+  would itself have forced a pointless redeploy. Fresh deployments fall back
+  to :latest. The lookup is bounded by AbortSignal.timeout(5000).
+- The service resource now ignores changes to its volume attribute. The
+  /data volume is created out-of-band, the provider refreshes it into state,
+  and a re-apply planned the undeclared attribute back to null — which the
+  provider's update handler turns into volumeDelete, silently destroying the
+  control plane's databases, secrets, and installed agents on every re-run.
+  With re-runs promoted to the routine upgrade action, that pre-existing
+  hazard had to close.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(deploy): ship uv in the cloud image so requires-python nodes install in cloud deployments
+
+The cloud image's python3 is Debian bookworm's 3.11.2 and nothing could
+provision anything newer, so installing an agent node with requires-python
+>=3.12 on a cloud deployment failed with 'no compatible interpreter is
+available' — the installer's provisionViaUv path already handles this, but
+only when uv is on PATH.
+
+Interpreters uv downloads go under /data (UV_PYTHON_INSTALL_DIR): venvs on
+the volume symlink back to the interpreter, and one left in $HOME would
+vanish with the container on the next deploy, breaking every venv built
+from it. The smoke test asserts both the binary and the install dir.
+
+Validated by building the image and installing a fixture node declaring
+requires-python ">=3.12": before, it reproduces the exact production
+failure; after, uv provisions CPython 3.12 under /data/uv/python and the
+install succeeds.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ci): actually gate required-checks on the cloud image job
+
+The summary job lists control-plane-cloud-image in needs but only ever
+inspected control-plane-image.result, so with if: always() a cloud image
+build or smoke-test failure could not fail the aggregate check.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (75fa55e)
+
+## [0.1.124] - 2026-08-05
+
+## [0.1.124-rc.11] - 2026-08-05
+
+
+### Fixed
+
+- Fix(sdk/python): forward v1 video optional fields regressed by #854 (#886)
+
+PR #854 promoted content/ratio/callback_url/aigc_watermark to named
+parameters of MiniMaxProvider.generate_video and rejected all four for
+non-H3 models. Before that, the last three fell through **kwargs into
+the v1 request body and were forwarded verbatim — callback_url and
+aigc_watermark are documented v1 fields — so existing Hailuo callers
+now raise ValueError.
+
+Forward ratio/callback_url/aigc_watermark verbatim on the v1 path
+again, matching v0.1.123 byte-for-byte. Keep the guard for content
+only: structured content is a v2 request shape that never worked
+against v1, so the client-side error stays.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (de30ec6)
+
+- Fix(ci): build UI images on bookworm and pin desktop security overrides (#868)
+
+* fix(security): close open npm Dependabot vulnerability alerts
+
+Bump transitive overrides across web client, desktop, TypeScript SDK,
+and mastra-bench lockfiles:
+
+- brace-expansion → 1.1.18 / 2.1.4 / 5.0.9 (CVE-2026-14257, CVE-2026-69152)
+- postcss → 8.5.25 (GHSA-fxqj-rqcc-2cmp incomplete sourceMappingURL fix)
+- fast-uri → 3.1.5 (backslash authority host confusion)
+- undici → 6.28.0 (cookie injection, retry desync, CRLF blob type)
+
+Closes Dependabot alerts #355, #357, #363, #365, #366, #370, #371, #372,
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(ci): build web UI on bookworm to avoid lightningcss musl flake
+
+npm ci on alpine intermittently omits lightningcss-linux-*-musl when the
+lockfile lacks libc metadata, breaking vite build in functional-test
+image builds. Use glibc Node images for the UI builder stages instead.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (5c7e773)
+
+## [0.1.124-rc.10] - 2026-08-05
+
+
+### Fixed
+
+- Fix(security): bump fast-uri, postcss, and hono for Dependabot alerts (#883)
+
+Upgrade overrides/lockfiles to clear open npm advisories:
+- fast-uri 3.1.4 → 3.1.5 (GHSA-7p8r-x3mc-p8w7)
+- postcss 8.5.18 → 8.5.25 (GHSA-fxqj-rqcc-2cmp)
+- hono 4.12.32 → 4.12.34 (GHSA-8j4g-w8fx-2239)
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (cd644a8)
+
+## [0.1.124-rc.9] - 2026-08-05
+
+
+### Fixed
+
+- Fix(sdk/go/ai): two follow-ups to the Infron gateway integration (#874) (#884)
+
+* fix(sdk/go/ai): never fabricate zero-token usage from a top-level cost
+
+normalizeNativeCost synthesized an empty Usage{} when a body carried a
+top-level cost without a usage block. On the streaming path every consumer
+accumulates usage last-non-nil-wins, so a cost-only chunk arriving after
+the real usage chunk replaced genuine token counts with zeros — recorded
+downstream as input=0/output=0 with cost_source "provider", an
+authoritative-looking row that has lost its tokens. Fold the cost only
+into a usage block the provider actually sent.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go/ai): don't inherit attribution values past their opt-out
+
+Infron attribution fell back to the OpenRouter-scoped site URL and app
+name but never consulted AGENTFIELD_OPENROUTER_ATTRIBUTION, so values a
+deployment had explicitly suppressed — often internal hostnames or
+product names — were sent to a different vendor on the first Infron
+call. Inherit the values only while OpenRouter attribution is enabled;
+the Infron defaults apply otherwise.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a2dee0b)
+
+## [0.1.124-rc.8] - 2026-08-05
+
+
+### Added
+
+- Feat(sdk/go/ai): support the Infron gateway (#874)
+
+* feat(sdk/go/ai): support the Infron gateway
+
+Infron is an OpenAI-compatible inference gateway that serves the standard
+<provider>/<model> ids, so a model moves across by prefix alone:
+infron/moonshotai/kimi-k2.6 routes the same model the bare id names.
+
+Follows the provider shape already in this package rather than inventing
+a new one:
+
+- infron_attribution.go mirrors the existing attribution helper. Infron
+  accepts the same HTTP-Referer / X-Title pair, and the attribution env
+  vars already configured for the existing gateway are honored as
+  fallbacks, so a deployment that already declares itself as
+  'AgentField AI' keeps that identity after switching gateways.
+- Config gains IsInfron(); DefaultConfig() reads INFRON_API_KEY and
+  points at https://llm.onerouter.pro/v1.
+- client.go attaches attribution on both the sync and streaming paths.
+- marshalRequest opts Infron into native usage accounting and strips the
+  routing-only 'infron/' model prefix before the request goes out
+  (stripInfronPrefix, mirroring the prefix handling on the media path).
+  The gateway serves the bare id, so leaving the prefix on returns 'No
+  available providers for model infron/...'. Only a copy of the Request
+  is rewritten; the caller's Request is untouched.
+
+One real difference is handled rather than papered over: Infron returns
+the native cost at the top level of the body and of the final stream
+chunk, rather than nested under usage. Parsed naively that leaves
+Usage.Cost nil, which the cost tracker reads as 'price unknown' -- usage
+still recorded, but with no cost and an empty cost_source instead of
+'provider'. Response/StreamChunk now carry the top-level field and
+normalizeNativeCost folds it into Usage.Cost, so every existing consumer
+keeps reading one place. An explicit usage.cost always wins.
+
+A gateway key that was already honored before Infron existed keeps
+precedence, so adding an Infron key never reroutes an existing
+deployment.
+
+llm.onerouter.pro is deliberately NOT added to vouchedRewriteDomains:
+max_tokens and max_completion_tokens behaved identically in probing and
+neither could be shown to be enforced, so the conservative legacy
+max_tokens path stays, per the reasoning already in that comment.
+
+* fix(sdk/go/ai): keep OPENAI_API_KEY precedence over INFRON_API_KEY
+
+DefaultConfig applied the Infron block unconditionally, so an environment
+with OPENAI_API_KEY set and INFRON_API_KEY added resolved to the Infron key
+and base URL. That contradicts the guarantee stated in DefaultConfig's own
+doc comment and in ENVIRONMENT_VARIABLES.md, and it matters because spawned
+agent processes inherit the parent environment -- one exported INFRON_API_KEY
+would move every Go agent's traffic and credential to a different gateway.
+
+The existing precedence test cleared OPENAI_API_KEY on its first line, so it
+only exercised the OpenRouter branch and the gap passed CI green. Adds the
+regression test for the OpenAI case plus one pinning that Infron still applies
+when it is the only gateway key set, and names the OpenRouter attribution
+fallback vars in the docs so operators can audit what feeds the gateway.
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (64d27aa)
+
+- Feat: add a Parallel search option to the deep research example (#863)
+
+Signed-off-by: georgeatparallel <george@parallel.ai>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (f721fca)
+
+## [0.1.124-rc.7] - 2026-08-05
+
+
+### Chores
+
+- Chore(deps-dev): bump electron (#882)
+
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [electron](https://github.com/electron/electron).
+
+
+Updates `electron` from 39.8.5 to 39.8.10
+- [Release notes](https://github.com/electron/electron/releases)
+- [Commits](https://github.com/electron/electron/compare/v39.8.5...v39.8.10)
+
+---
+updated-dependencies:
+- dependency-name: electron
+  dependency-version: 39.8.10
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (ed127c1)
+
+- Chore(readme): sync utm-links.csv and guard it in CI (#878)
+
+The CSV is the manifest of every UTM-tagged link in the README, but nothing
+enforced that it stayed in sync, so it drifted across successive README
+rewrites: 8 tracked links had no row, and one row pointed at a link deleted
+in 859174f4.
+
+Sync:
+- add the 8 missing rows (harness-banner, prompt-to-production, full-features,
+  explore-features, see-all-examples, architecture, community-docs,
+  community-examples)
+- drop the stale blog-iam row
+- normalize the one www.agentfield.ai link to the apex domain, so analytics
+  don't fragment by host
+- fix the missing space in the cloudsecurity row name
+
+Guard:
+- scripts/check-utm-links.py fails on a README link with no row, a stale row,
+  a target that disagrees with the README, an untagged agentfield.ai link, or
+  a www. host. Reports the exact row to paste. Stdlib only.
+- .github/workflows/readme-links.yml runs it on PRs touching README.md,
+  the manifest, or the checker.
+
+Co-authored-by: OG <oktaygoktas@users.noreply.github.com>
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (b97e7d2)
+
+
+
+### Fixed
+
+- Fix(security): bump brace-expansion for CVE-2026-14257 (#855)
+
+Override brace-expansion@1 to 1.1.18 and brace-expansion@2 to 2.1.4
+in the web client to close Dependabot alerts for the unbounded
+expansion length DoS (OOM crash) in both package-lock.json and
+pnpm-lock.yaml.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (fa3d376)
+
+## [0.1.124-rc.6] - 2026-08-05
+
+
+### Other
+
+- Add MiniMax image generation support (#853)
+
+* feat: add MiniMax image generation
+
+* fix(sdk/python): parse MiniMax base64 image responses from image_base64
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (b7613b5)
+
+## [0.1.124-rc.5] - 2026-08-05
+
+
+### Other
+
+- Add MiniMax text-to-speech support (#852)
+
+* feat: add MiniMax text-to-speech support
+
+* docs(sdk/python): document MiniMax audio models and cover validation branches
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (63f573b)
+
+## [0.1.124-rc.4] - 2026-08-05
+
+
+### Other
+
+- Add MiniMax H3 video v2 support (#854)
+
+* feat: add MiniMax H3 video v2 support
+
+* fix(sdk/python): correct MiniMax H3 resolutions, pricing, and task enums
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (fd15a67)
+
+## [0.1.124-rc.3] - 2026-08-05
+
+
+### Testing
+
+- Test(typescript): expand multimodal coverage (#846)
+
+* test(typescript): expand multimodal coverage
+
+* test(typescript): cover Audio.fromUrl default format
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (2175312)
+
+## [0.1.124-rc.2] - 2026-08-05
+
+
+### Added
+
+- Feat(typescript): add server-side memory event filters (#838)
+
+Co-authored-by: Jonesxq <239089032+Jonesxq@users.noreply.github.com> (d77f1c2)
+
+
+
+### Fixed
+
+- Fix(desktop): portal overflow menus so panel clipping can't cut them off (#881)
+
+The agents table's "..." dropdown was absolutely positioned inside
+.panel, whose overflow: hidden (rounded-corner clipping) cut the menu
+off at the card's bottom edge — on a short list the last items
+(e.g. Uninstall) were unreachable.
+
+Extract the trigger + popover into a shared MenuPopover component that
+portals the menu to <body> with fixed coordinates from the trigger's
+rect, following the .af-tooltip escape-hatch pattern. Repositions on
+scroll/resize while open. Also migrates InstallPanel's copy of the same
+markup, whose .market-card hover transform would otherwise re-anchor a
+fixed-position descendant.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (3592a7e)
+
+## [0.1.124-rc.1] - 2026-08-05
+
+
+### Fixed
+
+- Fix(install): ignore wedged runs when deciding whether the server is busy (#880)
+
+* fix(install): ignore wedged runs when deciding whether the server is busy
+
+The busy probe added in #879 counted every entry in
+GET /api/v1/executions/active as work in flight. Execution cleanup is disabled
+server-side, so a run that wedges — node still "running", nothing actually
+happening — stays in that list indefinitely. One zombie therefore made the
+probe permanently true, and a same-owner upgrade would defer its restart
+forever and never land a new binary. The guard meant to protect a busy server
+turned into a guard against ever upgrading.
+
+A live workflow touches latest_activity on every reasoner event, so freshness
+is the signal that separates the two. Observed on a real server: one run,
+root_status running, started 02:29, latest_activity 03:05 — still listed more
+than ten hours later. That run now counts as stale and is ignored; a genuinely
+active one is unaffected.
+
+The window is 30 minutes, overridable with AGENTFIELD_INSTALL_ACTIVE_WINDOW as
+a Go duration. An unparseable or non-positive value falls back to the default
+rather than failing an install.
+
+A run whose latest_activity is missing or malformed counts as BUSY. The probe
+exists to protect work in progress, so an ambiguous timestamp must never be the
+thing that licenses an interruption — the fail-safe points at not restarting.
+An older server that reports a count with no run detail to age is trusted the
+same way.
+
+DecideTakeover is untouched: the staleness rules live in the probe, and the
+policy's ActiveExecutions input now simply means "recently active". Both counts
+are returned so the messaging can be precise rather than merely smaller —
+the installer appends "(ignored 1 stale run(s) with no activity for over 30m0s)"
+and `af service status` reads "In flight: 2 workflow(s) (plus 1 stale, idle
+>30m0s)", so a number lower than the dashboard's is explained rather than
+puzzling.
+
+splitActiveRuns is split out as the pure half, so the ageing rules are tested
+without a clock or a socket, including the exact window boundary.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(install): unconfirmable liveness counts as stale, not busy
+
+The first cut treated a run with a missing or malformed latest_activity as
+busy — bad data must never license a restart. The owner reversed that call,
+and for this fleet the reversal is right: runs wedged in "running" are the
+documented failure mode here, and a run that cannot demonstrate liveness
+must not pin upgrades forever, which is the exact bug the staleness split
+exists to fix.
+
+A run with no usable activity stamp gets one fallback before the rule
+applies: its start time. A demonstrably young run — an older server that
+reports no activity stamps yet — is still protected; with no usable
+evidence at all the run is assumed stale. The count-without-run-detail
+shape from older servers follows the same rule and lands in the stale
+figure, so it stays visible in the install message and service status
+rather than silently vanishing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (5e9fb1c)
+
+## [0.1.123] - 2026-08-05
+
+## [0.1.123-rc.2] - 2026-08-05
+
+
+### Fixed
+
+- Fix(install): stop a second install from seizing a running control plane (#879)
+
+* fix(install): stop a second install from seizing a running control plane
+
+The launchd labels ai.agentfield.server and ai.agentfield.tray are global per
+login session, and installDesktop reloaded both unconditionally. A second
+install therefore took the first one's control plane: bootout, rewrite, restart
+onto a different binary — while it was serving. Because the agent carries
+KeepAlive={SuccessfulExit:false}, killing the resulting process looked like a
+crash and launchd brought it straight back, pointed at the other install.
+
+Reproduced during a launch rehearsal: a sandboxed install (HOME redirected, so
+the on-disk plists were never modified) still repointed the LOADED job at its
+own binary. The user's plist said one path; the running server was another.
+
+Five changes, all in service of "an install must not silently interrupt work it
+did not start":
+
+1. Conditional takeover. The server agent is now decided by
+   launchdsvc.DecideTakeover from four observations — label loaded, /health,
+   GET /api/v1/executions/active, and who owns the existing plist. Not running
+   reloads as before; running-and-idle reloads and says so; running-with-work
+   writes the binary and plists but leaves the process alone, since the atomic
+   rename-over is already safe and the new version lands on the next restart.
+
+2. Ownership guard. A plist whose program path or home differs from what this
+   install would write belongs to somebody else, so the install refuses and
+   names both paths rather than seizing the label. An in-place upgrade is the
+   same owner and is unaffected. --take-over or
+   AGENTFIELD_INSTALL_FORCE_RESTART=1 override it.
+
+3. Idempotency. A re-run whose plist and tray binary already match on disk
+   skips the launchd round trip entirely.
+
+4. `af service status|stop|restart|uninstall`, plus internal/launchdsvc, which
+   now owns the launchctl wrappers, the labels and the plist paths so the tray
+   and the CLI drive launchd through one code path. status is read-only and
+   reports registration, health, version and in-flight count; stop exists
+   because a plain kill is indistinguishable from a crash to launchd. The
+   command is registered everywhere and reports macOS-only off darwin.
+
+5. install.sh and README say the server runs under launchd, that `af service
+   stop` (or the menu-bar icon) is how to stop it, and that --no-tray skips the
+   whole arrangement.
+
+The tray agent keeps converging unconditionally: restarting a menu-bar app
+interrupts nothing, and a stale tray on yesterday's binary is what that was for.
+
+DecideTakeover is a pure function so the policy is exhaustively table-tested —
+including the rehearsal case (different home, server running, no flags →
+Refuse) and a 128-combination sweep asserting totality — without any test
+invoking launchctl, which mutates global login-session state. The plist parser
+is pinned by round-tripping the plist serverPlist() actually generates, so a
+template change that the ownership guard could not read fails the build rather
+than turning every upgrade into a refusal.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(service): cover the launchd probes, stubs and command surface
+
+The patch-coverage gate failed on three files the previous commit added. All
+three were untested for the same reason: their code either runs only off macOS,
+or only against a live control plane, and neither was reachable from a test.
+
+launchctl_other.go (0.0%) is the compiled implementation everywhere except
+macOS — including on the Linux runner that measures coverage — so its stubs are
+now pinned: every mutating call reports ErrUnsupported, the queries answer
+without touching launchd, and Reload is inert.
+
+probe.go (30.0% → 95.7%) needed no seam. The probes build
+http://localhost:<port>/… and httptest listens on loopback, so passing the stub
+server's port points them straight at it. Covered: healthy, error status, and
+refused connection for /health; a counted response, a count-absent fallback to
+the run list, API-key forwarding, 401, truncated JSON and a refused connection
+for executions/active; and the sha256 helpers against real files, a missing
+path and a directory. ActiveExecutionsOn was folded into ActiveExecutions —
+one exported entry point rather than two, the second of which had no caller.
+
+service.go (29.6% → 92.9% on macOS, 97.1% on Linux) needed two structural
+changes rather than tests alone, because the parts a Linux runner can reach and
+the parts it cannot were interleaved in one file:
+
+  * The launchd mutations moved to service_darwin.go / service_other.go. A
+    darwin-only file is not compiled on Linux and so contributes no uncovered
+    lines to the gate, while the shared command wiring is now free of
+    platform-conditional branches and runs identically on both. This also
+    replaces the requireLaunchd guard: the refusal lives in the non-macOS
+    implementation, which the !darwin test drives through the real cobra RunE.
+  * agentLoadedFn indirects the one remaining launchctl call, so the status
+    assembly is exercised on every platform and no test in this package can
+    shell out to launchctl at all — not even the read-only `launchctl print`.
+
+Status is covered end to end against a stub server in both output modes,
+including the plist branch that reports which binary launchd would run, and
+printServiceStatus is walked through all six rendering states.
+
+No test invokes launchctl on any platform, and nothing reads or writes a real
+launchd job. .coverage-gate.toml is untouched.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ef50964)
+
+## [0.1.123-rc.1] - 2026-08-05
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 1 update (#871)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [ip-address](https://github.com/beaugunderson/ip-address).
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [ip-address](https://github.com/beaugunderson/ip-address).
+
+
+Updates `ip-address` from 10.2.0 to 10.4.0
+- [Release notes](https://github.com/beaugunderson/ip-address/releases)
+- [Commits](https://github.com/beaugunderson/ip-address/compare/v10.2.0...v10.4.0)
+
+Updates `ip-address` from 10.2.0 to 10.4.0
+- [Release notes](https://github.com/beaugunderson/ip-address/releases)
+- [Commits](https://github.com/beaugunderson/ip-address/compare/v10.2.0...v10.4.0)
+
+---
+updated-dependencies:
+- dependency-name: ip-address
+  dependency-version: 10.4.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: ip-address
+  dependency-version: 10.4.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (5234a61)
+
+- Chore(sdk/python): enable ruff ASYNC lint rules to gate async/blocking hazards (#620) (#812)
+
+Enable ruff's flake8-async (ASYNC) ruleset in pyproject.toml to catch
+blocking calls inside async functions at lint time. This prevents new
+violations from landing while documenting the existing findings as
+per-file-ignores to be fixed in follow-up slices.
+
+Rules now enforced on new code:
+- ASYNC210: blocking HTTP calls (requests.*) in async functions
+- ASYNC230: blocking open() in async functions
+- ASYNC240: blocking os.path / pathlib in async functions
+- ASYNC110: asyncio.sleep in while loop (use asyncio.Event)
+
+Existing violations (6 production files, 5 test files) are suppressed
+via per-file-ignores with a comment referencing #620.
+
+Part of #620. (c53cdfe)
+
+
+
+### Documentation
+
+- Docs(readme): lead the pr-af card with its Code-Review-Bench result (#877)
+
+Swap the pr-af card image for the repo's hero chart (#1 open-source on
+Code-Review-Bench) and rewrite the caption to match. Normalize the link
+to the /github/<slug>/ form used by every other card, and add the
+missing pr-af row to assets/utm-links.csv.
+
+The previous image is kept at assets/examples/agentic-pr-reviewer.png.
+
+Co-authored-by: OG <oktaygoktas@users.noreply.github.com>
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (a851fe3)
+
+## [0.1.122] - 2026-08-05
+
+## [0.1.122-rc.1] - 2026-08-05
+
+
+### Fixed
+
+- Fix(cli): stop probing for a Python venv when starting a Go node (#876)
+
+Starting a Go node printed
+
+    ⚠️  Virtual environment not found at <dir>/venv, using system Python: …
+
+because buildProcessConfig resolved a Python interpreter unconditionally and
+only afterwards checked IsGo() to override the command. The interpreter it
+found was then discarded — a Go install never builds a venv.
+
+Move the resolution into the non-Go branch, matching the shape runner.go
+already uses, so the stat probes, the LookPath scan and the VIRTUAL_ENV /
+PATH / PYTHONHOME / PYTHONPATH appends simply do not run for a Go node
+rather than running and being thrown away. The venv block itself is
+unchanged — only re-indented.
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (4af7bb9)
+
+## [0.1.121] - 2026-08-05
+
+## [0.1.121-rc.6] - 2026-08-04
+
+
+### Other
+
+- Provision a Go toolchain at install time, the way Python's already is (#875)
+
+* feat(packages): provision a Go toolchain, the way Python's already is
+
+`af install` provisions a Python node's prerequisite but not a Go node's.
+`resolveVenvInterpreter` walks ambient interpreter → `provisionViaUv`, which
+runs `uv python install` and *downloads* a standalone build → pyenv → only then
+an actionable error. `resolveGoToolchain` walked `firstOnPath("go")` → error.
+There was no provisioning rung at all, so installing a Go node without Go on
+PATH was a hard failure where the equivalent Python user gets an interpreter
+fetched for them.
+
+That asymmetry now decides whether the two nodes AgentField ships are
+installable at all: both the SWE fleet and pr-af are served by their Go
+implementations, so a user with no Go toolchain — which is most users, since Go
+is not preinstalled anywhere — could not install either from the desktop app.
+
+Adds the missing rung. The official index at go.dev/dl?mode=json names the
+newest stable archive for this GOOS/GOARCH along with its SHA256; that archive
+is downloaded, hashed as it streams, and **checked against the published sum
+before anything is unpacked**. Extraction is into a temp directory inside the
+toolchains dir and refuses absolute paths, `..` traversal, symlinks, hard links,
+and any entry type it does not understand — verified against the real
+go1.26.5.linux-amd64 tarball, which is 15026 regular files and 1667 directories
+and no links, so the strict policy costs nothing on the genuine artifact. Only
+after `go/bin/go` is confirmed runnable is the tree renamed into
+`<AGENTFIELD_HOME>/toolchains/<version>/`, so an interrupted download can never
+leave a half-tree that a later run mistakes for a toolchain. A lost race to a
+concurrent installer resolves to the winner's copy.
+
+`AGENTFIELD_DISABLE_GO_PROVISIONING=1` restores exactly today's behaviour for
+environments that must not fetch binaries.
+
+Also stops refusing an ambient Go that would have worked. Since 1.21 the
+toolchain downloads and switches to whatever `go.mod` asks for on its own
+(`GOTOOLCHAIN=auto`, the default) — confirmed: go1.25.4 on PATH built a module
+declaring `go 1.26.0` by fetching 1.26.0 itself. The old version gate rejected
+that, so a user on Go 1.21 with a node needing 1.23 was told to upgrade for no
+reason. `go env GOTOOLCHAIN` is now consulted, and only a genuinely incapable
+toolchain — older than 1.21, or pinned `local` — falls through to provisioning.
+
+`usableGoBinary` probes that the binary *runs* rather than that it exists. A
+cached toolchain whose `go` lost its execute bit would otherwise be handed back
+from the cache forever and fail inside the build with a raw permission error —
+the same failure mode SWE-AF's engine check was hardened against. It
+deliberately does not require the version to parse, since this file treats an
+unparseable version as "unknown, don't gate" everywhere else.
+
+Verified end to end with no `go` on PATH at all: installing the pr-af repo
+followed its `superseded_by` redirect, provisioned Go 1.26.5, built the node,
+and registered it as `pr-af`; the second install reused the cache in 2s.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(packages): extract the toolchain through os.Root, and test the entry policy
+
+CodeQL flagged both extraction loops as `go/zipslip` (2 high). The lexical
+`safeArchivePath` check was sound — Clean, reject a `..` prefix, then confirm
+the joined path is still under the root — but "the scanner does not recognise my
+sanitizer" is a weak answer on a security finding, and a lexical check is only
+as good as its own reasoning about paths.
+
+Extraction now writes through `os.Root` (Go 1.24+; this module is on 1.25).
+Every create and mkdir resolves inside the destination at the syscall level and
+refuses to escape it — `..`, absolute paths, and symlinked parents alike. That
+is a structural guarantee rather than a string comparison, so it holds even
+where a lexical argument would have to be re-checked. The name check stays as a
+cheap first gate that produces a legible error, but it is no longer what makes
+this safe.
+
+Verified on the genuine artifact, not just fixtures: the real
+go1.26.5.linux-amd64 tarball still extracts completely through os.Root — all
+15026 files — and the provisioned toolchain runs.
+
+The entry policy had no tests at all, which is how it should not have been
+shipped: refusing symlinks and hard links is a security control, and the
+happy-path tests never touched it because a well-formed Go archive contains
+nothing unusual. Now pinned directly — symlinks (escaping and innocuous), hard
+links, character devices and FIFOs are each refused by name and leave nothing
+behind; directories and regular files extract with their mode preserved, which
+matters because a `go/bin/go` without its execute bit is not a toolchain.
+
+Also covers the degradation paths that decide whether a user gets guidance or a
+plumbing error: an unresolvable AgentField home, a `toolchains` path that is not
+a directory, an unreachable archive host, a non-200 or malformed index, and an
+index with no build for this platform — each declines quietly so the caller
+keeps its actionable "install Go" message.
+
+Patch coverage 65% → 80.6%.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(packages): cover the provisioning paths that decide what the user is told
+
+Raises patch coverage 78% → 82%, but the point is which paths: every one of
+these changes what a user sees when something goes wrong.
+
+- A download that fails its checksum, or dies partway through, must not degrade
+  into "no `go` toolchain was found on PATH". That message tells someone their
+  machine is missing Go when the truth is that what we fetched could not be
+  trusted — so integrity failures stay loud and a truncated transfer leaves
+  nothing cached for the next run to trip over.
+- An unwritable cache directory declines quietly instead, because there the
+  install-Go guidance is exactly the right advice.
+
+Also makes the fake toolchain in the fixtures report `go1.99.0` rather than
+`go9.9.9`. `installedGoVersion` only recognises `go1`/`go2` prefixes, so the old
+value silently exercised the unparseable-version branch on every provisioning
+test and never the normal one.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(packages): say the toolchain is downloading before it downloads
+
+The provisioning notice printed only on success, so the ~64MB transfer happened
+in silence behind an install spinner that cannot tick during it. On a slow link
+that is a minute of nothing, shown to precisely the people this feature exists
+for: users with no Go, who have no reason to expect installing an agent to fetch
+a compiler, and who reasonably read a still spinner as a hang.
+
+Now announced up front with the version and size, from the `size` the download
+index already publishes alongside the checksum.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (91fd73f)
+
+- Consolidate the SWE and PR-AF nodes in the app, and make installs superseded-aware (#873)
+
+* fix(packages): an install job reports the package the installer actually installed
+
+`Manager.run` inferred the installed package by diffing the registry's names
+before and after: whichever name is new must be the one this job installed.
+That inference breaks on exactly the case `superseded_by` was added for.
+
+A successor may declare its predecessor's name — an in-place rename, which is
+what both Agent-Field/SWE-AF#122 and Agent-Field/pr-af#64 use, and what keeps a
+node id, its triggers, and its node-scoped secrets intact across the swap. The
+set of installed names is then identical before and after, so the diff finds
+nothing and the job reports an empty package name. AgentField Desktop streams
+that job's output, so the user watched a successful install end in
+"install completed: " with the name missing.
+
+When the successor's name *does* differ, the diff happened to work, but only by
+luck: it returns the first registry name that is new, so any unrelated entry
+appearing during the install is misattributed to this job.
+
+The installer already knows the answer — `GitInstaller` tracks it in
+`installedName` and propagates it through a redirect. Export it, thread it out
+through the package service as `InstallPackageWithResult`, and have the job
+prefer it, keeping the before/after diff as the fallback for installers that
+cannot report a name. Node-dependency discovery used the same diff idiom and is
+switched to the authoritative name too, which also stops it from walking the
+dependencies of a package some other caller installed concurrently.
+
+Updates take the authoritative name as well. `StartUpdate` pre-seeds the job
+with the name being updated, so previously the installer's answer was
+discarded — and an update whose recorded source redirects to a differently
+named successor would then try to restart the package the redirect had just
+uninstalled. It now reports and restarts the node that exists.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(desktop): name the node an install actually landed on
+
+Every install result in the app was phrased from the request: the catalog row's
+name, or the URL that was pasted. A `superseded_by:` redirect makes that a
+guess — the manifest at the source hands the install off to a successor, which
+may register under its own name.
+
+Now that the control plane reports what it installed, repeat that instead:
+
+  - a pasted repo says "pr-af installed" rather than "Installed from
+    https://github.com/Agent-Field/pr-af", which is the more useful half of the
+    sentence and the only one that tells you what to run next;
+  - a catalog install names the successor if it ever disagrees with the row —
+    the two agree for every entry today (that is the invariant catalog.ts
+    documents), so a disagreement is drift worth seeing rather than hiding
+    behind the row's own label;
+  - an update that followed a rename reads "<old> replaced by <new>" instead of
+    claiming it updated a node that no longer exists.
+
+Each falls back to the previous wording when the control plane names nothing,
+so an older control plane behaves exactly as it does today.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* refactor(catalog): one PR-AF row, and install both consolidated nodes by repo
+
+The catalog offered PR-AF twice — a Python row and a Go row shipping the same
+reasoners under a name the user had to know to type. The two were
+indistinguishable in the Install view except by the `-go` suffix, which is an
+implementation detail leaking into a product list. Agent-Field/pr-af#64 collapses
+them the way Agent-Field/SWE-AF#122 collapsed the SWE fleet: the root manifest
+redirects to `//go`, and the Go node takes the product's name. So this is one
+`pr-af` row, language go.
+
+Both consolidated rows now install from the bare repo URL rather than naming
+`//go` directly. Selecting the subdirectory would install the same node, but it
+skips the redirect — and the redirect is the part that carries an existing
+install across: it puts the successor in place first, migrates node-scoped
+secrets, and only then retires the predecessor. Someone who already has the
+Python node gets migrated by pressing Update; someone naming `//go` would only
+collide with it. Naming the repo and letting the manifest decide is also simply
+what a user can be told to type.
+
+That changes the rule both catalogs are written against, so both header comments
+now say the new one: an entry's `name` must equal the name the package ends up
+REGISTERED under once the install settles, which under a redirect is not the
+`name:` in the manifest at the source, and may live in a subdirectory the
+catalog never mentions.
+
+sec-af and cloudsecurity-af are untouched — neither ships a second
+implementation, so neither has anything to collapse.
+
+The SWE guard test generalizes to cover both repos: exactly one row per repo,
+named for the product, sourced at the bare URL, language go, and the retired
+implementation-suffixed name absent from the whole catalog — so a re-added row
+fails here instead of quietly reappearing.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs(skills): the PR review node is pr-af, not pr-af-go
+
+The agentfield-use skill is what a harness reads to learn how to call the nodes
+on this machine, and skillkit installs it into Claude Code, Codex, Cursor and
+the rest — so its examples are the ids an agent will actually try. Its
+`executions/active` sample still showed a run targeting `pr-af-go`, a name that
+stops existing once Agent-Field/pr-af#64 lands.
+
+Applied identically to the embedded copy under skillkit/skill_data so the two
+stay byte-identical.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(packages): pin that the production installer can report what it installed
+
+The job reaches the authoritative name through a type assertion, and a failed
+assertion is silent — it falls back to inferring the name from a registry diff,
+which is exactly the path that returns nothing for an in-place `superseded_by`
+replacement. Every other test in this file uses a stub that satisfies the
+interface by construction, so none of them would notice a production wiring
+change (a decorator, a swapped implementation) that quietly reverted the fix.
+
+This one asserts against the service the server actually constructs.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(packages): a node-dependency cycle must terminate
+
+Switching dependency discovery from a registry snapshot to the authoritative
+installed name dropped the only thing that stopped a cycle.
+
+The snapshot version terminated by accident but reliably: the recursive call
+received a snapshot that already contained the package just reinstalled, so the
+second lap skipped it. Recursing on a single name removed that, and the
+remaining guard — `depName != "" && isPackageInstalled(depName)` — cannot
+substitute. It only knows a dependency's name for `af://registry/…` refs, and a
+forced install reinstalls whatever is already there. Every update is forced
+(`StartUpdate` → `startJob(JobUpdate, …, true)`), so two packages declaring each
+other by bare git URL or local path recursed until the process died — with the
+package-job manager's `active` latch held, blocking every later install.
+
+Tracks the packages this install pass has walked instead, which does not depend
+on ref form, on Force, or on registry state.
+
+The accompanying suite pins the seam's behaviour end to end through the real git
+installer rather than a stub: a redirect reports the successor — including when
+the successor takes the predecessor's own name, the case a registry diff cannot
+see and the reason this seam exists — a failed install reports no name at each
+stage it can fail, an uninstallable dependency does not fail its parent, and a
+cycle terminates. That last one fails in 30s against this fix reverted.
+
+`manager_test.go` covers the other side: an installer that cannot report a name
+still installs and falls back to the registry diff, so the old path stays intact
+for anything that does not implement the newer seam.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (f70d5da)
+
+## [0.1.121-rc.5] - 2026-08-04
+
+
+### Other
+
+- Offer a single SWE node, and let a manifest declare itself superseded (#864)
+
+* refactor(cli): collapse SWE catalog rows into one Go entry
+
+`af catalog` listed the SWE fleet twice — a root Python node and its Go
+counterpart — which forced a harness to pick between two rows that ship the
+same reasoners. Keep only the Go node (installed via the `//go` source
+selector) and give it the full fleet description.
+
+Tighten the pretty-output assertion to `swe-planner-go` (the old
+`swe-planner` substring matched either row) and add a guard test that pins
+the invariant: exactly one entry installs from Agent-Field/SWE-AF, its
+source ends in `//go`, and no entry is named exactly `swe-planner`, so a
+re-added root entry fails loudly instead of quietly reappearing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* refactor(desktop): collapse SWE catalog rows into one Go entry
+
+Mirrors the `af catalog` change: the Install view listed the SWE fleet twice
+with identical copy, so the two rows were indistinguishable to a user. Keep
+only the Go node sourced from `//go`, with the same description wording the
+CLI catalog now uses.
+
+Add a test pinning the invariant — `swe-planner-go` is present, its source
+ends in `//go`, exactly one entry installs from Agent-Field/SWE-AF, and no
+entry is named exactly `swe-planner`.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: point SWE examples at the go-sourced swe-planner-go node
+
+The catalog now offers the SWE fleet as a single Go node, so the docs that
+still told users to install the bare repo root and call `swe-planner` were
+advertising a node the catalog no longer lists. Update the README quickstart
+to `af install …/SWE-AF//go` plus `af run`/`af call swe-planner-go`, and
+switch the MCP example flow and the agentfield-use skill examples to the same
+node id.
+
+The `--path go` examples in installing-agent-nodes.md stay as they are — they
+document the subdirectory selector itself; only the surrounding framing is
+reworded so the Go node reads as the advertised install rather than a port of
+the root node.
+
+The skill edit is applied identically to the embedded copy under
+internal/skillkit/skill_data so the two stay byte-identical.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* refactor(desktop): keep the app's own wording for the SWE entry
+
+The catalog collapse rewrote this card's copy to match the CLI catalog's
+phrasing, which reads out of place next to the other entries in this file.
+Restore the original line — it describes the surviving Go node just as
+accurately.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(packages): record the //subdir selector in the installed source
+
+A subdirectory can reach the installer two ways: the `//subdir` selector on
+the URL, or the --path flag. The install API takes the second route — it
+splits the selector off the URL and passes it as an option — so info.URL
+arrives bare and the registry records the REPO ROOT as the source.
+
+The next update resolves that bare source and installs whatever manifest lives
+at the repo root, which is a different package than the one installed. For a
+repo shipping a Python root and a Go port side by side, updating the Go node
+silently replaces it with the Python one.
+
+Put the selector back when it came from the flag, so the recorded source
+round-trips through ParseGitURL.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(packages): let a manifest declare itself superseded by another package
+
+A node author who renames or replaces their own node has no way to carry
+existing users across: `af install <their url>` keeps installing the old
+package forever, because the manifest at that source is the only thing the
+installer looks at.
+
+Add an optional `superseded_by:` key naming an installable source. Installing
+a superseded package installs the successor instead, and replaces the old one
+when it is already present. The redirect lives in the package's own manifest,
+so the control plane needs no knowledge of any particular node — any author
+gets this, and no catalog or table here has to name them.
+
+Ordering and safety:
+  - The successor is installed FIRST; only then is the old package retired, so
+    a failed install leaves the user's existing node exactly as it was.
+  - The redirect is taken before the force check and before anything is
+    copied, so it never half-installs the package it redirects away from.
+  - Node-scoped secrets move to the successor before the old package is
+    uninstalled, which would otherwise delete that scope outright. Values
+    already set on the successor win. Global secrets are shared and untouched.
+  - Retiring the old package never fails the install: the successor is already
+    working, so a leftover is a cleanup chore, not a failure.
+  - A chain is bounded at 3 hops so two manifests pointing at each other fail
+    loudly instead of cloning forever.
+
+The user is warned before the swap, naming what will be replaced.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(packages): cover the superseded_by redirect and the subdir source fix
+
+One test per behaviour, driven through the real InstallFromGit against the
+existing fake-git harness rather than against the internals:
+
+  - a superseded package installs its successor, and its own name never
+    reaches the registry
+  - an already-installed superseded package is replaced: successor present,
+    old entry and old package directory gone
+  - node-scoped secrets follow the swap, a value already set on the successor
+    wins, and global secrets are untouched
+  - with nothing to replace it is a plain install, no error
+  - two manifests pointing at each other fail with a bounded-chain error and
+    install nothing
+  - a recorded --path source round-trips through ParseGitURL back to the same
+    repo AND subdir
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(packages): let a successor replace a predecessor of the same name
+
+A node that renames itself takes the name its predecessor held, and
+`superseded_by` could not express that: the redirect installed the
+successor without carrying the user's consent to replace, so the
+successor's own force check rejected it with "already installed (use
+--force to reinstall)". The redirect has already printed an explicit
+replacement warning by then, so it now carries that consent through.
+Same name means there is nothing to retire afterwards and node-scoped
+secrets are already in the right scope, both of which the existing
+short-circuit handles.
+
+That makes the failure mode worse, though, and this fixes it too:
+copyPackage clears the destination before the replacement is copied,
+and long before its dependencies build. A replace that dies in the
+dependency step — a missing toolchain is enough — used to leave the
+user with neither the package they had nor a working new one. The
+existing directory is now set aside first and put back on any failure
+before the registry is updated, which also covers a plain
+`af install --force` on any package.
+
+Also restores the doc comment on updateRegistryWithGit, which an
+earlier commit in this branch left attached to the wrong function.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* refactor: catalogue the SWE node as swe-planner
+
+The catalog named it swe-planner-go, after the implementation. That was
+only ever a workaround for the two SWE manifests needing distinct
+registry keys, and the node now declares itself swe-planner — a name
+that survives the implementation changing under it, and the one its
+triggers already use. Catalog `name` must equal the manifest `name`, so
+this follows rather than leads.
+
+The install command in the README drops the `//go` selector too: the
+root manifest redirects, so the bare repo URL is the whole instruction.
+
+Both catalog tests keep their guard against a second SWE row, and now
+pin the surviving row's name rather than merely asserting the Python one
+is absent — the assertion that would have caught this rename going
+half-done.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: document superseded_by
+
+The key shipped undocumented, which defeats the point of making it
+generic — a node author cannot use a manifest field they cannot find.
+Documents what it accepts, and the ordering guarantees that make a
+redirect safe to run against an installed node: resolved before
+anything is copied, successor installed first, node-scoped secrets
+carried across, retiring never fails the install, chains bounded.
+
+Also corrects the claim just above it that a root node and a `--path`
+node from one repo always coexist. They coexist when their names
+differ, and replace each other when they do not — which is exactly
+what SWE-AF, the example named there, now does.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f4acec1)
+
+## [0.1.121-rc.4] - 2026-08-04
+
+
+### Chores
+
+- Chore(deps-dev): bump the npm_and_yarn group across 1 directory with 2 updates (#866)
+
+Bumps the npm_and_yarn group with 2 updates in the /desktop directory: [brace-expansion](https://github.com/juliangruber/brace-expansion) and [undici](https://github.com/nodejs/undici).
+
+
+Updates `brace-expansion` from 1.1.16 to 1.1.18
+- [Release notes](https://github.com/juliangruber/brace-expansion/releases)
+- [Commits](https://github.com/juliangruber/brace-expansion/compare/v1.1.16...v1.1.18)
+
+Updates `undici` from 6.27.0 to 6.28.0
+- [Release notes](https://github.com/nodejs/undici/releases)
+- [Commits](https://github.com/nodejs/undici/compare/v6.27.0...v6.28.0)
+
+---
+updated-dependencies:
+- dependency-name: brace-expansion
+  dependency-version: 1.1.18
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: undici
+  dependency-version: 6.28.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (29f1cee)
+
+- Chore(deps): bump the uv group across 1 directory with 2 updates (#869)
+
+Bumps the uv group with 2 updates in the /sdk/python directory: [aiohttp](https://github.com/aio-libs/aiohttp) and [cryptography](https://github.com/pyca/cryptography).
+
+
+Updates `aiohttp` from 3.14.1 to 3.14.3
+- [Changelog](https://github.com/aio-libs/aiohttp/blob/master/CHANGES.rst)
+- [Commits](https://github.com/aio-libs/aiohttp/compare/v3.14.1...v3.14.3)
+
+Updates `cryptography` from 48.0.1 to 50.0.0
+- [Changelog](https://github.com/pyca/cryptography/blob/main/CHANGELOG.rst)
+- [Commits](https://github.com/pyca/cryptography/compare/48.0.1...50.0.0)
+
+---
+updated-dependencies:
+- dependency-name: aiohttp
+  dependency-version: 3.14.3
+  dependency-type: direct:production
+  dependency-group: uv
+- dependency-name: cryptography
+  dependency-version: 50.0.0
+  dependency-type: direct:production
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (ae2c9cf)
+
+
+
+### Other
+
+- Add MiniMax voice cloning support (#870)
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Claude <noreply@anthropic.com> (5df1c90)
+
+## [0.1.121-rc.3] - 2026-08-04
+
+
+### Fixed
+
+- Fix(storage): don't reap executions that are waiting on a child (#867)
+
+An execution's updated_at stops moving while it waits for a child to
+return, so the staleness sweep read 'blocked on a child' as 'stuck'. An
+agent doing many minutes of work inside a single request had its whole
+ancestor chain marked timed out mid-flight: the caller was told
+'execution timed out (no activity)' while the work was still running and
+went on to finish.
+
+Rows with a non-terminal child are now skipped. There is deliberately no
+recency test on the child, so the chain still drains when work genuinely
+stops — the leaf goes stale first, which makes its parent childless and
+eligible on the next sweep, and so on up. One sweep per level, and nothing
+is stranded in running.
+
+Applies to both the execution and workflow-execution sweeps, which had the
+same shape.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (22d65d1)
+
+## [0.1.121-rc.2] - 2026-08-03
+
+
+### Fixed
+
+- Fix(packages): preserve file modes when installing a package (#865)
+
+copyFile created every destination with os.Create, whose mode is
+0666&^umask, and never read the source's. Any executable a node ships — a
+helper binary, a hook, a shell script — therefore arrived on disk at 0644
+and failed at spawn time with 'permission denied'. Measured against a node
+that vendors a 0755 binary: it installed non-executable on both the local
+and git paths.
+
+The two byte-identical copies of this function (the CLI installer and the
+package service) are now one shared packages.CopyFile, so the fix cannot
+drift back apart, with regression tests covering the executable bit, the
+non-executable case, reinstall over an existing file, and a full
+copyPackage walk.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (3d7024c)
+
+## [0.1.121-rc.1] - 2026-08-03
+
+
+### Fixed
+
+- Fix(control-plane): reconcile must honor granted node status leases (#851)
+
+The status lease handler grants nodes a 5-minute lease (DefaultLeaseTTL),
+but the status manager's reconcile sweep marked any active node inactive
+once its heartbeat was older than HeartbeatStaleThreshold (60s). Go SDK
+nodes renew their lease every 2 minutes — well inside the granted lease —
+so every idle Go node deterministically flapped offline for ~30s of each
+lease cycle (measured 33/42 polls active over 7 idle minutes; production
+deploys show the same duty cycle).
+
+StatusManager now records each granted lease expiry, and the heartbeat-
+staleness rule skips nodes whose lease (plus 30s grace) is still running.
+Dead lease-holders are still caught quickly: the HTTP health monitor's
+consecutive-failure path is unchanged and its heartbeat gate stops
+protecting a node once the heartbeat goes stale. Nodes that never receive
+a lease (Python SDK heartbeaters) keep the 60s staleness rule unchanged.
+
+With the fix, the same idle-agent poll reads 42/42 active.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (36d10d5)
+
+## [0.1.120] - 2026-08-01
+
+## [0.1.120-rc.1] - 2026-08-01
+
+
+### Fixed
+
+- Fix(release): deploy-engine assert false-positives under pipefail (#860)
+
+The assert used `ls tofu tofu.exe | grep -q .`, but GitHub runs bash
+steps with -o pipefail: on macOS only `tofu` exists, ls exits nonzero
+for the missing tofu.exe arg, and pipefail surfaces that status even
+though grep matched — failing the release right after a successful
+fetch (v0.1.119: DMG/zip never built). Windows only passed via MSYS
+.exe transparency. Use plain [ -f ] tests, which have no pipeline for
+pipefail to poison.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (991c59e)
+
+## [0.1.119] - 2026-08-01
+
+## [0.1.119-rc.1] - 2026-08-01
+
+
+### Fixed
+
+- Fix(release): fetch the OpenTofu deploy engine before packing desktop installers (#859)
+
+The desktop-installers job never ran fetch:deploy-engine, so
+vendor/deploy-engine was always absent in CI. electron-builder silently
+skips a missing extraResources source, so every installer shipped without
+tofu and the Remote tab fell back to "one-click deploy isn't bundled in
+this build". Fetch the engine after bundling the af CLI, and assert the
+tofu binary + provider mirror exist so a future regression fails the
+release instead of degrading the artifact.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (61793d6)
+
+## [0.1.118] - 2026-08-01
+
+## [0.1.118-rc.12] - 2026-08-01
+
+
+### Fixed
+
+- Fix(sdk-go): send the API key on every control-plane request (#858)
+
+* feat(sdk-go): let the DID client authenticate with an API key
+
+The DID client only spoke Bearer, so against a control plane running with
+AGENTFIELD_API_KEY every DID and VC call came back 401 and the agent came up
+with no cryptographic identity.
+
+Add WithAPIKey alongside WithToken and send X-API-Key when it is set. The two
+are independent credentials, so setting one does not imply the other.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(sdk-go): send the API key on every control-plane request
+
+An agent pointed at a control plane running with AGENTFIELD_API_KEY registered
+fine and ran its reasoner, then never reported the result: the status callback
+came back 401 on every retry, the run stayed "running" forever, and the caller
+hung until it timed out. The agent logged a warning and otherwise looked
+healthy, so the failure was close to silent.
+
+Config.APIKey reached the shared client but not the handful of paths that build
+their own *http.Request, and those cover the whole result path — execution
+status callbacks, cross-node call submit and poll, workflow events, notes and
+discovery. Each set only Authorization from Config.Token.
+
+Route them through one applyControlPlaneAuth helper that sets both headers
+independently, and give the local verifier and the DID client the API key too.
+The verifier still falls back to Token, which callers used as the key before
+APIKey existed. With neither configured nothing is sent, so the default local
+setup is untouched.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (5a7672f)
+
+## [0.1.118-rc.11] - 2026-08-01
+
+
+### Fixed
+
+- Fix(release): restore macOS signing and let containerized control planes be managed (#857)
+
+* fix(release): sign macOS builds again so notarization can succeed
+
+v0.1.118-rc.10 published without its macOS DMG or zip. The job set
+CSC_IDENTITY_AUTO_DISCOVERY=false at job level, meaning "don't guess an
+identity from the runner keychain" — but electron-builder reads that flag as
+"skip code signing", and findIdentity() returns null whenever it is false and
+CSC_NAME is unset, regardless of CSC_LINK. The app was ad-hoc signed, and
+notarizing an unsigned app comes back Invalid, so stapling failed and the job
+died after every other artifact had published.
+
+Scope the flag to the Windows step, which really is unsigned, and set it on
+macOS only when the secrets are incomplete so an unsigned build still cannot
+pick up a stray identity. The macOS guard now checks all five secrets rather
+than two, and the notarize step checks the same set — previously a missing
+CSC_KEY_PASSWORD produced an unsigned app and then hard-failed the release
+instead of degrading to a warning.
+
+Also read the notarization result properly: `notarytool submit --wait` exits 0
+even when Apple answers Invalid, which is why rc.10 got as far as `stapler` and
+reported a ticket lookup error instead of a rejection. Check the status, and on
+anything other than Accepted print Apple's own report via `notarytool log`,
+which the job never fetched.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(deploy): let containerized control planes be managed from the host
+
+A client on the host reaches a control plane in Docker over the bridge network,
+so its peer address is the gateway rather than loopback. Since the privileged
+endpoints started requiring a local caller or an API key, package install and
+the secret/env/config APIs answer 401 for anyone managing the stack from the
+host — and publishing the port to 127.0.0.1 does not help, because the
+connection still arrives from the bridge.
+
+The documented remedy is to set an API key, but compose had no
+AGENTFIELD_API_KEY passthrough at all, so `AGENTFIELD_API_KEY=... docker compose
+up` silently did nothing and the remedy was unreachable without editing the
+file. Wire it through, defaulting to empty so a plain `docker compose up` keeps
+today's behaviour.
+
+Say the same thing where the other deployments would hit it: the Docker README
+now explains why host management needs a key, and the Helm values note that a
+Service or Ingress is not a local connection either.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (8edc0fc)
+
+## [0.1.118-rc.10] - 2026-08-01
+
+
+### Chores
+
+- Chore(desktop): one-click deploy tracks the latest production cloud image (#848)
+
+* chore(desktop): bump one-click deploy image to staging-0.1.118-rc.8
+
+Picks up the merged control-plane fixes (lease-renewal liveness,
+registry lifecycle sync, env metadata) for fresh Railway deploys.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(desktop): one-click deploy tracks the latest production cloud image
+
+Replace the hardcoded staging pin with control-plane-cloud:latest so every
+production release automatically becomes what one-click deploys — no more
+pin-bump PRs. Railway resolves the tag once per deploy and never
+auto-repulls, so existing deployments are unaffected.
+
+Note: the :latest tag does not exist on Docker Hub until the first
+production release that includes the cloud image job publishes it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (078ae2b)
+
+
+
+### Fixed
+
+- Fix(control-plane): require a trusted caller for package install and credential endpoints (#856)
+
+* fix(control-plane): require a trusted caller for install and credential endpoints
+
+POST /api/ui/v1/agents/packages/install clones any github.com URL it is given
+and runs that package's build and dependency steps. The global auth middleware
+treats an empty api.auth.api_key as "authentication disabled", which is the
+default, and the server binds every interface — so anything that could reach
+the port could run code as the user running the server, with no prior state.
+The secret store, agent env and agent config were reachable the same way.
+
+Guard those routes with PrivilegedAccess: with no API key configured only
+loopback callers may use them, and once a key is configured it is required from
+everyone. The ordinary local setup is unchanged, because the CLI, the desktop
+app and a same-machine browser are all loopback.
+
+The peer address comes from Request.RemoteAddr, not c.ClientIP(). This repo
+never calls SetTrustedProxies, so gin trusts every proxy and ClientIP() returns
+whatever the caller puts in X-Forwarded-For; a loopback check built on it would
+be bypassable with one header.
+
+The route-level test drives off the live route table, so a new route matching
+the privileged pattern is covered as soon as it is registered.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* docs: explain when the control plane needs an API key
+
+The key was documented as "optional" with no indication of what it protects.
+Spell out that it is optional only for a control plane used from the machine it
+runs on, and name the three topologies that now need one: another machine on
+the network, a container reached over a bridge, and anything behind a proxy.
+
+The proxy case is a security caveat rather than a convenience one — a proxy on
+the control plane's own host makes every forwarded request look local — so it
+gets its own paragraph.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(cli): store the control-plane API key and send it automatically
+
+Enabling authentication on a control plane used to break every client, because
+the CLI could only take a key from a flag or the environment and nothing
+persisted it.
+
+Add `af auth login|status|logout`, storing one key per control-plane URL in
+~/.agentfield/credentials.json at 0600. login verifies the key against the
+server before saving and only ever prints it masked. Resolution order is
+--api-key, then AGENTFIELD_API_KEY, then the stored file, so a user who sets
+neither sees no change and no file is created.
+
+A 401 now tells the user what to run instead of reporting a bare failure.
+
+Also make the credential consistent across commands: `af ls` and `af stop` sent
+it as Authorization: Bearer while everything else used X-API-Key, and
+`af doctor` sent nothing at all. `af execution` and `af nodes` keep their
+separate --token/AGENTFIELD_TOKEN credential, which still wins, but now fall
+back to the API key.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(sdk): let agents authenticate from AGENTFIELD_API_KEY
+
+An agent started by `af run` or `af dev` inherited the server URL but never a
+credential, so against a control plane with authentication enabled every local
+agent failed to register — which made enabling a key impractical.
+
+Export the resolved key to spawned agent processes, and have both SDKs default
+their control-plane credential from AGENTFIELD_API_KEY when none is passed in
+code. The Go SDK gets its own Config.APIKey rather than reusing Token, which
+also feeds local verification and incoming-request auth and should not change
+meaning here.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): support a local API key and show why a request was refused
+
+Local mode hard-nulled the API key, so pointing the app at a local control
+plane with authentication enabled failed with no way to supply a credential.
+Add an optional key in Settings → General, kept separate from the cloud
+credential so switching modes does not clobber either.
+
+A 401 previously surfaced as "unauthorized" — the machine-readable code — which
+told the user nothing. Show the server's message and its CLI hint instead.
+
+The default local path is untouched: no key, no header, no prompt.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* test(control-plane): cover dual-stack loopback and the Forwarded header
+
+An IPv4 client on a dual-stack host arrives as ::ffff:127.0.0.1 and is
+genuinely local, so pin that it is allowed. Pin too that the RFC 7239
+Forwarded header cannot forge a local caller, alongside the existing
+X-Forwarded-For and X-Real-IP cases.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* test(sdk-go): cover the API key wiring in agent.New
+
+Assert what the credential is for rather than just executing the branch: the
+key reaches the control plane as X-API-Key, it defaults from AGENTFIELD_API_KEY
+so `af run` can hand it to a spawned agent, an explicit key overrides the
+environment, no key means no header, and setting it leaves Token alone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (9d91dba)
+
+## [0.1.118-rc.9] - 2026-08-01
+
+
+### Added
+
+- Feat(cloud-image): bundle the opencode coding harness (#849)
+
+* feat(cloud-image): bundle the opencode coding harness
+
+A fresh cloud deploy could run agents but not their LLM work: SWE-AF
+style nodes spawn a coding-harness CLI, and the image shipped none -
+every LLM role failed at spawn in ~500ms. Verified live on a Railway
+deploy: installing opencode in the container took a role from instant
+failure to a successful PRD via OpenRouter. Pin 1.18.10, the version
+verified in that test.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cloud-image): install latest opencode, cache-bust per release
+
+Drop the version pin: each release image now ships the newest opencode.
+Because release.yml builds with a persistent gha layer cache, the install
+moves after the af binary COPY so the layer actually re-resolves every
+release instead of being restored from cache. The docker.yml smoke test
+gains an opencode --version check so a broken upstream release fails CI
+rather than shipping a harness-less image.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ccfa986)
+
+
+
+### Fixed
+
+- Fix(sdk): extract opencode token usage from step_finish parts (Go + Python) (#850)
+
+opencode reports cost AND tokens inside each step_finish event's part
+object, but both SDKs read only the cost from there - tokens went
+through a generic extractor that looks for top-level/item/turn usage
+shapes (Codex), so opencode runs recorded real cost with all-zero token
+counts. Sum part.tokens across steps exactly like cost (per-step
+values), fold reasoning into output_tokens (the envelope has no
+reasoning field), map cache.read/cache.write to the cache fields, and
+fall back to the generic extractor when no step carried tokens. Shape
+sourced from opencode's session schema (info.ts / session-data.ts).
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (4bfe2d1)
+
 ## [0.1.118-rc.8] - 2026-07-31
 
 

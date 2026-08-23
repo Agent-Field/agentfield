@@ -80,6 +80,10 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
               value={settings.controlPlanePort}
               onCommit={(port) => update({ controlPlanePort: port })}
             />
+            <LocalApiKeyRow
+              value={settings.localApiKey}
+              onCommit={(key) => update({ localApiKey: key })}
+            />
             <ToggleRow
               title="Keep coding-agent skills installed"
               sub="Teach Claude Code, Codex, and friends how to use AgentField (via `af skill install`)."
@@ -427,6 +431,63 @@ function PortRow({
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           }}
         />
+      </div>
+    </li>
+  )
+}
+
+/**
+ * Credential for a local AgentField server that runs with authentication on
+ * (AGENTFIELD_API_KEY). Empty for almost everyone — a server started without a
+ * key trusts this app because it connects over loopback. Committed on
+ * blur/Enter like the port, so half-typed keys are never persisted or sent.
+ */
+function LocalApiKeyRow({
+  value,
+  onCommit
+}: {
+  value: string
+  onCommit: (key: string) => void
+}) {
+  const [text, setText] = useState(value)
+  const [show, setShow] = useState(false)
+
+  // Reflect what main actually persisted (it trims).
+  useEffect(() => {
+    setText(value)
+  }, [value])
+
+  const commit = () => {
+    const trimmed = text.trim()
+    if (trimmed !== value) onCommit(trimmed)
+  }
+
+  return (
+    <li className="row">
+      <div className="row-main">
+        <span className="row-title">Server API key</span>
+        <span className="row-sub">
+          Only needed when your AgentField server requires authentication. Stored on this
+          computer and sent only to that server.
+        </span>
+      </div>
+      <div className="row-side">
+        <input
+          className="env-input"
+          type={show ? 'text' : 'password'}
+          placeholder="none"
+          autoComplete="off"
+          spellCheck={false}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+        />
+        <button className="action-button" type="button" onClick={() => setShow(!show)}>
+          {show ? 'Hide' : 'Show'}
+        </button>
       </div>
     </li>
   )

@@ -67,6 +67,9 @@ jobs:
             node --version
             npm --version
             go version
+            uv --version
+            [ "$(uv python dir)" = /data/uv/python ]
+            opencode --version
           '
 
   # Summary job that depends on all critical checks
@@ -79,6 +82,10 @@ jobs:
       - name: Check all jobs
         run: |
           if [ "${{ needs.control-plane-image.result }}" != "success" ]; then
+            echo "Required checks failed"
+            exit 1
+          fi
+          if [ "${{ needs.control-plane-cloud-image.result }}" != "success" ]; then
             echo "Required checks failed"
             exit 1
           fi

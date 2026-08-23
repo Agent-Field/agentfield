@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getApiKey, getBaseUrl, setLocalPort } from './connection'
+import { getApiKey, getBaseUrl, setLocalApiKey, setLocalPort } from './connection'
 import { applyConnectionProfile, normalizeServerUrl, testCloudConnection } from './cloud'
 import { DEFAULT_SETTINGS } from './settings'
 
@@ -19,7 +19,10 @@ function fakeFetch(responses: Array<Response | Error>): typeof fetch {
   }) as unknown as typeof fetch
 }
 
-afterEach(() => setLocalPort(8080))
+afterEach(() => {
+  setLocalApiKey(null)
+  setLocalPort(8080)
+})
 
 describe('normalizeServerUrl', () => {
   it('normalizes host input and removes paths, queries, and trailing slashes', () => {
@@ -46,17 +49,19 @@ describe('normalizeServerUrl', () => {
 describe('testCloudConnection', () => {
   it('reports healthy authenticated servers, install support, and health version', async () => {
     const fetchImpl = fakeFetch([
-      json({ status: 'healthy', version: '1.2.3' }),
+      json({ status: 'healthy', version: '1.2.3', furrow_public_addr: 'furrow.example:8802' }),
       json({ packages: [] }),
       json([])
     ])
     await expect(
-      testCloudConnection('cp.example/', 'secret', { fetchImpl })
+      testCloudConnection('cp.example/', 'secret', { fetchImpl, furrowProbe: async () => true })
     ).resolves.toEqual({
       ok: true,
       healthy: true,
       authOk: true,
       installApi: true,
+      furrowAvailable: true,
+      furrowReported: true,
       version: '1.2.3',
       message: 'Connection successful'
     })
@@ -73,6 +78,7 @@ describe('testCloudConnection', () => {
       healthy: true,
       authOk: false,
       installApi: false,
+      furrowAvailable: false,
       message: 'API key rejected'
     })
   })
@@ -84,6 +90,7 @@ describe('testCloudConnection', () => {
       healthy: false,
       authOk: false,
       installApi: false,
+      furrowAvailable: false,
       message: 'Could not reach https://cp.example'
     })
   })
@@ -102,6 +109,7 @@ describe('testCloudConnection', () => {
       healthy: true,
       authOk: true,
       installApi: false,
+      furrowAvailable: false,
       version: '0.9.0',
       message: 'Connected; install API unavailable'
     })
@@ -118,6 +126,21 @@ describe('testCloudConnection', () => {
     expect(result.ok).toBe(true)
     expect(result).not.toHaveProperty('version')
   })
+
+  it('keeps a healthy connection when the advertised furrow port is unreachable', async () => {
+    const fetchImpl = fakeFetch([
+      json({ status: 'healthy', furrow_public_addr: 'furrow.example:8802' }),
+      json({ packages: [] }),
+      json([]),
+      json({}, 404)
+    ])
+    const result = await testCloudConnection('https://cp.example', 'key', {
+      fetchImpl,
+      furrowProbe: async () => false
+    })
+    expect(result).toMatchObject({ ok: true, healthy: true, authOk: true, furrowAvailable: false })
+    expect(result.furrowReported).toBe(true)
+  })
 })
 
 describe('applyConnectionProfile', () => {
@@ -132,5 +155,46 @@ describe('applyConnectionProfile', () => {
     applyConnectionProfile(DEFAULT_SETTINGS)
     expect(getBaseUrl()).toBe('http://localhost:9091')
     expect(getApiKey()).toBeNull()
+  })
+
+  it('seeds the local port from the configured or last-used port', () => {
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, controlPlanePort: 18480 })
+    expect(getBaseUrl()).toBe('http://localhost:18480')
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, lastControlPlanePort: 8090 })
+    expect(getBaseUrl()).toBe('http://localhost:8090')
+    // A configured port beats the remembered one.
+    applyConnectionProfile({
+      ...DEFAULT_SETTINGS,
+      controlPlanePort: 18480,
+      lastControlPlanePort: 8090
+    })
+    expect(getBaseUrl()).toBe('http://localhost:18480')
+    // Cloud still wins while enabled, and the seeded port is what a switch
+    // back to local returns to.
+    applyConnectionProfile({
+      ...DEFAULT_SETTINGS,
+      controlPlanePort: 18480,
+      cloud: { enabled: true, serverUrl: 'https://cp.example', apiKey: 'k' }
+    })
+    expect(getBaseUrl()).toBe('https://cp.example')
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, controlPlanePort: 18480 })
+    expect(getBaseUrl()).toBe('http://localhost:18480')
+  })
+
+  it('carries a configured local API key on the local profile', () => {
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, localApiKey: 'local-secret' })
+    expect(getBaseUrl()).toBe('http://localhost:8080')
+    expect(getApiKey()).toBe('local-secret')
+  })
+
+  it('keeps the local key available for the switch back from cloud', () => {
+    applyConnectionProfile({
+      ...DEFAULT_SETTINGS,
+      localApiKey: 'local-secret',
+      cloud: { enabled: true, serverUrl: 'https://cp.example', apiKey: 'cloud-key' }
+    })
+    expect(getApiKey()).toBe('cloud-key')
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, localApiKey: 'local-secret' })
+    expect(getApiKey()).toBe('local-secret')
   })
 })

@@ -202,6 +202,12 @@ type NodeHealthConfig struct {
 	ConsecutiveFailures     int           `yaml:"consecutive_failures" mapstructure:"consecutive_failures"`           // Failures before marking inactive (0 = default 3; set 1 for instant)
 	RecoveryDebounce        time.Duration `yaml:"recovery_debounce" mapstructure:"recovery_debounce"`                 // Wait before allowing inactive->active (0 = default 5s)
 	HeartbeatStaleThreshold time.Duration `yaml:"heartbeat_stale_threshold" mapstructure:"heartbeat_stale_threshold"` // Heartbeat age before marking stale (0 = default 60s)
+	// AgentRestartGrace is how long a dispatch waits for a long-running agent
+	// node to come back after the connection is refused, before failing the
+	// execution. This absorbs the edit-restart loop, where the node is down
+	// for a few seconds but the control plane has not noticed yet.
+	// 0 = default 15s. Set to a negative duration to disable the wait.
+	AgentRestartGrace time.Duration `yaml:"agent_restart_grace" mapstructure:"agent_restart_grace"`
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
@@ -634,6 +640,11 @@ func ApplyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("AGENTFIELD_HEARTBEAT_STALE_THRESHOLD"); val != "" {
 		if d, err := time.ParseDuration(val); err == nil {
 			cfg.AgentField.NodeHealth.HeartbeatStaleThreshold = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_AGENT_RESTART_GRACE"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.AgentRestartGrace = d
 		}
 	}
 

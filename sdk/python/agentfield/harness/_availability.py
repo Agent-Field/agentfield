@@ -15,6 +15,15 @@ class ProviderSpec:
 
 
 PROVIDER_SPECS = {
+    "aforge": ProviderSpec(
+        binary="aforge",
+        version_args=("version",),
+        # `af` installs aforge beside itself in ~/.agentfield/bin (see
+        # control-plane/internal/aforge); the curl installer, the desktop app
+        # and the agent images all converge on that one command.
+        install_command="af aforge ensure",
+        auth_env_vars=("OPENROUTER_API_KEY",),
+    ),
     "codex": ProviderSpec(
         binary="codex",
         version_args=("--version",),
@@ -32,6 +41,13 @@ PROVIDER_SPECS = {
         version_args=("--version",),
         install_command="curl -fsSL https://opencode.ai/install | bash",
         auth_env_vars=(),
+    ),
+    "grok": ProviderSpec(
+        binary="grok",
+        version_args=("--version",),
+        # Grok Build CLI is distributed by xAI; install path may vary by platform.
+        install_command="install the Grok Build CLI and run `grok login`",
+        auth_env_vars=("XAI_API_KEY",),
     ),
 }
 

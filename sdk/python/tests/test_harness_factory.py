@@ -31,10 +31,12 @@ def _make_config(provider: str, **kwargs) -> HarnessConfig:
 
 
 def test_supported_providers_contains_expected_names():
+    assert "aforge" in SUPPORTED_PROVIDERS
     assert "claude-code" in SUPPORTED_PROVIDERS
     assert "codex" in SUPPORTED_PROVIDERS
     assert "gemini" in SUPPORTED_PROVIDERS
     assert "opencode" in SUPPORTED_PROVIDERS
+    assert "grok" in SUPPORTED_PROVIDERS
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +60,37 @@ def test_build_provider_unknown_message_lists_supported():
     config = _make_config("bad")
     with pytest.raises(ValueError, match="claude-code"):
         build_provider(config)
+
+
+# ---------------------------------------------------------------------------
+# build_provider: aforge
+# ---------------------------------------------------------------------------
+
+
+def test_build_provider_aforge_returns_aforge_provider():
+    from agentfield.harness.providers.aforge import AforgeProvider
+
+    config = _make_config("aforge")
+    provider = build_provider(config)
+    assert isinstance(provider, AforgeProvider)
+
+
+def test_build_provider_aforge_default_bin():
+    from agentfield.harness.providers.aforge import AforgeProvider
+
+    config = _make_config("aforge")
+    provider = build_provider(config)
+    assert isinstance(provider, AforgeProvider)
+    assert provider._bin == "aforge"
+
+
+def test_build_provider_aforge_custom_bin():
+    from agentfield.harness.providers.aforge import AforgeProvider
+
+    config = _make_config("aforge", aforge_bin="/opt/aforge")
+    provider = build_provider(config)
+    assert isinstance(provider, AforgeProvider)
+    assert provider._bin == "/opt/aforge"
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +220,13 @@ def test_codex_provider_satisfies_harness_provider_protocol():
     assert isinstance(provider, HarnessProvider)
 
 
+def test_aforge_provider_satisfies_harness_provider_protocol():
+    from agentfield.harness.providers.aforge import AforgeProvider
+
+    provider = AforgeProvider()
+    assert isinstance(provider, HarnessProvider)
+
+
 def test_gemini_provider_satisfies_harness_provider_protocol():
     from agentfield.harness.providers.gemini import GeminiProvider
 
@@ -205,6 +245,13 @@ def test_claude_code_provider_satisfies_harness_provider_protocol():
     from agentfield.harness.providers.claude import ClaudeCodeProvider
 
     provider = ClaudeCodeProvider()
+    assert isinstance(provider, HarnessProvider)
+
+
+def test_grok_provider_satisfies_harness_provider_protocol():
+    from agentfield.harness.providers.grok import GrokProvider
+
+    provider = GrokProvider()
     assert isinstance(provider, HarnessProvider)
 
 

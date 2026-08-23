@@ -467,3 +467,214 @@ func TestBatchExecutionStatusHandler_MixedResults(t *testing.T) {
 func ptrString(value string) *string {
 	return &value
 }
+
+// TestGetExecutionStatusHandler_WebhookRegisteredFromStore verifies that the
+// GET /executions/:id endpoint reports webhook_registered=true based on the
+// execution_webhooks table, not the unpersisted field on the execution record.
+// Regression test for issue #936.
+func TestGetExecutionStatusHandler_WebhookRegisteredFromStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newTestExecutionStorage(nil)
+	now := time.Now().UTC()
+
+	execution := &types.Execution{
+		ExecutionID:       "exec-wh",
+		RunID:             "run-1",
+		Status:            types.ExecutionStatusSucceeded,
+		StartedAt:         now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		WebhookRegistered: false, // As if loaded from DB (db:"-")
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	// Register webhook separately (simulates the real execution_webhooks table)
+	secret := "s3cr3t"
+	require.NoError(t, store.RegisterExecutionWebhook(context.Background(), &types.ExecutionWebhook{
+		ExecutionID: "exec-wh",
+		URL:         "https://example.com/hook",
+		Secret:      &secret,
+	}))
+
+	router := gin.New()
+	router.GET("/api/v1/executions/:execution_id", GetExecutionStatusHandler(store))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-wh", nil)
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var payload ExecutionStatusResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.True(t, payload.WebhookRegistered, "webhook_registered must be true when a webhook exists in the store (issue #936)")
+}
+
+// TestGetExecutionStatusHandler_NoWebhook verifies webhook_registered=false
+// when no webhook is registered for the execution.
+func TestGetExecutionStatusHandler_NoWebhook(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newTestExecutionStorage(nil)
+	now := time.Now().UTC()
+
+	execution := &types.Execution{
+		ExecutionID: "exec-no-wh",
+		RunID:       "run-1",
+		Status:      types.ExecutionStatusSucceeded,
+		StartedAt:   now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	router := gin.New()
+	router.GET("/api/v1/executions/:execution_id", GetExecutionStatusHandler(store))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-no-wh", nil)
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var payload ExecutionStatusResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.False(t, payload.WebhookRegistered, "webhook_registered must be false when no webhook exists")
+}
+
+// TestHttpStatusForFailedExecution validates the helper that replaces the
+// hardcoded 502 in the async-completion branch (issue #862).
+func TestHttpStatusForFailedExecution(t *testing.T) {
+	tests := []struct {
+		name         string
+		statusReason *string
+		errorMessage *string
+		wantStatus   int
+	}{
+		{
+			name:         "client error encoded in status_reason",
+			statusReason: ptrString("agent_client_error:422"),
+			wantStatus:   422,
+		},
+		{
+			name:         "client error 400 encoded in status_reason",
+			statusReason: ptrString("agent_client_error:400"),
+			wantStatus:   400,
+		},
+		{
+			name:         "agent_timeout maps to 504",
+			statusReason: ptrString("agent_timeout"),
+			wantStatus:   http.StatusGatewayTimeout,
+		},
+		{
+			name:         "agent_unreachable maps to 502",
+			statusReason: ptrString("agent_unreachable"),
+			wantStatus:   http.StatusBadGateway,
+		},
+		{
+			name:         "target_not_found maps to 404",
+			statusReason: ptrString("target_not_found"),
+			wantStatus:   http.StatusNotFound,
+		},
+		{
+			name:         "concurrency_limit maps to 429",
+			statusReason: ptrString("concurrency_limit"),
+			wantStatus:   http.StatusTooManyRequests,
+		},
+		{
+			name:         "node_unavailable maps to 503",
+			statusReason: ptrString("node_unavailable"),
+			wantStatus:   http.StatusServiceUnavailable,
+		},
+		{
+			name:         "error message with agent error 422 pattern",
+			statusReason: ptrString("agent_error"),
+			errorMessage: ptrString(`agent error (422): {"detail":"Missing required field"}`),
+			wantStatus:   422,
+		},
+		{
+			name:         "error message with agent error 500 stays 502",
+			statusReason: ptrString("agent_error"),
+			errorMessage: ptrString(`agent error (500): {"error":"internal"}`),
+			wantStatus:   http.StatusBadGateway,
+		},
+		{
+			name:         "no status_reason no error pattern defaults to 502",
+			statusReason: nil,
+			errorMessage: ptrString("something went wrong"),
+			wantStatus:   http.StatusBadGateway,
+		},
+		{
+			name:         "nil status_reason and nil error defaults to 502",
+			statusReason: nil,
+			errorMessage: nil,
+			wantStatus:   http.StatusBadGateway,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &types.Execution{
+				StatusReason: tc.statusReason,
+				ErrorMessage: tc.errorMessage,
+			}
+			got := httpStatusForFailedExecution(exec)
+			require.Equal(t, tc.wantStatus, got)
+		})
+	}
+}
+
+// TestUpdateExecutionStatusHandler_ErrorStatusCode verifies that the control
+// plane persists error_status_code from the SDK callback and uses it to classify
+// the failure for async-completion responses (issue #862).
+func TestUpdateExecutionStatusHandler_ErrorStatusCode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	agent := &types.AgentNode{
+		ID:        "node-1",
+		BaseURL:   "http://agent.example",
+		Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}},
+	}
+
+	store := newTestExecutionStorage(agent)
+	payloads := services.NewFilePayloadStore(t.TempDir())
+
+	execution := &types.Execution{
+		ExecutionID: "exec-862",
+		RunID:       "run-1",
+		Status:      types.ExecutionStatusRunning,
+		StartedAt:   time.Now().UTC(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	router := gin.New()
+	router.PUT("/api/v1/executions/:execution_id/status", UpdateExecutionStatusHandler(store, payloads, nil, 90*time.Second))
+
+	// SDK sends error_status_code=422 indicating a client-input rejection
+	reqBody := `{
+		"status": "failed",
+		"error": "invalid_input: RuleSpec rejected field",
+		"error_status_code": 422
+	}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/executions/exec-862/status", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	// Verify the execution record has the encoded status_reason
+	updated, err := store.GetExecutionRecord(context.Background(), "exec-862")
+	require.NoError(t, err)
+	require.NotNil(t, updated.StatusReason)
+	require.Equal(t, "agent_client_error:422", *updated.StatusReason)
+
+	// Verify httpStatusForFailedExecution returns 422 for this execution
+	require.Equal(t, 422, httpStatusForFailedExecution(updated))
+}

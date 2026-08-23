@@ -110,13 +110,16 @@ func newSkillInstallCommand() *cobra.Command {
 			// installs exactly that one skill.
 			if skillName == "" {
 				reports, err := skillkit.InstallAll(installOpts)
-				if err != nil {
-					return err
-				}
+				// Print everything that did happen before failing: a partial
+				// install is still worth showing, and the failures are named
+				// in the error.
 				for _, report := range reports {
 					printInstallReport(report, dryRun)
 				}
-				return nil
+				if err != nil {
+					return err
+				}
+				return skillkit.ReportsError(reports)
 			}
 
 			report, err := skillkit.Install(installOpts)
@@ -124,7 +127,7 @@ func newSkillInstallCommand() *cobra.Command {
 				return err
 			}
 			printInstallReport(report, dryRun)
-			return nil
+			return report.ReportError()
 		},
 	}
 
@@ -174,7 +177,7 @@ func newSkillUpdateCommand() *cobra.Command {
 				return err
 			}
 			printInstallReport(report, false)
-			return nil
+			return report.ReportError()
 		},
 	}
 	cmd.Flags().StringVar(&skillName, "skill", "", "Skill name to update")

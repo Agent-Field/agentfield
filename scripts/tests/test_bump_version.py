@@ -118,3 +118,41 @@ def test_target_base_lookup_bumps_component_when_label_differs():
 def test_prerelease_channel_requires_label():
     with pytest.raises(ValueError):
         determine_next_version(SemVer.parse("0.1.91"), "prerelease", "patch", None)
+
+
+def test_update_ts_template_bumps_sdk_pin_and_preserves_template_actions(tmp_path, monkeypatch):
+    tmpl = tmp_path / "package.json.tmpl"
+    tmpl.write_text(
+        '{\n'
+        '  "name": {{jsonQuote .ProjectName}},\n'
+        '  "dependencies": {\n'
+        '    "@agentfield/sdk": "^0.1.128",\n'
+        '    "zod": "^3.22.4"\n'
+        '  }\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bump_version, "TS_TEMPLATE_PACKAGE_JSON", tmpl)
+    bump_version.update_ts_template(SemVer.parse("0.2.0"))
+    text = tmpl.read_text(encoding="utf-8")
+    assert '"@agentfield/sdk": "^0.2.0"' in text
+    assert "{{jsonQuote .ProjectName}}" in text
+    assert '"zod": "^3.22.4"' in text
+
+
+def test_update_requirements_bumps_scaffold_template_floor(tmp_path, monkeypatch):
+    req = tmp_path / "requirements.txt.tmpl"
+    req.write_text("agentfield>=0.1.128\n", encoding="utf-8")
+    monkeypatch.setattr(bump_version, "REQUIREMENT_FILES", [req])
+    bump_version.update_requirements(SemVer.parse("0.2.0"))
+    assert req.read_text(encoding="utf-8") == "agentfield>=0.2.0\n"
+
+
+def test_update_requirements_ignores_other_agentfield_prefixed_packages(tmp_path, monkeypatch):
+    req = tmp_path / "requirements.txt"
+    req.write_text("agentfield-cli>=1.0\nagentfield\n", encoding="utf-8")
+    monkeypatch.setattr(bump_version, "REQUIREMENT_FILES", [req])
+    bump_version.update_requirements(SemVer.parse("0.2.0"))
+    lines = req.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "agentfield-cli>=1.0"
+    assert lines[1] == "agentfield>=0.2.0"

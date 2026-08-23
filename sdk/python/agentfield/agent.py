@@ -67,6 +67,7 @@ from agentfield.types import (
     MemoryConfig,
 )
 from agentfield.multimodal_response import MultimodalResponse
+from agentfield.run_async import run_coroutine, fire_and_forget
 from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.pydantic_utils import convert_function_args, should_convert_args
@@ -692,6 +693,7 @@ class Agent(FastAPI):
                                          and None defers entirely to platform defaults.
             api_key (str, optional): API key for authenticating with the AgentField control plane.
                                     When set, will be sent as X-API-Key header on all requests.
+                                    Defaults to the AGENTFIELD_API_KEY environment variable.
             **kwargs: Additional keyword arguments passed to FastAPI constructor.
 
         Example:
@@ -786,7 +788,11 @@ class Agent(FastAPI):
         # Initialize async configuration
         self.async_config = async_config or AsyncConfig.from_environment()
 
-        # Store API key for authentication
+        # Store API key for authentication. `af run` exports AGENTFIELD_API_KEY
+        # for agents it starts, so an agent registers against a control plane
+        # that has authentication enabled without needing the key in its code.
+        if api_key is None:
+            api_key = os.environ.get("AGENTFIELD_API_KEY") or None
         self.api_key = api_key
 
         # Initialize AgentFieldClient with async configuration and API key
@@ -1383,7 +1389,7 @@ class Agent(FastAPI):
 
                 # Execute function (sync or async)
                 if asyncio.iscoroutinefunction(func):
-                    result = asyncio.run(func(**input_data))
+                    result = run_coroutine(func(**input_data))
                 else:
                     result = func(**input_data)
 
@@ -2767,6 +2773,14 @@ class Agent(FastAPI):
                 "execution_id": execution_id,
                 "reasoner": reasoner_name,
             }
+            # Propagate the HTTP status code when the exception carries one so
+            # the control plane can return the correct 4xx to callers instead of
+            # a blanket 502 Bad Gateway (issue #862).
+            exc_status = getattr(exc, "status_code", None)
+            if exc_status is None:
+                exc_status = getattr(exc, "code", None)
+            if isinstance(exc_status, int) and 400 <= exc_status < 600:
+                payload["error_status_code"] = exc_status
             # A reasoner that ran, determined its own work failed, and wants its
             # structured outcome preserved raises ReasonerFailed(result=...).
             # Carry that result onto the failed-status payload so the control
@@ -3728,8 +3742,10 @@ class Agent(FastAPI):
         Args:
             prompt: Task description for the coding agent.
             schema: Pydantic BaseModel class for structured output validation.
-            provider: Override provider ("claude-code", "codex", "gemini", "opencode").
-            model: Override model identifier.
+            provider: Override provider ("aforge", "claude-code", "codex", "gemini",
+                "opencode", "grok"). Omit to use ``AGENTFIELD_HARNESS_PROVIDER``
+                when set, otherwise ``aforge``.
+            model: Override model identifier. Empty uses the provider's own default.
             max_turns: Maximum agent iterations.
             max_budget_usd: Cost cap in USD.
             tools: Allowed tools list.
@@ -3737,15 +3753,16 @@ class Agent(FastAPI):
             system_prompt: System prompt for the agent.
             env: Environment variables for the agent.
             cwd: Working directory for the agent process. When ``project_dir`` is
-                not set, this is also the agent's root and where the schema output
-                file is placed.
+                not set, this is also the agent's root; schema output is isolated
+                in a per-run temporary directory underneath it.
             project_dir: Root directory the agent may read and write (maps to the
                 provider's project-root flag, e.g. opencode ``--dir``, codex
                 ``-C``, or the process cwd for gemini/claude). Set this when the
                 agent must read files across a shared repo while ``cwd`` points at
-                a nested task directory. The schema output file is then placed in
-                an isolated temp dir *under* ``project_dir`` so the provider never
-                rejects it as an external-directory write.
+                a nested task directory. Schema output is placed in an isolated
+                temp dir under the effective root so the provider never rejects
+                it as an external-directory write and concurrent runs do not
+                collide.
             schema_mode: How schema output is produced. "single" (default) asks
                 for one Write of the whole object. "incremental" builds it one
                 top-level field at a time and recovers by patching only the
@@ -3797,6 +3814,7 @@ class Agent(FastAPI):
                 derive_provider,
                 get_current_cost_tracker,
             )
+            from agentfield.harness._defaults import resolve_harness_provider
 
             input_tokens = getattr(result, "input_tokens", 0) or 0
             output_tokens = getattr(result, "output_tokens", 0) or 0
@@ -3815,7 +3833,7 @@ class Agent(FastAPI):
             if tracker is None:
                 return
 
-            resolved_provider = (
+            resolved_provider = resolve_harness_provider(
                 str(provider) if provider else self._harness_provider_name()
             )
             harness_name = (
@@ -4762,7 +4780,6 @@ class Agent(FastAPI):
             tags = []
 
         # Fire-and-forget async task
-        import asyncio
 
         async def _send_note():
             try:
@@ -4872,27 +4889,10 @@ class Agent(FastAPI):
 
                     log_debug(f"Failed to send note: {type(e).__name__}: {e}")
 
-        # Create task without awaiting (fire-and-forget)
-        try:
-            # Try to get current event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in an async context, create a task
-                loop.create_task(_send_note())
-            else:
-                # If no loop is running, run in a new thread
-                import threading
-
-                thread = threading.Thread(target=lambda: asyncio.run(_send_note()))
-                thread.daemon = True
-                thread.start()
-        except RuntimeError:
-            # No event loop available, run in a new thread
-            import threading
-
-            thread = threading.Thread(target=lambda: asyncio.run(_send_note()))
-            thread.daemon = True
-            thread.start()
+        # Fire-and-forget: schedule on the running loop if available,
+        # otherwise spawn a daemon thread. Replaces the manual loop
+        # detection + threading that was prone to RuntimeError (#620).
+        fire_and_forget(_send_note())
 
     async def pause(
         self,
@@ -5371,10 +5371,23 @@ class Agent(FastAPI):
                 and self._async_execution_manager
             ):
                 try:
-                    # Try to cleanup async resources in a new event loop
-                    import asyncio
-
-                    asyncio.run(self._cleanup_async_resources())
+                    # Best-effort cleanup that must never raise, including
+                    # when a loop is already running (#620).
+                    #
+                    # No running loop (the common destructor / interpreter
+                    # exit case): run it synchronously so cleanup actually
+                    # completes before __del__ returns. Handing it to a
+                    # daemon thread here would let the interpreter kill the
+                    # thread at exit before it does any work.
+                    #
+                    # Running loop: asyncio.run() would raise, so schedule
+                    # on that loop instead and don't block it.
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        asyncio.run(self._cleanup_async_resources())
+                    else:
+                        fire_and_forget(self._cleanup_async_resources())
                 except Exception:
                     # Ignore async cleanup errors in destructor
                     pass

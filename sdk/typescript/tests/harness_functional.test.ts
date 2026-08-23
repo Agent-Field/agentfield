@@ -4,11 +4,12 @@
  * These tests invoke REAL coding agents and make real API calls.
  * They are NOT included in the default `vitest run` — run explicitly:
  *
- *   npx vitest run tests/harness_functional.test.ts --timeout=300000
+ *   npx vitest run --config vitest.functional.config.ts
  *
  * Run a single provider:
- *   npx vitest run tests/harness_functional.test.ts -t "Codex" --timeout=300000
- *   npx vitest run tests/harness_functional.test.ts -t "OpenCode" --timeout=300000
+ *   npx vitest run --config vitest.functional.config.ts -t "Aforge"
+ *   npx vitest run --config vitest.functional.config.ts -t "Codex"
+ *   npx vitest run --config vitest.functional.config.ts -t "OpenCode"
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -33,6 +34,8 @@ function hasBinary(name: string): boolean {
 
 const HAS_CODEX = hasBinary('codex');
 const HAS_OPENCODE = hasBinary('opencode');
+const HAS_AFORGE = hasBinary('aforge')
+  && Boolean(process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY);
 
 /** Plain JSON Schema — no Zod dependency needed. */
 const simpleSchema = {
@@ -76,6 +79,60 @@ function cleanupWorkDir(dir: string): void {
     // ignore
   }
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// AFORGE
+// ════════════════════════════════════════════════════════════════════════
+
+describe.skipIf(!HAS_AFORGE)('Aforge Functional', () => {
+  beforeEach(() => {
+    workDir = createWorkDir();
+  });
+  afterEach(() => {
+    cleanupWorkDir(workDir);
+  });
+
+  it('basic prompt returns the exec JSON deliverable and provider metrics', async () => {
+    const { AforgeProvider } = await import('../src/harness/providers/aforge.js');
+    const result = await new AforgeProvider().execute(
+      'Reply with exactly: HELLO_AGENTFIELD',
+      { cwd: workDir },
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.result).toContain('HELLO_AGENTFIELD');
+    expect(result.messages).toHaveLength(1);
+    expect(result.metrics.numTurns).toBeGreaterThan(0);
+    expect(result.metrics.inputTokens).toBeGreaterThan(0);
+    expect(result.metrics.outputTokens).toBeGreaterThan(0);
+    expect(result.metrics.totalCostUsd).toBeGreaterThan(0);
+    console.info('aforge metrics', JSON.stringify(result.metrics));
+  }, 300_000);
+
+  it('schema pipeline writes, parses, and cleans isolated output', async () => {
+    const result = await new HarnessRunner().run(
+      'Return exactly: greeting="Hello from Aforge" and number=42. Follow the OUTPUT REQUIREMENTS below precisely.',
+      {
+        provider: 'aforge',
+        schema: simpleSchema,
+        cwd: workDir,
+        maxRetries: 1,
+      },
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.parsed).toMatchObject({ greeting: 'Hello from Aforge', number: 42 });
+    console.info('aforge schema metrics', JSON.stringify({
+      durationMs: result.durationMs,
+      calls: result.numTurns,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      cacheReadTokens: result.cacheReadTokens,
+      costUsd: result.costUsd,
+    }));
+    expect(fs.readdirSync(workDir).filter((name) => name.startsWith('.agentfield-out-'))).toEqual([]);
+  }, 300_000);
+});
 
 // ════════════════════════════════════════════════════════════════════════
 // CODEX

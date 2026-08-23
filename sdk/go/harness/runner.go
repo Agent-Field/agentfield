@@ -52,26 +52,29 @@ type schemaAware interface {
 // is non-nil, the validated output is unmarshalled into it.
 func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, dest any, overrides Options) (*Result, error) {
 	opts := r.mergeOptions(overrides)
-
-	if opts.Provider == "" {
-		return nil, fmt.Errorf(
-			"no harness provider specified: set Provider in runner defaults or pass it to Run()",
-		)
-	}
+	opts.Provider = ResolveProviderName(opts.Provider)
 
 	provider, err := r.buildProvider(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	// Determine output directory for schema files.
-	outputDir := opts.Cwd
+	// Always isolate schema output in a per-run directory under the effective
+	// project root. Concurrent calls sharing one checkout must not overwrite or
+	// clean up each other's fixed .agentfield_output.json file.
+	outputDir := opts.ProjectDir
+	if outputDir == "" {
+		outputDir = opts.Cwd
+	}
 	if outputDir == "" {
 		outputDir = "."
 	}
 	var tempOutputDir string
-	if opts.ProjectDir != "" {
-		tempOutputDir, err = os.MkdirTemp(opts.ProjectDir, ".agentfield-out-")
+	if schema != nil {
+		if err = os.MkdirAll(outputDir, 0o700); err != nil {
+			return nil, fmt.Errorf("creating schema output root: %w", err)
+		}
+		tempOutputDir, err = os.MkdirTemp(outputDir, ".agentfield-out-")
 		if err != nil {
 			return nil, fmt.Errorf("creating temp output dir: %w", err)
 		}
@@ -160,6 +163,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 		IsError:      raw.IsError,
 		ErrorMessage: raw.ErrorMessage,
 		FailureType:  raw.FailureType,
+		Model:        raw.Metrics.Model,
 		CostUSD:      raw.Metrics.CostUSD,
 		NumTurns:     raw.Metrics.NumTurns,
 		DurationMS:   elapsed,
@@ -415,6 +419,7 @@ func (r *Runner) handleSchemaWithRetry(
 			NumTurns:   turns,
 			DurationMS: elapsed,
 			SessionID:  sid,
+			Model:      firstMetricsModel(allRaws),
 			Messages:   msgs,
 		}
 		tok.applyTo(res)
@@ -443,6 +448,7 @@ func (r *Runner) handleSchemaWithRetry(
 			NumTurns:     turns,
 			DurationMS:   elapsed,
 			SessionID:    sid,
+			Model:        firstMetricsModel(allRaws),
 			Messages:     msgs,
 		}
 		tok.applyTo(res)
@@ -469,6 +475,7 @@ func (r *Runner) handleSchemaWithRetry(
 					NumTurns:     turns,
 					DurationMS:   elapsed,
 					SessionID:    sid,
+					Model:        firstMetricsModel(allRaws),
 					Messages:     msgs,
 				}
 				tok.applyTo(res)
@@ -551,6 +558,7 @@ func (r *Runner) handleSchemaWithRetry(
 				NumTurns:   turns,
 				DurationMS: elapsed,
 				SessionID:  sid,
+				Model:      firstMetricsModel(allRaws),
 				Messages:   msgs,
 			}
 			tok.applyTo(res)
@@ -573,6 +581,7 @@ func (r *Runner) handleSchemaWithRetry(
 		NumTurns:    turns,
 		DurationMS:  elapsed,
 		SessionID:   sid,
+		Model:       firstMetricsModel(allRaws),
 		Messages:    msgs,
 	}
 	tok.applyTo(res)
@@ -605,6 +614,15 @@ func accumulateMetrics(raws []*RawResult) (totalCost *float64, totalTurns int, s
 		tokens.cacheCreationTokens += raw.Metrics.CacheCreationTokens
 	}
 	return
+}
+
+func firstMetricsModel(raws []*RawResult) string {
+	for _, raw := range raws {
+		if raw.Metrics.Model != "" {
+			return raw.Metrics.Model
+		}
+	}
+	return ""
 }
 
 func fileExists(path string) bool {

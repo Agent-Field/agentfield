@@ -14,11 +14,10 @@ export class GeminiProvider implements HarnessProvider {
   async execute(prompt: string, options: Record<string, unknown>): Promise<RawResult> {
     const cmd = [this.bin];
 
-    if (options.cwd) {
-      cmd.push('-C', String(options.cwd));
-    }
     if (options.permissionMode === 'auto') {
-      cmd.push('--sandbox');
+      cmd.push('--yolo');
+    } else if (options.permissionMode === 'plan') {
+      cmd.push('--approval-mode', 'plan');
     }
     // gemini has no reasoning-effort flag; strip any "#variant" suffix so
     // the CLI still receives a valid model id.

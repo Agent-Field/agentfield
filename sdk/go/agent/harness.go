@@ -10,10 +10,14 @@ import (
 // providing lazy initialization and a convenience Harness() method.
 // HarnessConfig configures the default harness runner for the agent.
 type HarnessConfig struct {
-	// Provider is the default provider: "claude-code", "codex", "gemini", or "opencode".
+	// Provider is the default provider: "aforge", "claude-code", "codex",
+	// "gemini", or "opencode". When empty, AGENTFIELD_HARNESS_PROVIDER
+	// overrides the default, "aforge" (AgentField's native harness). An
+	// explicit value always wins.
 	Provider string
 
-	// Model is the default model identifier. It may carry a
+	// Model is the default model identifier. Empty means the provider's own
+	// default. It may carry a
 	// reasoning-effort variant after a "#" separator (e.g.
 	// "openrouter/z-ai/glm-5.2#high").
 	Model string
@@ -86,9 +90,7 @@ func (a *Agent) HarnessRunner() *harness.Runner {
 //	}
 //	var result ReviewResult
 //	schema, _ := harness.StructToJSONSchema(result)
-//	hr, err := agent.Harness(ctx, "Review this code...", schema, &result, harness.Options{
-//	    Model: "sonnet",
-//	})
+//	hr, err := agent.Harness(ctx, "Review this code...", schema, &result, harness.Options{})
 func (a *Agent) Harness(ctx context.Context, prompt string, schema map[string]any, dest any, opts harness.Options) (*harness.Result, error) {
 	result, err := a.HarnessRunner().Run(ctx, prompt, schema, dest, opts)
 	if err == nil {

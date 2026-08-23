@@ -1,4 +1,7 @@
-FROM --platform=$BUILDPLATFORM node:20-alpine AS ui-builder
+# bookworm-slim (glibc) instead of alpine (musl): Vite's lightningcss
+# optional native binding is flaky under npm ci on musl when the lockfile
+# lacks libc metadata, which intermittently breaks `vite build` in CI.
+FROM --platform=$BUILDPLATFORM node:20-bookworm-slim AS ui-builder
 WORKDIR /app/web
 
 COPY control-plane/web/client/package*.json ./

@@ -1,11 +1,13 @@
 const DEFAULT_OPENROUTER_SITE_URL = 'https://agentfield.ai';
 const DEFAULT_OPENROUTER_APP_NAME = 'AgentField AI';
+const DEFAULT_OPENROUTER_CATEGORIES = 'cli-agent,programming-app';
 
 type EnvMap = Record<string, string | undefined>;
 
 export interface OpenRouterAttributionOptions {
   siteUrl?: string;
   appName?: string;
+  categories?: string;
   headers?: Record<string, string | undefined>;
   env?: EnvMap;
 }
@@ -39,7 +41,7 @@ export function openRouterAttributionEnabled(env: EnvMap = process.env): boolean
 
 export function resolveOpenRouterAttribution(
   options: OpenRouterAttributionOptions = {}
-): { siteUrl: string; appName: string } | undefined {
+): { siteUrl: string; appName: string; categories: string } | undefined {
   const env = options.env ?? process.env;
   if (!openRouterAttributionEnabled(env)) {
     return undefined;
@@ -57,7 +59,13 @@ export function resolveOpenRouterAttribution(
     clean(env.OR_APP_NAME) ??
     DEFAULT_OPENROUTER_APP_NAME;
 
-  return { siteUrl, appName };
+  const categories =
+    clean(options.categories) ??
+    clean(env.AGENTFIELD_OPENROUTER_CATEGORIES) ??
+    clean(env.OR_CATEGORIES) ??
+    DEFAULT_OPENROUTER_CATEGORIES;
+
+  return { siteUrl, appName, categories };
 }
 
 export function openRouterAttributionHeaders(
@@ -71,6 +79,7 @@ export function openRouterAttributionHeaders(
     'HTTP-Referer': resolved.siteUrl,
     'X-OpenRouter-Title': resolved.appName,
     'X-Title': resolved.appName,
+    'X-OpenRouter-Categories': resolved.categories,
   };
 }
 
@@ -107,8 +116,10 @@ export function openRouterAttributionEnv(env: EnvMap = process.env): Record<stri
   return {
     AGENTFIELD_OPENROUTER_SITE_URL: resolved.siteUrl,
     AGENTFIELD_OPENROUTER_APP_NAME: resolved.appName,
+    AGENTFIELD_OPENROUTER_CATEGORIES: resolved.categories,
     OR_SITE_URL: resolved.siteUrl,
     OR_APP_NAME: resolved.appName,
+    OR_CATEGORIES: resolved.categories,
   };
 }
 
@@ -117,8 +128,10 @@ export function applyOpenRouterAttributionEnv(env: Record<string, string | undef
     for (const key of [
       'AGENTFIELD_OPENROUTER_SITE_URL',
       'AGENTFIELD_OPENROUTER_APP_NAME',
+      'AGENTFIELD_OPENROUTER_CATEGORIES',
       'OR_SITE_URL',
       'OR_APP_NAME',
+      'OR_CATEGORIES',
     ]) {
       delete env[key];
     }

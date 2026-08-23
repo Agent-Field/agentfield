@@ -27,6 +27,7 @@ const api: AgentFieldApi = {
   cloudTest: (url, apiKey) => ipcRenderer.invoke('agentfield:cloud-test', url, apiKey),
   cloudDeployRailway: () => ipcRenderer.invoke('agentfield:cloud-deploy-railway'),
   railwayStatus: () => ipcRenderer.invoke('agentfield:railway-status'),
+  checkCloudImageUpdate: () => ipcRenderer.invoke('agentfield:cloud-image-update'),
   railwayLogin: () => ipcRenderer.invoke('agentfield:railway-login'),
   railwayLogout: () => ipcRenderer.invoke('agentfield:railway-logout'),
   cloudDeploy: (workspaceId) => ipcRenderer.invoke('agentfield:cloud-deploy', workspaceId),

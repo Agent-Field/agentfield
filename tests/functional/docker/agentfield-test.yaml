@@ -58,6 +58,14 @@ agentfield:
         - "http://test-runner:9777/api/v1/ard"
       default_search_limit: 20
 
+# CI runs must never report to production telemetry. Every functional-test
+# run starts the control plane on a fresh /data volume, which mints a brand
+# new anonymous install ID — so each run shows up in product metrics as a
+# "first-time user" whose activity is the suite's fixed success/failure
+# counts, drowning out real first-run signal.
+telemetry:
+  enabled: false
+
 ui:
   enabled: true
   mode: "embedded"

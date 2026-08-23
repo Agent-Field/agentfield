@@ -192,7 +192,8 @@ describe('AIClient', () => {
           headers: {
             'HTTP-Referer': 'https://agentfield.ai',
             'X-OpenRouter-Title': 'AgentField AI',
-            'X-Title': 'AgentField AI'
+            'X-Title': 'AgentField AI',
+            'X-OpenRouter-Categories': 'cli-agent,programming-app'
           }
         })
       );
@@ -213,7 +214,8 @@ describe('AIClient', () => {
           headers: {
             'X-Title': 'Header Title',
             'HTTP-Referer': 'https://caller.example',
-            'X-OpenRouter-Title': 'Caller App'
+            'X-OpenRouter-Title': 'Caller App',
+            'X-OpenRouter-Categories': 'cli-agent,programming-app'
           }
         })
       );

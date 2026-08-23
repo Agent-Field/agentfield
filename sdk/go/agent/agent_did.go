@@ -27,6 +27,9 @@ func (a *Agent) initializeDIDSystem(ctx context.Context) error {
 	if a.cfg.Token != "" {
 		didClientOpts = append(didClientOpts, did.WithToken(a.cfg.Token))
 	}
+	if a.cfg.APIKey != "" {
+		didClientOpts = append(didClientOpts, did.WithAPIKey(a.cfg.APIKey))
+	}
 	didClient := did.NewClient(a.cfg.AgentFieldURL, didClientOpts...)
 
 	// Create DID manager.

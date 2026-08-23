@@ -39,6 +39,7 @@ type ExecutionStore interface {
 	UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error)
 	QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error)
 	RegisterExecutionWebhook(ctx context.Context, webhook *types.ExecutionWebhook) error
+	HasExecutionWebhook(ctx context.Context, executionID string) (bool, error)
 	StoreWorkflowExecution(ctx context.Context, execution *types.WorkflowExecution) error
 	UpdateWorkflowExecution(ctx context.Context, executionID string, updateFunc func(*types.WorkflowExecution) (*types.WorkflowExecution, error)) error
 	GetWorkflowExecution(ctx context.Context, executionID string) (*types.WorkflowExecution, error)
@@ -124,6 +125,11 @@ type executionStatusUpdateRequest struct {
 	DurationMS   *int64                 `json:"duration_ms,omitempty"`
 	CompletedAt  *time.Time             `json:"completed_at,omitempty"`
 	Progress     *int                   `json:"progress,omitempty"`
+	// ErrorStatusCode is the optional HTTP status code the agent SDK sends to
+	// indicate whether the failure is client-facing (4xx) or an upstream error
+	// (5xx). When present and in the 4xx range, the control plane propagates it
+	// to callers instead of returning a blanket 502 Bad Gateway.
+	ErrorStatusCode *int `json:"error_status_code,omitempty"`
 	// Usage is the optional token/cost usage object the agent SDK attaches at
 	// the top level of the status-callback body. It is a sibling of Result, so
 	// it is never persisted into the result payload. Absent = no-op.
@@ -358,7 +364,7 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 			}
 			ctx.Header("X-Execution-ID", exec.ExecutionID)
 			ctx.Header("X-Run-ID", exec.RunID)
-			ctx.JSON(http.StatusBadGateway, response)
+			ctx.JSON(httpStatusForFailedExecution(exec), response)
 			return
 		}
 
@@ -941,6 +947,16 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 
 		current.Status = normalizedStatus
 		current.StatusReason = req.StatusReason
+		// When the SDK sends an error_status_code in the 4xx range, record it in
+		// StatusReason so the async-completion branch can propagate the correct
+		// HTTP status to the caller (instead of a blanket 502).
+		if req.ErrorStatusCode != nil && *req.ErrorStatusCode >= 400 && *req.ErrorStatusCode < 500 {
+			code := fmt.Sprintf("agent_client_error:%d", *req.ErrorStatusCode)
+			current.StatusReason = &code
+		} else if req.StatusReason == nil && req.ErrorStatusCode != nil && *req.ErrorStatusCode >= 500 {
+			reason := string(ErrorCategoryAgentError)
+			current.StatusReason = &reason
+		}
 		if len(resultBytes) > 0 {
 			current.ResultPayload = json.RawMessage(resultBytes)
 			current.ResultURI = resultURI
@@ -1007,7 +1023,7 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 
 	if isTerminal {
 		c.updateWorkflowExecutionFinalState(reqCtx, executionID, types.ExecutionStatus(normalizedStatus), updated.ResultPayload, elapsed, errorMsg)
-		if updated.WebhookRegistered {
+		if hasWH, _ := c.store.HasExecutionWebhook(reqCtx, executionID); hasWH {
 			c.triggerWebhook(executionID)
 		}
 	}
@@ -1549,6 +1565,24 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 			agent.DeploymentType = "serverless"
 		}
 	}
+
+	// Reject a call to a node we already know is down BEFORE the execution
+	// record is created. Dispatching into a dead node would persist a row and
+	// then fail it, charging the caller for a failed execution when nothing
+	// was ever attempted. See execute_agent_restart.go.
+	//
+	// Serverless nodes are exempt: they have no heartbeat loop and the health
+	// monitor never polls them, so the presence sweep marks every serverless
+	// node inactive shortly after registration — their recorded health says
+	// nothing about whether an invocation would succeed. Replay requests are
+	// also exempt: a replay hit is served from the recorded run without ever
+	// contacting the agent, so the node being down must not reject it (a
+	// replay miss simply dials and fails exactly as it did before this gate).
+	if agent.DeploymentType != "serverless" && strings.TrimSpace(headers.replaySourceRunID) == "" {
+		if err := ensureAgentDispatchable(agent); err != nil {
+			return nil, err
+		}
+	}
 	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
 		if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
 			execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
@@ -1871,50 +1905,13 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 		}
 	}
 
-	url := buildAgentURL(plan.agent, plan.target)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(plan.requestBody))
-	if err != nil {
-		return nil, 0, false, fmt.Errorf("create agent request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Run-ID", plan.exec.RunID)
-	req.Header.Set("X-Execution-ID", plan.exec.ExecutionID)
-	req.Header.Set("X-Workflow-ID", plan.exec.RunID)
-	if plan.exec.ParentExecutionID != nil {
-		req.Header.Set("X-Parent-Execution-ID", *plan.exec.ParentExecutionID)
-	}
-	if plan.exec.SessionID != nil {
-		req.Header.Set("X-Session-ID", *plan.exec.SessionID)
-	}
-	if plan.exec.ActorID != nil {
-		req.Header.Set("X-Actor-ID", *plan.exec.ActorID)
-	}
-	if c.internalToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.internalToken)
-	}
-	if plan.callerDID != "" {
-		req.Header.Set("X-Caller-DID", plan.callerDID)
-	}
-	if plan.targetDID != "" {
-		req.Header.Set("X-Target-DID", plan.targetDID)
-	}
-	if plan.replaySourceRunID != "" {
-		req.Header.Set("X-AgentField-Replay-Source-Run-ID", plan.replaySourceRunID)
-	}
-	if plan.replayBeforeExecutionID != "" {
-		req.Header.Set("X-AgentField-Replay-Before-Execution-ID", plan.replayBeforeExecutionID)
-	}
-	if plan.replayMode != "" {
-		req.Header.Set("X-AgentField-Replay-Mode", plan.replayMode)
-	}
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.dispatchAgentRequest(ctx, plan)
 	if err != nil {
 		return nil, time.Since(start), false, fmt.Errorf("agent call failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	url := buildAgentURL(plan.agent, plan.target)
 	if resp.StatusCode == http.StatusAccepted {
 		logger.Logger.Info().
 			Str("execution_id", plan.exec.ExecutionID).
@@ -2453,6 +2450,12 @@ func renderStatus(exec *types.Execution) ExecutionStatusResponse {
 func (c *executionController) renderStatusWithApproval(ctx context.Context, exec *types.Execution) ExecutionStatusResponse {
 	resp := renderStatus(exec)
 
+	// Resolve webhook_registered from the execution_webhooks table since the
+	// field is not persisted on the execution record itself (db:"-").
+	if hasWH, err := c.store.HasExecutionWebhook(ctx, exec.ExecutionID); err == nil {
+		resp.WebhookRegistered = hasWH
+	}
+
 	// Best-effort enrichment — if the lookup fails we still return the base response.
 	wfExec, err := c.store.GetWorkflowExecution(ctx, exec.ExecutionID)
 	if err != nil || wfExec == nil {
@@ -2747,7 +2750,65 @@ func classifyRawError(err error) ErrorCategory {
 		return ErrorCategoryInternal
 	}
 
+	// An agent or reasoner that does not exist. Matched on the messages
+	// prepareExecutionForTarget and determineTargetType produce, in the same
+	// style as the transport patterns above.
+	if strings.Contains(errStr, "not found") &&
+		(strings.HasPrefix(errStr, "agent '") || strings.HasPrefix(errStr, "target '")) {
+		return ErrorCategoryTargetNotFound
+	}
+
 	return ErrorCategoryInternal
+}
+
+// httpStatusForFailedExecution determines the HTTP status code to return to
+// callers for a failed execution record. It replaces the hardcoded 502 in the
+// async-completion branch with context-aware classification:
+//
+//  1. If StatusReason encodes a client error ("agent_client_error:<code>"), use that code.
+//  2. If StatusReason maps to a known server-side category, use the appropriate 5xx.
+//  3. Parse ErrorMessage for the "agent error (NNN):" pattern produced by the sync lane.
+//  4. Default to 502 Bad Gateway.
+func httpStatusForFailedExecution(exec *types.Execution) int {
+	// Check StatusReason for an encoded client error status code.
+	if exec.StatusReason != nil {
+		reason := *exec.StatusReason
+		if strings.HasPrefix(reason, "agent_client_error:") {
+			codeStr := strings.TrimPrefix(reason, "agent_client_error:")
+			if code, err := strconv.Atoi(codeStr); err == nil && code >= 400 && code < 500 {
+				return code
+			}
+		}
+		// Map known server-side categories.
+		switch ErrorCategory(reason) {
+		case ErrorCategoryAgentTimeout:
+			return http.StatusGatewayTimeout
+		case ErrorCategoryAgentUnreachable:
+			return http.StatusBadGateway
+		case ErrorCategoryTargetNotFound:
+			return http.StatusNotFound
+		case ErrorCategoryNodeUnavailable:
+			return http.StatusServiceUnavailable
+		case ErrorCategoryConcurrencyLimit:
+			return http.StatusTooManyRequests
+		}
+	}
+
+	// Fallback: parse ErrorMessage for the "agent error (NNN):" pattern that
+	// the sync lane produces when the agent returns an HTTP error directly.
+	if exec.ErrorMessage != nil {
+		msg := *exec.ErrorMessage
+		if strings.HasPrefix(msg, "agent error (") {
+			if idx := strings.Index(msg, "):"); idx > 13 {
+				codeStr := msg[13:idx]
+				if code, err := strconv.Atoi(codeStr); err == nil && code >= 400 && code < 500 {
+					return code
+				}
+			}
+		}
+	}
+
+	return http.StatusBadGateway
 }
 
 func pointerTime(t time.Time) *time.Time {

@@ -446,28 +446,34 @@ Example:
 
 			fmt.Println()
 			fmt.Println("Test it:")
-			fmt.Printf("  curl -X POST http://localhost:8080/api/v1/execute/%s.demo_echo \\\n", nodeID)
+			reasonerName := "demo_echo"
+			if language == "go" {
+				reasonerName = "echo"
+			}
+			fmt.Printf("  curl -X POST http://localhost:8080/api/v1/execute/%s.%s \\\n", nodeID, reasonerName)
 			fmt.Println("    -H \"Content-Type: application/json\" \\")
 			fmt.Println("    -d '{\"input\": {\"message\": \"Hello!\"}}'")
 			fmt.Println()
 			fmt.Println("Enable AI:")
-			fmt.Println("  1. Uncomment the AI config block in main." + getFileExtension(language))
-
 			if language == "python" {
-				fmt.Println("  2. Set API key: export OPENAI_API_KEY=sk-...")
-				fmt.Println("     (or ANTHROPIC_API_KEY, GOOGLE_API_KEY, etc.)")
-				fmt.Println("  3. Uncomment analyze_sentiment in reasoners.py")
+				// The Python scaffold ships with ai_config already enabled.
+				fmt.Println("  1. Set API key: export OPENROUTER_API_KEY=sk-or-...")
+				fmt.Println("     (or OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, etc.)")
+				fmt.Println("  2. Uncomment analyze_sentiment in reasoners.py")
+				fmt.Println("  3. Restart your agent")
 			} else if language == "go" {
+				fmt.Println("  1. Uncomment the AI config block in main.go")
 				fmt.Println("  2. Set API key: export OPENAI_API_KEY=sk-...")
 				fmt.Println("     (or OPENROUTER_API_KEY for OpenRouter)")
 				fmt.Println("  3. Uncomment analyze_sentiment in reasoners.go")
+				fmt.Println("  4. Restart your agent")
 			} else if language == "typescript" {
+				fmt.Println("  1. Uncomment the AI config block in main.ts")
 				fmt.Println("  2. Set API key: export OPENAI_API_KEY=sk-...")
 				fmt.Println("     (or OPENROUTER_API_KEY for OpenRouter)")
 				fmt.Println("  3. Uncomment analyzeSentiment in reasoners.ts")
+				fmt.Println("  4. Restart your agent")
 			}
-
-			fmt.Println("  4. Restart your agent")
 			fmt.Println()
 			printInfo("Learn more: https://agentfield.ai/docs/learn")
 			fmt.Println()

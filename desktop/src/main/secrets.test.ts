@@ -323,6 +323,32 @@ describe('control-plane secret management', () => {
     expect((await getEnvReports({ cpClient }))[0].satisfied).toBe(true)
   })
 
+  it('distinguishes environment-only values from stored values', async () => {
+    const cpClient = client()
+    vi.mocked(cpClient.listAgentSecrets).mockResolvedValue({
+      secrets: [
+        {
+          key: 'ENV_ONLY', is_set: true, env: true, declared_scope: 'global',
+          requirement: 'required'
+        },
+        {
+          key: 'ENV_AND_STORED', is_set: true, env: true, scope: 'global',
+          declared_scope: 'global', requirement: 'required'
+        }
+      ]
+    })
+
+    const [report] = await getEnvReports({ cpClient })
+
+    expect(report.satisfied).toBe(true)
+    expect(report.vars).toEqual([
+      expect.objectContaining({ name: 'ENV_ONLY', status: 'env', storedScopes: [] }),
+      expect.objectContaining({
+        name: 'ENV_AND_STORED', status: 'stored', storedScopes: ['global']
+      })
+    ])
+  })
+
   it('sets and deletes without sending a scope', async () => {
     const cpClient = client()
     await setAgentSecret('agent-id', 'SET_KEY', 'value', { cpClient })

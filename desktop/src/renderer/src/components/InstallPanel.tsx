@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import type { CatalogEntry } from '../../../shared/types'
 import { COMMUNITY_LINKS } from './communityLinks'
+import { MenuPopover } from './MenuPopover'
 import { SkeletonRows } from './Skeleton'
 
 /**
@@ -36,6 +37,7 @@ function InstallCheck() {
 // there is no separate Install view anymore.
 interface InstallPanelProps {
   installedNames: string[]
+  provisioningNames: string[]
   onInstalled: () => void
   /** Installed agents count — labels the "Back to installed (N)" affordance. */
   libraryCount: number
@@ -118,6 +120,7 @@ export function parseRepoSource(input: string): ParsedRepo | null {
 
 export function InstallPanel({
   installedNames,
+  provisioningNames,
   onInstalled,
   libraryCount,
   onBackToLibrary
@@ -386,6 +389,7 @@ export function InstallPanel({
               key={entry.name}
               entry={entry}
               installed={installedNames.includes(entry.name)}
+              provisioning={provisioningNames.includes(entry.name)}
               installing={installing}
               phase={phase}
               confirming={confirming === entry.name}
@@ -416,6 +420,7 @@ export function InstallPanel({
 function FeaturedCard({
   entry,
   installed,
+  provisioning,
   installing,
   phase,
   confirming,
@@ -429,6 +434,7 @@ function FeaturedCard({
 }: {
   entry: CatalogEntry
   installed: boolean
+  provisioning: boolean
   installing: boolean
   phase: InstallPhase
   confirming: boolean
@@ -497,7 +503,11 @@ function FeaturedCard({
         ) : (
           <span className="market-source">{sourceLabel}</span>
         )}
-        {installed ? (
+        {provisioning ? (
+          <button className="install-button" disabled>
+            Installing…
+          </button>
+        ) : installed ? (
           confirming ? (
             <div className="row-actions">
               <button className="action-button danger" disabled={installing} onClick={onUninstall}>
@@ -514,35 +524,24 @@ function FeaturedCard({
           ) : (
             <div className="row-actions">
               <span className="market-installed">✓ Installed</span>
-              <div className="menu-anchor">
+              <MenuPopover
+                open={menuOpen}
+                onToggle={onToggleMenu}
+                disabled={installing}
+                ariaLabel={`More actions for ${entry.name}`}
+              >
                 <button
-                  className="action-button icon"
-                  aria-label={`More actions for ${entry.name}`}
-                  aria-expanded={menuOpen}
-                  disabled={installing}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onToggleMenu()
-                  }}
+                  className="menu-item"
+                  role="menuitem"
+                  title="Reinstall the latest version; a running agent restarts after the update"
+                  onClick={onUpdate}
                 >
-                  ⋯
+                  {busy ? 'Updating…' : 'Update'}
                 </button>
-                {menuOpen && (
-                  <div className="menu-popover" role="menu">
-                    <button
-                      className="menu-item"
-                      role="menuitem"
-                      title="Reinstall the latest version; a running agent restarts after the update"
-                      onClick={onUpdate}
-                    >
-                      {busy ? 'Updating…' : 'Update'}
-                    </button>
-                    <button className="menu-item danger" role="menuitem" onClick={onConfirmUninstall}>
-                      Uninstall
-                    </button>
-                  </div>
-                )}
-              </div>
+                <button className="menu-item danger" role="menuitem" onClick={onConfirmUninstall}>
+                  Uninstall
+                </button>
+              </MenuPopover>
             </div>
           )
         ) : (

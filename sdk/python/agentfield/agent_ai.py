@@ -402,7 +402,7 @@ class AgentAI:
 
     @property
     def _minimax_provider(self):
-        """Lazy-initialized MiniMax provider for video generation."""
+        """Lazy-initialized MiniMax media provider."""
         if self._minimax_provider_instance is None:
             from agentfield.media_providers import MiniMaxProvider
 
@@ -655,13 +655,34 @@ class AgentAI:
             if system:
                 messages.append({"role": "system", "content": system})
 
-        # Handle flexible user input with intelligent processing
-        if user:
-            messages.append({"role": "user", "content": user})
-        elif args:
-            processed_content = self._process_multimodal_args(args)
-            if processed_content:
-                messages.extend(processed_content)
+        # Handle flexible user input with intelligent processing. When both
+        # input styles are used, keep the positional multimodal content and
+        # append the keyword prompt to the final user message.
+        processed_content = self._process_multimodal_args(args) if args else []
+        if user and processed_content:
+            user_message = next(
+                (
+                    message
+                    for message in reversed(processed_content)
+                    if message.get("role") == "user"
+                ),
+                None,
+            )
+            if user_message is not None:
+                content = user_message.get("content")
+                if isinstance(content, list):
+                    content.append({"type": "text", "text": user})
+                else:
+                    user_message["content"] = [
+                        {"type": "text", "text": content},
+                        {"type": "text", "text": user},
+                    ]
+            else:
+                processed_content.append({"role": "user", "content": user})
+        elif user:
+            processed_content.append({"role": "user", "content": user})
+
+        messages.extend(processed_content)
 
         litellm_module = litellm if hasattr(litellm, "acompletion") else None
 
@@ -1443,16 +1464,21 @@ class AgentAI:
         """
         AI method optimized for audio output generation.
 
-        Automatically detects the model type and uses the appropriate LiteLLM function:
+        Automatically detects the model type and uses the appropriate provider:
+        - For MiniMax TTS models (minimax/speech-2.8-hd, etc.): Uses MiniMax T2A
         - For TTS models (tts-1, tts-1-hd, gpt-4o-mini-tts): Uses litellm.speech()
         - For audio-capable chat models (gpt-4o-audio-preview): Uses litellm.completion() with audio modalities
 
         Args:
             *args: Input arguments (text prompts, etc.)
-            voice: Voice to use for audio generation (alloy, echo, fable, onyx, nova, shimmer)
-            format: Audio format (wav, mp3, etc.)
+            voice: Voice identifier. OpenAI voices include alloy, echo, fable,
+                onyx, nova, and shimmer. MiniMax models require a MiniMax voice ID.
+            format: Audio format. MiniMax supports mp3, wav, flac, and pcm.
             model: Model to use (defaults to tts-1)
-            **kwargs: Additional parameters
+            **kwargs: Additional parameters. MiniMax supports output_format
+                ("hex" or "url"), language_boost, voice_setting,
+                pronunciation_dict, audio_setting, voice_modify, and
+                subtitle_enable. Streaming is not supported.
 
         Returns:
             MultimodalResponse with audio content
@@ -1460,12 +1486,32 @@ class AgentAI:
         Example:
             audio_result = await agent.ai_with_audio("Say hello warmly", voice="alloy")
             audio_result.audio.save("greeting.wav")
+
+            minimax_result = await agent.ai_with_audio(
+                "Say hello warmly",
+                model="minimax/speech-2.8-hd",
+                voice="English_Graceful_Lady",
+                format="mp3",
+            )
         """
         # Use TTS model as default (more reliable than gpt-4o-audio-preview)
         if model is None:
             model = (
                 self.agent.ai_config.audio_model
             )  # Use configured audio model (defaults to tts-1)
+
+        if model.startswith("minimax/"):
+            provider = self._media_router.resolve(model, "audio")
+            text_input = " ".join(str(arg) for arg in args if isinstance(arg, str))
+            if not text_input:
+                text_input = "Hello, this is a test audio message."
+            return await provider.generate_audio(
+                text=text_input,
+                model=model,
+                voice=voice,
+                format=format,
+                **kwargs,
+            )
 
         # Try media router for fal models
         try:
@@ -1919,14 +1965,22 @@ class AgentAI:
         Supported Providers:
         - LiteLLM: OpenAI TTS models like "tts-1", "tts-1-hd", "gpt-4o-mini-tts"
         - Fal.ai: TTS models like "fal-ai/kokoro/..." (custom deployments)
+        - MiniMax: TTS models prefixed with "minimax/", such as
+          "minimax/speech-2.8-hd"
 
         Args:
             text: Text to convert to speech
             model: TTS model to use (defaults to AIConfig.audio_model, typically "tts-1")
-            voice: Voice to use ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
-            format: Audio format ("wav", "mp3", "opus", "aac", "flac", "pcm")
+            voice: Voice identifier. OpenAI voices include "alloy", "echo",
+                "fable", "onyx", "nova", and "shimmer". MiniMax models
+                require a MiniMax voice ID instead of the default "alloy".
+            format: Audio format. MiniMax supports "mp3", "wav", "flac", and
+                "pcm".
             speed: Speech speed multiplier (0.25 to 4.0)
-            **kwargs: Provider-specific parameters
+            **kwargs: Provider-specific parameters. MiniMax supports
+                output_format ("hex" or "url"), language_boost,
+                voice_setting, pronunciation_dict, audio_setting,
+                voice_modify, and subtitle_enable. Streaming is not supported.
 
         Returns:
             MultimodalResponse: Response object with .audio containing AudioOutput.
@@ -1947,6 +2001,16 @@ class AgentAI:
                 model="tts-1-hd",
                 voice="nova",
                 format="mp3"
+            )
+
+            # MiniMax TTS with a MiniMax voice ID
+            result = await app.ai_generate_audio(
+                "Welcome to the presentation.",
+                model="minimax/speech-2.8-hd",
+                voice="English_Graceful_Lady",
+                format="mp3",
+                language_boost="English",
+                output_format="hex",
             )
 
             # Adjust speech speed

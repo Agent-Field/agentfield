@@ -5,10 +5,14 @@ import {
   getBaseUrl,
   isCloudActive,
   setCloudConnection,
+  setLocalApiKey,
   setLocalPort
 } from './connection'
 
-afterEach(() => setLocalPort(8080))
+afterEach(() => {
+  setLocalApiKey(null)
+  setLocalPort(8080)
+})
 
 describe('connection state', () => {
   it('switches to cloud and restores the last local port', () => {
@@ -21,6 +25,24 @@ describe('connection state', () => {
     expect(getBaseUrl()).toBe('http://localhost:9091')
     expect(getApiKey()).toBeNull()
     expect(isCloudActive()).toBe(false)
+  })
+
+  it('sends no key locally until one is configured, and keeps it across ports', () => {
+    expect(getApiKey()).toBeNull()
+    setLocalApiKey('local-secret')
+    expect(getApiKey()).toBe('local-secret')
+    setLocalPort(9091)
+    expect(getApiKey()).toBe('local-secret')
+    setLocalApiKey('')
+    expect(getApiKey()).toBeNull()
+  })
+
+  it('prefers the cloud key while cloud is active and restores the local one after', () => {
+    setLocalApiKey('local-secret')
+    setCloudConnection('https://cp.example', 'cloud-key')
+    expect(getApiKey()).toBe('cloud-key')
+    clearCloudConnection()
+    expect(getApiKey()).toBe('local-secret')
   })
 
   it('setting a local port clears cloud state', () => {

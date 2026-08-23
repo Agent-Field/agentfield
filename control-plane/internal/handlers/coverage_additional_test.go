@@ -159,6 +159,7 @@ func (s *cleanupStorageStub) CleanupWorkflow(ctx context.Context, workflowID str
 
 type nodeRESTStorageStub struct {
 	storage.StorageProvider
+	mu               sync.Mutex
 	agent            *types.AgentNode
 	versionedAgent   *types.AgentNode
 	listAgents       []*types.AgentNode
@@ -170,6 +171,7 @@ type nodeRESTStorageStub struct {
 	lastVersion      string
 	updatedLifecycle *types.AgentLifecycleStatus
 	registeredAgent  *types.AgentNode
+	healthUpdates    []types.HealthStatus
 }
 
 func (s *nodeRESTStorageStub) GetAgent(ctx context.Context, id string) (*types.AgentNode, error) {
@@ -193,9 +195,18 @@ func (s *nodeRESTStorageStub) GetAgentVersion(ctx context.Context, id, version s
 }
 
 func (s *nodeRESTStorageStub) UpdateAgentHeartbeat(ctx context.Context, id, version string, ts time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.lastHeartbeatID = id
 	s.lastVersion = version
 	s.heartbeats = append(s.heartbeats, ts)
+	return nil
+}
+
+func (s *nodeRESTStorageStub) UpdateAgentHealth(ctx context.Context, id string, status types.HealthStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.healthUpdates = append(s.healthUpdates, status)
 	return nil
 }
 

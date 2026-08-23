@@ -8,7 +8,7 @@ A research agent that uses recursive planning to break down research questions i
 - **Task Deduplication** – Merges redundant tasks
 - **Smart Search Strategy** – Decides synthesis-only vs enhanced search for parent tasks
 - **Topological Execution** – Parallel execution with dependency management
-- **Web Search** – Tavily API integration with citation tracking
+- **Web Search** – Tavily by default, or setup-free Parallel Search by explicit opt-in
 
 ## Quick Start
 
@@ -17,6 +17,13 @@ A research agent that uses recursive planning to break down research questions i
 ```bash
 pip install -r examples/python_agent_nodes/deep_research/requirements.txt
 export TAVILY_API_KEY="your-tavily-api-key"
+```
+
+Tavily remains the default search provider. To use Parallel Search instead,
+select it explicitly; its hosted Search MCP endpoint needs no account or API key:
+
+```bash
+export SEARCH_PROVIDER=parallel
 ```
 
 ### 2. Run Agent
@@ -71,8 +78,9 @@ curl -X POST http://localhost:8080/reasoners/planning_execute_deep_research \
 
 ## Environment Variables
 
-| Variable            | Description               | Default                                      |
-| ------------------- | ------------------------- | -------------------------------------------- |
-| `TAVILY_API_KEY`    | Tavily API key (required) | -                                            |
-| `AGENTFIELD_SERVER` | Control plane URL         | `http://localhost:8080`                      |
-| `AI_MODEL`          | LLM model                 | `openrouter/deepseek/deepseek-v3.1-terminus` |
+| Variable            | Description                                       | Default                                      |
+| ------------------- | ------------------------------------------------- | -------------------------------------------- |
+| `SEARCH_PROVIDER`   | Web search backend: `tavily` or `parallel`        | `tavily`                                     |
+| `TAVILY_API_KEY`    | Tavily API key (required when using Tavily)       | -                                            |
+| `AGENTFIELD_SERVER` | Control plane URL                                 | `http://localhost:8080`                      |
+| `AI_MODEL`          | LLM model                                         | `openrouter/deepseek/deepseek-v3.1-terminus` |
