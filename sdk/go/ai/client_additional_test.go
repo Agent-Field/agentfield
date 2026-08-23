@@ -67,6 +67,22 @@ func TestCompleteWithMessages_AdditionalCoverage(t *testing.T) {
 }
 
 func TestDoRequest_ErrorPaths(t *testing.T) {
+	t.Run("redirect is a non-2xx API error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusFound)
+			_, _ = io.WriteString(w, "redirect body")
+		}))
+		defer server.Close()
+
+		client, err := NewClient(&Config{APIKey: "test-key", BaseURL: server.URL, Model: "gpt-4o"})
+		require.NoError(t, err)
+		_, err = client.doRequest(context.Background(), &Request{})
+		require.Error(t, err)
+		var apiErr *APIError
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusFound, apiErr.StatusCode)
+	})
+
 	for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +141,22 @@ func TestDoRequest_ErrorPaths(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, apiErr.StatusCode)
 		assert.Equal(t, []byte("upstream exploded"), apiErr.Body)
 		assert.ErrorIs(t, err, &APIError{StatusCode: http.StatusInternalServerError})
+	})
+
+	t.Run("api error preserves partial structured fields", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"type":"content_filter","code":"blocked"}}`)
+		}))
+		defer server.Close()
+
+		client, err := NewClient(&Config{APIKey: "test-key", BaseURL: server.URL, Model: "gpt-4o"})
+		require.NoError(t, err)
+		_, err = client.doRequest(context.Background(), &Request{})
+		var apiErr *APIError
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, "content_filter", apiErr.Type)
+		assert.Equal(t, "blocked", apiErr.Code)
 	})
 
 	t.Run("invalid response json", func(t *testing.T) {

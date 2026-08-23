@@ -129,7 +129,7 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 	}
 
 	// Check for errors
-	if httpResp.StatusCode >= 400 {
+	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 		return nil, newAPIError(httpResp.StatusCode, respBody)
 	}
 
@@ -217,7 +217,7 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 		defer httpResp.Body.Close()
 
 		// Check for errors
-		if httpResp.StatusCode >= 400 {
+		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 			respBody, _ := io.ReadAll(httpResp.Body)
 			errCh <- newAPIError(httpResp.StatusCode, respBody)
 			return

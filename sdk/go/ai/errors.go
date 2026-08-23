@@ -41,7 +41,8 @@ func newAPIError(statusCode int, body []byte) *APIError {
 	apiErr := &APIError{StatusCode: statusCode}
 
 	var response ErrorResponse
-	if err := json.Unmarshal(body, &response); err == nil && response.Error.Message != "" {
+	if err := json.Unmarshal(body, &response); err == nil &&
+		(response.Error.Message != "" || response.Error.Type != "" || response.Error.Code != "") {
 		apiErr.Message = response.Error.Message
 		apiErr.Type = response.Error.Type
 		apiErr.Code = response.Error.Code
