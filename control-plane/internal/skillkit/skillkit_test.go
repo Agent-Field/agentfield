@@ -431,7 +431,7 @@ func TestHelpersAndTargets(t *testing.T) {
 		t.Fatalf("mkdir opencode dir: %v", err)
 	}
 	opencode := opencodeTarget{}
-	if opencode.DisplayName() != "OpenCode" || opencode.Method() != "marker-block" {
+	if opencode.DisplayName() != "OpenCode" || opencode.Method() != "symlink" {
 		t.Fatalf("unexpected opencode metadata: %q %q", opencode.DisplayName(), opencode.Method())
 	}
 	if !opencode.Detected() {
