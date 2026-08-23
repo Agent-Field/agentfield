@@ -67,6 +67,27 @@ func TestCompleteWithMessages_AdditionalCoverage(t *testing.T) {
 }
 
 func TestDoRequest_ErrorPaths(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, `{"error":{"message":"retry later","type":"rate_limit","code":"busy"}}`)
+			}))
+			defer server.Close()
+
+			client, err := NewClient(&Config{APIKey: "test-key", BaseURL: server.URL, Model: "gpt-4o"})
+			require.NoError(t, err)
+			_, err = client.doRequest(context.Background(), &Request{})
+			require.Error(t, err)
+
+			var apiErr *APIError
+			require.ErrorAs(t, err, &apiErr)
+			assert.Equal(t, status, apiErr.StatusCode)
+			assert.Equal(t, "rate_limit", apiErr.Type)
+			assert.Equal(t, "busy", apiErr.Code)
+		})
+	}
+
 	t.Run("api error json body", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
@@ -79,7 +100,11 @@ func TestDoRequest_ErrorPaths(t *testing.T) {
 
 		_, err = client.doRequest(context.Background(), &Request{Messages: []Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "hello"}}}}})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "API error: bad request")
+		assert.Contains(t, err.Error(), "API error (400): bad request")
+		var apiErr *APIError
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+		assert.Equal(t, "invalid_request", apiErr.Type)
 	})
 
 	t.Run("api error non json body", func(t *testing.T) {
@@ -95,6 +120,11 @@ func TestDoRequest_ErrorPaths(t *testing.T) {
 		_, err = client.doRequest(context.Background(), &Request{Messages: []Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "hello"}}}}})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "API error (500): upstream exploded")
+		var apiErr *APIError
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusInternalServerError, apiErr.StatusCode)
+		assert.Equal(t, []byte("upstream exploded"), apiErr.Body)
+		assert.ErrorIs(t, err, &APIError{StatusCode: http.StatusInternalServerError})
 	})
 
 	t.Run("invalid response json", func(t *testing.T) {
@@ -145,6 +175,9 @@ func TestStreamComplete_AdditionalCoverage(t *testing.T) {
 		}
 		require.Error(t, streamErr)
 		assert.Contains(t, streamErr.Error(), "API error (502): temporary failure")
+		var apiErr *APIError
+		require.ErrorAs(t, streamErr, &apiErr)
+		assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
 	})
 
 	t.Run("context cancellation while sending chunk", func(t *testing.T) {
