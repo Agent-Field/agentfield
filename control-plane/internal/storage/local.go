@@ -68,6 +68,13 @@ func (e *ValidationError) Error() string {
 
 // getWorkflowExecutionByID is a helper function that retrieves a workflow execution using DBTX interface
 func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, executionID string) (*types.WorkflowExecution, error) {
+	return ls.getWorkflowExecutionByIDSuffix(ctx, q, executionID, "")
+}
+
+// getWorkflowExecutionByIDSuffix is getWorkflowExecutionByID with a trailing
+// SQL suffix — pass a row-locking suffix (see sqlTx.forUpdate) when the same
+// transaction will write the row back, "" for plain reads.
+func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DBTX, executionID string, suffix string) (*types.WorkflowExecution, error) {
 	query := `
 		SELECT workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
 		       agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
@@ -79,7 +86,7 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 		       approval_request_id, approval_request_url, approval_status, approval_response,
 		       approval_requested_at, approval_responded_at, approval_callback_url, approval_expires_at,
 		       workflow_name, workflow_tags, notes, created_at, updated_at
-		FROM workflow_executions WHERE execution_id = ?`
+		FROM workflow_executions WHERE execution_id = ?` + suffix
 
 	row := q.QueryRowContext(ctx, query, executionID)
 	execution := &types.WorkflowExecution{}
@@ -2314,8 +2321,10 @@ func (ls *LocalStorage) attemptWorkflowExecutionUpdate(ctx context.Context, exec
 	}
 	defer rollbackTx(tx, "attemptWorkflowExecutionUpdate:"+executionID)
 
-	// Read the current execution within the transaction
-	currentExecution, err := ls.getWorkflowExecutionWithTx(txCtx, tx, executionID)
+	// Read the current execution within the transaction, locking the row so a
+	// concurrent read-modify-write cannot base its UPDATE on a stale snapshot
+	// (postgres only; see forUpdate).
+	currentExecution, err := ls.getWorkflowExecutionByIDSuffix(txCtx, tx, executionID, tx.forUpdate())
 	if err != nil {
 		return fmt.Errorf("failed to get workflow execution %s: %w", executionID, err)
 	}
