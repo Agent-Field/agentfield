@@ -72,6 +72,7 @@ func TestLocalStorageVectorLifecycleAndSearch(t *testing.T) {
 	assert.Contains(t, err.Error(), "vector store is disabled")
 }
 
+// TestLocalStorageConfigLifecycle verifies config CRUD metadata and context cancellation guarantees.
 func TestLocalStorageConfigLifecycle(t *testing.T) {
 	ls, ctx := setupLocalStorage(t)
 
@@ -83,6 +84,10 @@ func TestLocalStorageConfigLifecycle(t *testing.T) {
 	assert.Equal(t, 1, entry.Version)
 	assert.Equal(t, "alice", entry.CreatedBy)
 	assert.Equal(t, "alice", entry.UpdatedBy)
+	require.False(t, entry.CreatedAt.IsZero())
+	require.False(t, entry.UpdatedAt.IsZero())
+	createdAt := entry.CreatedAt
+	firstUpdatedAt := entry.UpdatedAt
 
 	require.NoError(t, ls.SetConfig(ctx, "ui.theme", "dark", "bob"))
 	entry, err = ls.GetConfig(ctx, "ui.theme")
@@ -92,6 +97,8 @@ func TestLocalStorageConfigLifecycle(t *testing.T) {
 	assert.Equal(t, 2, entry.Version)
 	assert.Equal(t, "alice", entry.CreatedBy)
 	assert.Equal(t, "bob", entry.UpdatedBy)
+	assert.Equal(t, createdAt, entry.CreatedAt)
+	assert.False(t, entry.UpdatedAt.Before(firstUpdatedAt))
 
 	require.NoError(t, ls.SetConfig(ctx, "ui.locale", "en-US", "bob"))
 	entries, err := ls.ListConfigs(ctx)
@@ -106,16 +113,23 @@ func TestLocalStorageConfigLifecycle(t *testing.T) {
 	assert.Nil(t, missing)
 
 	err = ls.DeleteConfig(ctx, "ui.locale")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	require.EqualError(t, err, `config "ui.locale" not found`)
 
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	err = ls.SetConfig(canceled, "ui.theme", "solarized", "bob")
-	require.Error(t, err)
+	require.ErrorIs(t, ls.SetConfig(canceled, "ui.theme", "solarized", "bob"), context.Canceled)
 
+	_, err = ls.GetConfig(canceled, "ui.theme")
+	require.ErrorIs(t, err, context.Canceled)
 	_, err = ls.ListConfigs(canceled)
-	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, ls.DeleteConfig(canceled, "ui.theme"), context.Canceled)
+
+	// A cancelled write or delete must leave the previously committed value untouched.
+	entry, err = ls.GetConfig(ctx, "ui.theme")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "dark", entry.Value)
 }
 
 func TestLocalStorageCacheAndPubSub(t *testing.T) {
