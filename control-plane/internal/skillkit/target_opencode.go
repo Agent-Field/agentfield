@@ -65,8 +65,14 @@ func (t opencodeTarget) Install(skill Skill, canonicalCurrentDir string) (Instal
 }
 
 func (t opencodeTarget) Uninstall() error {
+<<<<<<< HEAD
 	// Resolve the target root before iterating so configuration errors (such as
 	// an unset HOME) are reported consistently with the other targets.
+=======
+	// Resolve the target root up front so failures (for example, an
+	// unavailable home directory) are reported to the caller instead of
+	// being silently ignored while iterating over the catalog.
+>>>>>>> bde4c576 (fix(skillkit): propagate OpenCode uninstall home errors)
 	if _, err := t.TargetPath(); err != nil {
 		return err
 	}
