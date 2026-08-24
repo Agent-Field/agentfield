@@ -101,7 +101,7 @@ func (p *piFamilyProvider) execute(ctx context.Context, prompt string, options O
 
 	tools := normalizePiTools(options.Tools, p.flavor)
 	if options.PermissionMode == "plan" {
-		readOnly := tools[:0]
+		readOnly := make([]string, 0, len(tools))
 		for _, tool := range tools {
 			if piReadOnlyTools[tool] {
 				readOnly = append(readOnly, tool)
@@ -163,7 +163,11 @@ func (p *piFamilyProvider) execute(ctx context.Context, prompt string, options O
 	raw.Metrics.DurationAPIMS = apiMS
 	raw.ReturnCode = cliResult.ReturnCode
 	stderr := StripANSI(strings.TrimSpace(cliResult.Stderr))
-	if cliResult.ReturnCode != 0 {
+	if cliResult.ReturnCode < 0 {
+		raw.IsError = true
+		raw.FailureType = FailureCrash
+		raw.ErrorMessage = fmt.Sprintf("Process killed by signal %d.", -cliResult.ReturnCode)
+	} else if cliResult.ReturnCode != 0 {
 		raw.IsError = true
 		raw.FailureType = FailureCrash
 		if stderr != "" {

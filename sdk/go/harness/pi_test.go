@@ -207,6 +207,12 @@ func TestPiFamilyExecutionFailures(t *testing.T) {
 			message:     "Process exited with code 7.",
 		},
 		{
+			name:        "signal kill reports the signal, not an exit code",
+			result:      &CLIResult{ReturnCode: -9},
+			failureType: FailureCrash,
+			message:     "Process killed by signal 9.",
+		},
+		{
 			name:        "api error event",
 			result:      &CLIResult{Stdout: `{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"quota exceeded"}}`},
 			failureType: FailureAPIError,
