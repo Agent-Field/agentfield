@@ -1,11 +1,42 @@
 import { useEffect, useState } from "react";
 import type {
+    CloudAutoUpdateMode,
     CloudDeployResult,
-    CloudImageUpdate,
     CloudTestResult,
+    CloudUpdateStatus,
     DesktopSettings,
     RailwayStatus,
 } from "../../../shared/types";
+
+export function deployedWorkspacePickerVisible(railway: RailwayStatus): boolean {
+    return railway.hasDeployment && railway.workspaces.length > 1;
+}
+
+export function deploymentActionWorkspaceId(
+    railway: RailwayStatus | null,
+    selectedWorkspaceId: string,
+): string {
+    if (selectedWorkspaceId) return selectedWorkspaceId;
+    return railway?.hasDeployment ? railway.deploymentWorkspaceId ?? "" : "";
+}
+
+export function cloudUpdateActionVisible(status: CloudUpdateStatus): boolean {
+    return (
+        status.canApply &&
+        (status.status === "available" ||
+            (status.status === "legacy" && status.latest !== null))
+    );
+}
+
+export function cloudUpdateActionLabel(status: CloudUpdateStatus): string {
+    return status.status === "legacy" ? "Update control plane" : "Update now";
+}
+
+type CloudUpdateFeedback = { ok: boolean; text: string };
+
+export function cloudUpdateFeedbackClass(feedback: CloudUpdateFeedback): string {
+    return feedback.ok ? "row-sub" : "row-sub error-text";
+}
 
 type Confirmation = {
     mode: "cloud" | "local";
@@ -30,8 +61,10 @@ export function CloudPanel() {
     const [error, setError] = useState<string | null>(null);
     const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
     const [railway, setRailway] = useState<RailwayStatus | null>(null);
-    const [cloudImageUpdate, setCloudImageUpdate] =
-        useState<CloudImageUpdate | null>(null);
+    const [cloudUpdate, setCloudUpdate] = useState<CloudUpdateStatus | null>(null);
+    const [cloudUpdateBusy, setCloudUpdateBusy] = useState<"apply" | "schedule" | null>(null);
+    const [cloudUpdateMessage, setCloudUpdateMessage] =
+        useState<CloudUpdateFeedback | null>(null);
     const [railwayBusy, setRailwayBusy] = useState<
         "login" | "deploy" | "destroy" | null
     >(null);
@@ -66,8 +99,20 @@ export function CloudPanel() {
     }, []);
 
     useEffect(() => {
+        if (!settings?.cloud.enabled) return;
+        void window.agentfield.checkCloudUpdate().then(setCloudUpdate);
+        return window.agentfield.onCloudUpdateStatus(setCloudUpdate);
+    }, [settings?.cloud.enabled]);
+
+    useEffect(() => {
         if (!railway?.loggedIn) {
             setWorkspaceId("");
+        } else if (
+            workspaceId === "" &&
+            railway.deploymentWorkspaceId &&
+            railway.workspaces.some((workspace) => workspace.id === railway.deploymentWorkspaceId)
+        ) {
+            setWorkspaceId(railway.deploymentWorkspaceId);
         } else if (railway.workspaces.length === 1) {
             setWorkspaceId(railway.workspaces[0].id);
         } else if (
@@ -82,17 +127,6 @@ export function CloudPanel() {
     useEffect(() => {
         if (railway && !railway.engineAvailable) setActiveTab("manual");
     }, [railway?.engineAvailable]);
-
-    useEffect(() => {
-        if (activeTab !== "railway" || !railway?.hasDeployment) {
-            setCloudImageUpdate(null);
-            return;
-        }
-        void window.agentfield
-            .checkCloudImageUpdate()
-            .then(setCloudImageUpdate)
-            .catch(() => setCloudImageUpdate(null));
-    }, [activeTab, railway?.hasDeployment]);
 
     useEffect(() => {
         if (!confirmation) return;
@@ -135,12 +169,10 @@ export function CloudPanel() {
         setError(null);
         setConfirmation(null);
         try {
-            const next = await window.agentfield.setSettings({
-                cloud: {
-                    enabled: true,
-                    serverUrl: serverUrl.trim(),
-                    apiKey: apiKey.trim(),
-                },
+            const next = await window.agentfield.setCloudProfile({
+                enabled: true,
+                serverUrl: serverUrl.trim(),
+                apiKey: apiKey.trim(),
             });
             setSettings(next);
             setServerUrl(next.cloud?.serverUrl ?? serverUrl.trim());
@@ -161,12 +193,10 @@ export function CloudPanel() {
         setError(null);
         setConfirmation(null);
         try {
-            const next = await window.agentfield.setSettings({
-                cloud: {
-                    enabled: false,
-                    serverUrl: serverUrl.trim(),
-                    apiKey: apiKey.trim(),
-                },
+            const next = await window.agentfield.setCloudProfile({
+                enabled: false,
+                serverUrl: serverUrl.trim(),
+                apiKey: apiKey.trim(),
             });
             setSettings(next);
             setConfirmation({ mode: "local" });
@@ -201,14 +231,19 @@ export function CloudPanel() {
     };
 
     const deploy = async () => {
-        if (!workspaceId) return;
+        const actionWorkspaceId = deploymentActionWorkspaceId(
+            railway,
+            workspaceId,
+        );
+        if (!actionWorkspaceId) return;
         setRailwayBusy("deploy");
         setDeployLines([]);
         setDeployResult(null);
         setDestroyed(false);
         setError(null);
         try {
-            const nextResult = await window.agentfield.cloudDeploy(workspaceId);
+            const nextResult =
+                await window.agentfield.cloudDeploy(actionWorkspaceId);
             setDeployResult(nextResult);
             if (nextResult.ok) {
                 const next = await window.agentfield.getSettings();
@@ -217,11 +252,9 @@ export function CloudPanel() {
                 setApiKey(next.cloud.apiKey);
             }
             await refreshRailway();
-            setCloudImageUpdate(
-                await window.agentfield
-                    .checkCloudImageUpdate()
-                    .catch(() => null),
-            );
+            if (nextResult.ok) {
+                setCloudUpdate(await window.agentfield.checkCloudUpdate());
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -244,13 +277,52 @@ export function CloudPanel() {
             setShowDestroy(false);
             setDeleteText("");
             setDeployResult(null);
-            setCloudImageUpdate(null);
+            setCloudUpdate(null);
             setDestroyed(true);
             await refreshRailway();
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             setRailwayBusy(null);
+        }
+    };
+
+    const applyCloudControlPlaneUpdate = async () => {
+        setCloudUpdateBusy("apply");
+        setCloudUpdateMessage(null);
+        try {
+            const applied = await window.agentfield.applyCloudUpdate();
+            setCloudUpdateMessage({ ok: applied.ok, text: applied.message });
+            setCloudUpdate(await window.agentfield.checkCloudUpdate());
+        } catch (err) {
+            setCloudUpdateMessage({
+                ok: false,
+                text: `${err instanceof Error ? err.message : String(err)} Check Railway deployment logs and try again.`,
+            });
+        } finally {
+            setCloudUpdateBusy(null);
+        }
+    };
+
+    const setAutoUpdate = async (mode: CloudAutoUpdateMode) => {
+        setCloudUpdateBusy("schedule");
+        setCloudUpdateMessage(null);
+        try {
+            const changed = await window.agentfield.setCloudAutoUpdate(mode);
+            if (!changed.ok) {
+                setCloudUpdateMessage({ ok: false, text: changed.message });
+                return;
+            }
+            const next = await window.agentfield.getSettings();
+            setSettings(next);
+            setCloudUpdateMessage({ ok: true, text: changed.message });
+        } catch (err) {
+            setCloudUpdateMessage({
+                ok: false,
+                text: `${err instanceof Error ? err.message : String(err)} Try again.`,
+            });
+        } finally {
+            setCloudUpdateBusy(null);
         }
     };
 
@@ -309,6 +381,61 @@ export function CloudPanel() {
                     </button>
                 )}
             </div>
+
+            {enabled && cloudUpdate && (
+                <div className="panel cloud-status-strip">
+                    <div className="row-main" aria-live="polite">
+                        <span className="row-title">
+                            Control plane {cloudUpdate.current ? `v${cloudUpdate.current}` : "version unknown"}
+                            {" · "}{cloudPlatformLabel(cloudUpdate.hosting?.platform)}
+                            {" · "}{cloudUpdateLabel(cloudUpdate)}
+                        </span>
+                        <span className="row-sub">{cloudUpdate.message}</span>
+                        {cloudUpdateMessage && (
+                            <span className={cloudUpdateFeedbackClass(cloudUpdateMessage)}>
+                                {cloudUpdateMessage.text}
+                            </span>
+                        )}
+                    </div>
+                    <div className="row-side">
+                        {cloudUpdateActionVisible(cloudUpdate) && (
+                            <button
+                                type="button"
+                                className="action-button primary"
+                                disabled={cloudUpdateBusy !== null || cloudUpdate.applying}
+                                onClick={() => void applyCloudControlPlaneUpdate()}
+                            >
+                                {cloudUpdateBusy === "apply" || cloudUpdate.applying
+                                    ? "Updating…"
+                                    : cloudUpdateActionLabel(cloudUpdate)}
+                            </button>
+                        )}
+                        {railway?.loggedIn &&
+                            (railway.hasDeployment || cloudUpdate.hosting?.platform === "railway") && (
+                                <label className="cloud-workspace-field">
+                                    <span className="row-sub">Railway image updates</span>
+                                    <select
+                                        className="env-input"
+                                        aria-label="Railway image auto-update schedule"
+                                        value={settings.cloud.autoUpdate ?? ""}
+                                        disabled={cloudUpdateBusy !== null}
+                                        onChange={(event) =>
+                                            void setAutoUpdate(event.target.value as CloudAutoUpdateMode)
+                                        }
+                                    >
+                                        <option value="" disabled>
+                                            Not set — choose a window
+                                        </option>
+                                        <option value="off">Off — never update automatically</option>
+                                        <option value="nightly">Nightly — every day, 02:00–06:00 UTC</option>
+                                        <option value="weekends">Weekends — Saturday and Sunday, all day UTC</option>
+                                        <option value="anytime">Anytime — apply after Railway detects a release</option>
+                                    </select>
+                                </label>
+                            )}
+                    </div>
+                </div>
+            )}
 
             <div
                 className="cloud-tabs"
@@ -501,29 +628,28 @@ export function CloudPanel() {
                                                 settings.cloud.serverUrl,
                                         )}
                                     </div>
-                                    {cloudImageUpdate?.updateAvailable && (
-                                        <div
-                                            className="callout warning"
-                                            role="status"
-                                        >
-                                            Control plane{" "}
-                                            {cloudImageUpdate.current} →{" "}
-                                            {cloudImageUpdate.latest} available
-                                        </div>
+                                    {deployedWorkspacePickerVisible(railway) && (
+                                        <WorkspacePicker
+                                            railway={railway}
+                                            value={workspaceId}
+                                            disabled={railwayBusy !== null}
+                                            onChange={setWorkspaceId}
+                                        />
                                     )}
                                     <div className="cloud-actions">
                                         <button
                                             className="action-button primary"
                                             type="button"
                                             disabled={
-                                                !workspaceId ||
+                                                !deploymentActionWorkspaceId(
+                                                    railway,
+                                                    workspaceId,
+                                                ) ||
                                                 railwayBusy !== null
                                             }
                                             onClick={() => void deploy()}
                                         >
-                                            {cloudImageUpdate?.updateAvailable
-                                                ? "Upgrade & redeploy"
-                                                : "Re-run deploy"}
+                                            Re-run deploy
                                         </button>
                                         <button
                                             className="cloud-link-button danger"
@@ -598,35 +724,12 @@ export function CloudPanel() {
                                         </button>
                                     </div>
                                     {railway.workspaces.length > 1 && (
-                                        <label className="cloud-workspace-field">
-                                            <span className="row-sub">
-                                                Railway workspace
-                                            </span>
-                                            <select
-                                                className="env-input cloud-input"
-                                                value={workspaceId}
-                                                disabled={railwayBusy !== null}
-                                                onChange={(event) =>
-                                                    setWorkspaceId(
-                                                        event.target.value,
-                                                    )
-                                                }
-                                            >
-                                                <option value="">
-                                                    Choose a workspace…
-                                                </option>
-                                                {railway.workspaces.map(
-                                                    (workspace) => (
-                                                        <option
-                                                            key={workspace.id}
-                                                            value={workspace.id}
-                                                        >
-                                                            {workspace.name}
-                                                        </option>
-                                                    ),
-                                                )}
-                                            </select>
-                                        </label>
+                                        <WorkspacePicker
+                                            railway={railway}
+                                            value={workspaceId}
+                                            disabled={railwayBusy !== null}
+                                            onChange={setWorkspaceId}
+                                        />
                                     )}
                                     {railway.workspaces.length === 0 && (
                                         <div className="callout warning">
@@ -662,6 +765,9 @@ export function CloudPanel() {
                                     Deployment removed. AgentField is using the
                                     local control plane.
                                 </div>
+                            )}
+                            {railway?.message && (
+                                <div className="callout warning">{railway.message}</div>
                             )}
                             <span className="cloud-railway-footnote">
                                 Powered by bundled OpenTofu.{" "}
@@ -760,4 +866,49 @@ function displayHost(serverUrl: string) {
     } catch {
         return serverUrl;
     }
+}
+
+function cloudPlatformLabel(platform: "railway" | "docker" | "local" | undefined) {
+    if (platform === "railway") return "Railway";
+    if (platform === "docker") return "Docker";
+    if (platform === "local") return "Local";
+    return "hosting unknown";
+}
+
+function cloudUpdateLabel(status: CloudUpdateStatus) {
+    if (status.status === "current") return "up to date";
+    if (status.status === "available") return `v${status.latest} available`;
+    if (status.status === "legacy") return "update status unavailable";
+    return "update check unavailable";
+}
+
+function WorkspacePicker({
+    railway,
+    value,
+    disabled,
+    onChange,
+}: {
+    railway: RailwayStatus;
+    value: string;
+    disabled: boolean;
+    onChange: (workspaceId: string) => void;
+}) {
+    return (
+        <label className="cloud-workspace-field">
+            <span className="row-sub">Railway workspace</span>
+            <select
+                className="env-input cloud-input"
+                value={value}
+                disabled={disabled}
+                onChange={(event) => onChange(event.target.value)}
+            >
+                <option value="">Choose a workspace…</option>
+                {railway.workspaces.map((workspace) => (
+                    <option key={workspace.id} value={workspace.id}>
+                        {workspace.name}
+                    </option>
+                ))}
+            </select>
+        </label>
+    );
 }

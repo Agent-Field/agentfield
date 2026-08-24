@@ -4,7 +4,7 @@ import { type View, isView } from '../../shared/deeplink'
 import type { AgentFieldSnapshot } from '../../shared/types'
 import { Sidebar } from './components/Sidebar'
 import { DashboardView } from './components/DashboardView'
-import { AgentsPanel } from './components/AgentsPanel'
+import { AgentsPanel, LocalControlPlaneRestartBanner } from './components/AgentsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
 import { InstallPanel } from './components/InstallPanel'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -12,6 +12,7 @@ import { CloudPanel } from './components/CloudPanel'
 import { KeysBanner } from './components/KeysBanner'
 import { StarBanner } from './components/StarBanner'
 import { UpdateBanner } from './components/UpdateBanner'
+import { CloudUpdateBanner } from './components/CloudUpdateBanner'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -321,7 +322,13 @@ export default function App() {
             </div>
           )}
         </header>
+        {agentsSelected && (
+          <LocalControlPlaneRestartBanner
+            status={snapshot?.localControlPlaneRestart ?? null}
+          />
+        )}
         <UpdateBanner />
+        <CloudUpdateBanner />
         {/* Blocked-agents warning sits above the star ask: one reports the
             product cannot work, the other is a favour. */}
         <KeysBanner

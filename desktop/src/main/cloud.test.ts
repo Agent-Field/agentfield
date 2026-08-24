@@ -148,7 +148,12 @@ describe('applyConnectionProfile', () => {
     setLocalPort(9091)
     applyConnectionProfile({
       ...DEFAULT_SETTINGS,
-      cloud: { enabled: true, serverUrl: ' cp.example/path ', apiKey: 'secret' }
+      cloud: {
+        ...DEFAULT_SETTINGS.cloud,
+        enabled: true,
+        serverUrl: ' cp.example/path ',
+        apiKey: 'secret'
+      }
     })
     expect(getBaseUrl()).toBe('https://cp.example')
     expect(getApiKey()).toBe('secret')
@@ -174,7 +179,12 @@ describe('applyConnectionProfile', () => {
     applyConnectionProfile({
       ...DEFAULT_SETTINGS,
       controlPlanePort: 18480,
-      cloud: { enabled: true, serverUrl: 'https://cp.example', apiKey: 'k' }
+      cloud: {
+        ...DEFAULT_SETTINGS.cloud,
+        enabled: true,
+        serverUrl: 'https://cp.example',
+        apiKey: 'k'
+      }
     })
     expect(getBaseUrl()).toBe('https://cp.example')
     applyConnectionProfile({ ...DEFAULT_SETTINGS, controlPlanePort: 18480 })
@@ -191,7 +201,12 @@ describe('applyConnectionProfile', () => {
     applyConnectionProfile({
       ...DEFAULT_SETTINGS,
       localApiKey: 'local-secret',
-      cloud: { enabled: true, serverUrl: 'https://cp.example', apiKey: 'cloud-key' }
+      cloud: {
+        ...DEFAULT_SETTINGS.cloud,
+        enabled: true,
+        serverUrl: 'https://cp.example',
+        apiKey: 'cloud-key'
+      }
     })
     expect(getApiKey()).toBe('cloud-key')
     applyConnectionProfile({ ...DEFAULT_SETTINGS, localApiKey: 'local-secret' })

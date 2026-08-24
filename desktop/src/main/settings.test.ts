@@ -2,7 +2,17 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, loadSettings, mergeSettings, normalizeSettings, saveSettings } from './settings'
+import {
+  DEFAULT_SETTINGS,
+  loadSettings,
+  mergeSettings,
+  normalizeSettings,
+  persistCloudAutoUpdatePreference,
+  saveSettings,
+  settingsWithCloudProfile,
+  settingsForCloudService,
+  settingsWithDismissedCloudUpdate
+} from './settings'
 
 const dir = mkdtempSync(join(tmpdir(), 'af-desktop-settings-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -10,7 +20,14 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }))
 describe('normalizeSettings', () => {
   it('accepts a valid shape as-is', () => {
     const s = {
-      cloud: { enabled: true, serverUrl: 'https://cloud.example', apiKey: 'secret' },
+      cloud: {
+        enabled: true,
+        serverUrl: 'https://cloud.example',
+        apiKey: 'secret',
+        autoUpdate: 'weekends' as const,
+        autoUpdateServiceId: 'service-1',
+        dismissedUpdateVersion: '0.1.135'
+      },
       openAtLogin: true,
       appearance: 'dark' as const,
       autostartControlPlane: false,
@@ -74,12 +91,36 @@ describe('normalizeSettings', () => {
       normalizeSettings({
         cloud: { enabled: 'yes', serverUrl: '  https://cp.example/  ', apiKey: ' key ' }
       }).cloud
-    ).toEqual({ enabled: true, serverUrl: 'https://cp.example/', apiKey: 'key' })
+    ).toEqual({
+      enabled: true,
+      serverUrl: 'https://cp.example/',
+      apiKey: 'key',
+      autoUpdate: null,
+      autoUpdateServiceId: null,
+      dismissedUpdateVersion: null
+    })
     expect(normalizeSettings({ cloud: { enabled: 0, serverUrl: 7, apiKey: null } }).cloud).toEqual({
       enabled: false,
       serverUrl: '',
-      apiKey: ''
+      apiKey: '',
+      autoUpdate: null,
+      autoUpdateServiceId: null,
+      dismissedUpdateVersion: null
     })
+  })
+
+  it('migrates cloud schedules to not-set unless their applied service is recorded', () => {
+    expect(normalizeSettings({}).cloud.autoUpdate).toBeNull()
+    expect(normalizeSettings({ cloud: { autoUpdate: 'anytime' } }).cloud.autoUpdate).toBeNull()
+    expect(normalizeSettings({
+      cloud: { autoUpdate: 'anytime', autoUpdateServiceId: 'service-1' }
+    }).cloud.autoUpdate).toBe('anytime')
+    expect(normalizeSettings({
+      cloud: { autoUpdate: 'invalid', autoUpdateServiceId: 'service-1' }
+    }).cloud.autoUpdate).toBeNull()
+    expect(
+      normalizeSettings({ cloud: { dismissedUpdateVersion: '0.1.135' } }).cloud.dismissedUpdateVersion
+    ).toBe('0.1.135')
   })
 
   it('drops non-string agent names and dedupes', () => {
@@ -155,13 +196,103 @@ describe('mergeSettings', () => {
     expect(snoozed.starPromptSnoozedUntil).toBe('2026-08-08T00:00:00.000Z')
     expect(snoozed.starPrompt).toBe('pending')
   })
+
+  it('resets the applied schedule when the connected Railway service changes', () => {
+    const applied = normalizeSettings({
+      cloud: {
+        enabled: true,
+        serverUrl: 'https://cp.example',
+        apiKey: 'key',
+        autoUpdate: 'off',
+        autoUpdateServiceId: 'service-a'
+      }
+    })
+    expect(settingsForCloudService(applied, 'service-a')).toBe(applied)
+    expect(settingsForCloudService(applied, 'service-b').cloud).toMatchObject({
+      autoUpdate: null,
+      autoUpdateServiceId: 'service-b'
+    })
+  })
+
+  it('dismisses a cloud version without reverting newer cloud settings', () => {
+    const current = normalizeSettings({
+      cloud: {
+        enabled: true,
+        serverUrl: 'https://new.example',
+        apiKey: 'new-key',
+        autoUpdate: 'weekends',
+        autoUpdateServiceId: 'service-new'
+      }
+    })
+    expect(settingsWithDismissedCloudUpdate(current, '0.1.136').cloud).toEqual({
+      ...current.cloud,
+      dismissedUpdateVersion: '0.1.136'
+    })
+  })
+
+  it('saves a renderer cloud profile without reverting main-owned cloud fields', () => {
+    const current = normalizeSettings({
+      cloud: {
+        enabled: false,
+        serverUrl: 'https://old.example',
+        apiKey: 'old-key',
+        autoUpdate: 'weekends',
+        autoUpdateServiceId: 'service-new',
+        dismissedUpdateVersion: '0.1.136'
+      }
+    })
+
+    expect(settingsWithCloudProfile(current, {
+      enabled: true,
+      serverUrl: 'https://new.example',
+      apiKey: 'new-key'
+    }).cloud).toEqual({
+      enabled: true,
+      serverUrl: 'https://new.example',
+      apiKey: 'new-key',
+      autoUpdate: 'weekends',
+      autoUpdateServiceId: 'service-new',
+      dismissedUpdateVersion: '0.1.136'
+    })
+  })
+
+  it('does not publish a Railway schedule preference when persistence fails', async () => {
+    const previous = normalizeSettings({
+      cloud: {
+        autoUpdate: 'nightly',
+        autoUpdateServiceId: 'service-a'
+      }
+    })
+    let current = previous
+
+    try {
+      current = await persistCloudAutoUpdatePreference(
+        current,
+        'weekends',
+        'service-a',
+        async () => { throw new Error('disk full') }
+      )
+    } catch {
+      // The caller retains its previous in-memory value when persistence rejects.
+    }
+
+    expect(current).toBe(previous)
+    expect(current.cloud.autoUpdate).toBe('nightly')
+  })
 })
 
 describe('load/save round trip', () => {
   it('persists and reloads settings', async () => {
     const file = join(dir, 'nested', 'settings.json')
     const s = {
-      cloud: { enabled: true, serverUrl: 'https://cloud.example', apiKey: 'round-trip-key' },
+      cloud: {
+        enabled: true,
+        serverUrl: 'https://cloud.example',
+        apiKey: 'round-trip-key',
+        autoUpdate: 'nightly' as const,
+        autoUpdateServiceId: 'service-round-trip',
+        dismissedUpdateVersion: null
+      },
       openAtLogin: true,
       appearance: 'light' as const,
       autostartControlPlane: true,
