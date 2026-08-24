@@ -29,6 +29,21 @@ export interface AutostartStep {
   action: 'start' | 'restart'
 }
 
+export type AutostartResult =
+  | { kind: 'cloud' }
+  | { kind: 'adopted'; port: number }
+  | { kind: 'started'; port: number }
+  | { kind: 'skipped' }
+
+/** Keep post-autostart provisioning alive when boot orchestration rejects. */
+export function recoverAutostartFailure(
+  error: unknown,
+  log: (message: string, error: unknown) => void = console.error
+): AutostartResult {
+  log('autostart failed:', error)
+  return { kind: 'skipped' }
+}
+
 /**
  * Decide what to do for each selected agent, from the snapshot's badge
  * (registry × control-plane view):
@@ -130,7 +145,7 @@ export async function runAutostart(
   log: (message: string) => void,
   persistPort: (port: number) => Promise<void> = async () => {},
   deps: { checkControlPlane?: typeof checkControlPlane; getBaseUrl?: typeof getBaseUrl } = {}
-): Promise<void> {
+): Promise<AutostartResult> {
   if (settings.cloud.enabled) {
     const baseUrl = (deps.getBaseUrl ?? getBaseUrl)()
     const status = await (deps.checkControlPlane ?? checkControlPlane)()
@@ -139,7 +154,7 @@ export async function runAutostart(
         ? `autostart: remote control plane reachable at ${baseUrl}`
         : `autostart: remote control plane unreachable at ${baseUrl}`
     )
-    return
+    return { kind: 'cloud' }
   }
 
   const probes: PortProbe[] = []
@@ -148,21 +163,25 @@ export async function runAutostart(
   }
 
   const plan = planControlPlaneBoot(settings, probes)
+  let result: AutostartResult
   if (plan.kind === 'adopt') {
     setActiveControlPlanePort(plan.port)
     log(`autostart: control plane already running at ${baseUrlForPort(plan.port)}`)
     if (plan.port !== settings.lastControlPlanePort) await persistPort(plan.port)
+    result = { kind: 'adopted', port: plan.port }
   } else if (plan.kind === 'skip') {
     log(`autostart: control plane not started — ${plan.reason}`)
+    result = { kind: 'skipped' }
   } else {
     const port = plan.port ?? (await pickFreePort())
     // Point the app (and the AGENTFIELD_SERVER handed to `af`) at the target
     // before starting, so snapshot polling tracks the boot on the right port.
     setActiveControlPlanePort(port)
     log(`autostart: starting control plane at ${baseUrlForPort(port)}`)
-    const result = await startControlPlane(port)
-    log(`autostart: control plane — ${result.message}`)
-    if (result.ok && port !== settings.lastControlPlanePort) await persistPort(port)
+    const launchResult = await startControlPlane(port)
+    log(`autostart: control plane — ${launchResult.message}`)
+    if (launchResult.ok && port !== settings.lastControlPlanePort) await persistPort(port)
+    result = { kind: 'started', port }
   }
 
   const snapshot: AgentFieldSnapshot = await getSnapshot()
@@ -171,4 +190,5 @@ export async function runAutostart(
     const result = await runAgentAction(step.action, step.name)
     log(`autostart: ${step.name} — ${result.ok ? 'up' : result.message}`)
   }
+  return result
 }

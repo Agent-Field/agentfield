@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ControlPlaneStatus, DesktopSettings, SnapshotAgent } from '../shared/types'
 import {
   autostartAgentPlan,
   controlPlanePortCandidates,
   planControlPlaneBoot,
+  recoverAutostartFailure,
   runAutostart,
+  type AutostartResult,
   type PortProbe
 } from './autostart'
 
@@ -28,7 +30,14 @@ describe('runAutostart cloud mode', () => {
     const logs: string[] = []
     await runAutostart(
       settings({
-        cloud: { enabled: true, serverUrl: 'https://cloud.example', apiKey: 'secret' },
+        cloud: {
+          enabled: true,
+          serverUrl: 'https://cloud.example',
+          apiKey: 'secret',
+          autoUpdate: null,
+          autoUpdateServiceId: null,
+          dismissedUpdateVersion: null
+        },
         autostartAgents: ['must-not-start']
       }),
       (line) => logs.push(line),
@@ -53,7 +62,14 @@ describe('runAutostart cloud mode', () => {
 
 function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
   return {
-    cloud: { enabled: false, serverUrl: '', apiKey: '' },
+    cloud: {
+      enabled: false,
+      serverUrl: '',
+      apiKey: '',
+      autoUpdate: null,
+      autoUpdateServiceId: null,
+      dismissedUpdateVersion: null
+    },
     openAtLogin: false,
     appearance: 'system',
     autostartControlPlane: true,
@@ -71,6 +87,20 @@ function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
     ...overrides
   }
 }
+
+describe('autostart failure isolation', () => {
+  it('returns skipped so chained provisioning and package checks still run', async () => {
+    const log = vi.fn()
+    const provision = vi.fn(async (_result: AutostartResult) => {})
+
+    await Promise.reject(new Error('boot failed'))
+      .catch((error): AutostartResult => recoverAutostartFailure(error, log))
+      .then(provision)
+
+    expect(log).toHaveBeenCalledWith('autostart failed:', expect.any(Error))
+    expect(provision).toHaveBeenCalledWith({ kind: 'skipped' })
+  })
+})
 
 function probe(port: number, overrides: Partial<ControlPlaneStatus> = {}): PortProbe {
   return {

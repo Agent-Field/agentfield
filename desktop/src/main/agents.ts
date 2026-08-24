@@ -86,6 +86,27 @@ export async function uninstallAgent(
   }
 }
 
+/** Pause or resume package maintenance while preserving the established
+ * old-control-plane message for servers without the additive endpoint. */
+export async function setAgentPackageAutoUpdate(
+  name: string,
+  enabled: boolean,
+  deps: AgentManagementDeps = defaultAgentManagementDeps()
+): Promise<AgentActionResult> {
+  try {
+    await deps.cpClient.setPackageAutoUpdate(name, enabled)
+    return {
+      ok: true,
+      message: enabled ? 'Automatic updates resumed.' : 'Automatic updates paused.'
+    }
+  } catch (err) {
+    if (err instanceof CpApiError && err.status === 404) {
+      return { ok: false, message: 'Control plane update required — update AgentField CLI' }
+    }
+    return managementError(err)
+  }
+}
+
 /** launchd label af-tray registers for the control-plane server agent (see af-tray shared.go). */
 export const SERVER_LABEL = 'ai.agentfield.server'
 

@@ -1,12 +1,13 @@
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   type ProbedCandidate,
   cliCandidates,
   compareVersions,
   effectiveMinVersion,
+  initializeCli,
   parseAfVersion,
   posixPathEntry,
   probeCli,
@@ -149,6 +150,71 @@ describe('effectiveMinVersion', () => {
     expect(effectiveMinVersion([probed({ source: 'path' })])).toBe('0.1.107')
     // A bundle older than the constant never lowers the floor.
     expect(effectiveMinVersion([probed({ source: 'bundled', version: '0.1.1' })])).toBe('0.1.107')
+  })
+})
+
+describe('initializeCli managed replacement reporting', () => {
+  async function initializeWithManagedVersion(managedVersion: string | null) {
+    let installed = false
+    const install = vi.fn(async () => {
+      installed = true
+      return { ok: true, message: 'installed' }
+    })
+    const candidates = () => [
+      { command: '/managed/af', source: 'managed' as const },
+      { command: '/bundle/af', source: 'bundled' as const }
+    ]
+    const result = await initializeCli('/bundle/af', {
+      candidates,
+      probe: async (candidate) => candidate.source === 'bundled'
+        ? { ...candidate, responds: true, version: '0.1.135' }
+        : {
+            ...candidate,
+            responds: installed || managedVersion !== null,
+            version: installed ? '0.1.135' : managedVersion
+          },
+      install
+    })
+    return { result, install }
+  }
+
+  it('returns true only when an older managed copy was actually replaced', async () => {
+    const { result, install } = await initializeWithManagedVersion('0.1.134')
+    expect(install).toHaveBeenCalledOnce()
+    expect(result.managedBinaryReplaced).toBe(true)
+  })
+
+  it.each([
+    ['fresh install', null],
+    ['managed copy is current', '0.1.135'],
+    ['managed copy is newer', '0.1.136']
+  ])('returns false for %s', async (_label, managedVersion) => {
+    const { result } = await initializeWithManagedVersion(managedVersion)
+    expect(result.managedBinaryReplaced).toBe(false)
+  })
+
+  it('reports replacement when a managed dev build is superseded by a stamped bundle', async () => {
+    let installed = false
+    const result = await initializeCli('/bundle/af', {
+      candidates: () => [
+        { command: '/managed/af', source: 'managed' },
+        { command: '/bundle/af', source: 'bundled' }
+      ],
+      probe: async (candidate) => candidate.source === 'bundled'
+        ? { ...candidate, responds: true, version: '0.1.135' }
+        : {
+            ...candidate,
+            responds: true,
+            version: installed ? '0.1.135' : null
+          },
+      install: async () => {
+        installed = true
+        return { ok: true, message: 'installed' }
+      }
+    })
+
+    expect(result.status.version).toBe('0.1.135')
+    expect(result.managedBinaryReplaced).toBe(true)
   })
 })
 
