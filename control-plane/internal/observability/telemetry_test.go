@@ -242,11 +242,14 @@ func TestTelemetryExecutionEventIdentityIsStableAndOpaque(t *testing.T) {
 		Status:      "failed",
 	}
 	svc.handleExecutionEvent(event)
-	svc.handleExecutionEvent(event)
-	first, second := <-svc.queue, <-svc.queue
+	first := <-svc.queue
 
-	if first.EventID != second.EventID {
-		t.Fatalf("event identity is not stable: %q != %q", first.EventID, second.EventID)
+	// The identity a re-publish would carry has to match the one already sent,
+	// so ingest can recognize it as the same outcome. The duplicate itself no
+	// longer reaches the queue (see TestTelemetryTerminalOutcomeReportedOnce),
+	// so recompute it rather than sending a second event.
+	if replay := svc.eventIdentity("execution_failed", "private-execution-id\x00failed"); replay != first.EventID {
+		t.Fatalf("event identity is not stable: %q != %q", replay, first.EventID)
 	}
 	encoded, err := json.Marshal(first)
 	if err != nil {
@@ -256,6 +259,105 @@ func TestTelemetryExecutionEventIdentityIsStableAndOpaque(t *testing.T) {
 		if strings.Contains(string(encoded), privateValue) {
 			t.Fatalf("%q leaked into telemetry payload: %s", privateValue, encoded)
 		}
+	}
+}
+
+// A terminal outcome is reached once per execution, so a second event for one
+// is a re-publish. Counting it again is what inflated execution_completed when
+// duplicate status callbacks re-ran the publish path.
+func TestTelemetryTerminalOutcomeReportedOnce(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		event events.ExecutionEvent
+	}{
+		{
+			name:  "completed",
+			event: events.ExecutionEvent{Type: events.ExecutionCompleted, ExecutionID: "exec-1", Status: "succeeded"},
+		},
+		{
+			name:  "failed",
+			event: events.ExecutionEvent{Type: events.ExecutionFailed, ExecutionID: "exec-2", Status: "failed"},
+		},
+		{
+			name:  "cancelled",
+			event: events.ExecutionEvent{Type: events.ExecutionCancelledEvent, ExecutionID: "exec-3", Status: "cancelled"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &TelemetryService{
+				installHash: "install-hash",
+				eventIDKey:  eventIdentityKey("private-install-id"),
+				runtimeName: "binary",
+				version:     "test",
+				queue:       make(chan TelemetryEvent, 4),
+			}
+			for i := 0; i < 4; i++ {
+				svc.handleExecutionEvent(tt.event)
+			}
+			if got := len(svc.queue); got != 1 {
+				t.Fatalf("four identical terminal events enqueued %d times, want 1", got)
+			}
+		})
+	}
+}
+
+// Suppression is keyed on the execution, not the event name, so two executions
+// completing must both be reported.
+func TestTelemetryTerminalSuppressionIsPerExecution(t *testing.T) {
+	svc := &TelemetryService{
+		installHash: "install-hash",
+		eventIDKey:  eventIdentityKey("private-install-id"),
+		runtimeName: "binary",
+		version:     "test",
+		queue:       make(chan TelemetryEvent, 4),
+	}
+	svc.handleExecutionEvent(events.ExecutionEvent{Type: events.ExecutionCompleted, ExecutionID: "exec-1", Status: "succeeded"})
+	svc.handleExecutionEvent(events.ExecutionEvent{Type: events.ExecutionCompleted, ExecutionID: "exec-2", Status: "succeeded"})
+
+	if got := len(svc.queue); got != 2 {
+		t.Fatalf("two distinct executions enqueued %d events, want 2", got)
+	}
+}
+
+// Non-terminal lifecycle events recur by design (a retried execution starts
+// more than once) and must never be collapsed.
+func TestTelemetryNonTerminalEventsAreNotSuppressed(t *testing.T) {
+	svc := &TelemetryService{
+		installHash: "install-hash",
+		eventIDKey:  eventIdentityKey("private-install-id"),
+		runtimeName: "binary",
+		version:     "test",
+		queue:       make(chan TelemetryEvent, 4),
+	}
+	event := events.ExecutionEvent{Type: events.ExecutionStarted, ExecutionID: "exec-1", Status: "running"}
+	svc.handleExecutionEvent(event)
+	svc.handleExecutionEvent(event)
+
+	if got := len(svc.queue); got != 2 {
+		t.Fatalf("repeated execution_started enqueued %d events, want 2", got)
+	}
+}
+
+// The set is bounded, so a long-lived control plane cannot grow it without
+// limit. Eviction is safe because duplicates arrive within seconds.
+func TestTelemetryReportedSetEvictsOldestPastCapacity(t *testing.T) {
+	set := &telemetryReportedSet{capacity: 2}
+
+	if set.observe("a") || set.observe("b") {
+		t.Fatal("first sighting of a key reported as a duplicate")
+	}
+	if !set.observe("a") {
+		t.Fatal("key still within capacity was not recognized")
+	}
+	if set.observe("c") {
+		t.Fatal("third distinct key reported as a duplicate")
+	}
+	// "c" evicted "a", the oldest insertion.
+	if set.observe("a") {
+		t.Fatal("evicted key was still recognized")
+	}
+	if len(set.seen) != 2 {
+		t.Fatalf("set holds %d keys, want capacity 2", len(set.seen))
 	}
 }
 
@@ -297,6 +399,74 @@ func TestTelemetryTimeoutEventIdentityDoesNotCollapseRepeatedTransitions(t *test
 	if first.EventID == second.EventID {
 		t.Fatalf("repeated timeout transitions collided: %q", first.EventID)
 	}
+}
+
+// usage_context has to ride on every event. A CI job mints a fresh install ID,
+// so without it a CI execution is indistinguishable from a real user's and no
+// downstream query can separate the two after ingestion.
+func TestTelemetryUsageContextStampedOnEveryEvent(t *testing.T) {
+	svc := &TelemetryService{
+		installHash:  "install-hash",
+		eventIDKey:   eventIdentityKey("private-install-id"),
+		runtimeName:  "binary",
+		usageContext: "ci",
+		version:      "test",
+		queue:        make(chan TelemetryEvent, 4),
+	}
+
+	svc.handleExecutionEvent(events.ExecutionEvent{
+		Type:        events.ExecutionCompleted,
+		ExecutionID: "exec-1",
+		Status:      "succeeded",
+	})
+	svc.handleNodeEvent(events.NodeEvent{Type: events.NodeRegistered})
+	svc.Enqueue("control_plane_stopped", nil)
+
+	for len(svc.queue) > 0 {
+		event := <-svc.queue
+		if got := event.Properties["usage_context"]; got != "ci" {
+			t.Fatalf("%s carried usage_context %v, want \"ci\"", event.EventName, got)
+		}
+	}
+}
+
+func TestTelemetryDetectsUsageContext(t *testing.T) {
+	ciKeys := []string{"CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE", "CIRCLECI", "JENKINS_URL"}
+
+	// The suite itself usually runs under CI, so each case has to start from a
+	// clean slate or every one of them would pass on the ambient CI variable.
+	clearCIEnv := func(t *testing.T) {
+		t.Helper()
+		for _, key := range ciKeys {
+			t.Setenv(key, "")
+		}
+	}
+
+	for _, key := range ciKeys {
+		t.Run(key, func(t *testing.T) {
+			clearCIEnv(t)
+			t.Setenv(key, "1")
+			if got := detectUsageContext("binary"); got != "ci" {
+				t.Fatalf("detectUsageContext with %s set = %q, want \"ci\"", key, got)
+			}
+		})
+	}
+
+	t.Run("container runtimes are servers", func(t *testing.T) {
+		clearCIEnv(t)
+		for _, runtimeName := range []string{"docker", "kubernetes"} {
+			if got := detectUsageContext(runtimeName); got != "server" {
+				t.Fatalf("detectUsageContext(%q) = %q, want \"server\"", runtimeName, got)
+			}
+		}
+	})
+
+	t.Run("a plain binary is a developer", func(t *testing.T) {
+		clearCIEnv(t)
+		if got := detectUsageContext("binary"); got != "dev_or_local" {
+			t.Fatalf("detectUsageContext(\"binary\") = %q, want \"dev_or_local\"", got)
+		}
+	})
 }
 
 func TestTelemetryFailureCategoriesMatchRuntimeVocabulary(t *testing.T) {
