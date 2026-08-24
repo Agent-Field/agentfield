@@ -29,7 +29,9 @@ dependencies = [
     "uvicorn",
     "requests>=2.28",
     "pydantic>=2.0",
-    "litellm!=1.97.0",  # 1.97.0 crashes on Python 3.10 building ModelResponse (BerriAI/litellm#36384)
+    # LiteLLM 1.97.0 crashes on Python 3.10 building ModelResponse, and
+    # 1.98.0 imports typing.NotRequired (only available in Python 3.11+).
+    "litellm!=1.97.0,<1.98.0",
     "psutil",
     "PyYAML>=6.0",
     "aiohttp>=3.8",
