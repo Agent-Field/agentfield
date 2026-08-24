@@ -230,7 +230,6 @@ export default function App() {
 
   const cp = controlPlaneStatus(snapshot)
   const agents = snapshot?.registry.agents ?? []
-  const installedNames = agents.map((a) => a.name)
   const provisioningNames = bundled
     .filter((node) => node.phase === 'pending' || node.phase === 'installing')
     .map((node) => node.name)
@@ -370,7 +369,7 @@ export default function App() {
               {agentsSelected &&
                 (agentsAddMode ? (
                   <InstallPanel
-                    installedNames={installedNames}
+                    installedAgents={agents}
                     provisioningNames={provisioningNames}
                     onInstalled={() => void refresh()}
                     libraryCount={agents.length}

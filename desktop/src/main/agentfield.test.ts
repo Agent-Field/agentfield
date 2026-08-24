@@ -37,6 +37,7 @@ const API_PACKAGES: PackageInfo[] = [
     description: 'Opens draft pull requests from a task description',
     status: 'configured', install_status: 'running',
     install_path: '/home/abir/.agentfield/packages/pr-af',
+    source: 'https://github.com/owner/pr-af',
     port: 9001, process_id: 4242, configuration_required: false,
     configuration_complete: true, author: ''
   },
@@ -152,6 +153,7 @@ describe('readInstalledAgents', () => {
       description: 'Opens draft pull requests from a task description',
       status: 'running',
       path: '/home/abir/.agentfield/packages/pr-af',
+      source: 'https://github.com/owner/pr-af',
       port: 9001,
       pid: 4242
     })

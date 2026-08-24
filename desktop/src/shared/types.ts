@@ -30,6 +30,8 @@ export interface InstalledAgent {
   status: string
   /** Install dir (~/.agentfield/packages/<name>) — where the manifest lives. */
   path: string | null
+  /** installed.yaml source_path; absent when an older control plane omits it. */
+  source?: string
   port: number | null
   pid: number | null
 }

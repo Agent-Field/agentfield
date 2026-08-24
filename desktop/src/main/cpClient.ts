@@ -46,6 +46,8 @@ export interface PackageInfo {
   install_status?: string
   installed_at?: string
   install_path: string
+  /** Recorded installed.yaml source_path; absent on older control planes. */
+  source?: string
   configuration_required: boolean
   configuration_complete: boolean
   running_node_id?: string
@@ -179,7 +181,7 @@ export interface CpClient {
   /** POST /api/ui/v1/agents/packages/:packageId/uninstall. */
   uninstallPackage(packageId: string): Promise<{ package_id: string; status: string }>
   /** POST /api/ui/v1/agents/packages/:packageId/update. */
-  updatePackage(packageId: string): Promise<{ job_id: string }>
+  updatePackage(packageId: string, source?: string): Promise<{ job_id: string }>
   /** GET /api/ui/v1/agents/packages. */
   listPackages(): Promise<PackageListResponse>
   /** POST /api/ui/v1/agents/:agentId/start. */
@@ -328,10 +330,12 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
         true
       )
     },
-    updatePackage(packageId) {
+    updatePackage(packageId, source) {
       return request(
         `/api/ui/v1/agents/packages/${encodeURIComponent(packageId)}/update`,
-        { method: 'POST' },
+        source === undefined
+          ? { method: 'POST' }
+          : { method: 'POST', body: JSON.stringify({ source }) },
         true
       )
     },

@@ -92,7 +92,24 @@ describe('createCpClient', () => {
       source: 'https://github.com/acme/agent',
       force: true
     })
+    expect(calls[4][1]?.body).toBeUndefined()
     expect(JSON.parse(String(calls[6][1]?.body))).toEqual({ port: 9000, detach: false })
+  })
+
+  it('sends an update source only when one is provided', async () => {
+    const fetchImpl = mockFetch([json({ job_id: 'with-source' }), json({ job_id: 'legacy' })])
+    const client = createCpClient({ fetchImpl })
+
+    await expect(
+      client.updatePackage('agent', 'https://github.com/Agent-Field/SWE-AF')
+    ).resolves.toEqual({ job_id: 'with-source' })
+    await expect(client.updatePackage('agent')).resolves.toEqual({ job_id: 'legacy' })
+
+    const calls = vi.mocked(fetchImpl).mock.calls
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
+      source: 'https://github.com/Agent-Field/SWE-AF'
+    })
+    expect(calls[1][1]?.body).toBeUndefined()
   })
 
   it('normalizes Go nil slices in list responses', async () => {

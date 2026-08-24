@@ -52,3 +52,45 @@ export const CATALOG: CatalogEntry[] = []
 export function catalogEntry(name: string): CatalogEntry | undefined {
   return [...CATALOG, ...BUNDLED_NODES].find((entry) => entry.name === name)
 }
+
+/**
+ * The repository a source string points at, with the parts that vary between
+ * a catalog row and an install record stripped away: the `//subdir` selector,
+ * an `@ref` pin, a `.git` suffix, trailing slashes, and case. A catalog row
+ * names the bare repo (`…/SWE-AF`) while the registry records what the
+ * `superseded_by:` redirect landed on (`…/SWE-AF//go`), so comparing the raw
+ * strings would flag every correct install as drift. Returns '' for a blank
+ * source so an unknown origin never compares equal to anything.
+ */
+export function sourceRepo(source: string): string {
+  let repo = source.trim()
+  if (!repo) return ''
+  repo = repo.replace(/^https?:\/\/github\.com\//i, '')
+  const subdir = repo.indexOf('//')
+  if (subdir >= 0) repo = repo.slice(0, subdir)
+  const ref = repo.lastIndexOf('@')
+  if (ref > repo.lastIndexOf('/')) repo = repo.slice(0, ref)
+  return repo.replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase()
+}
+
+/** True when two source strings name the same repository (see sourceRepo). */
+export function sameSourceRepo(a: string, b: string): boolean {
+  const left = sourceRepo(a)
+  return left !== '' && left === sourceRepo(b)
+}
+
+/**
+ * What an installed catalog card says about where the install actually came
+ * from: the recorded source in short `owner/repo…` form when it names a
+ * DIFFERENT repository than the catalog row, null when it is the same repo
+ * (a `//subdir` or `@ref` left by a `superseded_by:` redirect is not drift) or
+ * when the control plane did not report a source at all.
+ */
+export function installedSourceLabel(
+  recorded: string | undefined,
+  catalogSource: string
+): string | null {
+  const source = recorded?.trim()
+  if (!source || sameSourceRepo(source, catalogSource)) return null
+  return source.replace(/^https:\/\/github\.com\//, '')
+}

@@ -117,6 +117,7 @@ export function packageToInstalledAgent(pkg: PackageInfo): InstalledAgent {
     description: pkg.description,
     status: pkg.install_status ?? pkg.status,
     path: pkg.install_path || null,
+    ...(pkg.source === undefined ? {} : { source: pkg.source }),
     port: pkg.port ?? null,
     pid: pkg.process_id ?? null
   }

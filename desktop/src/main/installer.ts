@@ -237,12 +237,10 @@ export function installFromSource(
 }
 
 /**
- * Update an installed catalog agent to the latest version of its source:
- * stop it if it is running, `af install <source> --force` (reinstall in
- * place — registry entry and secrets survive), then restore the previous run
- * state: restart only what was running, leave stopped agents stopped. Phase
- * markers ("Stopping…", "Restarting…") ride the same progress channel as the
- * install output. Resolves (never rejects) with the outcome.
+ * Update an installed catalog agent from the latest catalog source, not its
+ * recorded source — replacing a stale origin is the point. The control plane
+ * stops a running agent, reinstalls with force, then restores its prior run
+ * state. Resolves (never rejects) with the outcome.
  */
 export async function updateAgent(
   name: string,
@@ -258,12 +256,16 @@ export async function updateAgent(
       return { ok: false, message: UPDATE_REQUIRED }
     }
     onLine(`Updating ${name}…`)
-    const { job_id } = await deps.cpClient.updatePackage(name)
+    // Only a git URL can be handed to the control plane as an override (its
+    // source validator wants https://github.com/…); any other catalog source
+    // shape falls back to the recorded-source update rather than a 400.
+    const override = entry.source.startsWith('https://') ? entry.source : undefined
+    const { job_id } = await deps.cpClient.updatePackage(name, override)
     const job = await deps.cpClient.watchInstallJob(job_id, onLine)
     if (job.status !== 'succeeded') {
       return { ok: false, message: job.error || job.lines.at(-1) || `Failed to update ${name}` }
     }
-    // An update reinstalls from the recorded source, so it can hit a
+    // An update reinstalls from the catalog source, so it can hit a
     // `superseded_by:` redirect and come back as a different node. Saying
     // "<old> updated" would then name something that no longer exists.
     const landed = installedName(job)

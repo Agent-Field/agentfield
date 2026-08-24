@@ -125,6 +125,12 @@ describe('control-plane installs', () => {
     expect(client.installPackage).toHaveBeenCalledWith(ENTRY.source, true)
   })
 
+  it('updates catalog agents from the current catalog source', async () => {
+    const client = installClient()
+    await updateAgent(ENTRY.name, () => {}, { cpClient: client })
+    expect(client.updatePackage).toHaveBeenCalledWith(ENTRY.name, ENTRY.source)
+  })
+
   it('surfaces conflict and old-control-plane errors without fallback', async () => {
     const conflict = installClient({ installPackage: vi.fn(async () => { throw new CpApiError({ status: 409, message: 'another install is running' }) }) })
     expect((await installAgent(ENTRY.name, () => {}, false, { cpClient: conflict })).message).toMatch(/another install/i)
