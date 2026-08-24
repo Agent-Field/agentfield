@@ -865,6 +865,12 @@ func (c *executionController) handleBatchStatus(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, response)
 }
 
+// errTerminalStatusConflict marks a callback that tries to rewrite one
+// terminal status as a different one (e.g. succeeded → failed). The handler
+// answers it with 409 so bounded SDK retries fail fast instead of looking
+// like a server fault.
+var errTerminalStatusConflict = errors.New("terminal status conflict")
+
 func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
 	executionID := ctx.Param("execution_id")
@@ -901,8 +907,10 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	isTerminal := types.IsTerminalExecutionStatus(normalizedStatus)
 	var elapsed time.Duration
 	var errorMsg *string
+	var terminalNoop bool
 
 	updated, err := c.store.UpdateExecutionRecord(reqCtx, executionID, func(current *types.Execution) (*types.Execution, error) {
+		terminalNoop = false
 		if current == nil {
 			return nil, fmt.Errorf("execution %s not found", executionID)
 		}
@@ -928,21 +936,30 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 			}
 		}
 
-		// Terminal-state regression guard. Once an execution has reached
-		// a terminal state, reject any non-terminal write — otherwise a
-		// late /status callback (e.g. from a retried fire-and-forget update)
-		// can stomp the terminal status back to "running" and strand the
-		// caller's poll loop. Idempotent terminal→same-terminal updates
-		// are allowed so callers can retry their own callback safely.
+		// Terminal-state guard. Once an execution has reached a terminal
+		// state, the only accepted write is an idempotent re-delivery of
+		// that same status (so callers can retry their own callback); it is
+		// acknowledged as a no-op so the record is not rewritten and none of
+		// the side effects (lifecycle event, webhook, usage ingestion) run a
+		// second time. A non-terminal write is rejected — a late retried
+		// fire-and-forget update must not stomp the status back to "running"
+		// and strand the caller's poll loop. A different terminal status is
+		// rejected too: a duplicate callback must not flip "succeeded" to
+		// "failed" after the outcome was already observed.
 		if types.IsTerminalExecutionStatus(string(current.Status)) {
-			if !types.IsTerminalExecutionStatus(normalizedStatus) {
-				logger.Logger.Warn().
-					Str("execution_id", executionID).
-					Str("current_status", string(current.Status)).
-					Str("requested_status", normalizedStatus).
-					Msg("rejecting status update: execution is already in a terminal state")
-				return nil, fmt.Errorf("execution %s is already in terminal state '%s'; cannot transition to '%s'", executionID, current.Status, normalizedStatus)
+			if normalizedStatus == string(current.Status) {
+				terminalNoop = true
+				return current, nil
 			}
+			logger.Logger.Warn().
+				Str("execution_id", executionID).
+				Str("current_status", string(current.Status)).
+				Str("requested_status", normalizedStatus).
+				Msg("rejecting status update: execution is already in a terminal state")
+			if types.IsTerminalExecutionStatus(normalizedStatus) {
+				return nil, fmt.Errorf("execution %s is already in terminal state '%s'; cannot transition to '%s': %w", executionID, current.Status, normalizedStatus, errTerminalStatusConflict)
+			}
+			return nil, fmt.Errorf("execution %s is already in terminal state '%s'; cannot transition to '%s'", executionID, current.Status, normalizedStatus)
 		}
 
 		current.Status = normalizedStatus
@@ -1004,11 +1021,19 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 		return current, nil
 	})
 	if err != nil {
+		if errors.Is(err, errTerminalStatusConflict) {
+			ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("failed to update execution: %v", err)})
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update execution: %v", err)})
 		return
 	}
 	if updated == nil {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
+		return
+	}
+	if terminalNoop {
+		ctx.JSON(http.StatusOK, c.renderStatusWithApproval(reqCtx, updated))
 		return
 	}
 	if elapsed == 0 && updated.DurationMS != nil {

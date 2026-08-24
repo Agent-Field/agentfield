@@ -187,6 +187,9 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 	}
 	defer rollbackTx(tx, "UpdateExecutionRecord:"+executionID)
 
+	// Lock the row for the duration of the read-modify-write (postgres only;
+	// see forUpdate). A concurrent updater blocks here until this transaction
+	// commits, then re-reads the committed row instead of a stale snapshot.
 	row := tx.QueryRowContext(ctx, `
 		SELECT execution_id, run_id, parent_execution_id,
 		       agent_node_id, reasoner_id, node_id,
@@ -197,7 +200,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 		       notes,
 		       created_at, updated_at
 		FROM executions
-		WHERE execution_id = ?`, executionID)
+		WHERE execution_id = ?`+tx.forUpdate(), executionID)
 
 	current, err := scanExecution(row)
 	if err != nil {
