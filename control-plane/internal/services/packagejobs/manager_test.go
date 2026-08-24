@@ -63,6 +63,7 @@ type stubInstaller struct {
 	installed    []domain.InstalledPackage
 	afterInstall []domain.InstalledPackage
 	calls        *[]string
+	lastSource   string
 	lastOptions  domain.InstallOptions
 	listErr      error
 	infoErr      error
@@ -77,13 +78,14 @@ func (s *stubInstaller) InstallPackageWithResult(source string, options domain.I
 	return s.resultName, nil
 }
 
-func (s *stubInstaller) InstallPackage(_ string, options domain.InstallOptions) error {
+func (s *stubInstaller) InstallPackage(source string, options domain.InstallOptions) error {
 	if s.block != nil {
 		<-s.block
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastOptions = options
+	s.lastSource = source
 	if s.calls != nil {
 		*s.calls = append(*s.calls, "install")
 	}
@@ -319,7 +321,7 @@ func TestUpdateStopsForceInstallsAndRestarts(t *testing.T) {
 	var calls []string
 	inst := &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}, calls: &calls}
 	manager := newManager(inst, &stubAgentService{running: true, calls: &calls}, home)
-	job, err := manager.StartUpdate("demo")
+	job, err := manager.StartUpdate("demo", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,6 +333,69 @@ func TestUpdateStopsForceInstallsAndRestarts(t *testing.T) {
 	}
 	if !inst.lastOptions.Force {
 		t.Fatal("update was not forced")
+	}
+}
+
+func TestStartUpdateSelectsOverrideOrRecordedSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		override   string
+		wantSource string
+		wantRepo   string
+		wantPath   string
+	}{
+		{
+			name:       "catalog override",
+			override:   " https://github.com/catalog/latest//agent/ ",
+			wantSource: "https://github.com/catalog/latest//agent",
+			wantRepo:   "https://github.com/catalog/latest",
+			wantPath:   "agent",
+		},
+		{
+			name:       "recorded source",
+			override:   " ",
+			wantSource: "https://github.com/recorded/original//go",
+			wantRepo:   "https://github.com/recorded/original",
+			wantPath:   "go",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/recorded/original//go@main\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			inst := &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}
+			manager := newManager(inst, &stubAgentService{}, home)
+
+			job, err := manager.StartUpdate("demo", test.override)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.Source != test.wantSource {
+				t.Fatalf("job source = %q, want %q", job.Source, test.wantSource)
+			}
+			if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+				t.Fatalf("job = %#v", got)
+			}
+			if inst.lastSource != test.wantRepo || inst.lastOptions.Path != test.wantPath {
+				t.Fatalf("installer source = %q, path = %q", inst.lastSource, inst.lastOptions.Path)
+			}
+		})
+	}
+}
+
+func TestStartUpdateValidatesOverrideAfterRegistryLookup(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/recorded/original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := newManager(&stubInstaller{}, &stubAgentService{}, home)
+	if _, err := manager.StartUpdate("demo", "not-a-github-source"); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("invalid override error = %v", err)
+	}
+	if _, err := manager.StartUpdate("missing", "https://github.com/catalog/latest"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown package error = %v", err)
 	}
 }
 
@@ -351,7 +416,7 @@ func TestUpdateFollowsASupersededRename(t *testing.T) {
 		calls:        &calls,
 	}
 	manager := newManager(inst, &stubAgentService{running: true, calls: &calls}, home)
-	job, err := manager.StartUpdate("demo")
+	job, err := manager.StartUpdate("demo", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +517,7 @@ func TestStartUpdateRegistryFailures(t *testing.T) {
 				}
 			}
 			manager := newManager(&stubInstaller{}, &stubAgentService{}, home)
-			_, err := manager.StartUpdate("demo")
+			_, err := manager.StartUpdate("demo", "")
 			if err == nil || (test.want != nil && !errors.Is(err, test.want)) {
 				t.Fatalf("err = %v, want %v", err, test.want)
 			}
@@ -611,7 +676,7 @@ func TestUpdateRegistryChangeHook(t *testing.T) {
 			calls := 0
 			manager.SetOnRegistryChange(func() { calls++ })
 
-			job, err := manager.StartUpdate("demo")
+			job, err := manager.StartUpdate("demo", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -679,5 +744,38 @@ func TestUninstallIsBusyDuringInstallAndSucceedsAfterward(t *testing.T) {
 	}
 	if got := strings.Join(calls, ","); got != "install,remove:demo" {
 		t.Fatalf("calls = %s", got)
+	}
+}
+
+// A catalog-source override changes WHERE the update fetches from and nothing
+// else: it is still an update job — forced reinstall in place, the running
+// node stopped first and restarted after — not a plain install of a new source.
+func TestStartUpdateOverrideKeepsUpdateSemantics(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/recorded/original//go\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	inst := &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}, calls: &calls}
+	manager := newManager(inst, &stubAgentService{running: true, calls: &calls}, home)
+
+	job, err := manager.StartUpdate("demo", "https://github.com/catalog/latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Kind != JobUpdate {
+		t.Fatalf("job kind = %q, want %q", job.Kind, JobUpdate)
+	}
+	if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+		t.Fatalf("job = %#v", got)
+	}
+	if strings.Join(calls, ",") != "stop:demo,install,start:demo" {
+		t.Fatalf("calls = %v", calls)
+	}
+	if !inst.lastOptions.Force {
+		t.Fatal("override update was not forced")
+	}
+	if inst.lastSource != "https://github.com/catalog/latest" {
+		t.Fatalf("installer source = %q", inst.lastSource)
 	}
 }

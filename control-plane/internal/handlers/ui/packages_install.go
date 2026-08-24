@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagejobs"
@@ -14,7 +15,7 @@ type PackageInstallHandler struct {
 
 type packageJobManager interface {
 	StartInstall(source string, force bool) (*packagejobs.Job, error)
-	StartUpdate(packageName string) (*packagejobs.Job, error)
+	StartUpdate(packageName, source string) (*packagejobs.Job, error)
 	Uninstall(packageName string) error
 	GetJob(id string) (*packagejobs.Job, bool)
 	ListJobs() []*packagejobs.Job
@@ -27,6 +28,10 @@ func NewPackageInstallHandler(manager packageJobManager) *PackageInstallHandler 
 type installPackageRequest struct {
 	Source string `json:"source" binding:"required"`
 	Force  bool   `json:"force"`
+}
+
+type updatePackageRequest struct {
+	Source string `json:"source"`
 }
 
 func (h *PackageInstallHandler) InstallPackageHandler(c *gin.Context) {
@@ -75,7 +80,13 @@ func (h *PackageInstallHandler) UpdatePackageHandler(c *gin.Context) {
 		RespondBadRequest(c, "packageId is required")
 		return
 	}
-	job, err := h.manager.StartUpdate(packageID)
+	var req updatePackageRequest
+	// Older clients send no body; EOF preserves their recorded-source update.
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		RespondBadRequest(c, "invalid request body")
+		return
+	}
+	job, err := h.manager.StartUpdate(packageID, req.Source)
 	if err != nil {
 		h.respondOperationError(c, err)
 		return

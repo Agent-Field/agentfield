@@ -42,6 +42,7 @@ type PackageInfo struct {
 	InstallStatus         string `json:"install_status"`
 	InstalledAt           string `json:"installed_at,omitempty"`
 	InstallPath           string `json:"install_path"`
+	Source                string `json:"source"`
 	ConfigurationRequired bool   `json:"configuration_required"`
 	ConfigurationComplete bool   `json:"configuration_complete"`
 	RunningNodeID         string `json:"running_node_id,omitempty"`
@@ -60,6 +61,7 @@ type PackageDetailsResponse struct {
 	Description   string               `json:"description"`
 	Author        string               `json:"author"`
 	InstallPath   string               `json:"install_path"`
+	Source        string               `json:"source"`
 	Status        string               `json:"status"`
 	Configuration PackageConfiguration `json:"configuration"`
 	Capabilities  *PackageCapabilities `json:"capabilities,omitempty"`
@@ -159,6 +161,7 @@ func (h *PackageHandler) ListPackagesHandler(c *gin.Context) {
 			Status:                packageStatus,
 			InstallStatus:         string(pkg.Status),
 			InstallPath:           pkg.InstallPath,
+			Source:                h.safeStringValue(pkg.Repository),
 			ConfigurationRequired: configRequired,
 			ConfigurationComplete: configComplete,
 			Description:           h.safeStringValue(pkg.Description),
@@ -237,6 +240,7 @@ func (h *PackageHandler) GetPackageDetailsHandler(c *gin.Context) {
 		Description: h.safeStringValue(pkg.Description),
 		Author:      h.safeStringValue(pkg.Author),
 		InstallPath: pkg.InstallPath,
+		Source:      h.safeStringValue(pkg.Repository),
 		Status:      packageStatus,
 		Configuration: PackageConfiguration{
 			Required: configRequired,

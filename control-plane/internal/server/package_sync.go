@@ -72,7 +72,8 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 		status := packageStatusFromRegistry(pkg.Status)
 		existing, err := storageProvider.GetAgentPackage(ctx, pkgName)
 		if err == nil && existing != nil && installedStatus(existing.Status) &&
-			existing.Status == status && existing.InstallPath == pkg.Path && existing.Version == pkg.Version {
+			existing.Status == status && existing.InstallPath == pkg.Path && existing.Version == pkg.Version &&
+			existing.Repository != nil && *existing.Repository == pkg.SourcePath {
 			continue // Already reconciled
 		}
 		// Load agentfield-package.yaml
@@ -92,11 +93,13 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 		if parsed, err := time.Parse(time.RFC3339, pkg.InstalledAt); err == nil && !parsed.IsZero() {
 			installedAt = parsed
 		}
+		recordedSource := pkg.SourcePath
 		agentPkg := &types.AgentPackage{
 			ID:                  pkgName,
 			Name:                pkg.Name,
 			Version:             pkg.Version,
 			Description:         &pkg.Description,
+			Repository:          &recordedSource,
 			InstallPath:         pkg.Path,
 			ConfigurationSchema: schemaJson,
 			Status:              status,

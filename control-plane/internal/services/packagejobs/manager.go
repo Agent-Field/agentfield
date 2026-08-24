@@ -162,12 +162,18 @@ func (m *Manager) StartInstall(source string, force bool) (*Job, error) {
 	return m.startJob(JobInstall, normalized, "", force)
 }
 
-func (m *Manager) StartUpdate(packageName string) (*Job, error) {
+func (m *Manager) StartUpdate(packageName, source string) (*Job, error) {
 	entry, err := m.registryEntry(packageName)
 	if err != nil {
 		return nil, err
 	}
-	source, err := sourceFromRegistry(entry.SourcePath)
+	if strings.TrimSpace(source) != "" {
+		// Desktop catalog updates deliberately replace a stale recorded source;
+		// the installer will persist the source that ultimately lands.
+		source, err = ValidateSource(source)
+	} else {
+		source, err = sourceFromRegistry(entry.SourcePath)
+	}
 	if err != nil {
 		return nil, err
 	}

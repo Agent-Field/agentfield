@@ -47,6 +47,37 @@ schema:
 	require.NotEmpty(t, pkg.ConfigurationSchema)
 }
 
+func TestSyncPackagesFromRegistryTracksRecordedSource(t *testing.T) {
+	t.Parallel()
+
+	agentfieldHome := t.TempDir()
+	pkgDir := filepath.Join(agentfieldHome, "source-agent")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"),
+		[]byte("name: Source Agent\nversion: 1.0.0\n"), 0o644))
+	registryPath := filepath.Join(agentfieldHome, "installed.yaml")
+	writeRegistry := func(source string) {
+		require.NoError(t, os.WriteFile(registryPath, []byte(`installed:
+  source-agent:
+    name: Source Agent
+    version: 1.0.0
+    path: `+pkgDir+`
+    source_path: `+source+`
+    status: installed
+`), 0o644))
+	}
+
+	storage := newStubPackageStorage()
+	writeRegistry("https://github.com/owner/original//go")
+	require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+	require.Equal(t, "https://github.com/owner/original//go", *storage.packages["source-agent"].Repository)
+
+	// Source changes must not be hidden by the otherwise-idempotent fast path.
+	writeRegistry("https://github.com/owner/latest//go")
+	require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+	require.Equal(t, "https://github.com/owner/latest//go", *storage.packages["source-agent"].Repository)
+}
+
 func TestSyncPackagesFromRegistryMapsRunningStatus(t *testing.T) {
 	t.Parallel()
 

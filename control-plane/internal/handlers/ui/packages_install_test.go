@@ -14,7 +14,7 @@ import (
 
 type stubPackageJobManager struct {
 	startInstall func(string, bool) (*packagejobs.Job, error)
-	startUpdate  func(string) (*packagejobs.Job, error)
+	startUpdate  func(string, string) (*packagejobs.Job, error)
 	uninstall    func(string) error
 	jobs         map[string]*packagejobs.Job
 }
@@ -22,8 +22,8 @@ type stubPackageJobManager struct {
 func (s *stubPackageJobManager) StartInstall(source string, force bool) (*packagejobs.Job, error) {
 	return s.startInstall(source, force)
 }
-func (s *stubPackageJobManager) StartUpdate(name string) (*packagejobs.Job, error) {
-	return s.startUpdate(name)
+func (s *stubPackageJobManager) StartUpdate(name, source string) (*packagejobs.Job, error) {
+	return s.startUpdate(name, source)
 }
 func (s *stubPackageJobManager) Uninstall(name string) error { return s.uninstall(name) }
 func (s *stubPackageJobManager) GetJob(id string) (*packagejobs.Job, bool) {
@@ -143,7 +143,7 @@ func TestUpdatePackageHandlerMappings(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			manager := &stubPackageJobManager{
-				startUpdate: func(string) (*packagejobs.Job, error) { return test.job, test.err },
+				startUpdate: func(string, string) (*packagejobs.Job, error) { return test.job, test.err },
 				uninstall:   func(string) error { return errors.New("unused") },
 			}
 			ctx, response := testContext(http.MethodPost, "/", nil, gin.Param{Key: "packageId", Value: "demo"})
@@ -152,6 +152,52 @@ func TestUpdatePackageHandlerMappings(t *testing.T) {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestUpdatePackageHandlerForwardsOptionalSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       []byte
+		wantSource string
+	}{
+		{name: "catalog source", body: []byte(`{"source":"https://github.com/catalog/latest"}`), wantSource: "https://github.com/catalog/latest"},
+		{name: "empty body"},
+		{name: "empty source", body: []byte(`{"source":""}`)},
+		{name: "absent source", body: []byte(`{}`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager := &stubPackageJobManager{
+				startUpdate: func(name, source string) (*packagejobs.Job, error) {
+					if name != "demo" || source != test.wantSource {
+						t.Fatalf("name=%q source=%q", name, source)
+					}
+					return &packagejobs.Job{ID: "update-1"}, nil
+				},
+			}
+			ctx, response := testContext(http.MethodPost, "/", test.body, gin.Param{Key: "packageId", Value: "demo"})
+			NewPackageInstallHandler(manager).UpdatePackageHandler(ctx)
+			if response.Code != http.StatusAccepted {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestUpdatePackageHandlerMapsInvalidSourceToBadRequest(t *testing.T) {
+	manager := &stubPackageJobManager{
+		startUpdate: func(_ string, source string) (*packagejobs.Job, error) {
+			if source != "invalid" {
+				t.Fatalf("source=%q", source)
+			}
+			return nil, packagejobs.ErrInvalidSource
+		},
+	}
+	ctx, response := testContext(http.MethodPost, "/", []byte(`{"source":"invalid"}`), gin.Param{Key: "packageId", Value: "demo"})
+	NewPackageInstallHandler(manager).UpdatePackageHandler(ctx)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -246,5 +292,21 @@ func TestUninstallPackageHandlerSuccessAndInternalError(t *testing.T) {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+// A body that is present but not a JSON object is a client bug, not an
+// "update from the recorded source" request — only a missing body means that.
+func TestUpdatePackageHandlerRejectsMalformedJSON(t *testing.T) {
+	manager := &stubPackageJobManager{
+		startUpdate: func(string, string) (*packagejobs.Job, error) {
+			t.Fatal("manager should not be called")
+			return nil, nil
+		},
+	}
+	ctx, response := testContext(http.MethodPost, "/", []byte(`{`), gin.Param{Key: "packageId", Value: "demo"})
+	NewPackageInstallHandler(manager).UpdatePackageHandler(ctx)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

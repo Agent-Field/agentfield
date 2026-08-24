@@ -112,6 +112,7 @@ func TestPackageHandlerCoverageNonIntegration(t *testing.T) {
 		router := newPackageRouter(storage)
 		description := "Searchable package"
 		author := "Author"
+		recordedSource := "https://github.com/owner/searchable//go"
 
 		storage.queryAgentPackagesFn = func(ctx context.Context, filters types.PackageFilters) ([]*types.AgentPackage, error) {
 			return []*types.AgentPackage{
@@ -121,6 +122,7 @@ func TestPackageHandlerCoverageNonIntegration(t *testing.T) {
 					Version:             "1.0.0",
 					Description:         &description,
 					Author:              &author,
+					Repository:          &recordedSource,
 					InstallPath:         "/tmp/pkg-active",
 					ConfigurationSchema: json.RawMessage(`{"required":{"token":{"type":"secret"}}}`),
 				},
@@ -165,6 +167,7 @@ func TestPackageHandlerCoverageNonIntegration(t *testing.T) {
 		body := decodeJSONResponse[PackageListResponse](t, rec)
 		require.Len(t, body.Packages, 1)
 		require.Equal(t, "pkg-active", body.Packages[0].ID)
+		require.Equal(t, recordedSource, body.Packages[0].Source)
 		require.True(t, body.Packages[0].ConfigurationRequired)
 		require.True(t, body.Packages[0].ConfigurationComplete)
 		require.Equal(t, 1, body.Total)
@@ -174,6 +177,7 @@ func TestPackageHandlerCoverageNonIntegration(t *testing.T) {
 		body = decodeJSONResponse[PackageListResponse](t, rec)
 		require.Len(t, body.Packages, 1)
 		require.Equal(t, "pkg-open", body.Packages[0].ID)
+		require.Empty(t, body.Packages[0].Source)
 		require.False(t, body.Packages[0].ConfigurationRequired)
 		require.True(t, body.Packages[0].ConfigurationComplete)
 
@@ -202,6 +206,7 @@ func TestPackageHandlerCoverageNonIntegration(t *testing.T) {
 
 		storage := &overrideStorage{StorageProvider: setupTestStorage(t)}
 		router := newPackageRouter(storage)
+		recordedSource := "https://github.com/owner/configured"
 		storage.getAgentPackageFn = func(ctx context.Context, packageID string) (*types.AgentPackage, error) {
 			switch packageID {
 			case "missing":
@@ -222,6 +227,7 @@ func TestPackageHandlerCoverageNonIntegration(t *testing.T) {
 					Version:             "2.0.0",
 					Description:         &description,
 					Author:              &author,
+					Repository:          &recordedSource,
 					InstallPath:         "/tmp/configured",
 					ConfigurationSchema: json.RawMessage(`{"required":{"token":{"type":"secret"}}}`),
 				}, nil
@@ -258,6 +264,7 @@ func TestPackageHandlerCoverageNonIntegration(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code)
 		configured := decodeJSONResponse[PackageDetailsResponse](t, rec)
 		require.Equal(t, "configured", configured.ID)
+		require.Equal(t, recordedSource, configured.Source)
 		require.Equal(t, "Configured package", configured.Description)
 		require.True(t, configured.Configuration.Required)
 		require.True(t, configured.Configuration.Complete)
@@ -267,6 +274,7 @@ func TestPackageHandlerCoverageNonIntegration(t *testing.T) {
 		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/agents/packages/no-config/details", nil)
 		require.Equal(t, http.StatusOK, rec.Code)
 		openPkg := decodeJSONResponse[PackageDetailsResponse](t, rec)
+		require.Empty(t, openPkg.Source)
 		require.False(t, openPkg.Configuration.Required)
 		require.True(t, openPkg.Configuration.Complete)
 		require.Empty(t, openPkg.Configuration.Current)
