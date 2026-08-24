@@ -139,6 +139,10 @@ func TestCheckCacheHealthGetError(t *testing.T) {
 }
 
 func TestHealthCheckHandlerHealthy(t *testing.T) {
+	originalVersion := buildVersion
+	t.Cleanup(func() { buildVersion = originalVersion })
+	buildVersion = "0.1.134"
+
 	gin.SetMode(gin.TestMode)
 	srv := &AgentFieldServer{
 		storageHealthOverride: func(context.Context) gin.H { return gin.H{"status": "healthy"} },
@@ -162,6 +166,69 @@ func TestHealthCheckHandlerHealthy(t *testing.T) {
 	}
 	if payload["status"] != "healthy" {
 		t.Fatalf("expected response status healthy, got %+v", payload)
+	}
+	if payload["version"] != "0.1.134" {
+		t.Fatalf("expected build version 0.1.134, got %+v", payload)
+	}
+}
+
+func TestVersionHandlerReturnsBuildInfoAndRailwayHosting(t *testing.T) {
+	originalVersion, originalCommit, originalDate := buildVersion, buildCommit, buildDate
+	t.Cleanup(func() {
+		buildVersion, buildCommit, buildDate = originalVersion, originalCommit, originalDate
+	})
+	buildVersion = "0.1.134"
+	buildCommit = "14819110"
+	buildDate = "2026-08-24T19:40:00Z"
+
+	t.Setenv("RAILWAY_PROJECT_ID", "project-id")
+	t.Setenv("RAILWAY_ENVIRONMENT_ID", "environment-id")
+	t.Setenv("RAILWAY_SERVICE_ID", "service-id")
+	t.Setenv("RAILWAY_DEPLOYMENT_ID", "deployment-id")
+	t.Setenv("RAILWAY_REPLICA_REGION", "ca-central1")
+
+	gin.SetMode(gin.TestMode)
+	srv := &AgentFieldServer{}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+
+	srv.versionHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 status, got %d", w.Code)
+	}
+
+	var payload struct {
+		Version   string   `json:"version"`
+		Commit    string   `json:"commit"`
+		BuildDate string   `json:"build_date"`
+		Features  []string `json:"features"`
+		Hosting   struct {
+			Platform      string `json:"platform"`
+			ProjectID     string `json:"project_id"`
+			EnvironmentID string `json:"environment_id"`
+			ServiceID     string `json:"service_id"`
+			DeploymentID  string `json:"deployment_id"`
+			Region        string `json:"region"`
+		} `json:"hosting"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if payload.Version != "0.1.134" || payload.Commit != "14819110" || payload.BuildDate != "2026-08-24T19:40:00Z" {
+		t.Fatalf("unexpected build info: %+v", payload)
+	}
+	if payload.Hosting.Platform != "railway" ||
+		payload.Hosting.ProjectID != "project-id" ||
+		payload.Hosting.EnvironmentID != "environment-id" ||
+		payload.Hosting.ServiceID != "service-id" ||
+		payload.Hosting.DeploymentID != "deployment-id" ||
+		payload.Hosting.Region != "ca-central1" {
+		t.Fatalf("unexpected hosting block: %+v", payload.Hosting)
+	}
+	if len(payload.Features) != 2 || payload.Features[0] != "package_updates" || payload.Features[1] != "boot_restore" {
+		t.Fatalf("unexpected features: %+v", payload.Features)
 	}
 }
 

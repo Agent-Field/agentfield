@@ -28,6 +28,7 @@ func (s *AgentFieldServer) registerPublicRoutes() {
 func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// Health check endpoint for container orchestration
 	agentAPI.GET("/health", s.healthCheckHandler)
+	agentAPI.GET("/version", s.versionHandler)
 
 	// Apply global rate limiting if enabled
 	if s.rateLimitGlobal != nil {
@@ -225,7 +226,7 @@ func (s *AgentFieldServer) healthCheckHandler(c *gin.Context) {
 	healthStatus := gin.H{
 		"status":    "healthy",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"version":   "1.0.0", // TODO: Get from build info
+		"version":   buildVersion,
 		"checks":    gin.H{},
 	}
 	if furrowPublicAddr := os.Getenv("FURROW_PUBLIC_ADDR"); furrowPublicAddr != "" {
@@ -271,6 +272,44 @@ func (s *AgentFieldServer) healthCheckHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, healthStatus)
+}
+
+type hostingInfo struct {
+	Platform      string `json:"platform"`
+	ProjectID     string `json:"project_id,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+	ServiceID     string `json:"service_id,omitempty"`
+	DeploymentID  string `json:"deployment_id,omitempty"`
+	Region        string `json:"region,omitempty"`
+}
+
+func (s *AgentFieldServer) versionHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"version":    buildVersion,
+		"commit":     buildCommit,
+		"build_date": buildDate,
+		"hosting":    detectHosting(),
+		"features":   []string{"package_updates", "boot_restore"},
+	})
+}
+
+func detectHosting() hostingInfo {
+	if serviceID := os.Getenv("RAILWAY_SERVICE_ID"); serviceID != "" {
+		return hostingInfo{
+			Platform:      "railway",
+			ProjectID:     os.Getenv("RAILWAY_PROJECT_ID"),
+			EnvironmentID: os.Getenv("RAILWAY_ENVIRONMENT_ID"),
+			ServiceID:     serviceID,
+			DeploymentID:  os.Getenv("RAILWAY_DEPLOYMENT_ID"),
+			Region:        os.Getenv("RAILWAY_REPLICA_REGION"),
+		}
+	}
+
+	if _, err := os.Stat("/.dockerenv"); err == nil || os.Getenv("AGENTFIELD_HOME") == "/data" {
+		return hostingInfo{Platform: "docker"}
+	}
+
+	return hostingInfo{Platform: "local"}
 }
 
 // checkStorageHealth performs a lightweight storage readiness probe.
