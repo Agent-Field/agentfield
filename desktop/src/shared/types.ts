@@ -48,6 +48,7 @@ export type PackageUpdateStatus =
   | 'pinned'
   | 'unknown'
   | 'deferred'
+  | 'failed'
   | 'error'
 
 export interface PackageUpdateResult {
@@ -125,6 +126,8 @@ export interface BundledStatus {
 export interface InstallResult {
   ok: boolean
   message: string
+  /** Present when the control plane refused an update because runs are active. */
+  activeExecutions?: number
 }
 
 /** Outcome of a start/stop/restart issued from the app. */
@@ -338,12 +341,15 @@ export interface CloudUpdateStatus extends CloudUpdateCheck {
   lastCheckedAt: string | null
   /** Whether Desktop can safely identify a Railway service to update. */
   canApply: boolean
+  /** Whether Railway service controls can safely target the connected CP. */
+  canManageRailway?: boolean
   hosting?: ControlPlaneHosting
 }
 
 export interface CloudUpdateApplyResult {
   ok: boolean
   target?: string
+  alreadyCurrent?: boolean
   message: string
 }
 
@@ -394,6 +400,8 @@ export interface PackageMaintenanceStatus {
   enabled: boolean
   reason: string
   interval: string
+  boot_pass_completed: boolean
+  hosting: 'railway' | 'docker' | 'local'
   last_run: PackageMaintenanceRun | null
   next_run_at: string
 }
@@ -404,6 +412,8 @@ export interface LocalControlPlaneRestartStatus {
   restarted: boolean
   status: 'not_required' | 'restart_required' | 'restarted' | 'failed'
   message: string
+  /** Managed CLI version the adopted server must reach before this clears. */
+  targetVersion?: string
 }
 
 /** A newer app release found on GitHub (the desktop app's update channel). */
@@ -557,7 +567,7 @@ export interface AgentFieldApi {
    * Update an installed agent. Catalog agents follow the catalog source;
    * other agents follow the source recorded by the control plane.
    */
-  update(name: string): Promise<InstallResult>
+  update(name: string, options?: { force?: boolean }): Promise<InstallResult>
   /** Ask the control plane to refresh package update availability. */
   checkPackageUpdates(): Promise<PackageUpdateCheckResponse>
   /** Pause/resume unattended updates for one installed package. */

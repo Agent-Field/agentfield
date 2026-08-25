@@ -179,12 +179,19 @@ export interface WatchInstallJobOptions {
 export class CpApiError extends Error {
   readonly status: number
   readonly code?: string | number
+  readonly activeExecutions?: number
 
-  constructor(details: { status: number; code?: string | number; message: string }) {
+  constructor(details: {
+    status: number
+    code?: string | number
+    message: string
+    activeExecutions?: number
+  }) {
     super(details.message)
     this.name = 'CpApiError'
     this.status = details.status
     this.code = details.code
+    this.activeExecutions = details.activeExecutions
   }
 }
 
@@ -200,7 +207,10 @@ export interface CpClient {
   /** POST /api/ui/v1/agents/packages/:packageId/uninstall. */
   uninstallPackage(packageId: string): Promise<{ package_id: string; status: string }>
   /** POST /api/ui/v1/agents/packages/:packageId/update. */
-  updatePackage(packageId: string, source?: string): Promise<{ job_id: string }>
+  updatePackage(
+    packageId: string,
+    options?: { source?: string; force?: boolean }
+  ): Promise<{ job_id: string }>
   /** GET /api/ui/v1/agents/packages. */
   listPackages(): Promise<PackageListResponse>
   /** POST /api/ui/v1/agents/packages/check-updates. */
@@ -267,9 +277,12 @@ async function apiError(response: Response): Promise<CpApiError> {
     typeof record?.code === 'string' || typeof record?.code === 'number'
       ? record.code
       : undefined
+  const activeExecutions =
+    typeof record?.active_executions === 'number' ? record.active_executions : undefined
   return new CpApiError({
     status: response.status,
     code,
+    activeExecutions,
     message:
       response.status === 401
         ? unauthorizedMessage(record, serverMessage)
@@ -368,12 +381,15 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
         { mutation: true }
       )
     },
-    updatePackage(packageId, source) {
+    updatePackage(packageId, updateOptions) {
+      const body = updateOptions && (
+        updateOptions.source !== undefined || updateOptions.force !== undefined
+      )
+        ? JSON.stringify(updateOptions)
+        : undefined
       return request(
         `/api/ui/v1/agents/packages/${encodeURIComponent(packageId)}/update`,
-        source === undefined
-          ? { method: 'POST' }
-          : { method: 'POST', body: JSON.stringify({ source }) },
+        body === undefined ? { method: 'POST' } : { method: 'POST', body },
         { mutation: true }
       )
     },

@@ -128,7 +128,7 @@ describe('control-plane installs', () => {
   it('updates catalog agents from the current catalog source', async () => {
     const client = installClient()
     await updateAgent(ENTRY.name, () => {}, { cpClient: client })
-    expect(client.updatePackage).toHaveBeenCalledWith(ENTRY.name, ENTRY.source)
+    expect(client.updatePackage).toHaveBeenCalledWith(ENTRY.name, { source: ENTRY.source })
   })
 
   it('surfaces conflict and old-control-plane errors without fallback', async () => {
