@@ -248,9 +248,12 @@ async function waitForBootMaintenance(
   for (;;) {
     try {
       const maintenance = await deps.getMaintenanceStatus()
+      // boot_restore_completed flips as soon as the restore loop ends, but on a
+      // fresh container last_run stays empty until the whole pass finishes —
+      // wait for a summary to report on rather than announcing "0 restored".
       if (
-        maintenance.boot_restore_completed === true ||
-        maintenance.boot_pass_completed === true
+        maintenance.boot_pass_completed === true ||
+        (maintenance.boot_restore_completed === true && maintenance.last_run != null)
       ) {
         return cloudUpdateMaintenanceMessage(target, maintenance)
       }

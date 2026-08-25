@@ -561,6 +561,48 @@ describe('six-minute apply polling', () => {
     })
   })
 
+  it('H6 — a restore-complete flag without a summary yet keeps waiting for the pass', async () => {
+    const withoutSummary: PackageMaintenanceStatus = {
+      enabled: true,
+      reason: '',
+      interval: '6h0m0s',
+      boot_restore_completed: true,
+      boot_pass_completed: false,
+      hosting: 'railway',
+      last_run: null,
+      next_run_at: 'later'
+    }
+    const finished: PackageMaintenanceStatus = {
+      ...withoutSummary,
+      boot_pass_completed: true,
+      last_run: {
+        started_at: 'start',
+        finished_at: 'end',
+        checked: 1,
+        updated: [],
+        restored: ['a'],
+        skipped: [],
+        errors: []
+      }
+    }
+    const getMaintenanceStatus = vi.fn()
+      .mockResolvedValueOnce(withoutSummary)
+      .mockResolvedValueOnce(withoutSummary)
+      .mockResolvedValue(finished)
+    const deps = { ...applyDeps(), getMaintenanceStatus }
+
+    await expect(applyCloudUpdate({
+      running: running('0.1.134', {
+        platform: 'railway', service_id: 'service', environment_id: 'environment'
+      }),
+      tfstateImage: null
+    }, deps)).resolves.toMatchObject({
+      ok: true,
+      message: 'Updated to v0.1.135. 1 agent restored.'
+    })
+    expect(getMaintenanceStatus).toHaveBeenCalledTimes(3)
+  })
+
   it('H6 — stops on restore completion and separates restore failures from warnings', async () => {
     const maintenance: PackageMaintenanceStatus = {
       enabled: true,
