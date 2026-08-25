@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -15,6 +16,9 @@ import (
 // DefaultProcessManager provides a default implementation for managing system processes.
 // It keeps track of running processes and provides methods to start, stop, and monitor them.
 type DefaultProcessManager struct {
+	// mu guards runningProcesses: boot restores and update jobs start and stop
+	// nodes from different goroutines.
+	mu               sync.Mutex
 	runningProcesses map[int]*exec.Cmd
 	// stopProcess is a narrow test seam for the platform-specific bounded stop
 	// path. Production always uses stopManagedProcess below.
@@ -79,7 +83,9 @@ func (pm *DefaultProcessManager) Start(config interfaces.ProcessConfig) (pid int
 	pid = cmd.Process.Pid
 
 	// Track the running process
+	pm.mu.Lock()
 	pm.runningProcesses[pid] = cmd
+	pm.mu.Unlock()
 
 	return pid, nil
 }
@@ -87,13 +93,19 @@ func (pm *DefaultProcessManager) Start(config interfaces.ProcessConfig) (pid int
 // Stop terminates a process identified by its PID.
 // It attempts graceful termination first, then forceful termination if necessary.
 func (pm *DefaultProcessManager) Stop(pid int) error {
+	pm.mu.Lock()
 	cmd, exists := pm.runningProcesses[pid]
+	pm.mu.Unlock()
 	if !exists {
 		return fmt.Errorf("process with PID %d not found in managed processes", pid)
 	}
 	// Tracking is bookkeeping, not proof that an unresponsive process was
 	// reaped. Every bounded return path must release the slot.
-	defer delete(pm.runningProcesses, pid)
+	defer func() {
+		pm.mu.Lock()
+		delete(pm.runningProcesses, pid)
+		pm.mu.Unlock()
+	}()
 
 	// Check if process is still running
 	if cmd.Process == nil {
@@ -147,6 +159,8 @@ func stopManagedProcess(cmd *exec.Cmd, pid int) error {
 
 // Status retrieves the current status and information of a process identified by its PID.
 func (pm *DefaultProcessManager) Status(pid int) (interfaces.ProcessInfo, error) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 	cmd, exists := pm.runningProcesses[pid]
 	if !exists {
 		return interfaces.ProcessInfo{}, fmt.Errorf("process with PID %d not found in managed processes", pid)
