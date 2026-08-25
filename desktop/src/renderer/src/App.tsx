@@ -322,11 +322,9 @@ export default function App() {
             </div>
           )}
         </header>
-        {agentsSelected && (
-          <LocalControlPlaneRestartBanner
-            status={snapshot?.localControlPlaneRestart ?? null}
-          />
-        )}
+        <LocalControlPlaneRestartBanner
+          status={snapshot?.localControlPlaneRestart ?? null}
+        />
         <UpdateBanner />
         <CloudUpdateBanner />
         {/* Blocked-agents warning sits above the star ask: one reports the

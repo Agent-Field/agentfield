@@ -101,7 +101,7 @@ describe('createCpClient', () => {
     const client = createCpClient({ fetchImpl })
 
     await expect(
-      client.updatePackage('agent', 'https://github.com/Agent-Field/SWE-AF')
+      client.updatePackage('agent', { source: 'https://github.com/Agent-Field/SWE-AF' })
     ).resolves.toEqual({ job_id: 'with-source' })
     await expect(client.updatePackage('agent')).resolves.toEqual({ job_id: 'legacy' })
 
@@ -110,6 +110,30 @@ describe('createCpClient', () => {
       source: 'https://github.com/Agent-Field/SWE-AF'
     })
     expect(calls[1][1]?.body).toBeUndefined()
+  })
+
+  it('D7 — sends force and preserves the active-executions conflict contract', async () => {
+    const fetchImpl = mockFetch([
+      json({
+        error: '1 run is active',
+        code: 'executions_active',
+        active_executions: 1
+      }, 409),
+      json({ job_id: 'forced' }, 202)
+    ])
+    const client = createCpClient({ fetchImpl })
+
+    await expect(client.updatePackage('agent')).rejects.toMatchObject({
+      status: 409,
+      code: 'executions_active',
+      activeExecutions: 1
+    })
+    await expect(client.updatePackage('agent', { force: true })).resolves.toEqual({
+      job_id: 'forced'
+    })
+    expect(JSON.parse(String(vi.mocked(fetchImpl).mock.calls[1][1]?.body))).toEqual({
+      force: true
+    })
   })
 
   it('implements the version and package-maintenance API contracts', async () => {
@@ -125,6 +149,8 @@ describe('createCpClient', () => {
       enabled: true,
       reason: '',
       interval: '6h0m0s',
+      boot_pass_completed: false,
+      hosting: 'railway',
       last_run: null,
       next_run_at: 'later'
     }

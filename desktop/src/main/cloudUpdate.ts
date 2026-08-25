@@ -3,13 +3,18 @@ import type {
   CloudUpdateApplyResult,
   CloudUpdateCheck,
   CloudUpdateStatus,
-  ControlPlaneVersion
+  ControlPlaneVersion,
+  PackageMaintenanceStatus
 } from '../shared/types'
+import { CpApiError } from './cpClient'
 import { resolveCloudImage } from './deployEngine'
 import { compareAppVersions } from './updates'
 
 const APPLY_TIMEOUT_MS = 6 * 60_000
 const POLL_INTERVAL_MS = 5_000
+const MAINTENANCE_TIMEOUT_MS = 2 * 60_000
+const RESTORE_FALLBACK_MESSAGE = (target: string) =>
+  `Updated to v${target} — agents are being restored by the control plane.`
 
 function cleanVersion(value: string): string {
   return value.trim().replace(/^v/, '')
@@ -98,6 +103,7 @@ export interface ApplyCloudUpdateOptions {
   running: ControlPlaneVersion | null
   tfstateImage: string | null
   tfstateServiceId?: string | null
+  tfstateEnvironmentId?: string | null
   tfstateUrl?: string | null
   connectedServerUrl?: string | null
 }
@@ -135,6 +141,27 @@ export function cloudUpdateApplyPath(
   return 'none'
 }
 
+/** Railway-only controls need a concrete service/environment, not merely
+ * stale local deployment state. Legacy CPs may use URL-matched tfstate. */
+export function cloudUpdateRailwayControlsAvailable(
+  options: ApplyCloudUpdateOptions
+): boolean {
+  const hosting = options.running?.hosting
+  if (
+    hosting?.platform === 'railway' &&
+    hosting.service_id &&
+    hosting.environment_id
+  ) {
+    return true
+  }
+  return (
+    options.running === null &&
+    Boolean(options.tfstateServiceId) &&
+    Boolean(options.tfstateEnvironmentId) &&
+    cloudUpdateApplyPath(options) === 'tfstate'
+  )
+}
+
 export function cloudUpdateApplyUnavailableMessage(
   options: ApplyCloudUpdateOptions
 ): string {
@@ -150,8 +177,63 @@ export interface ApplyCloudUpdateDeps {
   setServiceImage: (serviceId: string, environmentId: string, image: string) => Promise<void>
   redeploy: (serviceId: string, environmentId: string) => Promise<void>
   getVersion: () => Promise<ControlPlaneVersion | null>
+  /** Optional only for old/test integrations; production always supplies it. */
+  getMaintenanceStatus?: () => Promise<PackageMaintenanceStatus>
   sleep?: (milliseconds: number) => Promise<void>
   now?: () => number
+}
+
+function failedRestoreDetail(error: string): string {
+  const match = /^restore\s+([^:]+):\s*(.+)$/.exec(error.trim())
+  return match ? `${match[1]} (${match[2]})` : error.trim()
+}
+
+/** Turn the boot pass contract into the concise post-update message. */
+export function cloudUpdateMaintenanceMessage(
+  target: string,
+  maintenance: PackageMaintenanceStatus
+): string {
+  const restored = maintenance.last_run?.restored ?? []
+  const errors = maintenance.last_run?.errors ?? []
+  if (errors.length === 0) {
+    return `Updated to v${target}. ${restored.length} ${restored.length === 1 ? 'agent' : 'agents'} restored.`
+  }
+  const parts = [`Updated to v${target}.`]
+  if (restored.length > 0) parts.push(`Restored: ${restored.join(', ')}.`)
+  parts.push(`Failed to restore: ${errors.map(failedRestoreDetail).join(', ')}.`)
+  return parts.join(' ')
+}
+
+async function waitForBootMaintenance(
+  target: string,
+  deps: ApplyCloudUpdateDeps,
+  now: () => number,
+  sleep: (milliseconds: number) => Promise<void>
+): Promise<string> {
+  if (!deps.getMaintenanceStatus) return RESTORE_FALLBACK_MESSAGE(target)
+  const deadline = now() + MAINTENANCE_TIMEOUT_MS
+  for (;;) {
+    try {
+      const maintenance = await deps.getMaintenanceStatus()
+      if (maintenance.boot_pass_completed === true) {
+        return cloudUpdateMaintenanceMessage(target, maintenance)
+      }
+    } catch (error) {
+      if (
+        (error instanceof CpApiError && error.status === 404) ||
+        (
+          typeof error === 'object' &&
+          error !== null &&
+          (error as { status?: unknown }).status === 404
+        )
+      ) {
+        return RESTORE_FALLBACK_MESSAGE(target)
+      }
+      // The new container may still be settling; keep polling until bounded.
+    }
+    if (now() >= deadline) return RESTORE_FALLBACK_MESSAGE(target)
+    await sleep(POLL_INTERVAL_MS)
+  }
 }
 
 function errorText(error: unknown): string {
@@ -174,6 +256,14 @@ export async function applyCloudUpdate(
   }
 
   const current = options.running?.version ? cleanVersion(options.running.version) : null
+  if (current && compareAppVersions(target, current) === 0) {
+    return {
+      ok: true,
+      target,
+      alreadyCurrent: true,
+      message: `Control plane is already running v${target}.`
+    }
+  }
   if (current && compareAppVersions(target, current) < 0) {
     return {
       ok: false,
@@ -208,24 +298,29 @@ export async function applyCloudUpdate(
   const now = deps.now ?? Date.now
   const sleep = deps.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
   const deadline = now() + APPLY_TIMEOUT_MS
+  const previousDeploymentId = options.running?.hosting?.deployment_id ?? undefined
   for (;;) {
+    await sleep(POLL_INTERVAL_MS)
     try {
       const observed = await deps.getVersion()
       if (
         observed?.version && isSemver(cleanVersion(observed.version)) &&
-        compareAppVersions(cleanVersion(observed.version), target) >= 0
+        compareAppVersions(cleanVersion(observed.version), target) >= 0 &&
+        (
+          previousDeploymentId === undefined ||
+          observed.hosting.deployment_id !== previousDeploymentId
+        )
       ) {
         return {
           ok: true,
           target,
-          message: `Updated to v${target} — agents are being restored by the control plane.`
+          message: await waitForBootMaintenance(target, deps, now, sleep)
         }
       }
     } catch {
       // A deployment is expected to be briefly unreachable; keep polling.
     }
     if (now() >= deadline) break
-    await sleep(POLL_INTERVAL_MS)
   }
   return {
     ok: false,
@@ -365,6 +460,7 @@ export interface CloudUpdateCheckerDeps {
   getVersion: () => Promise<ControlPlaneVersion | null>
   getTfstateImage: () => string | null
   canApplyUpdate?: (running: ControlPlaneVersion | null) => boolean
+  canManageRailway?: (running: ControlPlaneVersion | null) => boolean
   applyUpdate?: (
     running: ControlPlaneVersion | null,
     tfstateImage: string | null
@@ -385,7 +481,8 @@ export class CloudUpdateChecker {
     checking: false,
     applying: false,
     lastCheckedAt: null,
-    canApply: false
+    canApply: false,
+    canManageRailway: false
   }
   private autoCheckStarted = false
 
@@ -408,7 +505,10 @@ export class CloudUpdateChecker {
     if (!this.deps.enabled()) {
       return this.patch({
         status: 'unknown',
-        message: 'Cloud update checks run when a Remote control plane is enabled.'
+        message: 'Cloud update checks run when a Remote control plane is enabled.',
+        canApply: false,
+        canManageRailway: false,
+        hosting: undefined
       })
     }
     this.patch({ checking: true, hosting: undefined })
@@ -420,6 +520,7 @@ export class CloudUpdateChecker {
         fetchImpl: this.deps.fetchImpl
       })
       const canApply = this.deps.canApplyUpdate?.(running) ?? false
+      const canManageRailway = this.deps.canManageRailway?.(running) ?? false
       const message = check.status === 'legacy' && !canApply
         ? check.latest
           ? `This legacy control plane cannot be matched to this desktop deployment. In Railway, set its image to agentfield/control-plane-cloud:v${check.latest} and redeploy it.`
@@ -431,6 +532,7 @@ export class CloudUpdateChecker {
         checking: false,
         lastCheckedAt: new Date().toISOString(),
         canApply,
+        canManageRailway,
         hosting: running?.hosting
       })
       this.deps.onCompletedCheck?.(running)
@@ -440,6 +542,7 @@ export class CloudUpdateChecker {
         status: 'unknown',
         checking: false,
         canApply: false,
+        canManageRailway: false,
         hosting: undefined,
         message: `Could not read the running control-plane version: ${errorText(error)}. Check the Remote connection and try again.`
       })
@@ -456,7 +559,9 @@ export class CloudUpdateChecker {
       const running = await this.deps.getVersion()
       const result = await this.deps.applyUpdate(running, this.deps.getTfstateImage())
       this.patch({ applying: false, message: result.message })
-      if (result.ok) await this.check()
+      // Let the renderer paint the positive apply result before the follow-up
+      // check changes the status to current and intentionally removes it.
+      if (result.ok) setTimeout(() => void this.check(), 500)
       return result
     } catch (error) {
       const result = {

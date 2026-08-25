@@ -5,6 +5,7 @@ import { installedSourceLabel } from '../../../shared/catalog'
 import { COMMUNITY_LINKS } from './communityLinks'
 import { MenuPopover } from './MenuPopover'
 import { SkeletonRows } from './Skeleton'
+import { updateWithExecutionConfirmation } from './AgentsPanel'
 
 /**
  * Install-success checkmark (DESIGN.md §5.2): the path draws in ~400ms via
@@ -203,7 +204,11 @@ export function InstallPanel({
   const update = async (name: string) => {
     setOpenMenu(null)
     setPhase({ state: 'installing', name, progress: 'Updating…', lines: ['Updating…'] })
-    const result = await window.agentfield.update(name)
+    const result = await updateWithExecutionConfirmation(
+      name,
+      (force) => window.agentfield.update(name, force ? { force: true } : undefined),
+      (message) => window.confirm(message)
+    )
     setPhase({
       state: 'done',
       name,

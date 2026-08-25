@@ -1,11 +1,31 @@
 import { useEffect, useState } from 'react'
-import type { CloudUpdateStatus } from '../../../shared/types'
+import type { CloudUpdateApplyResult, CloudUpdateStatus } from '../../../shared/types'
+
+const SUCCESS_VISIBLE_MS = 10_000
+
+interface ApplyFeedback extends CloudUpdateApplyResult {
+  shownAt: number
+}
+
+export function cloudUpdateApplyResultVisible(
+  status: CloudUpdateStatus,
+  result: ApplyFeedback | null,
+  now = Date.now()
+): boolean {
+  if (!result) return false
+  if (!result.ok) return true
+  return status.status !== 'current' && now - result.shownAt < SUCCESS_VISIBLE_MS
+}
 
 export function cloudUpdateBannerVisible(
   status: CloudUpdateStatus,
   dismissedVersion: string | null
 ): boolean {
-  return status.status === 'available' && status.latest !== null && status.latest !== dismissedVersion
+  return (
+    (status.status === 'available' || status.status === 'legacy') &&
+    status.latest !== null &&
+    status.latest !== dismissedVersion
+  )
 }
 
 export function cloudUpdateBannerActionVisible(status: CloudUpdateStatus): boolean {
@@ -14,6 +34,9 @@ export function cloudUpdateBannerActionVisible(status: CloudUpdateStatus): boole
 
 export function cloudUpdateBannerText(status: CloudUpdateStatus): string {
   const available = `Control plane v${status.latest} is available`
+  if (status.status === 'legacy') {
+    return `${available} — this one is too old to report its version`
+  }
   return status.canApply ? available : `${available} — update your control plane image`
 }
 
@@ -22,7 +45,7 @@ export function cloudUpdateBannerText(status: CloudUpdateStatus): string {
 export function CloudUpdateBanner() {
   const [status, setStatus] = useState<CloudUpdateStatus | null>(null)
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null)
-  const [result, setResult] = useState<string | null>(null)
+  const [result, setResult] = useState<ApplyFeedback | null>(null)
 
   useEffect(() => {
     void Promise.all([
@@ -35,15 +58,21 @@ export function CloudUpdateBanner() {
     return window.agentfield.onCloudUpdateStatus(setStatus)
   }, [])
 
-  if (
-    !status ||
-    !cloudUpdateBannerVisible(status, dismissedVersion)
-  ) return null
+  useEffect(() => {
+    if (!result?.ok) return
+    const remaining = Math.max(0, SUCCESS_VISIBLE_MS - (Date.now() - result.shownAt))
+    const timer = window.setTimeout(() => setResult(null), remaining)
+    return () => window.clearTimeout(timer)
+  }, [result])
+
+  const bannerVisible = status && cloudUpdateBannerVisible(status, dismissedVersion)
+  const resultVisible = status && cloudUpdateApplyResultVisible(status, result)
+  if (!status || (!bannerVisible && !resultVisible)) return null
 
   const apply = async () => {
     setResult(null)
     const next = await window.agentfield.applyCloudUpdate()
-    if (!next.ok) setResult(next.message)
+    setResult({ ...next, shownAt: Date.now() })
   }
 
   const dismiss = async () => {
@@ -56,7 +85,9 @@ export function CloudUpdateBanner() {
     <div className="update-banner" role="status">
       <span className="update-banner-text">
         {cloudUpdateBannerText(status)}
-        {result && <span className="error-text"> · {result}</span>}
+        {resultVisible && result && (
+          <span className={result.ok ? '' : 'error-text'}> · {result.message}</span>
+        )}
       </span>
       {cloudUpdateBannerActionVisible(status) && (
         <button

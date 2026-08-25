@@ -60,10 +60,14 @@ import {
   applyCloudUpdateWithRailwayToken,
   autoUpdateModeAfterDeploy,
   cloudUpdateApplyPath,
+  cloudUpdateRailwayControlsAvailable,
   CloudUpdateChecker,
   setCloudAutoUpdateSchedule
 } from './cloudUpdate'
-import { restartAdoptedControlPlaneAfterCliSwap } from './localCpUpdate'
+import {
+  reconcileLocalControlPlaneRestart,
+  restartAdoptedControlPlaneAfterCliSwap
+} from './localCpUpdate'
 import {
   getFreshAccessToken,
   isLoggedIn,
@@ -551,13 +555,23 @@ function main(): void {
     // The snapshot also carries the bundled-node provisioning rows, so the
     // Agents view can show the two nodes arriving on a first launch off the
     // poll it already runs.
-    ipcMain.handle('agentfield:snapshot', () =>
-      getSnapshot({
+    ipcMain.handle('agentfield:snapshot', async () => {
+      if (localControlPlaneRestart?.status === 'restart_required' && !settings.cloud.enabled) {
+        try {
+          localControlPlaneRestart = reconcileLocalControlPlaneRestart(
+            localControlPlaneRestart,
+            await createCpClient().getVersion()
+          )
+        } catch {
+          // Keep the actionable warning while the local server is unreachable.
+        }
+      }
+      return getSnapshot({
         skillSync: skillSync.last(),
         bundled: bundledStatuses(),
         localControlPlaneRestart
       })
-    )
+    })
     // Bundled nodes stay listed so an uninstalled one can be reinstalled from the curated UI.
     ipcMain.handle('agentfield:catalog', () => [...BUNDLED_NODES, ...CATALOG])
     ipcMain.handle('agentfield:install', async (event, name: unknown) => {
@@ -609,8 +623,22 @@ function main(): void {
     })
     // Update shares the install mutex and progress channel: it is an install
     // with a stop/restart wrapped around it.
-    ipcMain.handle('agentfield:update', async (event, name: unknown) => {
-      if (typeof name !== 'string') {
+    ipcMain.handle('agentfield:update', async (event, name: unknown, updateOptions: unknown) => {
+      if (
+        typeof name !== 'string' ||
+        (
+          updateOptions !== undefined &&
+          (
+            typeof updateOptions !== 'object' ||
+            updateOptions === null ||
+            Array.isArray(updateOptions) ||
+            (
+              (updateOptions as { force?: unknown }).force !== undefined &&
+              typeof (updateOptions as { force?: unknown }).force !== 'boolean'
+            )
+          )
+        )
+      ) {
         return { ok: false, message: 'invalid update request' }
       }
       if (installInFlight) {
@@ -618,11 +646,16 @@ function main(): void {
       }
       installInFlight = true
       try {
-        return await updateAgent(name, (line) => {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send('agentfield:install-progress', line)
-          }
-        })
+        return await updateAgent(
+          name,
+          (line) => {
+            if (!event.sender.isDestroyed()) {
+              event.sender.send('agentfield:install-progress', line)
+            }
+          },
+          undefined,
+          updateOptions as { force?: boolean } | undefined
+        )
       } finally {
         releaseInstall()
       }
@@ -763,6 +796,17 @@ function main(): void {
           connectedServerUrl: settings.cloud.serverUrl
         }) !== 'none'
       },
+      canManageRailway: (running) => {
+        const state = deploymentStateInfo(deployPaths().workspaceDir)
+        return cloudUpdateRailwayControlsAvailable({
+          running,
+          tfstateImage: state?.image ?? null,
+          tfstateServiceId: state?.serviceId,
+          tfstateEnvironmentId: state?.environmentId,
+          tfstateUrl: state?.url,
+          connectedServerUrl: settings.cloud.serverUrl
+        })
+      },
       applyUpdate: async (running, tfstateImage) => {
         const paths = deployPaths()
         const state = deploymentStateInfo(paths.workspaceDir)
@@ -797,7 +841,8 @@ function main(): void {
               setServiceImage: (serviceId, environmentId, image) =>
                 api.setServiceImage(serviceId, environmentId, image),
               redeploy: (serviceId, environmentId) => api.redeploy(serviceId, environmentId),
-              getVersion: () => createCpClient().getVersion()
+              getVersion: () => createCpClient().getVersion(),
+              getMaintenanceStatus: () => createCpClient().getMaintenanceStatus()
             }
           }
         })

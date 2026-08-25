@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ControlPlaneVersion } from '../shared/types'
-import { restartAdoptedControlPlaneAfterCliSwap } from './localCpUpdate'
+import {
+  reconcileLocalControlPlaneRestart,
+  restartAdoptedControlPlaneAfterCliSwap
+} from './localCpUpdate'
 
 function version(value: string): ControlPlaneVersion {
   return { version: value, commit: '', build_date: '', hosting: { platform: 'local' }, features: [] }
@@ -27,8 +30,23 @@ describe('local control-plane restart after a managed CLI swap', () => {
       ok: false,
       restarted: false,
       status: 'restart_required',
-      message: 'AgentField CLI updated to v0.1.135. Restart the control plane to use it.'
+      message: 'AgentField CLI updated to v0.1.135. Restart the local control plane: stop the running "af server" process and start it again (if AgentField Desktop started it, quit and reopen the app).',
+      targetVersion: '0.1.135'
     })
+  })
+
+  it('D6 — clears the global restart warning when the polled local CP reaches the CLI', () => {
+    const status = {
+      at: '',
+      ok: false,
+      restarted: false,
+      status: 'restart_required' as const,
+      message: 'restart',
+      targetVersion: '0.1.135'
+    }
+    expect(reconcileLocalControlPlaneRestart(status, version('0.1.134'))).toBe(status)
+    expect(reconcileLocalControlPlaneRestart(status, version('v0.1.135'))).toBeNull()
+    expect(reconcileLocalControlPlaneRestart(status, version('0.1.136'))).toBeNull()
   })
 
   it('treats a missing version endpoint on an adopted Windows server as restart-required', async () => {

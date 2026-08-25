@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ControlPlaneVersion } from '../shared/types'
+import type { ControlPlaneVersion, PackageMaintenanceStatus } from '../shared/types'
+import { CpApiError } from './cpClient'
 import {
   applyCloudUpdate,
   applyCloudUpdateWithRailwayToken,
   autoUpdateModeAfterDeploy,
   checkCloudUpdate,
   cloudUpdateApplyPath,
+  cloudUpdateRailwayControlsAvailable,
   CloudUpdateChecker,
   setCloudAutoUpdateSchedule
 } from './cloudUpdate'
@@ -115,6 +117,31 @@ function applyDeps(version = '0.1.135') {
 }
 
 describe('applyCloudUpdate path selection', () => {
+  it('D1 — returns already-current without Railway or tofu effects', async () => {
+    const deps = applyDeps()
+    const result = await applyCloudUpdate({
+      running: running('0.1.135', {
+        platform: 'railway',
+        service_id: 'service',
+        environment_id: 'environment',
+        deployment_id: 'deployment'
+      }),
+      tfstateImage: 'agentfield/control-plane-cloud:v0.1.135',
+      tfstateServiceId: 'service'
+    }, deps)
+
+    expect(result).toEqual({
+      ok: true,
+      target: '0.1.135',
+      alreadyCurrent: true,
+      message: 'Control plane is already running v0.1.135.'
+    })
+    expect(deps.refreshAndDeploy).not.toHaveBeenCalled()
+    expect(deps.setServiceImage).not.toHaveBeenCalled()
+    expect(deps.redeploy).not.toHaveBeenCalled()
+    expect(deps.getVersion).not.toHaveBeenCalled()
+  })
+
   it('refreshes and uses the existing deploy engine when tfstate is present', async () => {
     const deps = applyDeps()
     const result = await applyCloudUpdate({
@@ -202,6 +229,23 @@ describe('applyCloudUpdate path selection', () => {
     })).toBe('tfstate')
   })
 
+  it('D9 — exposes Railway controls only for a resolvable connected Railway service', () => {
+    expect(cloudUpdateRailwayControlsAvailable({
+      running: running('0.1.134', { platform: 'docker' }),
+      tfstateImage: 'agentfield/control-plane-cloud:v0.1.134',
+      tfstateServiceId: 'stale-service',
+      tfstateEnvironmentId: 'stale-environment',
+      tfstateUrl: 'https://state.example',
+      connectedServerUrl: 'https://state.example'
+    })).toBe(false)
+    expect(cloudUpdateRailwayControlsAvailable({
+      running: running('0.1.134', {
+        platform: 'railway', service_id: 'service', environment_id: 'environment'
+      }),
+      tfstateImage: null
+    })).toBe(true)
+  })
+
   it('explains that deployment identity is missing instead of guessing', async () => {
     const deps = applyDeps()
     const result = await applyCloudUpdate({
@@ -249,6 +293,37 @@ describe('applyCloudUpdate path selection', () => {
 
 describe('CloudUpdateChecker background cadence', () => {
   afterEach(() => vi.useRealTimers())
+
+  it('D8 — publishes apply success before the follow-up check clears available status', async () => {
+    vi.useFakeTimers()
+    const getVersion = vi
+      .fn()
+      .mockResolvedValueOnce(running('0.1.134'))
+      .mockResolvedValueOnce(running('0.1.134'))
+      .mockResolvedValueOnce(running('0.1.135'))
+    const checker = new CloudUpdateChecker({
+      enabled: () => true,
+      getVersion,
+      getTfstateImage: () => null,
+      canApplyUpdate: () => true,
+      applyUpdate: vi.fn(async () => ({
+        ok: true,
+        target: '0.1.135',
+        message: 'Updated to v0.1.135. 1 agent restored.'
+      })),
+      fetchImpl: dockerHub('0.1.135')
+    })
+    await checker.check()
+
+    await expect(checker.apply()).resolves.toMatchObject({ ok: true })
+    expect(checker.status()).toMatchObject({
+      status: 'available',
+      message: 'Updated to v0.1.135. 1 agent restored.'
+    })
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(checker.status().status).toBe('current')
+  })
 
   it('waits for Remote to be enabled before a background check', async () => {
     vi.useFakeTimers()
@@ -334,6 +409,93 @@ describe('CloudUpdateChecker background cadence', () => {
 })
 
 describe('six-minute apply polling', () => {
+  it('D2 — rejects the pre-restart deployment and accepts the new deployment id', async () => {
+    const deps = applyDeps()
+    deps.getVersion
+      .mockResolvedValueOnce(running('0.1.135', {
+        platform: 'railway', deployment_id: 'old-deployment'
+      }))
+      .mockResolvedValueOnce(running('0.1.135', {
+        platform: 'railway', deployment_id: 'new-deployment'
+      }))
+
+    await expect(applyCloudUpdate({
+      running: running('0.1.134', {
+        platform: 'railway',
+        service_id: 'service',
+        environment_id: 'environment',
+        deployment_id: 'old-deployment'
+      }),
+      tfstateImage: null
+    }, deps)).resolves.toMatchObject({ ok: true, target: '0.1.135' })
+
+    expect(deps.getVersion).toHaveBeenCalledTimes(2)
+    expect(deps.sleep).toHaveBeenCalledTimes(2)
+  })
+
+  it('D3 — legacy deployment identity falls back to version after the first sleep', async () => {
+    const deps = applyDeps()
+
+    await expect(applyCloudUpdate({
+      running: running('0.1.134', {
+        platform: 'railway', service_id: 'service', environment_id: 'environment'
+      }),
+      tfstateImage: null
+    }, deps)).resolves.toMatchObject({ ok: true, target: '0.1.135' })
+
+    expect(deps.sleep).toHaveBeenCalledTimes(1)
+    expect(deps.getVersion).toHaveBeenCalledTimes(1)
+    expect(deps.sleep.mock.invocationCallOrder[0])
+      .toBeLessThan(deps.getVersion.mock.invocationCallOrder[0])
+  })
+
+  it('D4 — reports restored agents and failures, with a 404 compatibility fallback', async () => {
+    const maintenance: PackageMaintenanceStatus = {
+      enabled: true,
+      reason: '',
+      interval: '6h0m0s',
+      boot_pass_completed: true,
+      hosting: 'railway',
+      last_run: {
+        started_at: 'start',
+        finished_at: 'finish',
+        checked: 0,
+        updated: [],
+        restored: ['a', 'b'],
+        skipped: [],
+        errors: ['restore c: boom']
+      },
+      next_run_at: 'later'
+    }
+    const deps = { ...applyDeps(), getMaintenanceStatus: vi.fn(async () => maintenance) }
+
+    await expect(applyCloudUpdate({
+      running: running('0.1.134', {
+        platform: 'railway', service_id: 'service', environment_id: 'environment'
+      }),
+      tfstateImage: null
+    }, deps)).resolves.toMatchObject({
+      ok: true,
+      message: 'Updated to v0.1.135. Restored: a, b. Failed to restore: c (boom).'
+    })
+
+    const oldControlPlane = {
+      ...applyDeps(),
+      getMaintenanceStatus: vi.fn(async (): Promise<PackageMaintenanceStatus> => {
+        throw new CpApiError({ status: 404, message: 'missing' })
+      })
+    }
+    await expect(applyCloudUpdate({
+      running: running('0.1.134', {
+        platform: 'railway', service_id: 'service', environment_id: 'environment'
+      }),
+      tfstateImage: null
+    }, oldControlPlane)).resolves.toMatchObject({
+      ok: true,
+      message: 'Updated to v0.1.135 — agents are being restored by the control plane.'
+    })
+  })
+
   it('keeps polling across multiple iterations until the target is reported', async () => {
     let clock = 0
     const deps = applyDeps()
@@ -351,7 +513,7 @@ describe('six-minute apply polling', () => {
       tfstateImage: null
     }, deps)).resolves.toMatchObject({ ok: true, target: '0.1.135' })
     expect(deps.getVersion).toHaveBeenCalledTimes(3)
-    expect(deps.sleep).toHaveBeenCalledTimes(2)
+    expect(deps.sleep).toHaveBeenCalledTimes(3)
   })
 
   it('returns the documented failure after the six-minute deadline', async () => {

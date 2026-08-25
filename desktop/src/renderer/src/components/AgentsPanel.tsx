@@ -7,7 +7,8 @@ import type {
   BundledPhase,
   BundledStatus,
   LocalControlPlaneRestartStatus,
-  SnapshotAgent
+  SnapshotAgent,
+  InstallResult
 } from '../../../shared/types'
 import { EnvEditor } from './EnvEditor'
 import { MenuPopover } from './MenuPopover'
@@ -73,10 +74,19 @@ export function visibleBundledRows(
 }
 
 export function agentUpdateChip(agent: SnapshotAgent): string | null {
+  if (agent.update?.status === 'failed') return 'Update failed'
   if (agent.autoUpdate === false) return 'Paused'
   if (agent.update?.status === 'available') return 'Update available'
   if (agent.update?.status === 'pinned') return 'Pinned'
   return null
+}
+
+export function agentUpdateChipTitle(agent: SnapshotAgent): string | undefined {
+  return agent.update?.status === 'failed' ? agent.update.message : undefined
+}
+
+export function agentManualUpdateActionVisible(_agent: SnapshotAgent): boolean {
+  return true
 }
 
 export function agentAutoUpdateActionVisible(agent: SnapshotAgent): boolean {
@@ -89,6 +99,24 @@ export function localControlPlaneRestartVisible(
   return status?.status === 'restart_required'
 }
 
+export function activeExecutionsConfirmation(count: number, agent: string): string {
+  return `${count} ${count === 1 ? 'run' : 'runs'} in progress on ${agent}. Updating will stop them. Update anyway?`
+}
+
+/** Retry exactly once with force after the user acknowledges active runs. */
+export async function updateWithExecutionConfirmation(
+  agent: string,
+  request: (force: boolean) => Promise<InstallResult>,
+  confirm: (message: string) => boolean
+): Promise<InstallResult> {
+  const initial = await request(false)
+  if (initial.activeExecutions === undefined || initial.activeExecutions <= 0) return initial
+  if (!confirm(activeExecutionsConfirmation(initial.activeExecutions, agent))) {
+    return { ok: true, message: 'Update cancelled.' }
+  }
+  return request(true)
+}
+
 export function LocalControlPlaneRestartBanner({
   status
 }: {
@@ -97,8 +125,7 @@ export function LocalControlPlaneRestartBanner({
   if (!localControlPlaneRestartVisible(status)) return null
   return (
     <div className="callout warning" role="status">
-      {status!.message} Stop and restart the local control plane manually, then reopen AgentField
-      Desktop.
+      {status!.message}
     </div>
   )
 }
@@ -191,7 +218,11 @@ function AgentsBody({ registry, bundled, onChanged }: AgentsPanelProps) {
       const result = action === 'uninstall'
         ? await window.agentfield.uninstall(name)
         : action === 'update'
-          ? await window.agentfield.update(name)
+          ? await updateWithExecutionConfirmation(
+              name,
+              (force) => window.agentfield.update(name, force ? { force: true } : undefined),
+              (message) => window.confirm(message)
+            )
           : action === 'pause' || action === 'resume'
             ? await window.agentfield.setPackageAutoUpdate(name, action === 'resume')
             : await window.agentfield.agentAction(action, name)
@@ -353,7 +384,10 @@ function AgentRow({
               </span>
             )}
             {updateChip && (
-              <span className={`chip ${agent.update?.status === 'available' ? 'warn' : ''}`}>
+              <span
+                className={`chip ${agent.update?.status === 'available' || agent.update?.status === 'failed' ? 'warn' : ''}`}
+                title={agentUpdateChipTitle(agent)}
+              >
                 {updateChip}
               </span>
             )}
@@ -431,13 +465,15 @@ function AgentRow({
                     Restart
                   </button>
                 )}
-                <button
-                  className="menu-item"
-                  role="menuitem"
-                  onClick={() => onAction('update')}
-                >
-                  Update from recorded source
-                </button>
+                {agentManualUpdateActionVisible(agent) && (
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => onAction('update')}
+                  >
+                    Update from recorded source
+                  </button>
+                )}
                 {agentAutoUpdateActionVisible(agent) && (
                   <button
                     className="menu-item"

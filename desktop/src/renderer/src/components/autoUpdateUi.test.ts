@@ -3,6 +3,7 @@ import type { CloudUpdateStatus, RailwayStatus, SnapshotAgent } from '../../../s
 import { packageToInstalledAgent } from '../../../main/agentfield'
 import type { PackageInfo } from '../../../main/cpClient'
 import {
+  cloudUpdateApplyResultVisible,
   cloudUpdateBannerActionVisible,
   cloudUpdateBannerText,
   cloudUpdateBannerVisible
@@ -11,12 +12,16 @@ import {
   cloudUpdateActionLabel,
   cloudUpdateActionVisible,
   cloudUpdateFeedbackClass,
+  deployedWorkspacePickerDisabled,
   deployedWorkspacePickerVisible,
-  deploymentActionWorkspaceId
+  deploymentActionWorkspaceId,
+  railwayImageUpdatesVisible
 } from './CloudPanel'
 import {
   agentAutoUpdateActionVisible,
+  agentManualUpdateActionVisible,
   agentUpdateChip,
+  agentUpdateChipTitle,
   localControlPlaneRestartVisible
 } from './AgentsPanel'
 import { latestPackageUpdateCheckedAt, packageUpdateTimestamps } from './SettingsPanel'
@@ -48,6 +53,21 @@ describe('cloud update banner dismissal', () => {
       'Control plane v0.1.135 is available — update your control plane image'
     )
   })
+
+  it('D5 — shows an actionable legacy banner and hides only its dismissed release', () => {
+    const legacy = {
+      ...available,
+      status: 'legacy' as const,
+      current: null,
+      canApply: true
+    }
+    expect(cloudUpdateBannerVisible(legacy, null)).toBe(true)
+    expect(cloudUpdateBannerText(legacy)).toBe(
+      'Control plane v0.1.135 is available — this one is too old to report its version'
+    )
+    expect(cloudUpdateBannerActionVisible(legacy)).toBe(true)
+    expect(cloudUpdateBannerVisible(legacy, '0.1.135')).toBe(false)
+  })
 })
 
 describe('deployed Railway workspace picker', () => {
@@ -64,9 +84,41 @@ describe('deployed Railway workspace picker', () => {
     }
     expect(deployedWorkspacePickerVisible(railway)).toBe(true)
     expect(deploymentActionWorkspaceId(railway, '')).toBe('workspace-2')
-    expect(deploymentActionWorkspaceId(railway, 'workspace-1')).toBe('workspace-1')
+    expect(deploymentActionWorkspaceId(railway, 'workspace-1')).toBe('workspace-2')
     expect(deploymentActionWorkspaceId({ ...railway, workspaces: [] }, ''))
       .toBe('workspace-2')
+    expect(deployedWorkspacePickerDisabled(railway, false)).toBe(true)
+  })
+
+  it('D9 — hides stale Railway controls and locks actions to the recorded workspace', () => {
+    const nonRailway: CloudUpdateStatus = {
+      status: 'available',
+      current: '0.1.134',
+      latest: '0.1.135',
+      message: '',
+      checking: false,
+      applying: false,
+      lastCheckedAt: '',
+      canApply: true,
+      canManageRailway: false,
+      hosting: { platform: 'docker' }
+    }
+    expect(railwayImageUpdatesVisible(nonRailway)).toBe(false)
+    expect(railwayImageUpdatesVisible({ ...nonRailway, canManageRailway: true })).toBe(true)
+    expect(railwayImageUpdatesVisible({
+      ...nonRailway,
+      canManageRailway: undefined,
+      hosting: {
+        platform: 'railway', service_id: 'service', environment_id: 'environment'
+      }
+    })).toBe(true)
+    expect(deploymentActionWorkspaceId({
+      loggedIn: true,
+      engineAvailable: true,
+      hasDeployment: true,
+      deploymentWorkspaceId: 'recorded',
+      workspaces: [{ id: 'recorded', name: 'Recorded' }, { id: 'other', name: 'Other' }]
+    }, 'other')).toBe('recorded')
   })
 })
 
@@ -100,6 +152,15 @@ describe('cloud update controls and feedback', () => {
     expect(cloudUpdateFeedbackClass({ ok: true, text: 'Could not be clearer' }))
       .toBe('row-sub')
   })
+
+  it('D8 — keeps success visible until current status or ten seconds', () => {
+    const available = status({ status: 'available', latest: '0.1.135', canApply: true })
+    const result = { ok: true, target: '0.1.135', message: 'Updated.', shownAt: 1_000 }
+    expect(cloudUpdateApplyResultVisible(available, result, 10_999)).toBe(true)
+    expect(cloudUpdateApplyResultVisible(available, result, 11_000)).toBe(false)
+    expect(cloudUpdateApplyResultVisible({ ...available, status: 'current' }, result, 1_001))
+      .toBe(false)
+  })
 })
 
 describe('package update timestamps', () => {
@@ -108,6 +169,8 @@ describe('package update timestamps', () => {
       enabled: true,
       reason: '',
       interval: '6h0m0s',
+      boot_pass_completed: true,
+      hosting: 'railway',
       next_run_at: '',
       last_run: {
         started_at: 'maintenance-start',
@@ -157,6 +220,22 @@ describe('agent update chips', () => {
     expect(agentUpdateChip({ ...agent, autoUpdate: false })).toBe('Paused')
   })
 
+  it('D10 — shows failed unattended updates while retaining manual update', () => {
+    const failed = {
+      ...agent,
+      update: {
+        status: 'failed' as const,
+        latestCommit: 'new',
+        checkedAt: '',
+        message: 'clone failed'
+      }
+    }
+    expect(agentUpdateChip(failed)).toBe('Update failed')
+    expect(agentUpdateChip({ ...failed, autoUpdate: false })).toBe('Update failed')
+    expect(agentUpdateChipTitle(failed)).toBe('clone failed')
+    expect(agentManualUpdateActionVisible(failed)).toBe(true)
+  })
+
   it('hides pause and resume when an older control plane omits autoUpdate', () => {
     const legacyPackage: PackageInfo = {
       id: 'legacy',
@@ -178,7 +257,7 @@ describe('agent update chips', () => {
     expect(agentAutoUpdateActionVisible({ ...agent, autoUpdate: false })).toBe(true)
   })
 
-  it('shows the manual restart strip only for restart-required snapshots', () => {
+  it('D6 — shows the global restart strip only for restart-required snapshots', () => {
     expect(localControlPlaneRestartVisible(null)).toBe(false)
     expect(localControlPlaneRestartVisible({
       at: '', ok: true, restarted: false, status: 'not_required', message: ''

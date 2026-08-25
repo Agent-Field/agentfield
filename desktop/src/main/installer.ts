@@ -244,7 +244,8 @@ export function installFromSource(
 export async function updateAgent(
   name: string,
   onLine: (line: string) => void,
-  deps: InstallerDeps = defaultInstallerDeps()
+  deps: InstallerDeps = defaultInstallerDeps(),
+  options: { force?: boolean } = {}
 ): Promise<InstallResult> {
   const entry = catalogEntry(name)
   try {
@@ -259,7 +260,13 @@ export async function updateAgent(
     // package updates from the source recorded by the control plane, so the
     // desktop can manage GitHub-installed packages without inventing a URL.
     const override = entry?.source.startsWith('https://') ? entry.source : undefined
-    const { job_id } = await deps.cpClient.updatePackage(name, override)
+    const updateOptions = override !== undefined || options.force === true
+      ? {
+          ...(override === undefined ? {} : { source: override }),
+          ...(options.force === true ? { force: true } : {})
+        }
+      : undefined
+    const { job_id } = await deps.cpClient.updatePackage(name, updateOptions)
     const job = await deps.cpClient.watchInstallJob(job_id, onLine)
     if (job.status !== 'succeeded') {
       return { ok: false, message: job.error || job.lines.at(-1) || `Failed to update ${name}` }
@@ -275,6 +282,18 @@ export async function updateAgent(
   } catch (err) {
     if (err instanceof CpApiError && err.status === 404) {
       return { ok: false, message: UPDATE_REQUIRED }
+    }
+    if (
+      err instanceof CpApiError &&
+      err.status === 409 &&
+      err.code === 'executions_active' &&
+      err.activeExecutions !== undefined
+    ) {
+      return {
+        ok: false,
+        message: err.message,
+        activeExecutions: err.activeExecutions
+      }
     }
     return {
       ok: false,

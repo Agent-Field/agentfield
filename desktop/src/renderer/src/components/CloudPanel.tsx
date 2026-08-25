@@ -12,12 +12,29 @@ export function deployedWorkspacePickerVisible(railway: RailwayStatus): boolean 
     return railway.hasDeployment && railway.workspaces.length > 1;
 }
 
+export function deployedWorkspacePickerDisabled(
+    railway: RailwayStatus,
+    busy: boolean,
+): boolean {
+    return railway.hasDeployment || busy;
+}
+
 export function deploymentActionWorkspaceId(
     railway: RailwayStatus | null,
     selectedWorkspaceId: string,
 ): string {
-    if (selectedWorkspaceId) return selectedWorkspaceId;
-    return railway?.hasDeployment ? railway.deploymentWorkspaceId ?? "" : "";
+    if (railway?.hasDeployment) return railway.deploymentWorkspaceId ?? "";
+    return selectedWorkspaceId;
+}
+
+export function railwayImageUpdatesVisible(status: CloudUpdateStatus): boolean {
+    if (status.canManageRailway !== undefined) return status.canManageRailway;
+    return Boolean(
+        status.canApply &&
+            status.hosting?.platform === "railway" &&
+            status.hosting.service_id &&
+            status.hosting.environment_id,
+    );
 }
 
 export function cloudUpdateActionVisible(status: CloudUpdateStatus): boolean {
@@ -107,6 +124,8 @@ export function CloudPanel() {
     useEffect(() => {
         if (!railway?.loggedIn) {
             setWorkspaceId("");
+        } else if (railway.hasDeployment && railway.deploymentWorkspaceId) {
+            setWorkspaceId(railway.deploymentWorkspaceId);
         } else if (
             workspaceId === "" &&
             railway.deploymentWorkspaceId &&
@@ -411,7 +430,7 @@ export function CloudPanel() {
                             </button>
                         )}
                         {railway?.loggedIn &&
-                            (railway.hasDeployment || cloudUpdate.hosting?.platform === "railway") && (
+                            railwayImageUpdatesVisible(cloudUpdate) && (
                                 <label className="cloud-workspace-field">
                                     <span className="row-sub">Railway image updates</span>
                                     <select
@@ -632,7 +651,10 @@ export function CloudPanel() {
                                         <WorkspacePicker
                                             railway={railway}
                                             value={workspaceId}
-                                            disabled={railwayBusy !== null}
+                                            disabled={deployedWorkspacePickerDisabled(
+                                                railway,
+                                                railwayBusy !== null,
+                                            )}
                                             onChange={setWorkspaceId}
                                         />
                                     )}
@@ -893,6 +915,10 @@ function WorkspacePicker({
     disabled: boolean;
     onChange: (workspaceId: string) => void;
 }) {
+    const recordedWorkspaceMissing =
+        railway.hasDeployment &&
+        value !== "" &&
+        !railway.workspaces.some((workspace) => workspace.id === value);
     return (
         <label className="cloud-workspace-field">
             <span className="row-sub">Railway workspace</span>
@@ -903,6 +929,9 @@ function WorkspacePicker({
                 onChange={(event) => onChange(event.target.value)}
             >
                 <option value="">Choose a workspace…</option>
+                {recordedWorkspaceMissing && (
+                    <option value={value}>Deployment workspace ({value})</option>
+                )}
                 {railway.workspaces.map((workspace) => (
                     <option key={workspace.id} value={workspace.id}>
                         {workspace.name}

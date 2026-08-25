@@ -8,7 +8,7 @@ const api: AgentFieldApi = {
   install: (name) => ipcRenderer.invoke('agentfield:install', name),
   installFromSource: (source) => ipcRenderer.invoke('agentfield:install-source', source),
   uninstall: (name) => ipcRenderer.invoke('agentfield:uninstall', name),
-  update: (name) => ipcRenderer.invoke('agentfield:update', name),
+  update: (name, options) => ipcRenderer.invoke('agentfield:update', name, options),
   checkPackageUpdates: () => ipcRenderer.invoke('agentfield:package-updates-check'),
   setPackageAutoUpdate: (id, enabled) =>
     ipcRenderer.invoke('agentfield:package-auto-update-set', id, enabled),
