@@ -304,3 +304,39 @@ func TestE22MigrationWriteFailureStillRestoresInMemoryMigration(t *testing.T) {
 		t.Fatalf("runs=%v summary=%+v", agent.runs, summary)
 	}
 }
+
+// E17b: on a fresh container the boot pass publishes what the restore did as
+// soon as the restore loop ends, so a client does not have to wait for the
+// update checks (which can take minutes) to learn which agents came back.
+func TestE17bBootRestoreSnapshotIsPublishedBeforeTheChecksFinish(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"x": {
+			Name: "x", Status: "stopped", DesiredState: packages.DesiredStateRunning,
+			Source: "github", SourcePath: "https://github.com/acme/x", Commit: "old",
+		},
+	})
+	runner := &gateCheckRunner{started: make(chan struct{}), release: make(chan struct{})}
+	ready := make(chan struct{})
+	close(ready)
+	agent := &maintAgent{}
+	service := New(Config{
+		AgentFieldHome: home, Agent: agent, Checker: updatecheck.NewChecker(runner), Jobs: &maintJobs{}, Ready: ready,
+		Enabled: func() (bool, string) { return true, "" }, Sleep: func(context.Context, time.Duration) error { return nil },
+		HostedInContainer: func() bool { return false },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { service.Run(ctx); close(done) }()
+	<-runner.started
+	status := service.Status()
+	if !status.BootRestoreCompleted || status.BootPassCompleted {
+		t.Fatalf("status during update checks=%+v", status)
+	}
+	if status.LastRun == nil || len(status.LastRun.Restored) != 1 || status.LastRun.Restored[0] != "x" {
+		t.Fatalf("restore snapshot must be readable during the checks: %+v", status.LastRun)
+	}
+	close(runner.release)
+	cancel()
+	<-done
+}

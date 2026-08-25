@@ -470,7 +470,7 @@ func (s *Service) runPass(ctx context.Context, boot bool) (summary Summary) {
 	registry, err := s.loadRegistryForPass()
 	if err != nil {
 		if boot {
-			s.markBootRestoreCompleted()
+			s.markBootRestoreCompleted(&summary)
 		}
 		summary.Errors = appendUnique(summary.Errors, fmt.Sprintf("restore registry: %v", err))
 		summary.retrySoon = true
@@ -478,7 +478,7 @@ func (s *Service) runPass(ctx context.Context, boot bool) (summary Summary) {
 	}
 	s.restore(ctx, registry, &summary)
 	if boot {
-		s.markBootRestoreCompleted()
+		s.markBootRestoreCompleted(&summary)
 	}
 	phase = "check maintenance"
 
@@ -910,9 +910,17 @@ func (s *Service) restorePending(name string) bool {
 	}
 }
 
-func (s *Service) markBootRestoreCompleted() {
+// markBootRestoreCompleted flips the boot-restore flag and, on a fresh
+// container where no pass has finished yet, publishes the in-progress summary
+// so a client (the desktop's post-update report) can read what the restore
+// did without waiting for the update checks that follow.
+func (s *Service) markBootRestoreCompleted(summary *Summary) {
 	s.mu.Lock()
 	s.bootRestoreCompleted = true
+	if s.lastRun == nil && summary != nil {
+		snapshot := *summary
+		s.lastRun = &snapshot
+	}
 	s.mu.Unlock()
 }
 
