@@ -76,7 +76,7 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 	agentNode.EnsureDesiredState()
 
 	// 2. Check current state and reconcile if needed
-	actuallyRunning, wasReconciled := as.reconcileProcessState(&agentNode, name)
+	actuallyRunning, wasReconciled := as.reconcileLifecycleProcessState(&agentNode, name)
 	if wasReconciled || legacyDesiredState {
 		// Save reconciled state
 		registry.Installed[name] = agentNode
@@ -331,7 +331,7 @@ func (as *DefaultAgentService) stopAgent(name string, preserveDesiredState bool)
 	}
 
 	// Check current state and reconcile if needed
-	actuallyRunning, wasReconciled := as.reconcileProcessState(&pkg, name)
+	actuallyRunning, wasReconciled := as.reconcileLifecycleProcessState(&pkg, name)
 	if wasReconciled || desiredStateChanged {
 		// Save reconciled state
 		registry.Installed[name] = pkg
@@ -397,7 +397,7 @@ func (as *DefaultAgentService) GetAgentStatus(name string) (*domain.AgentStatus,
 	name = actualName
 
 	// Reconcile registry state with actual process state
-	actuallyRunning, reconciled := as.reconcileProcessState(&pkg, name)
+	actuallyRunning, reconciled := as.reconcileReadProcessState(&pkg, name)
 	if reconciled {
 		// Save updated registry if reconciliation occurred
 		registry.Installed[name] = pkg
@@ -433,10 +433,40 @@ func (as *DefaultAgentService) GetAgentStatus(name string) (*domain.AgentStatus,
 	return status, nil
 }
 
-// reconcileProcessState checks if the registry state matches actual process state
-// Returns (actuallyRunning, wasReconciled)
+// reconcileLifecycleProcessState applies the signal-safe shared ownership rule
+// before any lifecycle decision. A recycled or unidentified PID is never enough
+// by itself to block a start or permit a stop.
+func (as *DefaultAgentService) reconcileLifecycleProcessState(pkg *packages.InstalledPackage, name string) (bool, bool) {
+	return as.reconcileProcessStateWithProbes(
+		pkg, name, runtime.GOOS, true, make(map[int]packages.HealthIdentity),
+		packages.RuntimeProcessStatus, packages.ProbeHealthIdentity,
+	)
+}
+
+// reconcileReadProcessState keeps the historical cheap Darwin projection while
+// Linux and Windows use the ownership rule. In particular, Darwin dashboard
+// polling must not spawn ps for every package.
+func (as *DefaultAgentService) reconcileReadProcessState(pkg *packages.InstalledPackage, name string) (bool, bool) {
+	return as.reconcileProcessStateWithProbes(
+		pkg, name, runtime.GOOS, false, make(map[int]packages.HealthIdentity),
+		packages.RuntimeProcessStatus, packages.ProbeHealthIdentity,
+	)
+}
+
+// reconcileProcessState is retained for focused legacy tests that exercise the
+// old cheap PID projection directly. Production lifecycle and status callers
+// use the explicit ownership-aware helpers above.
 func (as *DefaultAgentService) reconcileProcessState(pkg *packages.InstalledPackage, name string) (bool, bool) {
-	return as.reconcileProcessStateWithProbe(pkg, name, runtime.GOOS, make(map[int]packages.HealthIdentity), packages.ProbeHealthIdentity)
+	return as.reconcileProcessStateWithProbes(
+		pkg, name, runtime.GOOS, false, make(map[int]packages.HealthIdentity),
+		func(info packages.RuntimeInfo) packages.RuntimeProcessState {
+			if packages.RuntimePIDAlive(info) {
+				return packages.RuntimeProcessAliveState
+			}
+			return packages.RuntimeProcessDead
+		},
+		func(context.Context, int, string) packages.HealthIdentity { return packages.HealthIdentity{} },
+	)
 }
 
 func (as *DefaultAgentService) reconcileProcessStateWithProbe(
@@ -444,6 +474,20 @@ func (as *DefaultAgentService) reconcileProcessStateWithProbe(
 	name string,
 	goos string,
 	memo map[int]packages.HealthIdentity,
+	probe func(context.Context, int, string) packages.HealthIdentity,
+) (bool, bool) {
+	return as.reconcileProcessStateWithProbes(
+		pkg, name, goos, false, memo, packages.RuntimeProcessStatus, probe,
+	)
+}
+
+func (as *DefaultAgentService) reconcileProcessStateWithProbes(
+	pkg *packages.InstalledPackage,
+	name string,
+	goos string,
+	lifecycle bool,
+	memo map[int]packages.HealthIdentity,
+	processStatus func(packages.RuntimeInfo) packages.RuntimeProcessState,
 	probe func(context.Context, int, string) packages.HealthIdentity,
 ) (bool, bool) {
 	legacyDesiredState := pkg.DesiredState == ""
@@ -468,44 +512,51 @@ func (as *DefaultAgentService) reconcileProcessStateWithProbe(
 		pkg.Runtime.StartTime = ""
 		return false, true
 	}
-	if goos == "windows" {
-		memoizedProbe := func(ctx context.Context, port int, path string) packages.HealthIdentity {
-			identity, ok := memo[port]
-			if !ok {
-				identity = probe(ctx, port, path)
-				memo[port] = identity
-			}
-			return identity
-		}
-		assessment := packages.AssessRecordedProcessWith(
-			context.Background(), name, *pkg,
-			func(packages.RuntimeInfo) packages.RuntimeProcessState { return packages.RuntimeProcessUnknown },
-			memoizedProbe,
-		)
-		if assessment.Ownership == packages.RecordedProcessOursHealthy {
+	if !lifecycle && goos == "darwin" {
+		if packages.RuntimePIDAlive(pkg.Runtime) {
 			return true, false
 		}
-		fmt.Printf("Warning: Agent %s cannot be found at its recorded health endpoint, marking observed status as stopped\n", name)
-		pkg.Status = "stopped"
-		pkg.Runtime.PID = nil
-		pkg.Runtime.StartedAt = nil
-		pkg.Runtime.BootID = ""
-		pkg.Runtime.StartTime = ""
-		return false, true
-	}
-
-	if !packages.RuntimePIDAlive(pkg.Runtime) {
 		fmt.Printf("Warning: Agent %s process (PID %d) is not alive, marking observed status as stopped\n", name, *pkg.Runtime.PID)
-		pkg.Status = "stopped"
-		pkg.Runtime.PID = nil
-		pkg.Runtime.StartedAt = nil
-		pkg.Runtime.BootID = ""
-		pkg.Runtime.StartTime = ""
+		clearObservedRuntime(pkg)
 		return false, true
 	}
 
-	// Process exists and appears to be running
-	return true, false
+	memoizedProbe := func(ctx context.Context, port int, path string) packages.HealthIdentity {
+		identity, ok := memo[port]
+		if !ok {
+			identity = probe(ctx, port, path)
+			memo[port] = identity
+		}
+		return identity
+	}
+	status := processStatus
+	// Windows read reconciliation has historically resolved ownership entirely
+	// through the health identity because process start-time discovery is not a
+	// cheap dashboard operation there.
+	if !lifecycle && goos == "windows" {
+		status = func(packages.RuntimeInfo) packages.RuntimeProcessState {
+			return packages.RuntimeProcessUnknown
+		}
+	}
+	assessment := packages.AssessRecordedProcessWith(
+		context.Background(), name, *pkg, status, memoizedProbe,
+	)
+	if assessment.Ownership == packages.RecordedProcessOursHealthy ||
+		assessment.Ownership == packages.RecordedProcessOursUnhealthy {
+		return true, false
+	}
+
+	fmt.Printf("Warning: Agent %s recorded process is dead or belongs to another node, marking observed status as stopped\n", name)
+	clearObservedRuntime(pkg)
+	return false, true
+}
+
+func clearObservedRuntime(pkg *packages.InstalledPackage) {
+	pkg.Status = "stopped"
+	pkg.Runtime.PID = nil
+	pkg.Runtime.StartedAt = nil
+	pkg.Runtime.BootID = ""
+	pkg.Runtime.StartTime = ""
 }
 
 // ListRunningAgents returns a list of all running agents
@@ -603,7 +654,7 @@ func (as *DefaultAgentService) startNodeDependencies(node packages.InstalledPack
 			fmt.Printf("⚠️  Node dependency %s is declared but not installed (run: af install %s)\n", depName, ref)
 			continue
 		}
-		if running, _ := as.reconcileProcessState(&dep, depName); running {
+		if running, _ := as.reconcileLifecycleProcessState(&dep, depName); running {
 			continue
 		}
 		fmt.Printf("🔗 Starting node dependency: %s\n", depName)

@@ -527,6 +527,7 @@ func TestAgentServiceRunAgentAdditionalCoverage(t *testing.T) {
 
 		port := 8144
 		startedAt := time.Now().Add(-time.Minute).Format(time.RFC3339)
+		startTime := packages.CurrentProcessStartTime(pid)
 		registry := &packages.InstallationRegistry{
 			Installed: map[string]packages.InstalledPackage{
 				"running-agent": {
@@ -537,6 +538,7 @@ func TestAgentServiceRunAgentAdditionalCoverage(t *testing.T) {
 						Port:      &port,
 						PID:       &pid,
 						StartedAt: &startedAt,
+						StartTime: startTime,
 					},
 				},
 			},

@@ -3,11 +3,13 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -328,9 +330,10 @@ func TestRunAgent_AlreadyRunning(t *testing.T) {
 	tmpDir := t.TempDir()
 	agentfieldHome := tmpDir
 
-	port := 8001
-	pid := 12345
+	port := findFreePortInRange(t)
+	pid := os.Getpid()
 	startedAt := time.Now().Format(time.RFC3339)
+	startTime := packages.CurrentProcessStartTime(pid)
 
 	registry := &packages.InstallationRegistry{
 		Installed: map[string]packages.InstalledPackage{
@@ -343,6 +346,7 @@ func TestRunAgent_AlreadyRunning(t *testing.T) {
 					Port:      &port,
 					PID:       &pid,
 					StartedAt: &startedAt,
+					StartTime: startTime,
 					LogFile:   "/tmp/test-agent.log",
 				},
 			},
@@ -376,31 +380,8 @@ func TestRunAgent_AlreadyRunning(t *testing.T) {
 	options := domain.RunOptions{Port: 0}
 
 	_, err := service.RunAgent("test-agent", options)
-	// Note: reconcileProcessState uses real OS calls (os.FindProcess, process.Signal)
-	// which can't be easily mocked. If the process doesn't actually exist,
-	// reconciliation will mark it as stopped and the agent will start successfully.
-	// If the process exists and is running, it will return an error.
-	if err != nil {
-		// Check for different error scenarios:
-		// 1. Agent detected as already running (ideal case)
-		// 2. Agent started but failed to become ready (can happen in test environment)
-		// Both are valid outcomes depending on whether the process actually exists
-		if strings.Contains(err.Error(), "already running") {
-			// Ideal case: process exists and is detected as running
-			t.Log("Agent correctly detected as already running")
-		} else if strings.Contains(err.Error(), "agent node did not become ready") {
-			// Reconciliation detected process doesn't exist, so agent tried to start
-			// but failed to become ready (expected in test environment without real agent)
-			t.Log("Agent reconciliation worked (process not found), but agent failed to become ready (expected in test)")
-		} else {
-			// Unexpected error
-			t.Errorf("Unexpected error: %v", err)
-		}
-	} else {
-		// Reconciliation detected process doesn't exist, so agent started successfully
-		// This is also valid behavior - the test verifies the code path exists
-		t.Log("Agent started successfully (reconciliation detected process not running)")
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already running")
 }
 
 func TestStopAgent_Success(t *testing.T) {
@@ -464,7 +445,174 @@ func TestStopAgent_Success(t *testing.T) {
 	assert.NoError(t, err, "stopping an already-dead installed agent is idempotent")
 }
 
-func TestReconcileProcessStateUsesCheapPIDProbeForStatusReads(t *testing.T) {
+func TestC1RunAgentReplacesARecycledRecordedPIDWithOrWithoutStartTime(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		startTime string
+	}{
+		{name: "mismatched identity", startTime: "a-different-process"},
+		{name: "legacy unknown identity"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			pkgDir := filepath.Join(home, "packages", "demo")
+			writeManifest(t, pkgDir, "name: demo\nversion: 1.0.0\nagent_node:\n  node_id: demo\n")
+			stalePID := os.Getpid()
+			stalePort := findFreePortInRange(t)
+			createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+				"demo": {
+					Name: "demo", Path: pkgDir, Status: "running", DesiredState: packages.DesiredStateRunning,
+					Runtime: packages.RuntimeInfo{PID: &stalePID, Port: &stalePort, StartTime: test.startTime},
+				},
+			}})
+
+			server, newPort := startLocalServerOnFreePort(t, contractNodeHandler("demo"))
+			defer server.Close()
+			processManager := newMockProcessManager()
+			starts := 0
+			var started *exec.Cmd
+			processManager.startFunc = func(interfaces.ProcessConfig) (int, error) {
+				starts++
+				started = exec.Command("sleep", "60")
+				if err := started.Start(); err != nil {
+					return 0, err
+				}
+				return started.Process.Pid, nil
+			}
+			t.Cleanup(func() {
+				if started != nil && started.Process != nil {
+					_ = started.Process.Kill()
+					_, _ = started.Process.Wait()
+				}
+			})
+			ports := newMockPortManager()
+			ports.findFreePortFunc = func(int) (int, error) { return newPort, nil }
+			service := NewAgentService(processManager, ports, newMockRegistryStorage(), newMockAgentClient(), home).(*DefaultAgentService)
+
+			running, err := service.RunAgent("demo", domain.RunOptions{})
+			require.NoError(t, err)
+			require.Equal(t, 1, starts)
+			require.Equal(t, newPort, running.Port)
+			require.NotEqual(t, stalePort, running.Port)
+			registry, err := service.loadRegistryDirect()
+			require.NoError(t, err)
+			entry := registry.Installed["demo"]
+			require.NotNil(t, entry.Runtime.PID)
+			require.Equal(t, running.PID, *entry.Runtime.PID)
+			require.NotEmpty(t, entry.Runtime.StartTime)
+		})
+	}
+}
+
+func TestC2RunAgentKeepsAnEquivalentOrAnonymousHealthyNode(t *testing.T) {
+	for _, nodeID := range []string{"demo_node", ""} {
+		t.Run("node_id="+nodeID, func(t *testing.T) {
+			home := t.TempDir()
+			pkgDir := filepath.Join(home, "packages", "demo-node")
+			writeManifest(t, pkgDir, "name: demo-node\nversion: 1.0.0\nagent_node:\n  node_id: demo-node\n")
+			server, port := startLocalServerOnFreePort(t, contractNodeHandler(nodeID))
+			defer server.Close()
+			pid := os.Getpid()
+			createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+				"demo-node": {
+					Name: "demo-node", Path: pkgDir, Status: "running", DesiredState: packages.DesiredStateRunning,
+					Runtime: packages.RuntimeInfo{PID: &pid, Port: &port, StartTime: "a-different-process"},
+				},
+			}})
+			processManager := newMockProcessManager()
+			starts := 0
+			processManager.startFunc = func(interfaces.ProcessConfig) (int, error) { starts++; return 0, nil }
+			service := NewAgentService(processManager, newMockPortManager(), newMockRegistryStorage(), newMockAgentClient(), home).(*DefaultAgentService)
+
+			_, err := service.RunAgent("demo-node", domain.RunOptions{})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "already running")
+			require.Zero(t, starts)
+		})
+	}
+}
+
+func TestC3RunAgentAvoidsAHealthyForeignNodeAndNeverSignalsItsPID(t *testing.T) {
+	home := t.TempDir()
+	pkgDir := filepath.Join(home, "packages", "demo")
+	writeManifest(t, pkgDir, "name: demo\nversion: 1.0.0\nagent_node:\n  node_id: demo\n")
+	foreignServer, foreignPort := startLocalServerOnFreePort(t, contractNodeHandler("somebody-else"))
+	defer foreignServer.Close()
+	recordedPID := os.Getpid()
+	createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {
+			Name: "demo", Path: pkgDir, Status: "running", DesiredState: packages.DesiredStateRunning,
+			Runtime: packages.RuntimeInfo{PID: &recordedPID, Port: &foreignPort, StartTime: "a-different-process"},
+		},
+	}})
+	ownServer, ownPort := startLocalServerOnFreePort(t, contractNodeHandler("demo"))
+	defer ownServer.Close()
+	processManager := newMockProcessManager()
+	var started *exec.Cmd
+	processManager.startFunc = func(interfaces.ProcessConfig) (int, error) {
+		started = exec.Command("sleep", "60")
+		if err := started.Start(); err != nil {
+			return 0, err
+		}
+		return started.Process.Pid, nil
+	}
+	t.Cleanup(func() {
+		if started != nil && started.Process != nil {
+			_ = started.Process.Kill()
+			_, _ = started.Process.Wait()
+		}
+	})
+	ports := newMockPortManager()
+	ports.findFreePortFunc = func(int) (int, error) { return ownPort, nil }
+	service := NewAgentService(processManager, ports, newMockRegistryStorage(), newMockAgentClient(), home).(*DefaultAgentService)
+
+	running, err := service.RunAgent("demo", domain.RunOptions{})
+	require.NoError(t, err)
+	require.Equal(t, ownPort, running.Port)
+	require.NotEqual(t, foreignPort, running.Port)
+	require.True(t, packages.RuntimePIDAlive(packages.RuntimeInfo{PID: &recordedPID}))
+}
+
+func TestC4GetAgentStatusKeepsALiveOwnedButUnhealthyProcessRunningOnLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("C4 is the Linux read-path contract")
+	}
+	home := t.TempDir()
+	cmd := exec.Command("sleep", "60")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+	pid := cmd.Process.Pid
+	port := findFreePortInRange(t)
+	createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {
+			Name: "demo", Status: "running", DesiredState: packages.DesiredStateRunning,
+			Runtime: packages.RuntimeInfo{PID: &pid, Port: &port, StartTime: packages.CurrentProcessStartTime(pid)},
+		},
+	}})
+	service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), newMockAgentClient(), home).(*DefaultAgentService)
+	status, err := service.GetAgentStatus("demo")
+	require.NoError(t, err)
+	require.True(t, status.IsRunning)
+	require.Equal(t, pid, status.PID)
+}
+
+func contractNodeHandler(nodeID string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/health":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"node_id":%q}`, nodeID)
+		case "/reasoners":
+			_, _ = w.Write([]byte(`{"reasoners":[]}`))
+		case "/skills":
+			_, _ = w.Write([]byte(`{"skills":[]}`))
+		default:
+			http.NotFound(w, request)
+		}
+	})
+}
+
+func TestC5DarwinReadPathUsesCheapPIDProbe(t *testing.T) {
 	service := newStartupTestService(t, newMockPortManager())
 	pid := os.Getpid()
 	port := 8123
@@ -472,7 +620,11 @@ func TestReconcileProcessStateUsesCheapPIDProbeForStatusReads(t *testing.T) {
 		Name: "recycled", Status: "running",
 		Runtime: packages.RuntimeInfo{PID: &pid, Port: &port, StartTime: "different-process"},
 	}
-	alive, reconciled := service.reconcileProcessState(pkg, "recycled")
+	alive, reconciled := service.reconcileProcessStateWithProbes(
+		pkg, "recycled", "darwin", false, make(map[int]packages.HealthIdentity),
+		packages.RuntimeProcessStatus,
+		func(context.Context, int, string) packages.HealthIdentity { return packages.HealthIdentity{} },
+	)
 	if !alive || reconciled {
 		t.Fatalf("alive=%v reconciled=%v, want a cheap live projection without identity reconciliation", alive, reconciled)
 	}
@@ -854,7 +1006,7 @@ func TestGetAgentStatus_Success(t *testing.T) {
 	refreshed, loadErr := service.loadRegistryDirect()
 	require.NoError(t, loadErr)
 	require.NotNil(t, refreshed.Installed["test-agent"].Runtime.Port)
-	assert.Equal(t, 8001, *refreshed.Installed["test-agent"].Runtime.Port) // Restore preference is retained privately.
+	assert.Equal(t, port, *refreshed.Installed["test-agent"].Runtime.Port) // Restore preference is retained privately.
 }
 
 func TestGetAgentStatus_NotInstalled(t *testing.T) {

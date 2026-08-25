@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 )
@@ -16,6 +17,8 @@ import (
 type DefaultProcessManager struct {
 	runningProcesses map[int]*exec.Cmd
 }
+
+const gracefulStopTimeout = 5 * time.Second
 
 // NewProcessManager creates a new instance of DefaultProcessManager.
 // It initializes the map for tracking running processes.
@@ -93,7 +96,15 @@ func (pm *DefaultProcessManager) Stop(pid int) error {
 		return nil
 	}
 
-	// Try graceful termination first (SIGTERM)
+	// Start reaping before signalling so every exit path is observed exactly
+	// once and a child that ignores SIGTERM cannot wedge the caller forever.
+	waited := make(chan struct{}, 1)
+	go func() {
+		_, _ = cmd.Process.Wait()
+		waited <- struct{}{}
+	}()
+
+	// Try graceful termination first (SIGTERM).
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		if !errors.Is(err, os.ErrProcessDone) {
 			// If SIGTERM fails, try forceful termination (SIGKILL)
@@ -103,9 +114,22 @@ func (pm *DefaultProcessManager) Stop(pid int) error {
 		}
 	}
 
-	// Wait for the process to actually terminate
-	// Ignore errors as process might have already exited
-	_, _ = cmd.Process.Wait()
+	timer := time.NewTimer(gracefulStopTimeout)
+	select {
+	case <-waited:
+		timer.Stop()
+	case <-timer.C:
+		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			return fmt.Errorf("failed to force kill process %d after %s: %w", pid, gracefulStopTimeout, killErr)
+		}
+		// Kill makes Wait return and reaps the child. Keep this final wait bounded
+		// as defense against an unusual platform/process implementation.
+		select {
+		case <-waited:
+		case <-time.After(time.Second):
+			return fmt.Errorf("timed out reaping process %d after force kill", pid)
+		}
+	}
 
 	// Clean up tracking
 	delete(pm.runningProcesses, pid)
