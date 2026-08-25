@@ -278,8 +278,10 @@ func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *
 	observedInstance := plan.agent.InstanceID
 	observedHeartbeat := plan.agent.LastHeartbeat
 	startedWaiting := time.Now()
-	grace, updateGrace := agentRestartGraceFor(plan.target.NodeID)
-	deadline := startedWaiting.Add(grace)
+	grace, _ := agentRestartGraceFor(plan.target.NodeID)
+	// Both are re-read on every poll below, where the extended flag matters.
+	var deadline time.Time
+	var updateGrace bool
 
 	logger.Logger.Info().
 		Str("execution_id", plan.exec.ExecutionID).

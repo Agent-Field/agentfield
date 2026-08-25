@@ -267,9 +267,11 @@ func TestRunAgent_Success(t *testing.T) {
 		agentfieldHome,
 	).(*DefaultAgentService)
 
-	// Mock port manager to return a free port
+	// Mock port manager to return a port nothing listens on: the readiness
+	// wait probes it for real, so a fixed 8001 breaks whenever a node is
+	// serving there on the developer machine.
 	portManager.findFreePortFunc = func(startPort int) (int, error) {
-		return 8001, nil
+		return closedPort(t), nil
 	}
 
 	// Mock process manager to start successfully
