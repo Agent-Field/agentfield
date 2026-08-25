@@ -66,6 +66,18 @@ func TestOpenCodeTargetReplacesExistingEntryAndReportsManualEntry(t *testing.T) 
 	}
 }
 
+func TestOpenCodeTargetInstallReportsRootCreationFailure(t *testing.T) {
+	home := withTempHome(t)
+	if err := os.WriteFile(filepath.Join(home, ".config"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (opencodeTarget{}).Install(Catalog[0], filepath.Join(home, "canonical"))
+	if err == nil {
+		t.Fatal("Install should report a failure creating the OpenCode skills directory")
+	}
+}
+
 func TestOpenCodeTargetUninstallReportsMissingHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
@@ -121,6 +133,25 @@ func TestOpenCodeTargetStatusResolvesCurrentLink(t *testing.T) {
 	}
 	if installed, version, err := target.Status(); err != nil || !installed || version != "1.2.3" {
 		t.Fatalf("current-link Status = %v %q %v", installed, version, err)
+	}
+}
+
+func TestOpenCodeTargetStatusPreservesVersionFromRemovedDirectLink(t *testing.T) {
+	home := withTempHome(t)
+	target := opencodeTarget{}
+	link, err := target.skillLink(Catalog[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, "canonical", "1.2.3"), link); err != nil {
+		t.Fatal(err)
+	}
+
+	if installed, version, err := target.Status(); err != nil || !installed || version != "1.2.3" {
+		t.Fatalf("removed-direct-link Status = %v %q %v", installed, version, err)
 	}
 }
 
