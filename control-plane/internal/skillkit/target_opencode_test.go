@@ -74,3 +74,59 @@ func TestOpenCodeTargetUninstallReportsMissingHome(t *testing.T) {
 		t.Fatal("Uninstall should report an unavailable home directory")
 	}
 }
+
+func TestOpenCodeTargetStatusHandlesMissingAndBrokenLinks(t *testing.T) {
+	home := withTempHome(t)
+	target := opencodeTarget{}
+
+	installed, version, err := target.Status()
+	if err != nil || installed || version != "" {
+		t.Fatalf("missing Status = %v %q %v", installed, version, err)
+	}
+
+	link, err := target.skillLink(Catalog[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, "missing"), link); err != nil {
+		t.Fatal(err)
+	}
+	if installed, version, err := target.Status(); err == nil || installed || version != "" {
+		t.Fatalf("broken-link Status = %v %q %v", installed, version, err)
+	}
+}
+
+func TestOpenCodeTargetUninstallRemovesCatalogEntries(t *testing.T) {
+	target := opencodeTarget{}
+	root, err := target.TargetPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range Catalog {
+		path, err := target.skillLink(skill)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := target.Uninstall(); err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range Catalog {
+		path, err := target.skillLink(skill)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("catalog entry %q remains after uninstall: %v", skill.Name, err)
+		}
+	}
+}
