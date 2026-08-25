@@ -3,7 +3,6 @@ package packages
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/ui"
-	"gopkg.in/yaml.v3"
 )
 
 // GitPackageInfo represents parsed Git package information
@@ -729,19 +727,6 @@ func appendSubdirSelector(url, subdir string) string {
 func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *GitPackageInfo, sourcePath, destPath string) error {
 	registryPath := filepath.Join(gi.AgentFieldHome, "installed.yaml")
 
-	// Load existing registry or create new one
-	registry := &InstallationRegistry{
-		Installed: make(map[string]InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return fmt.Errorf("failed to parse registry %s: %w", registryPath, err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("failed to read registry %s: %w", registryPath, err)
-	}
-
 	// Determine source type based on URL
 	sourceType := "git"
 	if strings.Contains(info.URL, "github.com") {
@@ -764,54 +749,27 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 		sourcePathStr = appendSubdirSelector(sourcePathStr, gi.Subdir)
 	}
 
-	previous := registry.Installed[metadata.Name]
-	desiredState := previous.EffectiveDesiredState()
-	autoUpdate := previous.AutoUpdate
-	if autoUpdate == nil {
-		enabled := true
-		autoUpdate = &enabled
-	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	installedAt := previous.InstalledAt
-	if installedAt == "" {
-		installedAt = now
-	}
-
-	// Add/update package entry with Git information
-	registry.Installed[metadata.Name] = InstalledPackage{
-		Name:         metadata.Name,
-		Version:      metadata.Version,
-		Description:  metadata.Description,
-		Path:         destPath,
-		Source:       sourceType,
-		SourcePath:   sourcePathStr,
-		InstalledAt:  installedAt,
-		Commit:       info.Commit,
-		Ref:          info.Ref,
-		AutoUpdate:   autoUpdate,
-		UpdatedAt:    now,
-		Status:       "stopped",
-		DesiredState: desiredState,
-		Runtime: RuntimeInfo{
-			Port:      previous.Runtime.Port,
-			PID:       nil,
-			StartedAt: nil,
-			LogFile:   filepath.Join(gi.AgentFieldHome, "logs", metadata.Name+".log"),
-		},
-	}
-
-	// Save registry
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(registryPath), 0755); err != nil {
-		return fmt.Errorf("failed to create registry directory: %w", err)
-	}
-
-	if err := os.WriteFile(registryPath, data, 0644); err != nil {
+	if err := UpdateInstallationRegistry(registryPath, func(registry *InstallationRegistry) error {
+		previous := registry.Installed[metadata.Name]
+		autoUpdate := previous.AutoUpdate
+		if autoUpdate == nil {
+			enabled := true
+			autoUpdate = &enabled
+		}
+		installedAt := previous.InstalledAt
+		if installedAt == "" {
+			installedAt = now
+		}
+		registry.Installed[metadata.Name] = InstalledPackage{
+			Name: metadata.Name, Version: metadata.Version, Description: metadata.Description,
+			Path: destPath, Source: sourceType, SourcePath: sourcePathStr, InstalledAt: installedAt,
+			Commit: info.Commit, Ref: info.Ref, AutoUpdate: autoUpdate, UpdatedAt: now,
+			Status: "stopped", DesiredState: previous.EffectiveDesiredState(),
+			Runtime: RuntimeInfo{Port: previous.Runtime.Port, LogFile: filepath.Join(gi.AgentFieldHome, "logs", metadata.Name+".log")},
+		}
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to write registry: %w", err)
 	}
 

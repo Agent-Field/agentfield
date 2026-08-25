@@ -105,6 +105,7 @@ func TestRuntimeProcessStatusTreatsIdentityProbeTimeoutAsUnknown(t *testing.T) {
 	state := runtimeProcessStatus(
 		RuntimeInfo{PID: &pid, StartTime: "recorded"},
 		func(int) (string, processIdentityState) { return "", processIdentityUnavailable },
+		func(int) (time.Time, bool) { return time.Time{}, false },
 		func(int) bool { t.Fatal("unknown identity must not be reduced to a liveness signal"); return false },
 	)
 	if state != RuntimeProcessUnknown {

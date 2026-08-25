@@ -544,8 +544,10 @@ func (pu *PackageUninstaller) UninstallPackage(packageName string) error {
 	}
 
 	// 8. Update registry
-	delete(registry.Installed, packageName)
-	if err := pu.saveRegistry(registry); err != nil {
+	if err := UpdateInstallationRegistry(filepath.Join(pu.AgentFieldHome, "installed.yaml"), func(latest *InstallationRegistry) error {
+		delete(latest.Installed, packageName)
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
@@ -575,30 +577,14 @@ func (pu *PackageUninstaller) stopAgentNode(agentNode *InstalledPackage) error {
 // loadRegistry loads the installation registry
 func (pu *PackageUninstaller) loadRegistry() (*InstallationRegistry, error) {
 	registryPath := filepath.Join(pu.AgentFieldHome, "installed.yaml")
-
-	registry := &InstallationRegistry{
-		Installed: make(map[string]InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return nil, fmt.Errorf("failed to parse registry: %w", err)
-		}
-	}
-
-	return registry, nil
+	return LoadInstallationRegistry(registryPath)
 }
 
 // saveRegistry saves the installation registry
 func (pu *PackageUninstaller) saveRegistry(registry *InstallationRegistry) error {
 	registryPath := filepath.Join(pu.AgentFieldHome, "installed.yaml")
 
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	if err := os.WriteFile(registryPath, data, 0644); err != nil {
+	if err := WriteInstallationRegistry(registryPath, registry); err != nil {
 		return fmt.Errorf("failed to write registry: %w", err)
 	}
 
@@ -1130,17 +1116,6 @@ func (pi *PackageInstaller) hasRequirementsFile(packagePath string) bool {
 func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath, destPath string) error {
 	registryPath := filepath.Join(pi.AgentFieldHome, "installed.yaml")
 
-	// Load existing registry or create new one
-	registry := &InstallationRegistry{
-		Installed: make(map[string]InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return fmt.Errorf("failed to parse registry: %w", err)
-		}
-	}
-
 	// Ensure logs directory exists before setting LogFile path
 	logsDir := filepath.Join(pi.AgentFieldHome, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
@@ -1148,44 +1123,20 @@ func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath
 	}
 	fmt.Printf("📁 Created logs directory: %s\n", logsDir)
 
-	previous := registry.Installed[metadata.Name]
-	// Add/update package entry. A reinstall replaces the observed process, but
-	// preserves whether the user intended the node to be running and its preferred
-	// port so maintenance can restore it safely.
-	registry.Installed[metadata.Name] = InstalledPackage{
-		Name:         metadata.Name,
-		Version:      metadata.Version,
-		Description:  metadata.Description,
-		Path:         destPath,
-		Source:       "local",
-		SourcePath:   sourcePath,
-		InstalledAt:  time.Now().Format(time.RFC3339),
-		Commit:       previous.Commit,
-		Ref:          previous.Ref,
-		AutoUpdate:   previous.AutoUpdate,
-		UpdatedAt:    previous.UpdatedAt,
-		Status:       "stopped",
-		DesiredState: previous.EffectiveDesiredState(),
-		Runtime: RuntimeInfo{
-			Port:      previous.Runtime.Port,
-			PID:       nil,
-			StartedAt: nil,
-			LogFile:   filepath.Join(pi.AgentFieldHome, "logs", metadata.Name+".log"),
-		},
-	}
-
-	// Save registry
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(registryPath), 0755); err != nil {
-		return fmt.Errorf("failed to create registry directory: %w", err)
-	}
-
-	if err := os.WriteFile(registryPath, data, 0644); err != nil {
+	if err := UpdateInstallationRegistry(registryPath, func(registry *InstallationRegistry) error {
+		previous := registry.Installed[metadata.Name]
+		// A reinstall replaces observed process state while retaining user intent
+		// and the previous preferred port.
+		registry.Installed[metadata.Name] = InstalledPackage{
+			Name: metadata.Name, Version: metadata.Version, Description: metadata.Description,
+			Path: destPath, Source: "local", SourcePath: sourcePath,
+			InstalledAt: time.Now().Format(time.RFC3339), Commit: previous.Commit, Ref: previous.Ref,
+			AutoUpdate: previous.AutoUpdate, UpdatedAt: previous.UpdatedAt,
+			Status: "stopped", DesiredState: previous.EffectiveDesiredState(),
+			Runtime: RuntimeInfo{Port: previous.Runtime.Port, LogFile: filepath.Join(pi.AgentFieldHome, "logs", metadata.Name+".log")},
+		}
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to write registry: %w", err)
 	}
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagejobs"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagemaint"
@@ -158,16 +159,17 @@ func packageAgentNodeIDs(home, packageName string) ([]string, error) {
 	}
 	metadata, err := packages.ParsePackageMetadata(entry.Path)
 	if err != nil {
-		return nil, fmt.Errorf("resolve node id for %s: %w", packageName, err)
+		logger.Logger.Warn().Err(err).Str("package", packageName).Msg("could not read package manifest for execution activity; using the registry name")
+		return []string{packageName}, nil
 	}
 	candidates := []string{packageName}
-	if entry.Name != "" && !packages.NodeIDsEquivalent(entry.Name, packageName) {
+	if entry.Name != "" && entry.Name != packageName {
 		candidates = append(candidates, entry.Name)
 	}
 	if metadata.AgentNode.NodeID != "" {
 		duplicate := false
 		for _, candidate := range candidates {
-			duplicate = duplicate || packages.NodeIDsEquivalent(candidate, metadata.AgentNode.NodeID)
+			duplicate = duplicate || candidate == metadata.AgentNode.NodeID
 		}
 		if !duplicate {
 			candidates = append(candidates, metadata.AgentNode.NodeID)
@@ -187,29 +189,46 @@ func packageAgentNodeID(home, packageName string) string {
 type packageUpdateGraceHook struct {
 	home    string
 	mu      sync.Mutex
-	nodeIDs map[string]string
+	entries map[string]packageGraceEntry
+}
+
+type packageGraceEntry struct {
+	nodeID string
+	count  int
 }
 
 func (h *packageUpdateGraceHook) set(packageName string, active bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if active {
-		nodeID := packageAgentNodeID(h.home, packageName)
-		h.nodeIDs[packageName] = nodeID
+		entry := h.entries[packageName]
+		if entry.count == 0 {
+			entry.nodeID = packageAgentNodeID(h.home, packageName)
+		}
+		entry.count++
+		h.entries[packageName] = entry
 		handlers.SetAgentUpdateInProgress(packageName, true)
-		handlers.SetAgentUpdateInProgress(nodeID, true)
+		handlers.SetAgentUpdateInProgress(entry.nodeID, true)
 		return
 	}
-	nodeID := h.nodeIDs[packageName]
-	delete(h.nodeIDs, packageName)
+	entry, ok := h.entries[packageName]
+	if !ok {
+		return
+	}
+	entry.count--
+	if entry.count == 0 {
+		delete(h.entries, packageName)
+	} else {
+		h.entries[packageName] = entry
+	}
 	handlers.SetAgentUpdateInProgress(packageName, false)
-	if nodeID != "" {
-		handlers.SetAgentUpdateInProgress(nodeID, false)
+	if entry.nodeID != "" {
+		handlers.SetAgentUpdateInProgress(entry.nodeID, false)
 	}
 }
 
 func newPackageMaintenance(home string, store storage.StorageProvider, agent interfaces.AgentService, jobs *packagejobs.Manager, ready <-chan struct{}) *packagemaint.Service {
-	grace := &packageUpdateGraceHook{home: home, nodeIDs: make(map[string]string)}
+	grace := &packageUpdateGraceHook{home: home, entries: make(map[string]packageGraceEntry)}
 	activity := packageExecutionActivity{storage: store, home: home}
 	maintenance := packagemaint.New(packagemaint.Config{
 		AgentFieldHome:   home,

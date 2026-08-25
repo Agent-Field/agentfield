@@ -69,7 +69,7 @@ func TestStopAgentNodeShutdownPaths(t *testing.T) {
 		require.Nil(t, updated.Installed["demo"].Runtime.PID)
 	})
 
-	t.Run("legacy entry with silent port is reconciled without signalling", func(t *testing.T) {
+	t.Run("legacy entry without identity and with a silent port is left untouched", func(t *testing.T) {
 		home := t.TempDir()
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -88,12 +88,13 @@ func TestStopAgentNodeShutdownPaths(t *testing.T) {
 		registry.Installed["demo"] = entry
 		stopper := &AgentNodeStopper{AgentFieldHome: home, Force: true}
 		require.NoError(t, stopper.saveRegistry(registry))
-		require.NoError(t, stopper.StopAgentNode("demo"))
+		require.ErrorContains(t, stopper.StopAgentNode("demo"), "could not verify that process")
 		require.True(t, packages.RuntimePIDAlive(packages.RuntimeInfo{PID: &pid}))
 		updated, err := stopper.loadRegistry()
 		require.NoError(t, err)
-		require.Equal(t, "stopped", updated.Installed["demo"].Status)
-		require.Nil(t, updated.Installed["demo"].Runtime.PID)
+		require.Equal(t, "running", updated.Installed["demo"].Status)
+		require.NotNil(t, updated.Installed["demo"].Runtime.PID)
+		require.Equal(t, pid, *updated.Installed["demo"].Runtime.PID)
 	})
 
 	t.Run("http shutdown success updates registry", func(t *testing.T) {

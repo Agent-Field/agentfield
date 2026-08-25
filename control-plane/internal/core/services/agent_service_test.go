@@ -445,7 +445,7 @@ func TestStopAgent_Success(t *testing.T) {
 	assert.NoError(t, err, "stopping an already-dead installed agent is idempotent")
 }
 
-func TestC1RunAgentReplacesARecycledRecordedPIDWithOrWithoutStartTime(t *testing.T) {
+func TestE3C1RunAgentReplacesARecycledRecordedPIDWithOrWithoutStartTime(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		startTime string
@@ -458,11 +458,18 @@ func TestC1RunAgentReplacesARecycledRecordedPIDWithOrWithoutStartTime(t *testing
 			pkgDir := filepath.Join(home, "packages", "demo")
 			writeManifest(t, pkgDir, "name: demo\nversion: 1.0.0\nagent_node:\n  node_id: demo\n")
 			stalePID := os.Getpid()
+			var startedAt *string
+			if test.startTime == "" {
+				processStarted, ok := packages.ProcessStartWallClock(stalePID)
+				require.True(t, ok)
+				recorded := processStarted.Add(-time.Minute).Format(time.RFC3339)
+				startedAt = &recorded
+			}
 			stalePort := findFreePortInRange(t)
 			createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
 				"demo": {
 					Name: "demo", Path: pkgDir, Status: "running", DesiredState: packages.DesiredStateRunning,
-					Runtime: packages.RuntimeInfo{PID: &stalePID, Port: &stalePort, StartTime: test.startTime},
+					Runtime: packages.RuntimeInfo{PID: &stalePID, Port: &stalePort, StartTime: test.startTime, StartedAt: startedAt},
 				},
 			}})
 
@@ -667,9 +674,10 @@ func TestWindowsProcessReconciliationUsesMemoizedHealthIdentityForEveryEntry(t *
 		{name: "foreign node", identity: packages.HealthIdentity{Healthy: true, NodeID: "somebody-else"}, wantReconciled: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			missingPID := 99999999
 			pkg := packages.InstalledPackage{
 				Name: "demo-node", Status: "running", DesiredState: packages.DesiredStateRunning,
-				Runtime: packages.RuntimeInfo{Port: &port, PID: &pid, StartTime: "recorded"},
+				Runtime: packages.RuntimeInfo{Port: &port, PID: &missingPID, StartTime: "recorded"},
 			}
 			running, reconciled := service.reconcileProcessStateWithProbe(
 				&pkg, "demo-node", "windows", make(map[int]packages.HealthIdentity),

@@ -15,7 +15,6 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -166,6 +165,9 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 	as.printf("🛑 Stopping agent node: %s (PID: %d)\n", agentNodeName, *agentNode.Runtime.PID)
 
 	assessment := packages.AssessRecordedProcess(context.Background(), agentNodeName, agentNode)
+	if assessment.Ownership == packages.RecordedProcessUnknown {
+		return fmt.Errorf("could not verify that process %d is %s; stop it manually", *agentNode.Runtime.PID, agentNodeName)
+	}
 	if !assessment.Owned() {
 		if assessment.Ownership == packages.RecordedProcessForeign && agentNode.Runtime.Port != nil {
 			as.printf("⚠️  Port %d belongs to node %q, not %s — clearing stale registry entry without signalling PID %d\n",
@@ -194,7 +196,7 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 		return nil
 	}
 
-	result, err := packages.StopRecordedProcess(context.Background(), agentNodeName, agentNode)
+	result, err := packages.StopRecordedProcessWithAssessment(context.Background(), agentNodeName, agentNode, assessment)
 	if err != nil {
 		return err
 	}
@@ -224,9 +226,10 @@ func (as *AgentNodeStopper) markStopped(registry *packages.InstallationRegistry,
 	node.Runtime.StartedAt = nil
 	node.Runtime.BootID = ""
 	node.Runtime.StartTime = ""
-	registry.Installed[name] = node
-
-	if err := as.saveRegistry(registry); err != nil {
+	if err := packages.UpdateInstallationRegistry(filepath.Join(as.AgentFieldHome, "installed.yaml"), func(latest *packages.InstallationRegistry) error {
+		latest.Installed[name] = node
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
@@ -372,28 +375,12 @@ func readAffirmative(r io.Reader) bool {
 // loadRegistry loads the installation registry
 func (as *AgentNodeStopper) loadRegistry() (*packages.InstallationRegistry, error) {
 	registryPath := filepath.Join(as.AgentFieldHome, "installed.yaml")
-
-	registry := &packages.InstallationRegistry{
-		Installed: make(map[string]packages.InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return nil, fmt.Errorf("failed to parse registry: %w", err)
-		}
-	}
-
-	return registry, nil
+	return packages.LoadInstallationRegistry(registryPath)
 }
 
 // saveRegistry saves the installation registry
 func (as *AgentNodeStopper) saveRegistry(registry *packages.InstallationRegistry) error {
 	registryPath := filepath.Join(as.AgentFieldHome, "installed.yaml")
 
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	return os.WriteFile(registryPath, data, 0644)
+	return packages.WriteInstallationRegistry(registryPath, registry)
 }

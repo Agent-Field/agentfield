@@ -94,6 +94,14 @@ control-plane maintenance by default:
   moves; a manual update clears the failed memo.
 - On container startup, packages recorded as `running` are restored when their
   old process is no longer alive. Their previous port is reused when available.
+- Legacy runtime records that have `started_at` but no process `start_time`
+  still receive PID-reuse protection: the observed process start must fall
+  between 180 seconds before and 30 seconds after `started_at`. A process
+  outside that window is treated as a different process and is never signalled.
+- Before a live recorded process is declared unhealthy and restarted, the
+  control plane confirms a silent health probe three times, about three seconds
+  apart. Status/list reads remain non-blocking and keep an unverified live PID
+  for a later lifecycle decision.
 - On the first boot after upgrading a legacy registry, entries without
   `desired_state` migrate to `running` in Railway/Docker and are restored.
   Local installations keep the historical status-derived intent. Once an
@@ -120,6 +128,11 @@ source pins remain pinned regardless of the global interval.
 A manual `POST /api/ui/v1/agents/packages/:id/update` returns HTTP 409 with
 `code: executions_active` and `active_executions` when runs are in flight.
 Clients may confirm the interruption and retry with `{"force": true}`.
+
+`GET /api/ui/v1/agents/packages/maintenance` reports
+`boot_restore_completed: true` as soon as the boot restore loop finishes, even
+if update checks in that boot pass are still running. `boot_pass_completed`
+only becomes true after the entire boot maintenance pass finishes.
 
 ## Updating and recovery
 

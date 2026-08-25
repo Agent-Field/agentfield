@@ -19,6 +19,8 @@ import (
 const (
 	shutdownRequestTimeout = 10 * time.Second
 	gracefulExitWait       = 3 * time.Second
+	processProbeAttempts   = 3
+	processProbeInterval   = 3 * time.Second
 )
 
 // StopProcessResult describes the externally visible stop path. For an
@@ -42,6 +44,7 @@ const (
 	RecordedProcessOursHealthy
 	RecordedProcessOursUnhealthy
 	RecordedProcessForeign
+	RecordedProcessUnknown
 )
 
 // RecordedProcessAssessment centralizes the ownership rule used by every
@@ -61,7 +64,39 @@ func (a RecordedProcessAssessment) Owned() bool {
 // AssessRecordedProcess applies the shared PID/health ownership rule using
 // production probes.
 func AssessRecordedProcess(ctx context.Context, name string, entry InstalledPackage) RecordedProcessAssessment {
-	return AssessRecordedProcessWith(ctx, name, entry, RuntimeProcessStatus, ProbeHealthIdentity)
+	return AssessRecordedProcessWith(ctx, name, entry, RuntimeProcessStatus, ProbeHealthIdentity, LifecycleConfirmationPolicy())
+}
+
+// ProcessConfirmationPolicy controls whether a silent ownership probe is
+// confirmed. Reads use one non-blocking attempt; lifecycle calls retry an
+// existing PID before they may stop, restart, or discard it.
+type ProcessConfirmationPolicy struct {
+	Attempts      int
+	Interval      time.Duration
+	Sleep         func(context.Context, time.Duration) error
+	ProcessExists func(int) bool
+}
+
+func LifecycleConfirmationPolicy() ProcessConfirmationPolicy {
+	return ProcessConfirmationPolicy{
+		Attempts: processProbeAttempts, Interval: processProbeInterval,
+		Sleep: sleepWithContext, ProcessExists: processExists,
+	}
+}
+
+func ReadConfirmationPolicy() ProcessConfirmationPolicy {
+	return ProcessConfirmationPolicy{Attempts: 1, ProcessExists: processExists}
+}
+
+func sleepWithContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // AssessRecordedProcessWith is the injectable form used by status and
@@ -72,11 +107,39 @@ func AssessRecordedProcessWith(
 	entry InstalledPackage,
 	processStatus func(RuntimeInfo) RuntimeProcessState,
 	healthProbe func(context.Context, int, string) HealthIdentity,
+	confirmation ProcessConfirmationPolicy,
 ) RecordedProcessAssessment {
 	state := processStatus(entry.Runtime)
 	assessment := RecordedProcessAssessment{Ownership: RecordedProcessDead, ProcessState: state}
-	if entry.Runtime.Port != nil && *entry.Runtime.Port > 0 {
-		assessment.Health = healthProbe(ctx, *entry.Runtime.Port, PackageHealthcheckPath(entry))
+	attempts := confirmation.Attempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	exists := confirmation.ProcessExists
+	if exists == nil {
+		exists = processExists
+	}
+	pidExists := entry.Runtime.PID != nil && *entry.Runtime.PID > 0 &&
+		(state == RuntimeProcessAliveState || exists(*entry.Runtime.PID))
+	if state == RuntimeProcessDead || !pidExists {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			sleep := confirmation.Sleep
+			if sleep == nil {
+				sleep = sleepWithContext
+			}
+			if err := sleep(ctx, confirmation.Interval); err != nil {
+				break
+			}
+		}
+		if entry.Runtime.Port != nil && *entry.Runtime.Port > 0 {
+			assessment.Health = healthProbe(ctx, *entry.Runtime.Port, PackageHealthcheckPath(entry))
+		}
+		if assessment.Health.Healthy {
+			break
+		}
 	}
 
 	if assessment.Health.Healthy {
@@ -92,6 +155,8 @@ func AssessRecordedProcessWith(
 	if state == RuntimeProcessAliveState {
 		assessment.Ownership = RecordedProcessOursUnhealthy
 		assessment.SignalAllowed = true
+	} else if state == RuntimeProcessUnknown && pidExists {
+		assessment.Ownership = RecordedProcessUnknown
 	}
 	return assessment
 }
@@ -152,6 +217,16 @@ func StopRecordedProcess(ctx context.Context, name string, entry InstalledPackag
 	}
 
 	assessment := AssessRecordedProcess(ctx, name, entry)
+	return StopRecordedProcessWithAssessment(ctx, name, entry, assessment)
+}
+
+// StopRecordedProcessWithAssessment performs the stop using an assessment the
+// caller already confirmed, avoiding a second multi-probe confirmation window.
+func StopRecordedProcessWithAssessment(ctx context.Context, name string, entry InstalledPackage, assessment RecordedProcessAssessment) (StopProcessResult, error) {
+	result := StopProcessResult{}
+	if entry.Runtime.PID == nil || *entry.Runtime.PID <= 0 {
+		return result, nil
+	}
 	if !assessment.Owned() {
 		return result, nil
 	}
@@ -231,7 +306,8 @@ func requestHTTPShutdown(ctx context.Context, port int) (accepted bool, timedOut
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "AgentField-CLI/1.0")
-	response, err := http.DefaultClient.Do(request)
+	request.Close = true
+	response, err := NewNodeHTTPClient(shutdownRequestTimeout).Do(request)
 	if err != nil {
 		var netErr net.Error
 		return false, errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout()
@@ -266,7 +342,13 @@ func isFinishedProcessError(err error) bool {
 // StopPackageForReinstall stops and reconciles a running registry entry while
 // retaining desired running intent and its preferred port for the replacement.
 func StopPackageForReinstall(ctx context.Context, home, name string) (ReinstallState, error) {
-	return stopPackageForReinstallWith(ctx, home, name, StopRecordedProcess)
+	return stopPackageForReinstallWith(ctx, home, name, func(ctx context.Context, name string, entry InstalledPackage) (StopProcessResult, error) {
+		assessment := AssessRecordedProcess(ctx, name, entry)
+		if assessment.Ownership == RecordedProcessUnknown {
+			return StopProcessResult{}, fmt.Errorf("could not verify that process %d is %s; stop it manually", *entry.Runtime.PID, name)
+		}
+		return StopRecordedProcessWithAssessment(ctx, name, entry, assessment)
+	})
 }
 
 func stopPackageForReinstallWith(
@@ -301,15 +383,10 @@ func stopPackageForReinstallWith(
 	entry.Runtime.BootID = ""
 	entry.Runtime.StartTime = ""
 	registry.Installed[name] = entry
-	updated, err := yaml.Marshal(&registry)
-	if err != nil {
-		return state, err
-	}
-	mode := os.FileMode(0o644)
-	if info, statErr := os.Stat(registryPath); statErr == nil {
-		mode = info.Mode().Perm()
-	}
-	return state, os.WriteFile(registryPath, updated, mode)
+	return state, UpdateInstallationRegistry(registryPath, func(latest *InstallationRegistry) error {
+		latest.Installed[name] = entry
+		return nil
+	})
 }
 
 // RestartPackageAfterReinstall restores a package that was running before its

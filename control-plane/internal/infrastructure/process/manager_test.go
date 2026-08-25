@@ -3,6 +3,7 @@ package process
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"syscall"
@@ -84,6 +85,18 @@ func TestC10StopKillsChildThatIgnoresSIGTERMWithinSixSeconds(t *testing.T) {
 	assert.Less(t, elapsed, 6*time.Second)
 	assert.GreaterOrEqual(t, elapsed, 4*time.Second)
 	assert.Error(t, process.Signal(syscall.Signal(0)), "force-killed child still exists")
+}
+
+func TestE21FinalReapTimeoutStillRemovesProcessFromManager(t *testing.T) {
+	pm := &DefaultProcessManager{
+		runningProcesses: map[int]*exec.Cmd{42: {Process: &os.Process{Pid: 42}}},
+		stopProcess: func(_ *exec.Cmd, pid int) error {
+			return fmt.Errorf("timed out reaping process %d after force kill", pid)
+		},
+	}
+	require.ErrorContains(t, pm.Stop(42), "timed out reaping process 42")
+	_, exists := pm.runningProcesses[42]
+	require.False(t, exists, "bounded stop returns must release process bookkeeping")
 }
 
 func TestProcessHelper(t *testing.T) {
