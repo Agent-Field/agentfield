@@ -395,13 +395,22 @@ func (m *Manager) run(jobID string, force bool) {
 		if previousPort > 0 && m.portAvailable != nil && m.portAvailable(previousPort) {
 			port = previousPort
 		}
-		m.appendLine(jobID, fmt.Sprintf("restarting %s", restartName))
-		_, restartErr := m.agentService.RunAgent(restartName, domain.RunOptions{Detach: true, Port: port, PortIsPreference: true})
-		if restartErr != nil {
-			if err == nil {
-				err = restartErr
-			} else {
-				err = fmt.Errorf("%v; restoring previous package: %w", err, restartErr)
+		// A stop issued while the node was down for this update is the user's
+		// last word: RunAgent would record running intent again and erase it.
+		stoppedMeanwhile := false
+		if entry, entryErr := m.registryEntry(restartName); entryErr == nil && entry.DesiredState == "stopped" {
+			stoppedMeanwhile = true
+			m.appendLine(jobID, fmt.Sprintf("not restarting %s: it was stopped during the update", restartName))
+		}
+		if !stoppedMeanwhile {
+			m.appendLine(jobID, fmt.Sprintf("restarting %s", restartName))
+			_, restartErr := m.agentService.RunAgent(restartName, domain.RunOptions{Detach: true, Port: port, PortIsPreference: true})
+			if restartErr != nil {
+				if err == nil {
+					err = restartErr
+				} else {
+					err = fmt.Errorf("%v; restoring previous package: %w", err, restartErr)
+				}
 			}
 		}
 	}
@@ -589,8 +598,9 @@ func cloneJob(job *Job) *Job {
 }
 
 type registryPackage struct {
-	SourcePath string `yaml:"source_path"`
-	Runtime    struct {
+	SourcePath   string `yaml:"source_path"`
+	DesiredState string `yaml:"desired_state"`
+	Runtime      struct {
 		Port *int `yaml:"port"`
 	} `yaml:"runtime"`
 }

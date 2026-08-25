@@ -19,7 +19,10 @@ const processIdentityTimeout = 2 * time.Second
 
 const (
 	legacyStartBeforeRecord = 180 * time.Second
-	legacyStartAfterRecord  = 30 * time.Second
+	// started_at is written after readiness, so a genuine process starts before
+	// the record; only clock skew puts it after. Keep that slack tiny so a PID
+	// reused by a process launched moments after a redeploy is never ours.
+	legacyStartAfterRecord = 5 * time.Second
 )
 
 // RuntimeProcessState distinguishes a dead recorded process from a live one

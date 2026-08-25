@@ -898,6 +898,11 @@ func (as *DefaultAgentService) waitForAgentNode(port int, healthPath, expectedNo
 // updateRuntimeInfo updates the registry with runtime information
 func (as *DefaultAgentService) updateRuntimeInfo(agentNodeName string, port, pid int) error {
 	registryPath := filepath.Join(as.agentfieldHome, "installed.yaml")
+	// Resolve the process identity before taking the registry lock: on macOS
+	// and Windows it shells out (ps / PowerShell) and must not stall every
+	// registry read in the process for its bounded duration.
+	bootID := packages.CurrentBootID()
+	startTime := packages.CurrentProcessStartTime(pid)
 	return packages.UpdateInstallationRegistry(registryPath, func(registry *packages.InstallationRegistry) error {
 		if agentNode, exists := registry.Installed[agentNodeName]; exists {
 			startedAt := time.Now().Format(time.RFC3339)
@@ -910,8 +915,8 @@ func (as *DefaultAgentService) updateRuntimeInfo(agentNodeName string, port, pid
 			agentNode.Runtime.Port = &port
 			agentNode.Runtime.PID = &pid
 			agentNode.Runtime.StartedAt = &startedAt
-			agentNode.Runtime.BootID = packages.CurrentBootID()
-			agentNode.Runtime.StartTime = packages.CurrentProcessStartTime(pid)
+			agentNode.Runtime.BootID = bootID
+			agentNode.Runtime.StartTime = startTime
 			registry.Installed[agentNodeName] = agentNode
 		}
 		return nil

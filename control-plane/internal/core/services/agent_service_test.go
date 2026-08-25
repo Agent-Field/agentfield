@@ -392,7 +392,7 @@ func TestStopAgent_Success(t *testing.T) {
 	agentfieldHome := tmpDir
 
 	port := closedPort(t)
-	pid := 12345
+	pid := 1<<22 - 1 // above pid_max: guaranteed dead, never a real process this test could signal
 	startedAt := time.Now().Format(time.RFC3339)
 
 	registry := &packages.InstallationRegistry{

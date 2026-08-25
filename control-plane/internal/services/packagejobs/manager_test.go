@@ -1133,3 +1133,26 @@ func TestC22SuccessfulUnattendedUpdateStopsAfterValidationAndRestartsPreferredPo
 		t.Fatalf("calls=%v options=%+v", calls, agent.runOptions)
 	}
 }
+
+// E25: a stop issued while the node was down for an update wins — the job
+// does not restart it, because RunAgent would record running intent again.
+func TestE25UpdateDoesNotRestartAPackageStoppedDuringTheUpdate(t *testing.T) {
+	home := t.TempDir()
+	registry := "installed:\n  demo:\n    source_path: https://github.com/acme/demo\n    desired_state: stopped\n    runtime:\n      port: 8123\n"
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte(registry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := &stubAgentService{running: true}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, agent, home)
+	manager.portAvailable = func(int) bool { return true }
+	job, err := manager.StartUpdate("demo", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+		t.Fatalf("job=%+v", got)
+	}
+	if len(agent.runOptions) != 0 {
+		t.Fatalf("a package stopped during the update must not be restarted: %+v", agent.runOptions)
+	}
+}
