@@ -316,6 +316,7 @@ func (m *Manager) run(jobID string, force bool) {
 	job.Status = StatusRunning
 	job.StartedAt = &started
 	source, kind, packageName := job.Source, job.Kind, job.PackageName
+	originalPackageName := packageName
 	expectedName, previousPort := job.expectedName, job.previousPort
 	onUpdateState := m.onUpdateState
 	m.mu.Unlock()
@@ -365,6 +366,25 @@ func (m *Manager) run(jobID string, force bool) {
 	}
 	if err == nil && packageName == "" {
 		packageName = m.discoverPackageName(before)
+	}
+	if kind == JobUpdate && err == nil && packageName != "" && packageName != originalPackageName {
+		// A differently-named successor is a first install, so the installer's
+		// same-name BeforeReplace boundary does not fire. Once the successor is
+		// safely installed, stop and retire the old package here.
+		if wasRunning && !replaceHookFired {
+			m.appendLine(jobID, fmt.Sprintf("stopping %s", originalPackageName))
+			if stopErr := m.stopForUpdate(originalPackageName); stopErr != nil {
+				err = stopErr
+			} else {
+				replaceHookFired = true
+			}
+		}
+		if err == nil && m.installedNames()[originalPackageName] {
+			m.appendLine(jobID, fmt.Sprintf("retiring %s", originalPackageName))
+			if uninstallErr := m.installer.UninstallPackage(originalPackageName); uninstallErr != nil {
+				err = uninstallErr
+			}
+		}
 	}
 	if kind == JobUpdate && wasRunning && replaceHookFired {
 		restartName := packageName

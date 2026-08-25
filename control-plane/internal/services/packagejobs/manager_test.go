@@ -59,19 +59,20 @@ func TestProductionInstallerReportsTheNameItInstalled(t *testing.T) {
 }
 
 type stubInstaller struct {
-	mu               sync.Mutex
-	installErr       error
-	beforeReplaceErr error
-	resultName       string
-	block            <-chan struct{}
-	installed        []domain.InstalledPackage
-	afterInstall     []domain.InstalledPackage
-	calls            *[]string
-	lastSource       string
-	lastOptions      domain.InstallOptions
-	listErr          error
-	infoErr          error
-	uninstallErr     error
+	mu                sync.Mutex
+	installErr        error
+	beforeReplaceErr  error
+	resultName        string
+	block             <-chan struct{}
+	installed         []domain.InstalledPackage
+	afterInstall      []domain.InstalledPackage
+	calls             *[]string
+	lastSource        string
+	lastOptions       domain.InstallOptions
+	listErr           error
+	infoErr           error
+	uninstallErr      error
+	skipBeforeReplace bool
 }
 
 func (s *stubInstaller) InstallPackageWithResult(source string, options domain.InstallOptions) (string, error) {
@@ -96,7 +97,7 @@ func (s *stubInstaller) InstallPackage(source string, options domain.InstallOpti
 	if s.beforeReplaceErr != nil {
 		return s.beforeReplaceErr
 	}
-	if options.BeforeReplace != nil {
+	if options.BeforeReplace != nil && !s.skipBeforeReplace {
 		if err := options.BeforeReplace(); err != nil {
 			return err
 		}
@@ -107,8 +108,19 @@ func (s *stubInstaller) InstallPackage(source string, options domain.InstallOpti
 	return s.installErr
 }
 func (s *stubInstaller) UninstallPackage(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.calls != nil {
 		*s.calls = append(*s.calls, "remove:"+name)
+	}
+	if s.uninstallErr == nil {
+		kept := s.installed[:0]
+		for _, pkg := range s.installed {
+			if pkg.Name != name {
+				kept = append(kept, pkg)
+			}
+		}
+		s.installed = kept
 	}
 	return s.uninstallErr
 }
@@ -422,17 +434,18 @@ func TestStartUpdateValidatesOverrideAfterRegistryLookup(t *testing.T) {
 // to a differently-named successor follows the rename. The old package is gone
 // by the time the install returns, so reporting or restarting the name that went
 // in would name a node that no longer exists.
-func TestUpdateFollowsASupersededRename(t *testing.T) {
+func TestE9UpdateFollowsASupersededRename(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/o/repo\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	var calls []string
 	inst := &stubInstaller{
-		resultName:   "demo-v2",
-		installed:    []domain.InstalledPackage{{Name: "demo"}},
-		afterInstall: []domain.InstalledPackage{{Name: "demo-v2"}},
-		calls:        &calls,
+		resultName:        "demo-v2",
+		installed:         []domain.InstalledPackage{{Name: "demo"}},
+		afterInstall:      []domain.InstalledPackage{{Name: "demo"}, {Name: "demo-v2"}},
+		calls:             &calls,
+		skipBeforeReplace: true,
 	}
 	manager := newManager(inst, &stubAgentService{running: true, calls: &calls}, home)
 	job, err := manager.StartUpdate("demo", "", false)
@@ -448,7 +461,7 @@ func TestUpdateFollowsASupersededRename(t *testing.T) {
 	}
 	// Stopped under the old name (that is what was running), restarted under
 	// the new one (that is what is now installed).
-	if strings.Join(calls, ",") != "install,stop:demo,start:demo-v2" {
+	if strings.Join(calls, ",") != "install,stop:demo,remove:demo,start:demo-v2" {
 		t.Fatalf("calls = %v", calls)
 	}
 }

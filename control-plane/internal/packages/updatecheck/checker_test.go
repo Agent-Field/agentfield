@@ -106,6 +106,39 @@ func TestCheckerCachesAndClearsResults(t *testing.T) {
 	}
 }
 
+func TestE19FailedCommitMemoSurvivesTransientCheckError(t *testing.T) {
+	const failedCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	runner := &recordingRunner{results: []runnerResult{
+		{err: errors.New("remote temporarily unavailable")},
+		{output: failedCommit + "\tHEAD\n"},
+	}}
+	checker := NewChecker(runner)
+	checker.Set("demo", Update{
+		Status:       StatusFailed,
+		LatestCommit: failedCommit,
+		Message:      "update failed for this commit",
+	})
+	entry := []Entry{{ID: "demo", Source: "https://github.com/acme/demo", InstalledCommit: "old"}}
+
+	first := checker.Check(context.Background(), entry)[0]
+	if first.Update.Status != StatusError {
+		t.Fatalf("transient result = %+v, want error", first.Update)
+	}
+	if cached := checker.Cached("demo"); cached.Status != StatusFailed || cached.LatestCommit != failedCommit {
+		t.Fatalf("transient error erased failed-commit memo: %+v", cached)
+	}
+
+	second := checker.Check(context.Background(), entry)[0]
+	if second.Update.Status != StatusFailed || second.Update.LatestCommit != failedCommit {
+		t.Fatalf("same remote commit was made eligible again: %+v", second.Update)
+	}
+	for _, call := range runner.calls {
+		if len(call) > 0 && call[0] == "clone" {
+			t.Fatalf("memo recheck must remain ls-remote-only: %v", runner.calls)
+		}
+	}
+}
+
 type contextErrorRunner struct{}
 
 func (contextErrorRunner) Run(ctx context.Context, _ ...string) ([]byte, error) {
