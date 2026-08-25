@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -36,6 +37,73 @@ _OPENCODE_STDERR_ERROR_PATTERNS = (
     re.compile(r"\bUnauthorized\b"),
     re.compile(r"\bAPIError\b"),
 )
+
+_OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json"
+_OPENCODE_AGENT_NAME = "agentfield-harness"
+_AGENTFIELD_TOOL_ACTIONS = {
+    "read": "read",
+    "write": "edit",
+    "edit": "edit",
+    "glob": "glob",
+    "grep": "grep",
+    "bash": "bash",
+}
+
+
+def _opencode_permissions(tools: object) -> dict[str, str]:
+    """Build the initial headless permission baseline for the harness agent.
+
+    The wildcard allow is intentional: this first integration preserves the
+    existing compatibility behavior instead of turning omitted tools into
+    denials. Recognized AgentField tools are also emitted under their OpenCode
+    action names so the translation remains visible in the effective config.
+    """
+    permissions: dict[str, str] = {"*": "allow"}
+    if isinstance(tools, (list, tuple, set, frozenset)):
+        for tool in tools:
+            if not isinstance(tool, str):
+                continue
+            action = _AGENTFIELD_TOOL_ACTIONS.get(tool.strip().lower())
+            if action is not None:
+                permissions[action] = "allow"
+
+    # Headless runs must never wait for an interactive response. Keep this
+    # baseline independent of permission_mode: structured-output runs write
+    # .agentfield_output.json, so AgentField Write/Edit must retain OpenCode's
+    # edit permission. In particular, do not add an "ask" rule here.
+    permissions["question"] = "deny"
+    permissions["task"] = "deny"
+    return permissions
+
+
+def _build_opencode_config_content(
+    options: dict[str, object],
+    model_value: Optional[str],
+    variant_value: Optional[str],
+) -> str:
+    """Serialize the per-run OpenCode agent overlay."""
+    agent: dict[str, object] = {
+        "mode": "primary",
+        "steps": 500,
+        "permission": _opencode_permissions(options.get("tools")),
+    }
+
+    system_prompt = options.get("system_prompt")
+    if isinstance(system_prompt, str) and system_prompt.strip():
+        agent["prompt"] = system_prompt.strip()
+    if model_value:
+        agent["model"] = model_value
+    if variant_value:
+        agent["reasoningEffort"] = variant_value
+
+    return json.dumps(
+        {
+            "$schema": _OPENCODE_CONFIG_SCHEMA,
+            "default_agent": _OPENCODE_AGENT_NAME,
+            "agent": {_OPENCODE_AGENT_NAME: agent},
+        },
+        ensure_ascii=False,
+    )
 
 
 def _prompt_via_stdin() -> bool:
@@ -212,6 +280,10 @@ class OpenCodeProvider:
         cmd = [self._bin, "run"]
         cmd.extend(["--format", "json"])
 
+        # Select a deterministic per-run agent. Its configuration is supplied
+        # through OPENCODE_CONFIG_CONTENT below rather than a shared file.
+        cmd.extend(["--agent", _OPENCODE_AGENT_NAME])
+
         # --dir is the project root the agent may read and write. project_dir is
         # the canonical field; fall back to cwd when it is unset. Previously cwd
         # took precedence, so a nested cwd under a shared project_dir made
@@ -237,21 +309,11 @@ class OpenCodeProvider:
         # response. opencode in non-TTY mode proceeds without permission
         # prompting, so no flag is needed. See agentfield#582.
 
-        # Handle system prompt - prepend to user prompt since OpenCode
-        # has no native --system-prompt flag
-        effective_prompt = prompt
-        system_prompt = options.get("system_prompt")
-        if isinstance(system_prompt, str) and system_prompt.strip():
-            effective_prompt = (
-                f"SYSTEM INSTRUCTIONS:\n{system_prompt.strip()}\n\n"
-                f"---\n\nUSER REQUEST:\n{prompt}"
-            )
-
-        # Prompt is a positional arg to `opencode run` (not -p) on POSIX; on
-        # Windows it goes over stdin instead (see _prompt_via_stdin).
+        # The system prompt belongs to the selected agent, so the task remains
+        # the only user-facing prompt sent to OpenCode.
         prompt_via_stdin = _prompt_via_stdin()
         if not prompt_via_stdin:
-            cmd.append(effective_prompt)
+            cmd.append(prompt)
 
         env: Dict[str, str] = {}
         env_value = options.get("env")
@@ -262,7 +324,12 @@ class OpenCodeProvider:
                 if isinstance(key, str) and isinstance(value, str)
             }
 
-        # Model is passed via -m flag on the run subcommand (see above)
+        # Model is passed via -m flag on the run subcommand (see above).
+        # Keep credentials and other caller-provided environment values in
+        # place; only the generated config content is added for this child.
+        env["OPENCODE_CONFIG_CONTENT"] = _build_opencode_config_content(
+            options, model_value, variant_value
+        )
 
         cwd: Optional[str] = None
 
@@ -309,7 +376,7 @@ class OpenCodeProvider:
                     env=env,
                     cwd=cwd,
                     timeout=timeout_seconds,
-                    input_text=effective_prompt if prompt_via_stdin else None,
+                    input_text=prompt if prompt_via_stdin else None,
                 )
             except FileNotFoundError as exc:
                 raise provider_unavailable("opencode", self._bin) from exc
@@ -387,7 +454,7 @@ class OpenCodeProvider:
         else:
             estimated_cost = estimate_cli_cost(
                 model=model_value or "",
-                prompt=effective_prompt,
+                prompt=prompt,
                 result_text=result_text,
             )
 

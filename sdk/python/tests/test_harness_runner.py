@@ -403,6 +403,7 @@ async def test_run_resolves_harness_config_defaults_with_per_call_overrides(tmp_
     config = SimpleNamespace(
         provider="codex",
         model="default-model",
+        variant="low",
         max_turns=30,
         max_budget_usd=1.5,
         tools=["Read", "Write"],
@@ -422,6 +423,7 @@ async def test_run_resolves_harness_config_defaults_with_per_call_overrides(tmp_
         await runner.run(
             "hello",
             model="override-model",
+            variant="max",
             max_turns=5,
             env={"OVERRIDE": "1"},
             permission_mode="auto",
@@ -430,6 +432,7 @@ async def test_run_resolves_harness_config_defaults_with_per_call_overrides(tmp_
     assert provider.last_options is not None
     assert provider.last_options["provider"] == "codex"
     assert provider.last_options["model"] == "override-model"
+    assert provider.last_options["variant"] == "max"
     assert provider.last_options["max_turns"] == 5
     assert provider.last_options["max_budget_usd"] == 1.5
     assert provider.last_options["permission_mode"] == "auto"

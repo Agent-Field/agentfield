@@ -16,6 +16,7 @@ def test_harness_config_defaults():
 
     assert cfg.provider == "codex"
     assert cfg.model is None
+    assert cfg.variant is None
     assert cfg.max_turns == 30
     assert cfg.max_budget_usd is None
     assert cfg.max_retries == 3
@@ -31,6 +32,12 @@ def test_harness_config_defaults():
     assert cfg.codex_bin == "codex"
     assert cfg.gemini_bin == "gemini"
     assert cfg.opencode_bin == "opencode"
+
+
+def test_harness_config_accepts_explicit_variant():
+    cfg = HarnessConfig(provider="opencode", variant="high")
+
+    assert cfg.variant == "high"
 
 
 def test_build_provider_raises_for_unknown_provider():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # pyright: reportMissingImports=false
 
+import json
 from typing import Any
 from unittest.mock import patch
 
@@ -64,18 +65,101 @@ async def test_opencode_provider_constructs_command_and_maps_result(
         "run",
         "--format",
         "json",
+        "--agent",
+        "agentfield-harness",
         "--dir",
         "/tmp/work",
         "hello",
     ]
     assert captured["env"]["A"] == "1"
     assert "XDG_DATA_HOME" in captured["env"]
+    overlay = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert overlay["default_agent"] == "agentfield-harness"
+    assert overlay["agent"]["agentfield-harness"] == {
+        "mode": "primary",
+        "steps": 500,
+        "permission": {
+            "*": "allow",
+            "question": "deny",
+            "task": "deny",
+        },
+    }
     # Note: cwd is None because we use --dir in command instead of cwd param
     assert raw.is_error is False
     assert raw.result == "final text"
     assert raw.metrics.session_id == ""
     assert raw.metrics.num_turns == 1
     assert raw.messages == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_overlay_configures_agent_tools_and_run_options(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = cwd, timeout, input_text
+        captured["cmd"] = cmd
+        captured["env"] = env
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    task = "inspect the repository"
+    provider = OpenCodeProvider()
+    await provider.execute(
+        task,
+        {
+            "model": "openai/gpt-5#low",
+            "variant": "max",
+            "system_prompt": "  Work autonomously.  ",
+            "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+            "permission_mode": "plan",
+            "max_turns": 7,
+            "env": {"OPENAI_API_KEY": "secret", "DEPLOYMENT": "local"},
+        },
+    )
+
+    overlay = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    agent = overlay["agent"]["agentfield-harness"]
+    assert overlay["$schema"] == "https://opencode.ai/config.json"
+    assert overlay["default_agent"] == "agentfield-harness"
+    assert agent["mode"] == "primary"
+    assert agent["steps"] == 500
+    assert agent["prompt"] == "Work autonomously."
+    assert agent["model"] == "openai/gpt-5"
+    assert agent["reasoningEffort"] == "max"
+    assert agent["permission"] == {
+        "*": "allow",
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "bash": "allow",
+        "question": "deny",
+        "task": "deny",
+    }
+    assert "ask" not in agent["permission"]
+    assert "max_turns" not in agent
+
+    assert captured["cmd"] == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--agent",
+        "agentfield-harness",
+        "-m",
+        "openai/gpt-5",
+        "--variant",
+        "max",
+        task,
+    ]
+    assert captured["cmd"].count("--variant") == 1
+    assert "SYSTEM INSTRUCTIONS:" not in captured["cmd"]
+    assert captured["env"]["OPENAI_API_KEY"] == "secret"
+    assert captured["env"]["DEPLOYMENT"] == "local"
 
 
 @pytest.mark.asyncio
@@ -143,6 +227,8 @@ async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
         "run",
         "--format",
         "json",
+        "--agent",
+        "agentfield-harness",
         "-m",
         "openai/gpt-5",
         "hello",
@@ -497,6 +583,7 @@ async def test_opencode_v14_cli_shape_no_deprecated_flags(
     # Must use `run` subcommand
     assert captured_cmd[1] == "run", "Must use 'opencode run' subcommand (v1.4+)"
     assert "--format" in captured_cmd, "Must request JSON stream for metrics parsing"
+    assert captured_cmd[captured_cmd.index("--agent") + 1] == "agentfield-harness"
     assert "json" in captured_cmd, "Must request JSON output format"
     # Must NOT use deprecated -p flag
     assert "-p" not in captured_cmd, "Must not use deprecated -p flag (v1.4+)"
@@ -624,11 +711,18 @@ async def test_opencode_windows_hands_prompt_over_stdin(
     )
 
     assert raw.is_error is False
-    # The prompt (with the system prompt folded in) went over stdin...
-    assert "a prompt far too large" in (captured["input_text"] or "")
-    assert "SYSTEM INSTRUCTIONS:" in (captured["input_text"] or "")
+    # The task prompt went over stdin without a folded system prompt.
+    assert captured["input_text"] == "a prompt far too large for a cmd.exe command line"
+    assert "SYSTEM INSTRUCTIONS:" not in (captured["input_text"] or "")
     # ...and argv carries only the fixed flags, no positional prompt.
-    assert captured["cmd"][:4] == ["opencode", "run", "--format", "json"]
+    assert captured["cmd"][:6] == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--agent",
+        "agentfield-harness",
+    ]
     assert all("too large" not in part for part in captured["cmd"])
 
 
@@ -653,6 +747,8 @@ async def test_opencode_model_variant_suffix_maps_to_variant_flag(
         "run",
         "--format",
         "json",
+        "--agent",
+        "agentfield-harness",
         "-m",
         "openrouter/z-ai/glm-5.2",
         "--variant",
