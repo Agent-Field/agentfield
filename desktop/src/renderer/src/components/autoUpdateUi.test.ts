@@ -160,8 +160,20 @@ describe('cloud update controls and feedback', () => {
     const result = { ok: true, target: '0.1.135', message: 'Updated.', shownAt: 1_000 }
     expect(cloudUpdateApplyResultVisible(available, result, 10_999)).toBe(true)
     expect(cloudUpdateApplyResultVisible(available, result, 11_000)).toBe(false)
+    // The follow-up check flips the status to current within a second of a
+    // successful update; the confirmation must stay readable for its window.
     expect(cloudUpdateApplyResultVisible({ ...available, status: 'current' }, result, 1_001))
+      .toBe(true)
+    expect(cloudUpdateApplyResultVisible({ ...available, status: 'current' }, result, 11_000))
       .toBe(false)
+  })
+
+  it('D8 — a status publication keeps a successful apply result and clears a failed one', () => {
+    const success = { ok: true, target: '0.1.136', message: 'Updated to v0.1.136. 2 agents restored.', shownAt: 1_000 }
+    const failure = { ok: false, message: 'Sign in to Railway before updating the cloud control plane.', shownAt: 1_000 }
+    expect(cloudUpdateApplyFeedback(success, { type: 'status' })).toEqual(success)
+    expect(cloudUpdateApplyFeedback(failure, { type: 'status' })).toBeNull()
+    expect(cloudUpdateApplyFeedback(success, { type: 'dismiss' })).toBeNull()
   })
 
   it('H3 — makes failed apply feedback dismissible, status-scoped, and null-safe', () => {

@@ -11,23 +11,28 @@ type ApplyFeedbackEvent =
   | { type: 'apply'; result: ApplyFeedback }
   | { type: 'dismiss' | 'status' }
 
-/** Apply feedback belongs to one status snapshot: either an explicit dismiss
- * or the next main-process status publication clears it. */
+/** A failure stays until the user dismisses it or the next status snapshot
+ * replaces it. A success is shown for SUCCESS_VISIBLE_MS no matter what the
+ * status does meanwhile: the follow-up check flips the status to "current"
+ * within a second of a successful update, which is exactly when the
+ * "Updated to vX. N agents restored." line must still be readable. */
 export function cloudUpdateApplyFeedback(
-  _current: ApplyFeedback | null,
+  current: ApplyFeedback | null,
   event: ApplyFeedbackEvent
 ): ApplyFeedback | null {
-  return event.type === 'apply' ? event.result : null
+  if (event.type === 'apply') return event.result
+  if (event.type === 'status') return current?.ok ? current : null
+  return null
 }
 
 export function cloudUpdateApplyResultVisible(
-  status: CloudUpdateStatus,
+  _status: CloudUpdateStatus,
   result: ApplyFeedback | null,
   now = Date.now()
 ): boolean {
   if (!result) return false
   if (!result.ok) return true
-  return status.status !== 'current' && now - result.shownAt < SUCCESS_VISIBLE_MS
+  return now - result.shownAt < SUCCESS_VISIBLE_MS
 }
 
 export function cloudUpdateBannerVisible(

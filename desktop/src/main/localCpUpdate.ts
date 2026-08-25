@@ -100,7 +100,7 @@ export async function restartAdoptedControlPlaneAfterCliSwap(
       ok: false,
       restarted: false,
       status: 'failed',
-      message: `Could not check the adopted control-plane version: ${detail}. Restart AgentField Desktop to try again.`
+      message: `Could not check the adopted control-plane version: ${detail}. If it is still running the old build, stop the running "af server" process and start it again (af server).`
     })
   }
   if (
