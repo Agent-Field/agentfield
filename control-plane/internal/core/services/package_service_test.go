@@ -132,6 +132,122 @@ func TestNewPackageService(t *testing.T) {
 	assert.Equal(t, agentfieldHome, ps.agentfieldHome)
 }
 
+func TestPackageServiceLocalRegistryUpdatePreservesRunningIntentAndPort(t *testing.T) {
+	home := t.TempDir()
+	port := 8123
+	paused := false
+	registry := packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {
+			Name: "demo", Status: "stopped", DesiredState: packages.DesiredStateRunning,
+			Commit: "previous-commit", Ref: "release", AutoUpdate: &paused, UpdatedAt: "2026-08-20T10:00:00Z",
+			Runtime: packages.RuntimeInfo{Port: &port},
+		},
+	}}
+	data, err := yaml.Marshal(&registry)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644))
+	service := NewPackageService(newMockPackageRegistryStorage(), newMockFileSystemAdapter(), home).(*DefaultPackageService)
+	require.NoError(t, service.updateRegistry(&packages.PackageMetadata{Name: "demo", Version: "2.0.0"}, "/source", "/destination"))
+	updated, err := service.loadRegistryDirect()
+	require.NoError(t, err)
+	entry := updated.Installed["demo"]
+	require.Equal(t, packages.DesiredStateRunning, entry.DesiredState)
+	require.NotNil(t, entry.Runtime.Port)
+	require.Equal(t, port, *entry.Runtime.Port)
+	require.Equal(t, "stopped", entry.Status)
+	require.Equal(t, "previous-commit", entry.Commit)
+	require.Equal(t, "release", entry.Ref)
+	require.Equal(t, "2026-08-20T10:00:00Z", entry.UpdatedAt)
+	require.NotNil(t, entry.AutoUpdate)
+	require.False(t, *entry.AutoUpdate)
+}
+
+func TestForcedLocalReinstallStopsBeforeReplacementAndRestarts(t *testing.T) {
+	home := t.TempDir()
+	source := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(source, "agentfield-package.yaml"), []byte("name: demo\nversion: 2.0.0\nmain: main.py\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "main.py"), []byte("print('new')\n"), 0o644))
+	destination := filepath.Join(home, "packages", "demo")
+	require.NoError(t, os.MkdirAll(destination, 0o755))
+	marker := filepath.Join(destination, "old-version")
+	require.NoError(t, os.WriteFile(marker, []byte("old"), 0o644))
+	port := 8123
+	data, err := yaml.Marshal(packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {
+			Name: "demo", Path: destination, Status: "running",
+			Runtime: packages.RuntimeInfo{Port: &port},
+		},
+	}})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644))
+
+	stopped := false
+	restarted := false
+	service := &DefaultPackageService{agentfieldHome: home}
+	service.stopForReinstall = func(name string) (packages.ReinstallState, error) {
+		stopped = true
+		require.Equal(t, "demo", name)
+		_, statErr := os.Stat(marker)
+		require.NoError(t, statErr, "old files must still exist when stop begins")
+		return packages.ReinstallState{WasRunning: true, PreferredPort: port}, nil
+	}
+	service.restartAfterReinstall = func(name string, state packages.ReinstallState) error {
+		restarted = true
+		require.True(t, stopped)
+		require.Equal(t, "demo", name)
+		require.Equal(t, port, state.PreferredPort)
+		_, statErr := os.Stat(marker)
+		require.True(t, os.IsNotExist(statErr), "old files must be replaced before restart")
+		registry, loadErr := service.loadRegistryDirect()
+		require.NoError(t, loadErr)
+		require.Equal(t, "2.0.0", registry.Installed["demo"].Version)
+		return nil
+	}
+
+	require.NoError(t, service.InstallPackage(source, domain.InstallOptions{Force: true}))
+	require.True(t, stopped)
+	require.True(t, restarted)
+}
+
+func TestForcedLocalReinstallPropagatesLifecycleErrors(t *testing.T) {
+	setup := func(t *testing.T) (string, string) {
+		t.Helper()
+		home := t.TempDir()
+		source := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(source, "agentfield-package.yaml"), []byte("name: demo\nversion: 2.0.0\nmain: main.py\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(source, "main.py"), []byte("print('new')\n"), 0o644))
+		data, err := yaml.Marshal(packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+			"demo": {Name: "demo", Path: filepath.Join(home, "packages", "demo"), Status: "running"},
+		}})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644))
+		return home, source
+	}
+
+	t.Run("stop failure prevents replacement", func(t *testing.T) {
+		home, source := setup(t)
+		service := &DefaultPackageService{agentfieldHome: home}
+		service.stopForReinstall = func(string) (packages.ReinstallState, error) {
+			return packages.ReinstallState{}, errors.New("stop failed")
+		}
+		err := service.InstallPackage(source, domain.InstallOptions{Force: true})
+		require.ErrorContains(t, err, "stop failed")
+	})
+
+	t.Run("restart failure is returned after replacement", func(t *testing.T) {
+		home, source := setup(t)
+		service := &DefaultPackageService{agentfieldHome: home}
+		service.stopForReinstall = func(string) (packages.ReinstallState, error) {
+			return packages.ReinstallState{WasRunning: true}, nil
+		}
+		service.restartAfterReinstall = func(string, packages.ReinstallState) error {
+			return errors.New("restart failed")
+		}
+		err := service.InstallPackage(source, domain.InstallOptions{Force: true})
+		require.ErrorContains(t, err, "restart failed")
+	})
+}
+
 func TestInstallPackage_GitURL(t *testing.T) {
 	registryStorage := newMockPackageRegistryStorage()
 	fileSystem := newMockFileSystemAdapter()

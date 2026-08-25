@@ -37,19 +37,26 @@ type InstallationRegistry struct {
 }
 
 type InstalledPackage struct {
-	Name        string `yaml:"name"`
-	Version     string `yaml:"version"`
-	Description string `yaml:"description"`
-	Path        string `yaml:"path"`
-	Source      string `yaml:"source"`
-	SourcePath  string `yaml:"source_path"`
-	InstalledAt string `yaml:"installed_at"`
-	Status      string `yaml:"status"`
-	Runtime     struct {
+	Name         string `yaml:"name"`
+	Version      string `yaml:"version"`
+	Description  string `yaml:"description"`
+	Path         string `yaml:"path"`
+	Source       string `yaml:"source"`
+	SourcePath   string `yaml:"source_path"`
+	InstalledAt  string `yaml:"installed_at"`
+	Commit       string `yaml:"commit"`
+	Ref          string `yaml:"ref"`
+	AutoUpdate   *bool  `yaml:"auto_update"`
+	UpdatedAt    string `yaml:"updated_at"`
+	Status       string `yaml:"status"`
+	DesiredState string `yaml:"desired_state"`
+	Runtime      struct {
 		Port      int    `yaml:"port"`
 		PID       int    `yaml:"pid"`
 		StartedAt string `yaml:"started_at"`
 		LogFile   string `yaml:"log_file"`
+		BootID    string `yaml:"boot_id"`
+		StartTime string `yaml:"start_time"`
 	} `yaml:"runtime"`
 }
 
@@ -71,9 +78,11 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 	for pkgName, pkg := range registry.Installed {
 		status := packageStatusFromRegistry(pkg.Status)
 		existing, err := storageProvider.GetAgentPackage(ctx, pkgName)
+		metadata := mirroredPackageMetadata(pkg, existing)
 		if err == nil && existing != nil && installedStatus(existing.Status) &&
 			existing.Status == status && existing.InstallPath == pkg.Path && existing.Version == pkg.Version &&
-			existing.Repository != nil && *existing.Repository == pkg.SourcePath {
+			existing.Repository != nil && *existing.Repository == pkg.SourcePath &&
+			packageMetadataEqual(existing.Metadata, metadata) {
 			continue // Already reconciled
 		}
 		// Load agentfield-package.yaml
@@ -106,6 +115,7 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 			ConfigurationStatus: types.ConfigurationStatusDraft,
 			InstalledAt:         installedAt,
 			UpdatedAt:           now,
+			Metadata:            metadata,
 		}
 		if existing != nil {
 			// Preserve identity fields the catalog row may carry.
@@ -137,6 +147,48 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 		_ = updatePackage(storageProvider, ctx, row)
 	}
 	return nil
+}
+
+func packageMetadataEqual(left, right types.PackageMetadata) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
+}
+
+func mirroredPackageMetadata(pkg InstalledPackage, existing *types.AgentPackage) types.PackageMetadata {
+	metadata := types.PackageMetadata{}
+	if existing != nil {
+		metadata = existing.Metadata
+	}
+	custom := make(map[string]interface{}, len(metadata.Custom)+6)
+	for key, value := range metadata.Custom {
+		custom[key] = value
+	}
+	autoUpdate := true
+	if pkg.AutoUpdate != nil {
+		autoUpdate = *pkg.AutoUpdate
+	}
+	custom["commit"] = pkg.Commit
+	custom["ref"] = pkg.Ref
+	custom["auto_update"] = autoUpdate
+	custom["updated_at"] = pkg.UpdatedAt
+	desiredState := pkg.DesiredState
+	if desiredState == "" {
+		if pkg.Status == "running" {
+			desiredState = "running"
+		} else {
+			desiredState = "stopped"
+		}
+	}
+	custom["desired_state"] = desiredState
+	custom["runtime"] = map[string]interface{}{
+		"port":       pkg.Runtime.Port,
+		"pid":        pkg.Runtime.PID,
+		"boot_id":    pkg.Runtime.BootID,
+		"start_time": pkg.Runtime.StartTime,
+	}
+	metadata.Custom = custom
+	return metadata
 }
 
 func packageStatusFromRegistry(status string) types.PackageStatus {

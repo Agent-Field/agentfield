@@ -64,6 +64,7 @@ func TestListCommandJSON(t *testing.T) {
 				Description: "first node",
 				Status:      "running",
 				Runtime:     packages.RuntimeInfo{Port: &port},
+				Commit:      "0123456789abcdef0123456789abcdef01234567",
 			},
 		},
 	})
@@ -86,6 +87,7 @@ func TestListCommandJSON(t *testing.T) {
 	require.Equal(t, "alpha-node", first["name"])
 	require.Equal(t, "1.0.0", first["version"])
 	require.Equal(t, "running", first["status"])
+	require.Equal(t, "0123456789abcdef0123456789abcdef01234567", first["commit"])
 	require.Equal(t, float64(8005), first["port"])
 
 	second := nodes[1].(map[string]interface{})

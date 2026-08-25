@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
@@ -73,10 +72,12 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 
 	// Use the actual name from registry for all subsequent operations
 	name = actualName
+	legacyDesiredState := agentNode.DesiredState == ""
+	agentNode.EnsureDesiredState()
 
 	// 2. Check current state and reconcile if needed
 	actuallyRunning, wasReconciled := as.reconcileProcessState(&agentNode, name)
-	if wasReconciled {
+	if wasReconciled || legacyDesiredState {
 		// Save reconciled state
 		registry.Installed[name] = agentNode
 		if err := as.saveRegistryDirect(registry); err != nil {
@@ -86,30 +87,50 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 
 	// If actually running after reconciliation, return appropriate message
 	if actuallyRunning {
-		return nil, fmt.Errorf("agent node %s is already running on port %d", name, *agentNode.Runtime.Port)
+		if agentNode.Runtime.Port == nil {
+			agentNode.Status = "stopped"
+			agentNode.Runtime.PID = nil
+			agentNode.Runtime.StartedAt = nil
+			agentNode.Runtime.BootID = ""
+			agentNode.Runtime.StartTime = ""
+			registry.Installed[name] = agentNode
+			if err := as.saveRegistryDirect(registry); err != nil {
+				return nil, fmt.Errorf("failed to reconcile running agent without a port: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("agent node %s is already running on port %d", name, *agentNode.Runtime.Port)
+		}
 	}
 
-	// 2b. Start declared node dependencies first, before allocating this node's
-	// port — each dependency fully binds its own port, avoiding collisions.
+	// Reserve a requested/preferred port before dependencies start. Otherwise
+	// a dependency's FindFreePort can claim the node's restore/update port.
+	var releasePort func()
+	requestedPort := options.Port
+	options.Port, releasePort, err = as.reserveRequestedPort(options.Port, options.PortIsPreference)
+	if err != nil {
+		return nil, err
+	}
+	defer releasePort()
+
+	// 2b. Start declared node dependencies first while the requested node port
+	// is reserved.
 	as.startNodeDependencies(agentNode, inProgress, options)
 
 	// 3. Allocate port
 	fmt.Printf("🔍 Searching for available port...\n")
 	port := options.Port
-	autoAssignedPort := port == 0
-	if autoAssignedPort {
+	if port == 0 {
 		port, err = as.portManager.FindFreePort(8001)
 		if err != nil {
 			return nil, fmt.Errorf("failed to allocate port: %w", err)
 		}
 	}
 
-	// 4-5. Start the process and wait for readiness. Automatically allocated
-	// ports retry exactly once on a fresh port if the node exits with a
-	// strict-port bind conflict. A caller-supplied port is never reassigned:
-	// callers may have firewall, proxy, or service-discovery configuration that
-	// targets that exact port.
-	pid, port, startErr := as.startWithPortRetry(port, autoAssignedPort, func(p int) (int, error, bool) {
+	// 4-5. Start the process and wait for readiness. Automatically allocated and
+	// internal preferred ports retry exactly once on a fresh port after a strict
+	// bind conflict. Explicit user ports fail on the requested port.
+	retryOnConflict := requestedPort <= 0 || options.PortIsPreference
+	pid, port, startErr := as.startWithPortRetry(port, retryOnConflict, func(p int) (int, error, bool) {
 		return as.attemptStart(agentNode, name, p)
 	})
 	if startErr != nil {
@@ -142,6 +163,19 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 	runningAgent.StartedAt = time.Now()
 
 	return &runningAgent, nil
+}
+
+func (as *DefaultAgentService) reserveRequestedPort(port int, allowFallback bool) (int, func(), error) {
+	if port <= 0 {
+		return port, func() {}, nil
+	}
+	if err := as.portManager.ReservePort(port); err != nil {
+		if allowFallback {
+			return 0, func() {}, nil
+		}
+		return 0, func() {}, fmt.Errorf("requested port %d is unavailable: %w", port, err)
+	}
+	return port, func() { _ = as.portManager.ReleasePort(port) }, nil
 }
 
 // attemptStart builds the process config, starts the node on the given port,
@@ -264,6 +298,17 @@ func logIndicatesPortConflict(lines []string) bool {
 
 // StopAgent stops a running agent with robust error handling
 func (as *DefaultAgentService) StopAgent(name string) error {
+	return as.stopAgent(name, false)
+}
+
+// StopAgentForUpdate stops the observed process without changing the user's
+// persisted intent that the package should be running. Package update jobs use
+// this path; API/CLI stops continue to use StopAgent.
+func (as *DefaultAgentService) StopAgentForUpdate(name string) error {
+	return as.stopAgent(name, true)
+}
+
+func (as *DefaultAgentService) stopAgent(name string, preserveDesiredState bool) error {
 	// Load registry to get agent info
 	registry, err := as.loadRegistryDirect()
 	if err != nil {
@@ -278,113 +323,53 @@ func (as *DefaultAgentService) StopAgent(name string) error {
 
 	// Use the actual name from registry for all subsequent operations
 	name = actualName
+	pkg.EnsureDesiredState()
+	desiredStateChanged := false
+	if !preserveDesiredState && pkg.DesiredState != packages.DesiredStateStopped {
+		pkg.DesiredState = packages.DesiredStateStopped
+		desiredStateChanged = true
+	}
 
 	// Check current state and reconcile if needed
 	actuallyRunning, wasReconciled := as.reconcileProcessState(&pkg, name)
-	if wasReconciled {
+	if wasReconciled || desiredStateChanged {
 		// Save reconciled state
 		registry.Installed[name] = pkg
 		if err := as.saveRegistryDirect(registry); err != nil {
-			fmt.Printf("Warning: failed to save reconciled registry state: %v\n", err)
+			return fmt.Errorf("failed to save reconciled registry state: %w", err)
 		}
 	}
 
-	// If not actually running after reconciliation, return appropriate message
+	// An explicit stop is idempotent. Reconciliation may already have observed
+	// the process exit, but the desired stopped state persisted above still
+	// matters because it disarms boot restore.
 	if !actuallyRunning {
-		if pkg.Status == "stopped" {
-			return fmt.Errorf("agent %s is not running", name)
-		} else {
-			// Was marked as running but process was dead - now reconciled
-			fmt.Printf("Agent %s was marked as running but process was not found - state has been corrected\n", name)
-			return nil
-		}
+		return nil
 	}
 
-	// Agent is actually running - proceed with HTTP shutdown
-	if pkg.Runtime.Port == nil {
-		return fmt.Errorf("no port found for agent %s", name)
-	}
-
-	// Try HTTP shutdown first
-	httpShutdownSuccess := false
-	if as.agentClient != nil {
-		fmt.Printf("🛑 Attempting graceful HTTP shutdown for agent %s\n", name)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// Construct node ID from agent name (assuming they match)
-		nodeID := name
-
-		// Try graceful shutdown with 30-second timeout
-		shutdownResp, err := as.agentClient.ShutdownAgent(ctx, nodeID, true, 30)
-		if err == nil && shutdownResp != nil && shutdownResp.Status == "shutting_down" {
-			fmt.Printf("✅ HTTP shutdown request accepted for agent %s\n", name)
-			httpShutdownSuccess = true
-
-			// Wait a moment for the agent to shut down gracefully
-			time.Sleep(2 * time.Second)
-		} else {
-			fmt.Printf("⚠️ HTTP shutdown failed for agent %s: %v\n", name, err)
-		}
-	}
-
-	// If HTTP shutdown failed or not available, fall back to process signals
-	if !httpShutdownSuccess {
-		fmt.Printf("🔄 Falling back to process signal shutdown for agent %s\n", name)
-
-		if pkg.Runtime.PID == nil {
-			return fmt.Errorf("no PID found for agent %s", name)
-		}
-
-		// Stop the process
-		process, err := os.FindProcess(*pkg.Runtime.PID)
+	assessment := packages.AssessRecordedProcess(context.Background(), name, pkg)
+	if assessment.Owned() {
+		result, err := packages.StopRecordedProcess(context.Background(), name, pkg)
 		if err != nil {
-			// Process not found - update registry and return success
-			fmt.Printf("Process %d not found for agent %s - updating registry\n", *pkg.Runtime.PID, name)
-			pkg.Status = "stopped"
-			pkg.Runtime.PID = nil
-			pkg.Runtime.Port = nil
-			pkg.Runtime.StartedAt = nil
-			registry.Installed[name] = pkg
-			if err := as.saveRegistryDirect(registry); err != nil {
-				return fmt.Errorf("failed to update registry: %w", err)
-			}
-			return nil
+			return err
 		}
-
-		// Send SIGTERM first for graceful shutdown
-		if err := process.Signal(os.Interrupt); err != nil {
-			// If graceful shutdown fails, force kill
-			if err := process.Kill(); err != nil {
-				// Handle "process already finished" gracefully
-				if strings.Contains(err.Error(), "process already finished") ||
-					strings.Contains(err.Error(), "no such process") {
-					fmt.Printf("Process %d for agent %s already finished - updating registry\n", *pkg.Runtime.PID, name)
-				} else {
-					return fmt.Errorf("failed to kill process: %w", err)
-				}
-			}
-		} else {
-			// Wait a moment for graceful shutdown, then force kill if needed
-			time.Sleep(3 * time.Second)
-
-			// Check if process is still running
-			if err := process.Signal(syscall.Signal(0)); err == nil {
-				// Process still running, force kill
-				fmt.Printf("⚠️ Process %d still running, force killing agent %s\n", *pkg.Runtime.PID, name)
-				if err := process.Kill(); err != nil && !strings.Contains(err.Error(), "process already finished") {
-					return fmt.Errorf("failed to force kill process: %w", err)
-				}
-			}
+		if result.HTTPAttempted {
+			fmt.Printf("🛑 Attempting graceful HTTP shutdown for agent %s\n", name)
+		}
+		if result.InterruptSent || result.ForceKillNeeded {
+			fmt.Printf("🔄 Falling back to process signal shutdown for agent %s\n", name)
 		}
 	}
 
 	// Update registry to mark as stopped
 	pkg.Status = "stopped"
 	pkg.Runtime.PID = nil
-	pkg.Runtime.Port = nil
+	if !preserveDesiredState {
+		pkg.Runtime.Port = nil
+	}
 	pkg.Runtime.StartedAt = nil
+	pkg.Runtime.BootID = ""
+	pkg.Runtime.StartTime = ""
 	registry.Installed[name] = pkg
 
 	// Save registry
@@ -426,11 +411,11 @@ func (as *DefaultAgentService) GetAgentStatus(name string) (*domain.AgentStatus,
 		IsRunning: actuallyRunning,
 	}
 
-	if pkg.Runtime.Port != nil {
+	if actuallyRunning && pkg.Runtime.Port != nil {
 		status.Port = *pkg.Runtime.Port
 	}
 
-	if pkg.Runtime.PID != nil {
+	if actuallyRunning && pkg.Runtime.PID != nil {
 		status.PID = *pkg.Runtime.PID
 	}
 
@@ -451,46 +436,72 @@ func (as *DefaultAgentService) GetAgentStatus(name string) (*domain.AgentStatus,
 // reconcileProcessState checks if the registry state matches actual process state
 // Returns (actuallyRunning, wasReconciled)
 func (as *DefaultAgentService) reconcileProcessState(pkg *packages.InstalledPackage, name string) (bool, bool) {
+	return as.reconcileProcessStateWithProbe(pkg, name, runtime.GOOS, make(map[int]packages.HealthIdentity), packages.ProbeHealthIdentity)
+}
+
+func (as *DefaultAgentService) reconcileProcessStateWithProbe(
+	pkg *packages.InstalledPackage,
+	name string,
+	goos string,
+	memo map[int]packages.HealthIdentity,
+	probe func(context.Context, int, string) packages.HealthIdentity,
+) (bool, bool) {
+	legacyDesiredState := pkg.DesiredState == ""
+	pkg.EnsureDesiredState()
 	registryRunning := pkg.Status == "running"
 
 	// If registry says not running, trust it (no process to check)
 	if !registryRunning {
-		return false, false
+		return false, legacyDesiredState
 	}
 
 	// Registry says running - verify the process actually exists
-	if pkg.Runtime.PID == nil {
-		// Registry says running but no PID - inconsistent state
-		fmt.Printf("Warning: Agent %s marked as running but no PID found, marking as stopped\n", name)
-		pkg.Status = "stopped"
-		pkg.Runtime.Port = nil
-		pkg.Runtime.StartedAt = nil
-		return false, true
-	}
-
-	// Check if process actually exists
-	process, err := os.FindProcess(*pkg.Runtime.PID)
-	if err != nil {
-		// Process not found - mark as stopped
-		fmt.Printf("Warning: Agent %s process (PID %d) not found, marking as stopped\n", name, *pkg.Runtime.PID)
+	if pkg.Runtime.PID == nil || pkg.Runtime.Port == nil {
+		// A running node needs both fields. In particular, a live-looking PID with
+		// no port cannot be health-checked and must not reach the already-running
+		// projection, which formats the port value.
+		fmt.Printf("Warning: Agent %s marked as running without complete runtime information, marking as stopped\n", name)
 		pkg.Status = "stopped"
 		pkg.Runtime.PID = nil
-		pkg.Runtime.Port = nil
 		pkg.Runtime.StartedAt = nil
+		pkg.Runtime.BootID = ""
+		pkg.Runtime.StartTime = ""
+		return false, true
+	}
+	if goos == "windows" {
+		memoizedProbe := func(ctx context.Context, port int, path string) packages.HealthIdentity {
+			identity, ok := memo[port]
+			if !ok {
+				identity = probe(ctx, port, path)
+				memo[port] = identity
+			}
+			return identity
+		}
+		assessment := packages.AssessRecordedProcessWith(
+			context.Background(), name, *pkg,
+			func(packages.RuntimeInfo) packages.RuntimeProcessState { return packages.RuntimeProcessUnknown },
+			memoizedProbe,
+		)
+		if assessment.Ownership == packages.RecordedProcessOursHealthy {
+			return true, false
+		}
+		fmt.Printf("Warning: Agent %s cannot be found at its recorded health endpoint, marking observed status as stopped\n", name)
+		pkg.Status = "stopped"
+		pkg.Runtime.PID = nil
+		pkg.Runtime.StartedAt = nil
+		pkg.Runtime.BootID = ""
+		pkg.Runtime.StartTime = ""
 		return false, true
 	}
 
-	// On Unix systems, check if process is actually alive
-	if runtime.GOOS != "windows" {
-		if err := process.Signal(syscall.Signal(0)); err != nil {
-			// Process exists but is not alive (zombie or permission issue)
-			fmt.Printf("Warning: Agent %s process (PID %d) not responding, marking as stopped\n", name, *pkg.Runtime.PID)
-			pkg.Status = "stopped"
-			pkg.Runtime.PID = nil
-			pkg.Runtime.Port = nil
-			pkg.Runtime.StartedAt = nil
-			return false, true
-		}
+	if !packages.RuntimePIDAlive(pkg.Runtime) {
+		fmt.Printf("Warning: Agent %s process (PID %d) is not alive, marking observed status as stopped\n", name, *pkg.Runtime.PID)
+		pkg.Status = "stopped"
+		pkg.Runtime.PID = nil
+		pkg.Runtime.StartedAt = nil
+		pkg.Runtime.BootID = ""
+		pkg.Runtime.StartTime = ""
+		return false, true
 	}
 
 	// Process exists and appears to be running
@@ -599,6 +610,7 @@ func (as *DefaultAgentService) startNodeDependencies(node packages.InstalledPack
 		// Dependencies get an auto-assigned port, not the parent's --port.
 		depOptions := options
 		depOptions.Port = 0
+		depOptions.PortIsPreference = false
 		if _, err := as.runAgentGuarded(depName, depOptions, inProgress); err != nil {
 			fmt.Printf("⚠️  Failed to start node dependency %s: %v\n", depName, err)
 		}
@@ -815,9 +827,12 @@ func (as *DefaultAgentService) updateRuntimeInfo(agentNodeName string, port, pid
 	if agentNode, exists := registry.Installed[agentNodeName]; exists {
 		startedAt := time.Now().Format(time.RFC3339)
 		agentNode.Status = "running"
+		agentNode.DesiredState = packages.DesiredStateRunning
 		agentNode.Runtime.Port = &port
 		agentNode.Runtime.PID = &pid
 		agentNode.Runtime.StartedAt = &startedAt
+		agentNode.Runtime.BootID = packages.CurrentBootID()
+		agentNode.Runtime.StartTime = packages.CurrentProcessStartTime(pid)
 		registry.Installed[agentNodeName] = agentNode
 	}
 

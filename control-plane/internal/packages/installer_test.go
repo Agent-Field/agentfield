@@ -326,3 +326,34 @@ func TestPackageUninstallerLifecycle(t *testing.T) {
 		t.Fatalf("expected missing PID error, got %v", err)
 	}
 }
+
+func TestLocalRegistryUpdatePreservesRunningIntentAndPort(t *testing.T) {
+	home := t.TempDir()
+	port := 8123
+	paused := false
+	registry := InstallationRegistry{Installed: map[string]InstalledPackage{
+		"demo": {
+			Name: "demo", Status: "stopped", DesiredState: DesiredStateRunning,
+			Commit: "previous-commit", Ref: "release", AutoUpdate: &paused, UpdatedAt: "2026-08-20T10:00:00Z",
+			Runtime: RuntimeInfo{Port: &port},
+		},
+	}}
+	data, err := yaml.Marshal(&registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	installer := &PackageInstaller{AgentFieldHome: home}
+	if err := installer.updateRegistry(&PackageMetadata{Name: "demo", Version: "2.0.0"}, "/source", "/destination"); err != nil {
+		t.Fatal(err)
+	}
+	updated := readRegistryFile(t, filepath.Join(home, "installed.yaml")).Installed["demo"]
+	if updated.DesiredState != DesiredStateRunning || updated.Runtime.Port == nil || *updated.Runtime.Port != port || updated.Status != "stopped" {
+		t.Fatalf("updated registry entry = %+v", updated)
+	}
+	if updated.Commit != "previous-commit" || updated.Ref != "release" || updated.UpdatedAt != "2026-08-20T10:00:00Z" || updated.AutoUpdate == nil || *updated.AutoUpdate {
+		t.Fatalf("forced local reinstall lost update policy/provenance: %+v", updated)
+	}
+}

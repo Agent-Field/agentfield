@@ -188,15 +188,53 @@ type InstallationRegistry struct {
 
 // InstalledPackage represents an installed package entry
 type InstalledPackage struct {
-	Name        string      `yaml:"name"`
-	Version     string      `yaml:"version"`
-	Description string      `yaml:"description"`
-	Path        string      `yaml:"path"`
-	Source      string      `yaml:"source"`
-	SourcePath  string      `yaml:"source_path"`
-	InstalledAt string      `yaml:"installed_at"`
-	Status      string      `yaml:"status"`
-	Runtime     RuntimeInfo `yaml:"runtime"`
+	Name         string      `yaml:"name"`
+	Version      string      `yaml:"version"`
+	Description  string      `yaml:"description"`
+	Path         string      `yaml:"path"`
+	Source       string      `yaml:"source"`
+	SourcePath   string      `yaml:"source_path"`
+	InstalledAt  string      `yaml:"installed_at"`
+	Commit       string      `yaml:"commit,omitempty"`
+	Ref          string      `yaml:"ref,omitempty"`
+	AutoUpdate   *bool       `yaml:"auto_update,omitempty"`
+	UpdatedAt    string      `yaml:"updated_at,omitempty"`
+	Status       string      `yaml:"status"`
+	DesiredState string      `yaml:"desired_state,omitempty"`
+	Runtime      RuntimeInfo `yaml:"runtime"`
+}
+
+const (
+	DesiredStateRunning = "running"
+	DesiredStateStopped = "stopped"
+)
+
+// AutoUpdateEnabled implements the registry contract that an omitted
+// auto_update value means enabled while retaining an explicit false value.
+func (p InstalledPackage) AutoUpdateEnabled() bool {
+	return p.AutoUpdate == nil || *p.AutoUpdate
+}
+
+// EffectiveDesiredState upgrades legacy entries in memory: before
+// desired_state existed, status was the only persisted indication of whether
+// the user expected a node to be running.
+func (p InstalledPackage) EffectiveDesiredState() string {
+	if p.DesiredState != "" {
+		return p.DesiredState
+	}
+	if p.Status == "running" {
+		return DesiredStateRunning
+	}
+	return DesiredStateStopped
+}
+
+// EnsureDesiredState performs the one-time legacy derivation before callers
+// mutate observed status.
+func (p *InstalledPackage) EnsureDesiredState() string {
+	if p.DesiredState == "" {
+		p.DesiredState = p.EffectiveDesiredState()
+	}
+	return p.DesiredState
 }
 
 // RuntimeInfo represents runtime information for a package
@@ -205,6 +243,8 @@ type RuntimeInfo struct {
 	PID       *int    `yaml:"pid"`
 	StartedAt *string `yaml:"started_at"`
 	LogFile   string  `yaml:"log_file"`
+	BootID    string  `yaml:"boot_id,omitempty"`
+	StartTime string  `yaml:"start_time,omitempty"`
 }
 
 // PackageInstaller handles package installation
@@ -1108,18 +1148,26 @@ func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath
 	}
 	fmt.Printf("📁 Created logs directory: %s\n", logsDir)
 
-	// Add/update package entry
+	previous := registry.Installed[metadata.Name]
+	// Add/update package entry. A reinstall replaces the observed process, but
+	// preserves whether the user intended the node to be running and its preferred
+	// port so maintenance can restore it safely.
 	registry.Installed[metadata.Name] = InstalledPackage{
-		Name:        metadata.Name,
-		Version:     metadata.Version,
-		Description: metadata.Description,
-		Path:        destPath,
-		Source:      "local",
-		SourcePath:  sourcePath,
-		InstalledAt: time.Now().Format(time.RFC3339),
-		Status:      "stopped",
+		Name:         metadata.Name,
+		Version:      metadata.Version,
+		Description:  metadata.Description,
+		Path:         destPath,
+		Source:       "local",
+		SourcePath:   sourcePath,
+		InstalledAt:  time.Now().Format(time.RFC3339),
+		Commit:       previous.Commit,
+		Ref:          previous.Ref,
+		AutoUpdate:   previous.AutoUpdate,
+		UpdatedAt:    previous.UpdatedAt,
+		Status:       "stopped",
+		DesiredState: previous.EffectiveDesiredState(),
 		Runtime: RuntimeInfo{
-			Port:      nil,
+			Port:      previous.Runtime.Port,
 			PID:       nil,
 			StartedAt: nil,
 			LogFile:   filepath.Join(pi.AgentFieldHome, "logs", metadata.Name+".log"),

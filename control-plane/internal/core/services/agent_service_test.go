@@ -3,9 +3,13 @@ package services
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -457,15 +461,315 @@ func TestStopAgent_Success(t *testing.T) {
 	).(*DefaultAgentService)
 
 	err := service.StopAgent("test-agent")
-	// This will fail because we can't easily mock os.FindProcess
-	// The reconcileProcessState will detect PID 12345 doesn't exist and mark agent as stopped
-	// Then StopAgent will return "not running" error since the process doesn't actually exist
+	assert.NoError(t, err, "stopping an already-dead installed agent is idempotent")
+}
+
+func TestReconcileProcessStateUsesCheapPIDProbeForStatusReads(t *testing.T) {
+	service := newStartupTestService(t, newMockPortManager())
+	pid := os.Getpid()
+	port := 8123
+	pkg := &packages.InstalledPackage{
+		Name: "recycled", Status: "running",
+		Runtime: packages.RuntimeInfo{PID: &pid, Port: &port, StartTime: "different-process"},
+	}
+	alive, reconciled := service.reconcileProcessState(pkg, "recycled")
+	if !alive || reconciled {
+		t.Fatalf("alive=%v reconciled=%v, want a cheap live projection without identity reconciliation", alive, reconciled)
+	}
+	if pkg.Status != "running" || pkg.DesiredState != packages.DesiredStateRunning || pkg.Runtime.PID == nil || pkg.Runtime.StartTime != "different-process" {
+		t.Fatalf("status projection performed an expensive identity reconciliation: %+v", pkg)
+	}
+}
+
+func TestWindowsProcessReconciliationUsesMemoizedHealthIdentityForEveryEntry(t *testing.T) {
+	service := &DefaultAgentService{}
+	port, pid := 8123, 42
+	memo := make(map[int]packages.HealthIdentity)
+	probeCalls := 0
+	probe := func(context.Context, int, string) packages.HealthIdentity {
+		probeCalls++
+		return packages.HealthIdentity{Healthy: true, NodeID: "demo_node"}
+	}
+	for iteration := 0; iteration < 2; iteration++ {
+		pkg := packages.InstalledPackage{
+			Name: "demo-node", Status: "running", DesiredState: packages.DesiredStateRunning,
+			Runtime: packages.RuntimeInfo{Port: &port, PID: &pid, StartTime: "recorded-even-though-windows-status-must-probe"},
+		}
+		running, reconciled := service.reconcileProcessStateWithProbe(&pkg, "demo-node", "windows", memo, probe)
+		if !running || reconciled || pkg.Status != "running" {
+			t.Fatalf("iteration=%d running=%v reconciled=%v pkg=%+v", iteration, running, reconciled, pkg)
+		}
+	}
+	if probeCalls != 1 {
+		t.Fatalf("health probe calls=%d, want one per memoized status read", probeCalls)
+	}
+
+	for _, test := range []struct {
+		name           string
+		identity       packages.HealthIdentity
+		wantRunning    bool
+		wantReconciled bool
+	}{
+		{name: "silent port", identity: packages.HealthIdentity{}, wantReconciled: true},
+		{name: "anonymous Go health", identity: packages.HealthIdentity{Healthy: true}, wantRunning: true},
+		{name: "foreign node", identity: packages.HealthIdentity{Healthy: true, NodeID: "somebody-else"}, wantReconciled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pkg := packages.InstalledPackage{
+				Name: "demo-node", Status: "running", DesiredState: packages.DesiredStateRunning,
+				Runtime: packages.RuntimeInfo{Port: &port, PID: &pid, StartTime: "recorded"},
+			}
+			running, reconciled := service.reconcileProcessStateWithProbe(
+				&pkg, "demo-node", "windows", make(map[int]packages.HealthIdentity),
+				func(context.Context, int, string) packages.HealthIdentity { return test.identity },
+			)
+			if running != test.wantRunning || reconciled != test.wantReconciled {
+				t.Fatalf("identity=%+v running=%v reconciled=%v pkg=%+v", test.identity, running, reconciled, pkg)
+			}
+			if test.wantRunning {
+				if pkg.Status != "running" || pkg.Runtime.PID == nil {
+					t.Fatalf("anonymous healthy Windows status cleared runtime: %+v", pkg)
+				}
+			} else if pkg.Status != "stopped" || pkg.Runtime.PID != nil {
+				t.Fatalf("dead/foreign Windows status was not reconciled: %+v", pkg)
+			}
+		})
+	}
+}
+
+func TestStopAgentForUpdateStopsLegacyGoNodeWithAnonymousHealthBySignal(t *testing.T) {
+	home := t.TempDir()
+	pkgDir := filepath.Join(home, "packages", "demo")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"), []byte("name: demo\nversion: 1.0.0\nlanguage: go\nagent_node:\n  node_id: demo\n"), 0o600))
+	cmd := exec.Command("sh", "-c", "trap 'exit 0' INT; while :; do sleep 1; done")
+	require.NoError(t, cmd.Start())
+	done := make(chan struct{})
+	go func() { _, _ = cmd.Process.Wait(); close(done) }()
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		default:
+			_ = cmd.Process.Kill()
+			<-done
+		}
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := listener.Addr().(*net.TCPAddr).Port
+	var shutdowns atomic.Int32
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/health" {
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		shutdowns.Add(1)
+		http.NotFound(w, request)
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	pid := cmd.Process.Pid
+	createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {
+			Name: "demo", Path: pkgDir, Status: "running", DesiredState: packages.DesiredStateRunning,
+			Runtime: packages.RuntimeInfo{Port: &port, PID: &pid},
+		},
+	}})
+	service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), nil, home).(*DefaultAgentService)
+	require.NoError(t, service.StopAgentForUpdate("demo"))
+	require.Equal(t, int32(0), shutdowns.Load())
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Go node was not interrupted after its unsupported shutdown route was skipped")
+	}
+	registry, err := service.loadRegistryDirect()
+	require.NoError(t, err)
+	entry := registry.Installed["demo"]
+	require.Equal(t, "stopped", entry.Status)
+	require.Equal(t, packages.DesiredStateRunning, entry.DesiredState)
+	require.Nil(t, entry.Runtime.PID)
+	require.NotNil(t, entry.Runtime.Port)
+}
+
+func TestStopAgentOwnershipAcrossExplicitAndUpdateStops(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		stop      func(*DefaultAgentService, string) error
+		wantState string
+		keepPort  bool
+	}{
+		{name: "explicit stop", stop: func(service *DefaultAgentService, name string) error { return service.StopAgent(name) }, wantState: packages.DesiredStateStopped},
+		{name: "update stop", stop: func(service *DefaultAgentService, name string) error { return service.StopAgentForUpdate(name) }, wantState: packages.DesiredStateRunning, keepPort: true},
+	} {
+		t.Run(test.name+" accepts equivalent node id and uses graceful HTTP", func(t *testing.T) {
+			home := t.TempDir()
+			cmd := exec.Command("sleep", "30")
+			require.NoError(t, cmd.Start())
+			done := make(chan struct{})
+			go func() { _, _ = cmd.Process.Wait(); close(done) }()
+			t.Cleanup(func() {
+				select {
+				case <-done:
+				default:
+					_ = cmd.Process.Kill()
+					<-done
+				}
+			})
+
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			port := listener.Addr().(*net.TCPAddr).Port
+			var shutdowns atomic.Int32
+			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/health" {
+					_, _ = w.Write([]byte(`{"node_id":"DEMO_NODE"}`))
+					return
+				}
+				shutdowns.Add(1)
+				_ = cmd.Process.Kill()
+				w.WriteHeader(http.StatusOK)
+			})}
+			go func() { _ = server.Serve(listener) }()
+			t.Cleanup(func() { _ = server.Close() })
+
+			pid := cmd.Process.Pid
+			createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+				"demo-node": {
+					Name: "demo-node", Status: "running", DesiredState: packages.DesiredStateRunning,
+					Runtime: packages.RuntimeInfo{Port: &port, PID: &pid, StartTime: packages.CurrentProcessStartTime(pid)},
+				},
+			}})
+			service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), nil, home).(*DefaultAgentService)
+			require.NoError(t, test.stop(service, "demo-node"))
+			require.Equal(t, int32(1), shutdowns.Load())
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("graceful HTTP path did not stop equivalent node")
+			}
+			registry, err := service.loadRegistryDirect()
+			require.NoError(t, err)
+			entry := registry.Installed["demo-node"]
+			require.Equal(t, "stopped", entry.Status)
+			require.Equal(t, test.wantState, entry.DesiredState)
+			if test.keepPort {
+				require.NotNil(t, entry.Runtime.Port)
+			} else {
+				require.Nil(t, entry.Runtime.Port)
+			}
+		})
+
+		t.Run(test.name+" rejects foreign port without signalling PID", func(t *testing.T) {
+			home := t.TempDir()
+			cmd := exec.Command("sleep", "30")
+			require.NoError(t, cmd.Start())
+			t.Cleanup(func() {
+				_ = cmd.Process.Kill()
+				_, _ = cmd.Process.Wait()
+			})
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			port := listener.Addr().(*net.TCPAddr).Port
+			var shutdowns atomic.Int32
+			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/health" {
+					_, _ = w.Write([]byte(`{"node_id":"somebody-else"}`))
+					return
+				}
+				shutdowns.Add(1)
+			})}
+			go func() { _ = server.Serve(listener) }()
+			t.Cleanup(func() { _ = server.Close() })
+
+			pid := cmd.Process.Pid
+			createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+				"demo-node": {
+					Name: "demo-node", Status: "running", DesiredState: packages.DesiredStateRunning,
+					Runtime: packages.RuntimeInfo{Port: &port, PID: &pid, StartTime: packages.CurrentProcessStartTime(pid)},
+				},
+			}})
+			service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), nil, home).(*DefaultAgentService)
+			require.NoError(t, test.stop(service, "demo-node"))
+			require.Zero(t, shutdowns.Load())
+			require.True(t, packages.RuntimePIDAlive(packages.RuntimeInfo{PID: &pid}), "foreign port caused recorded PID to be signalled")
+			registry, err := service.loadRegistryDirect()
+			require.NoError(t, err)
+			entry := registry.Installed["demo-node"]
+			require.Equal(t, "stopped", entry.Status)
+			require.Equal(t, test.wantState, entry.DesiredState)
+		})
+	}
+}
+
+func TestGetAgentStatusHidesPreservedPortWhenStopped(t *testing.T) {
+	home := t.TempDir()
+	port := 8123
+	createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped", DesiredState: packages.DesiredStateRunning, Runtime: packages.RuntimeInfo{Port: &port}},
+	}})
+	service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), nil, home).(*DefaultAgentService)
+	status, err := service.GetAgentStatus("demo")
 	if err != nil {
-		// We expect "not running" since the fake PID doesn't exist in the test environment
-		// The key is that it got past the registry lookup (no "not installed" error)
-		assert.NotContains(t, err.Error(), "not installed")
-		// After reconciliation, it should return "not running" for non-existent PIDs
-		assert.Contains(t, err.Error(), "not running")
+		t.Fatal(err)
+	}
+	if status.IsRunning || status.Port != 0 {
+		t.Fatalf("status = %+v, want stopped with zero projected port", status)
+	}
+	registry, err := service.loadRegistryDirect()
+	if err != nil || registry.Installed["demo"].Runtime.Port == nil || *registry.Installed["demo"].Runtime.Port != port {
+		t.Fatalf("preferred registry port was not retained: registry=%+v err=%v", registry, err)
+	}
+}
+
+func TestUpdateRuntimeInfoRecordsRunningIntentAndProcessIdentity(t *testing.T) {
+	home := t.TempDir()
+	createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {Name: "demo"},
+	}})
+	service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), nil, home).(*DefaultAgentService)
+	if err := service.updateRuntimeInfo("demo", 8123, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "installed.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registry packages.InstallationRegistry
+	if err := yaml.Unmarshal(data, &registry); err != nil {
+		t.Fatal(err)
+	}
+	if registry.Installed["demo"].Runtime.BootID != packages.CurrentBootID() {
+		t.Fatalf("boot_id = %q, want %q", registry.Installed["demo"].Runtime.BootID, packages.CurrentBootID())
+	}
+	if registry.Installed["demo"].DesiredState != packages.DesiredStateRunning {
+		t.Fatalf("desired_state = %q, want running", registry.Installed["demo"].DesiredState)
+	}
+	if got := registry.Installed["demo"].Runtime.StartTime; got == "" || got != packages.CurrentProcessStartTime(os.Getpid()) {
+		t.Fatalf("start_time = %q", got)
+	}
+}
+
+func TestExplicitStopPersistsStoppedIntentForDeadProcess(t *testing.T) {
+	home := t.TempDir()
+	pid := 99999999
+	port := 8123
+	createTestRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "running", DesiredState: packages.DesiredStateRunning, Runtime: packages.RuntimeInfo{PID: &pid, Port: &port, StartTime: "gone"}},
+	}})
+	service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), nil, home).(*DefaultAgentService)
+	_ = service.StopAgent("demo")
+	data, err := os.ReadFile(filepath.Join(home, "installed.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registry packages.InstallationRegistry
+	if err := yaml.Unmarshal(data, &registry); err != nil {
+		t.Fatal(err)
+	}
+	entry := registry.Installed["demo"]
+	if entry.DesiredState != packages.DesiredStateStopped {
+		t.Fatalf("desired_state = %q, want stopped", entry.DesiredState)
 	}
 }
 
@@ -545,8 +849,12 @@ func TestGetAgentStatus_Success(t *testing.T) {
 	// Since PID 12345 doesn't exist, reconcileProcessState will mark it as stopped
 	// The test verifies the agent is found in registry and basic fields are populated
 	assert.False(t, status.IsRunning) // Process doesn't actually exist
-	assert.Equal(t, 0, status.Port)   // Cleared by reconciliation
+	assert.Equal(t, 0, status.Port)   // Stopped status never advertises a live endpoint
 	assert.Equal(t, 0, status.PID)    // Cleared by reconciliation
+	refreshed, loadErr := service.loadRegistryDirect()
+	require.NoError(t, loadErr)
+	require.NotNil(t, refreshed.Installed["test-agent"].Runtime.Port)
+	assert.Equal(t, 8001, *refreshed.Installed["test-agent"].Runtime.Port) // Restore preference is retained privately.
 }
 
 func TestGetAgentStatus_NotInstalled(t *testing.T) {
@@ -615,7 +923,9 @@ func TestReconcileProcessState_ProcessNotRunning(t *testing.T) {
 	assert.True(t, wasReconciled)
 	assert.Equal(t, "stopped", pkg.Status)
 	assert.Nil(t, pkg.Runtime.PID)
-	assert.Nil(t, pkg.Runtime.Port)
+	require.NotNil(t, pkg.Runtime.Port)
+	assert.Equal(t, port, *pkg.Runtime.Port)
+	assert.Equal(t, packages.DesiredStateRunning, pkg.DesiredState)
 }
 
 func TestReconcileProcessState_ProcessRunning(t *testing.T) {

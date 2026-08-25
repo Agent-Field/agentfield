@@ -2,6 +2,7 @@ package packages
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -21,6 +22,7 @@ type GitPackageInfo struct {
 	URL      string // Original URL provided by user
 	Ref      string // branch, tag, or commit (optional)
 	CloneURL string // URL for git clone (may be same as URL)
+	Commit   string // Resolved HEAD of the shallow clone
 	// Subdir is an optional path inside the repository whose
 	// agentfield-package.yaml is the package to install — the `//` selector
 	// in e.g. https://github.com/Agent-Field/pr-af//go. Lets one repo ship
@@ -38,6 +40,17 @@ type GitInstaller struct {
 	// subdirectory becomes the package root that is copied and installed. It
 	// composes with an @ref pin on the URL, which is parsed independently.
 	Subdir string
+	// ExpectedName is set only for unattended updates. It permits redirects
+	// that keep the installed name and rejects a rename before any replacement
+	// package is copied.
+	ExpectedName string
+	// BeforeForceInstall stops an existing running package before its files are
+	// replaced. Tests and higher-level callers may inject the lifecycle effect;
+	// the default uses the persisted PID identity directly.
+	BeforeForceInstall func(name string) error
+	// AfterForceInstall restarts a package that was running before replacement.
+	// The default runner prefers the previous port when it is still free.
+	AfterForceInstall func(name string, state ReinstallState) error
 
 	// redirects counts how many superseded_by hops led here, bounding a cycle
 	// (A superseded by B, B superseded by A) instead of cloning forever.
@@ -219,6 +232,9 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse package metadata: %w", err)
 	}
+	if gi.ExpectedName != "" && metadata.Name != gi.ExpectedName {
+		return fmt.Errorf("unattended update of %s would rename the package to %s", gi.ExpectedName, metadata.Name)
+	}
 
 	// 4. A superseded package installs its successor instead. This runs before
 	// the force check and before anything is copied, so a redirect never
@@ -235,8 +251,29 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	}
 
 	// Check if already installed
-	if !force && installer.isPackageInstalled(metadata.Name) {
+	replacing := installer.isPackageInstalled(metadata.Name)
+	if !force && replacing {
 		return fmt.Errorf("package %s already installed (use --force to reinstall)", metadata.Name)
+	}
+	reinstallState := ReinstallState{}
+	if force && replacing {
+		stop := gi.BeforeForceInstall
+		if stop == nil {
+			var stateErr error
+			reinstallState, stateErr = StopPackageForReinstall(context.Background(), gi.AgentFieldHome, metadata.Name)
+			if stateErr != nil {
+				return fmt.Errorf("failed to stop %s before reinstall: %w", metadata.Name, stateErr)
+			}
+		} else {
+			var stateErr error
+			reinstallState, stateErr = PackageReinstallState(gi.AgentFieldHome, metadata.Name)
+			if stateErr != nil {
+				return fmt.Errorf("failed to read %s before reinstall: %w", metadata.Name, stateErr)
+			}
+			if err := stop(metadata.Name); err != nil {
+				return fmt.Errorf("failed to stop %s before reinstall: %w", metadata.Name, err)
+			}
+		}
 	}
 
 	// Install using existing flow
@@ -249,15 +286,18 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	// directory aside instead, and put it back if anything below fails.
 	backup, err := stashExistingPackage(destPath)
 	if err != nil {
-		return err
+		return gi.finishFailedReinstall(metadata.Name, reinstallState, nil, err)
 	}
 
 	spinner = gi.newSpinner("Setting up environment")
 	spinner.Start()
 	if err := installer.copyPackage(packagePath, destPath); err != nil {
 		spinner.Error("Failed to copy package")
-		backup.restore()
-		return fmt.Errorf("failed to copy package: %w", err)
+		return gi.finishFailedReinstall(metadata.Name, reinstallState, backup, fmt.Errorf("failed to copy package: %w", err))
+	}
+	if err := backup.restoreFile(".env"); err != nil {
+		spinner.Error("Failed to preserve environment")
+		return gi.finishFailedReinstall(metadata.Name, reinstallState, backup, fmt.Errorf("failed to preserve .env: %w", err))
 	}
 	spinner.Success("Environment configured")
 
@@ -265,17 +305,18 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	spinner.Start()
 	if err := installer.installDependencies(destPath, metadata); err != nil {
 		spinner.Error("Failed to install dependencies")
-		backup.restore()
-		return fmt.Errorf("failed to install dependencies: %w", err)
+		return gi.finishFailedReinstall(metadata.Name, reinstallState, backup, fmt.Errorf("failed to install dependencies: %w", err))
 	}
 	spinner.Success("Dependencies installed")
 
 	// Update registry with Git source information
 	if err := gi.updateRegistryWithGit(metadata, info, packagePath, destPath); err != nil {
-		backup.restore()
-		return fmt.Errorf("failed to update registry: %w", err)
+		return gi.finishFailedReinstall(metadata.Name, reinstallState, backup, fmt.Errorf("failed to update registry: %w", err))
 	}
 	backup.discard()
+	if err := gi.restartAfterForceInstall(metadata.Name, reinstallState); err != nil {
+		return fmt.Errorf("failed to restart %s after reinstall: %w", metadata.Name, err)
+	}
 
 	fmt.Println()
 	fmt.Println(installSummaryPanel(metadata.Name, metadata.Version, info.URL, info.Ref, destPath))
@@ -287,6 +328,39 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	fmt.Println(ui.Title("→ Run: af run " + metadata.Name))
 
 	return nil
+}
+
+func (gi *GitInstaller) restartAfterForceInstall(name string, state ReinstallState) error {
+	if !state.WasRunning {
+		return nil
+	}
+	restart := gi.AfterForceInstall
+	if restart == nil {
+		restart = func(name string, state ReinstallState) error {
+			return RestartPackageAfterReinstall(gi.AgentFieldHome, name, state)
+		}
+	}
+	return restart(name, state)
+}
+
+// finishFailedReinstall restores the previous files before bringing a package
+// that was running before the forced reinstall back online. This keeps a
+// failed update from extending the stop until a later maintenance pass.
+func (gi *GitInstaller) finishFailedReinstall(name string, state ReinstallState, backup *packageBackup, installErr error) error {
+	if backup != nil {
+		backup.restore()
+	}
+	if restartErr := gi.restartAfterForceInstall(name, state); restartErr != nil {
+		return fmt.Errorf("%w (previous package restored but failed to restart: %v)", installErr, restartErr)
+	}
+	return installErr
+}
+
+// stopPackageForReinstall is retained as the package-local compatibility
+// wrapper used by focused tests.
+func stopPackageForReinstall(home, name string) error {
+	_, err := StopPackageForReinstall(context.Background(), home, name)
+	return err
 }
 
 // safeGitRefPattern matches refs (branches, tags, commits) that cannot be
@@ -362,6 +436,20 @@ func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 		}
 
 		return "", fmt.Errorf("git clone failed: %w\nError output: %s", err, stderrStr)
+	}
+
+	revParse := exec.Command("git", "-C", tempDir, "rev-parse", "HEAD")
+	var revStderr bytes.Buffer
+	revParse.Stderr = &revStderr
+	commit, err := revParse.Output()
+	if err != nil {
+		os.RemoveAll(tempDir)
+		return "", fmt.Errorf("failed to resolve cloned commit: %w: %s", err, strings.TrimSpace(revStderr.String()))
+	}
+	info.Commit = strings.TrimSpace(string(commit))
+	if info.Commit == "" {
+		os.RemoveAll(tempDir)
+		return "", fmt.Errorf("failed to resolve cloned commit: git returned an empty HEAD")
 	}
 
 	return tempDir, nil
@@ -456,9 +544,12 @@ func (gi *GitInstaller) followSupersededBy(fromName, target string, force bool) 
 	fmt.Println()
 
 	successor := &GitInstaller{
-		AgentFieldHome: gi.AgentFieldHome,
-		Verbose:        gi.Verbose,
-		redirects:      gi.redirects + 1,
+		AgentFieldHome:     gi.AgentFieldHome,
+		Verbose:            gi.Verbose,
+		redirects:          gi.redirects + 1,
+		ExpectedName:       gi.ExpectedName,
+		BeforeForceInstall: gi.BeforeForceInstall,
+		AfterForceInstall:  gi.AfterForceInstall,
 	}
 	// A successor may carry the same name as the package it retires — that is
 	// a node renaming itself in place, and it is the shape a rename takes when
@@ -556,6 +647,24 @@ func (b *packageBackup) discard() {
 	b.saved = ""
 }
 
+// restoreFile copies one locally-managed file from the stashed install into
+// the replacement. Package copies intentionally exclude .env files, so this
+// is the only point at which plaintext package configuration crosses an
+// update boundary.
+func (b *packageBackup) restoreFile(name string) error {
+	if b == nil || b.saved == "" {
+		return nil
+	}
+	source := filepath.Join(b.saved, name)
+	if _, err := os.Stat(source); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return CopyFile(source, filepath.Join(b.original, name))
+}
+
 // migrateNodeScopedSecrets hands node-scoped secrets to the successor before
 // the old package is uninstalled, which deletes that scope outright. Without
 // this every `af secrets set KEY --node <old>` value is silently lost in the
@@ -645,18 +754,36 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 		sourcePathStr = appendSubdirSelector(sourcePathStr, gi.Subdir)
 	}
 
+	previous := registry.Installed[metadata.Name]
+	desiredState := previous.EffectiveDesiredState()
+	autoUpdate := previous.AutoUpdate
+	if autoUpdate == nil {
+		enabled := true
+		autoUpdate = &enabled
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	installedAt := previous.InstalledAt
+	if installedAt == "" {
+		installedAt = now
+	}
+
 	// Add/update package entry with Git information
 	registry.Installed[metadata.Name] = InstalledPackage{
-		Name:        metadata.Name,
-		Version:     metadata.Version,
-		Description: metadata.Description,
-		Path:        destPath,
-		Source:      sourceType,
-		SourcePath:  sourcePathStr,
-		InstalledAt: time.Now().Format(time.RFC3339),
-		Status:      "stopped",
+		Name:         metadata.Name,
+		Version:      metadata.Version,
+		Description:  metadata.Description,
+		Path:         destPath,
+		Source:       sourceType,
+		SourcePath:   sourcePathStr,
+		InstalledAt:  installedAt,
+		Commit:       info.Commit,
+		Ref:          info.Ref,
+		AutoUpdate:   autoUpdate,
+		UpdatedAt:    now,
+		Status:       "stopped",
+		DesiredState: desiredState,
 		Runtime: RuntimeInfo{
-			Port:      nil,
+			Port:      previous.Runtime.Port,
 			PID:       nil,
 			StartedAt: nil,
 			LogFile:   filepath.Join(gi.AgentFieldHome, "logs", metadata.Name+".log"),

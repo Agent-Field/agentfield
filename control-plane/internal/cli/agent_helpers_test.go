@@ -225,6 +225,7 @@ installed:
   demo:
     name: demo
     version: "1.2.3"
+    commit: 0123456789abcdef0123456789abcdef01234567
     description: example agent
     path: /tmp/demo
     status: running
@@ -238,8 +239,9 @@ installed:
 		require.Contains(t, output, "Installed agent nodes (1)")
 		require.Contains(t, output, "demo")
 		require.Contains(t, output, "v1.2.3")
-		require.Contains(t, output, "8123")    // running node's port cell
-		require.Contains(t, output, "running") // status badge
+		require.Contains(t, output, "01234567") // short installed commit column
+		require.Contains(t, output, "8123")     // running node's port cell
+		require.Contains(t, output, "running")  // status badge
 		_ = port
 		_ = pid
 	})

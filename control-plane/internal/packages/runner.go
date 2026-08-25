@@ -433,6 +433,8 @@ func (ar *AgentNodeRunner) updateRuntimeInfo(agentNodeName string, port, pid int
 		agentNode.Runtime.Port = &port
 		agentNode.Runtime.PID = &pid
 		agentNode.Runtime.StartedAt = &startedAt
+		agentNode.Runtime.BootID = CurrentBootID()
+		agentNode.Runtime.StartTime = CurrentProcessStartTime(pid)
 		registry.Installed[agentNodeName] = agentNode
 	}
 

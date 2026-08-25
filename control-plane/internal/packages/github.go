@@ -378,14 +378,15 @@ func (gi *GitHubInstaller) updateRegistryWithGitHub(metadata *PackageMetadata, i
 
 	// Add/update package entry with GitHub information
 	registry.Installed[metadata.Name] = InstalledPackage{
-		Name:        metadata.Name,
-		Version:     metadata.Version,
-		Description: metadata.Description,
-		Path:        destPath,
-		Source:      "github",
-		SourcePath:  fmt.Sprintf("%s/%s@%s", info.Owner, info.Repo, info.Ref),
-		InstalledAt: time.Now().Format(time.RFC3339),
-		Status:      "stopped",
+		Name:         metadata.Name,
+		Version:      metadata.Version,
+		Description:  metadata.Description,
+		Path:         destPath,
+		Source:       "github",
+		SourcePath:   fmt.Sprintf("%s/%s@%s", info.Owner, info.Repo, info.Ref),
+		InstalledAt:  time.Now().Format(time.RFC3339),
+		Status:       "stopped",
+		DesiredState: DesiredStateStopped,
 		Runtime: RuntimeInfo{
 			Port:      nil,
 			PID:       nil,

@@ -79,6 +79,7 @@ func runListCommandJSON() error {
 			"name":               name,
 			"version":            pkg.Version,
 			"status":             pkg.Status,
+			"commit":             pkg.Commit,
 			"description":        pkg.Description,
 			"health":             h.Display,
 			"health_discrepancy": h.Discrepancy,
@@ -275,6 +276,7 @@ func runListCommand(cmd *cobra.Command, args []string) {
 		rows = append(rows, []string{
 			name,
 			"v" + pkg.Version,
+			shortCommit(pkg.Commit),
 			ui.StatusBadge(pkg.Status),
 			port,
 			h.Display,
@@ -284,7 +286,7 @@ func runListCommand(cmd *cobra.Command, args []string) {
 
 	fmt.Println(ui.Table(
 		fmt.Sprintf("Installed agent nodes (%d)", len(rows)),
-		[]string{"NODE", "VERSION", "STATUS", "PORT", "HEALTH", "DESCRIPTION"},
+		[]string{"NODE", "VERSION", "COMMIT", "STATUS", "PORT", "HEALTH", "DESCRIPTION"},
 		rows,
 	))
 	fmt.Println()
@@ -292,4 +294,15 @@ func runListCommand(cmd *cobra.Command, args []string) {
 		fmt.Println(ui.Muted("STATUS is the local registry; HEALTH is the control plane. (mismatch) marks a disagreement — reconcile with `af stop`/`af run`."))
 	}
 	fmt.Println(ui.Muted("af run <name>  ·  af stop <name>  ·  af logs <name>"))
+}
+
+func shortCommit(commit string) string {
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return "—"
+	}
+	if len(commit) > 8 {
+		return commit[:8]
+	}
+	return commit
 }

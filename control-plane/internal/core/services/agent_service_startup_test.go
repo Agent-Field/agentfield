@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 )
 
@@ -149,30 +151,159 @@ func TestStartWithPortRetry_NoDistinctPortDoesNotRetry(t *testing.T) {
 	}
 }
 
-// Contract: a caller-supplied port is never reassigned after a strict-port
-// conflict because external configuration can depend on that exact port.
-func TestStartWithPortRetry_ExplicitPortDoesNotRetry(t *testing.T) {
+// Contract: an internal restore/update port preference falls back to a fresh port
+// when another process wins the bind race.
+func TestStartWithPortRetry_PreferredPortFallsBackAfterBindConflict(t *testing.T) {
 	pm := newMockPortManager()
+	pm.findFreePortFunc = func(int) (int, error) { return 9124, nil }
 	service := newStartupTestService(t, pm)
 
-	var attempts int
+	var attempted []int
 	attempt := func(p int) (int, error, bool) {
-		attempts++
-		if p != 9123 {
-			t.Errorf("attempted port = %d, want explicitly requested port 9123", p)
+		attempted = append(attempted, p)
+		if len(attempted) == 1 {
+			return 0, errors.New("assigned port unavailable"), true
 		}
-		return 0, errors.New("assigned port unavailable"), true
+		return 99, nil, false
 	}
 
-	_, port, err := captureRetry(t, service, 9123, false, attempt)
+	pid, port, err := captureRetry(t, service, 9123, true, attempt)
+	if err != nil || pid != 99 || port != 9124 {
+		t.Fatalf("pid=%d port=%d err=%v", pid, port, err)
+	}
+	if fmt.Sprint(attempted) != "[9123 9124]" {
+		t.Fatalf("attempted ports = %v", attempted)
+	}
+}
+
+// Contract: a user-supplied port is strict and never silently retries on a
+// different port after a bind conflict.
+func TestStartWithPortRetry_ExplicitPortDoesNotRetry(t *testing.T) {
+	service := newStartupTestService(t, newMockPortManager())
+	attempts := 0
+	_, port, err := captureRetry(t, service, 9123, false, func(p int) (int, error, bool) {
+		attempts++
+		return 0, errors.New("assigned port unavailable"), true
+	})
+	if err == nil || attempts != 1 || port != 9123 {
+		t.Fatalf("attempts=%d port=%d err=%v", attempts, port, err)
+	}
+}
+
+func TestRequestedPortIsReservedAndReleasedOrFallsBack(t *testing.T) {
+	pm := newMockPortManager()
+	var events []string
+	pm.reserveFunc = func(port int) error {
+		events = append(events, fmt.Sprintf("reserve:%d", port))
+		return nil
+	}
+	pm.releaseFunc = func(port int) error {
+		events = append(events, fmt.Sprintf("release:%d", port))
+		return nil
+	}
+	service := newStartupTestService(t, pm)
+	port, release, err := service.reserveRequestedPort(8123, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port != 8123 {
+		t.Fatalf("reserved port = %d", port)
+	}
+	release()
+	if fmt.Sprint(events) != "[reserve:8123 release:8123]" {
+		t.Fatalf("reservation events = %v", events)
+	}
+
+	pm.reserveFunc = func(int) error { return errors.New("occupied") }
+	port, release, err = service.reserveRequestedPort(8123, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if port != 0 {
+		t.Fatalf("occupied requested port = %d, want automatic allocation", port)
+	}
+	if _, _, err := service.reserveRequestedPort(8123, false); err == nil {
+		t.Fatal("occupied explicit port did not fail")
+	}
+}
+
+// Contract: runAgentGuarded reserves the parent's requested port before it
+// starts dependencies, so a dependency can never be allocated that port.
+func TestRunAgentGuardedReservesRequestedPortBeforeDependencies(t *testing.T) {
+	home := t.TempDir()
+	parentDir := filepath.Join(home, "packages", "parent")
+	depDir := filepath.Join(home, "packages", "dep")
+	writeManifest(t, parentDir, "name: parent\nversion: 1.0.0\nentrypoint:\n  start: missing-parent\ndependencies:\n  nodes:\n    - af://registry/dep\n")
+	writeManifest(t, depDir, "name: dep\nversion: 1.0.0\nentrypoint:\n  start: missing-dep\n")
+	writeRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"parent": {Name: "parent", Path: parentDir, Status: "stopped"},
+		"dep":    {Name: "dep", Path: depDir, Status: "stopped"},
+	}})
+
+	reserved := false
+	pm := newMockPortManager()
+	pm.reserveFunc = func(port int) error {
+		if port == 8123 {
+			reserved = true
+		}
+		return nil
+	}
+	pm.findFreePortFunc = func(int) (int, error) {
+		if !reserved {
+			t.Fatal("dependency port allocation ran before parent reservation")
+		}
+		return 8124, nil
+	}
+	processManager := newMockProcessManager()
+	var assigned []string
+	processManager.startFunc = func(config interfaces.ProcessConfig) (int, error) {
+		for _, value := range config.Env {
+			if strings.HasPrefix(value, "PORT=") {
+				assigned = append(assigned, value)
+			}
+		}
+		return 0, errors.New("stop after port assignment")
+	}
+	service := NewAgentService(processManager, pm, newMockRegistryStorage(), nil, home).(*DefaultAgentService)
+	_, err := service.RunAgent("parent", domain.RunOptions{Port: 8123, Detach: true})
 	if err == nil {
-		t.Fatal("expected conflict failure to propagate")
+		t.Fatal("test process manager unexpectedly started the parent")
 	}
-	if attempts != 1 {
-		t.Errorf("explicit port must not retry, got %d attempts", attempts)
+	if len(assigned) < 2 || assigned[0] != "PORT=8124" || assigned[1] != "PORT=8123" {
+		t.Fatalf("assigned ports = %v, want dependency 8124 then parent 8123", assigned)
 	}
-	if port != 9123 {
-		t.Errorf("returned port = %d, want explicitly requested port 9123", port)
+}
+
+func TestRunAgentGuardedReconcilesRunningEntryWithoutPortBeforeRestore(t *testing.T) {
+	home := t.TempDir()
+	pkgDir := filepath.Join(home, "packages", "demo")
+	writeManifest(t, pkgDir, "name: demo\nversion: 1.0.0\nentrypoint:\n  start: missing-demo\n")
+	pid := os.Getpid()
+	writeRegistry(t, home, &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {
+			Name: "demo", Path: pkgDir, Status: "running", DesiredState: packages.DesiredStateRunning,
+			Runtime: packages.RuntimeInfo{PID: &pid},
+		},
+	}})
+
+	pm := newMockPortManager()
+	pm.findFreePortFunc = func(int) (int, error) { return 8123, nil }
+	processManager := newMockProcessManager()
+	processManager.startFunc = func(interfaces.ProcessConfig) (int, error) {
+		return 0, errors.New("stop after reconciliation")
+	}
+	service := NewAgentService(processManager, pm, newMockRegistryStorage(), nil, home).(*DefaultAgentService)
+	if _, err := service.RunAgent("demo", domain.RunOptions{Detach: true}); err == nil || !strings.Contains(err.Error(), "stop after reconciliation") {
+		t.Fatalf("RunAgent error=%v, want normal startup attempt after reconciliation", err)
+	}
+	registry, err := service.loadRegistryDirect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := registry.Installed["demo"]
+	if entry.Status != "stopped" || entry.Runtime.PID != nil {
+		t.Fatalf("malformed running entry was not reconciled before restore: %+v", entry)
 	}
 }
 

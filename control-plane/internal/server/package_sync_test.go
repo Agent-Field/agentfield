@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,6 +77,55 @@ func TestSyncPackagesFromRegistryTracksRecordedSource(t *testing.T) {
 	writeRegistry("https://github.com/owner/latest//go")
 	require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
 	require.Equal(t, "https://github.com/owner/latest//go", *storage.packages["source-agent"].Repository)
+}
+
+func TestSyncPackagesFromRegistryMirrorsUpdateProvenanceAndRuntime(t *testing.T) {
+	home := t.TempDir()
+	pkgDir := filepath.Join(home, "provenance-agent")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"), []byte("name: Provenance Agent\nversion: 1.0.0\n"), 0o600))
+	write := func(commit string, autoUpdate bool) {
+		require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), []byte(fmt.Sprintf(`installed:
+  provenance-agent:
+    name: Provenance Agent
+    version: 1.0.0
+    path: %s
+    source: github
+    source_path: https://github.com/acme/provenance
+    commit: %s
+    ref: main
+    auto_update: %t
+    updated_at: "2026-08-24T19:40:00Z"
+    status: running
+    desired_state: running
+    runtime:
+      port: 8123
+      pid: 42
+      boot_id: boot-a
+      start_time: process-a
+`, pkgDir, commit, autoUpdate)), 0o600))
+	}
+
+	storage := newStubPackageStorage()
+	write("commit-a", false)
+	require.NoError(t, SyncPackagesFromRegistry(home, storage))
+	custom := storage.packages["provenance-agent"].Metadata.Custom
+	require.Equal(t, "commit-a", custom["commit"])
+	require.Equal(t, "main", custom["ref"])
+	require.Equal(t, false, custom["auto_update"])
+	require.Equal(t, "running", custom["desired_state"])
+	runtimeMetadata, ok := custom["runtime"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "boot-a", runtimeMetadata["boot_id"])
+	require.Equal(t, "process-a", runtimeMetadata["start_time"])
+	require.Equal(t, 8123, runtimeMetadata["port"])
+
+	// Provenance-only changes must invalidate the reconciliation fast path.
+	write("commit-b", true)
+	require.NoError(t, SyncPackagesFromRegistry(home, storage))
+	custom = storage.packages["provenance-agent"].Metadata.Custom
+	require.Equal(t, "commit-b", custom["commit"])
+	require.Equal(t, true, custom["auto_update"])
 }
 
 func TestSyncPackagesFromRegistryMapsRunningStatus(t *testing.T) {
