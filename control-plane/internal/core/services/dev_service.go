@@ -414,7 +414,6 @@ func devNodeGet(client *http.Client, url string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	request.Close = true
 	return client.Do(request)
 }
 

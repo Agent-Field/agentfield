@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1373,4 +1374,53 @@ func closedPort(t *testing.T) int {
 	port := listener.Addr().(*net.TCPAddr).Port
 	require.NoError(t, listener.Close())
 	return port
+}
+
+// E24: an explicit start records the intent to run before the node is
+// launched, so a container replacement afterwards restores it — regardless
+// of what desired_state said before (a fresh install records "stopped").
+func TestE24ExplicitStartRecordsRunningIntentBeforeLaunch(t *testing.T) {
+	agentfieldHome := t.TempDir()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := listener.Addr().(*net.TCPAddr).Port
+	node := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"healthy","node_id":"test-agent"}`))
+	}))
+	node.Listener = listener
+	node.Start()
+	t.Cleanup(node.Close)
+
+	registry := &packages.InstallationRegistry{
+		Installed: map[string]packages.InstalledPackage{
+			"test-agent": {
+				Name:         "test-agent",
+				Version:      "1.0.0",
+				Path:         t.TempDir(),
+				Status:       "stopped",
+				DesiredState: packages.DesiredStateStopped,
+				Runtime:      packages.RuntimeInfo{LogFile: filepath.Join(agentfieldHome, "test-agent.log")},
+			},
+		},
+	}
+	createTestRegistry(t, agentfieldHome, registry)
+
+	processManager := newMockProcessManager()
+	processManager.startFunc = func(interfaces.ProcessConfig) (int, error) { return os.Getpid(), nil }
+	processManager.startedPIDs[os.Getpid()] = true
+	portManager := newMockPortManager()
+	portManager.findFreePortFunc = func(int) (int, error) { return port, nil }
+	service := NewAgentService(processManager, portManager, newMockRegistryStorage(), newMockAgentClient(), agentfieldHome).(*DefaultAgentService)
+
+	_, err = service.RunAgent("test-agent", domain.RunOptions{Detach: true})
+	require.NoError(t, err)
+
+	refreshed, err := service.loadRegistryDirect()
+	require.NoError(t, err)
+	entry := refreshed.Installed["test-agent"]
+	assert.Equal(t, packages.DesiredStateRunning, entry.DesiredState, "an explicit start must record running intent")
+	assert.Equal(t, "running", entry.Status)
+	require.NotNil(t, entry.Runtime.Port)
+	assert.Equal(t, port, *entry.Runtime.Port)
 }

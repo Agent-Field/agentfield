@@ -316,7 +316,6 @@ func (ar *AgentNodeRunner) waitForAgentNode(port int, healthPath, expectedNodeID
 		var resp *http.Response
 		err := requestErr
 		if requestErr == nil {
-			request.Close = true
 			resp, err = client.Do(request)
 		}
 		if err == nil && resp.StatusCode == 200 {
@@ -407,7 +406,6 @@ func fetchCapabilityDocument(client *http.Client, port int, path string) (map[st
 	if err != nil {
 		return nil, err
 	}
-	request.Close = true
 	resp, err := client.Do(request)
 	if err != nil {
 		return nil, err

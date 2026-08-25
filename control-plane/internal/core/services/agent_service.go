@@ -99,6 +99,20 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 		}
 	}
 
+	// An explicit start is the user's intent to run. Record it before the
+	// launch so a container replacement during or after this call restores
+	// the node; a stop that lands while the node is still starting is written
+	// after this point and wins, because updateRuntimeInfo never overrides
+	// desired_state.
+	if agentNode.DesiredState != packages.DesiredStateRunning {
+		agentNode.DesiredState = packages.DesiredStateRunning
+		if err := as.updateRegistryEntry(name, agentNode); err != nil {
+			// Not fatal here: the runtime write after readiness reports an
+			// unwritable registry with the error callers already handle.
+			fmt.Printf("Warning: failed to record running intent for %s: %v\n", name, err)
+		}
+	}
+
 	// Reserve a requested/preferred port before dependencies start. Otherwise
 	// a dependency's FindFreePort can claim the node's restore/update port.
 	var releasePort func()
@@ -857,7 +871,6 @@ func (as *DefaultAgentService) waitForAgentNode(port int, healthPath, expectedNo
 	for time.Now().Before(deadline) {
 		request, requestErr := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%d%s", port, healthPath), nil)
 		if requestErr == nil {
-			request.Close = true
 		}
 		var resp *http.Response
 		err := requestErr

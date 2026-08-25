@@ -306,7 +306,6 @@ func requestHTTPShutdown(ctx context.Context, port int) (accepted bool, timedOut
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "AgentField-CLI/1.0")
-	request.Close = true
 	response, err := NewNodeHTTPClient(shutdownRequestTimeout).Do(request)
 	if err != nil {
 		var netErr net.Error
