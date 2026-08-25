@@ -596,6 +596,7 @@ func TestAgentServiceRunAgentAdditionalCoverage(t *testing.T) {
 		_, err = service.RunAgent("update-agent", domain.RunOptions{Port: port})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to update runtime info")
+		assert.True(t, processManager.stoppedPIDs[5151], "a node the registry could not record must not be left running")
 	})
 }
 

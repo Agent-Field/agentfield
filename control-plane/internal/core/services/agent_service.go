@@ -153,8 +153,13 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 
 	fmt.Printf("🧠 Agent node registered with AgentField Server\n")
 
-	// 6. Update registry with runtime info
+	// 6. Update registry with runtime info. A node the registry cannot record
+	// must not be left running: the next restore would start another copy
+	// beside it (a full volume, for instance, fails every write).
 	if err := as.updateRuntimeInfo(name, port, pid); err != nil {
+		if stopErr := as.processManager.Stop(pid); stopErr != nil {
+			fmt.Printf("Warning: could not stop unrecorded node %s (pid %d): %v\n", name, pid, stopErr)
+		}
 		return nil, fmt.Errorf("failed to update runtime info: %w", err)
 	}
 
