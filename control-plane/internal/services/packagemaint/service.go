@@ -1088,10 +1088,6 @@ func loadRegistryFile(path string) (*packages.InstallationRegistry, error) {
 	return registry, nil
 }
 
-func writeRegistryFile(path string, registry *packages.InstallationRegistry) error {
-	return packages.WriteInstallationRegistryAtomic(path, registry)
-}
-
 func (s *Service) Entries() ([]updatecheck.Entry, error) {
 	registry, err := s.loadRegistry()
 	if err != nil {
