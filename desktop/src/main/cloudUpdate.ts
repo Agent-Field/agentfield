@@ -29,6 +29,14 @@ function isSemver(value: string | null): value is string {
   return value !== null && /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.test(value)
 }
 
+/** `compareAppVersions` predates build metadata and deliberately exposes an
+ * invalid dotted core as NaN. Keep that uncertainty explicit at update
+ * boundaries so it can never become permission to redeploy. */
+function compareComparableVersions(a: string, b: string): number | null {
+  const comparison = compareAppVersions(a, b)
+  return Number.isFinite(comparison) ? comparison : null
+}
+
 function normalizedUrl(value: string | null | undefined): string | null {
   if (!value) return null
   try {
@@ -83,7 +91,16 @@ export async function checkCloudUpdate(options: CheckCloudUpdateOptions): Promis
       message: 'Could not check Docker Hub for the latest control plane release. Check your connection and try again.'
     }
   }
-  if (current && compareAppVersions(latest, current) > 0) {
+  const comparison = current ? compareComparableVersions(latest, current) : null
+  if (current && comparison === null) {
+    return {
+      status: 'unknown',
+      current,
+      latest,
+      message: `The running control-plane version v${current} cannot be compared safely with v${latest}; automatic updates are unavailable.`
+    }
+  }
+  if (comparison !== null && comparison > 0) {
     return {
       status: 'available',
       current,
@@ -188,6 +205,10 @@ function failedRestoreDetail(error: string): string {
   return match ? `${match[1]} (${match[2]})` : error.trim()
 }
 
+function isRestoreError(error: string): boolean {
+  return error.startsWith('restore ')
+}
+
 /** Turn the boot pass contract into the concise post-update message. */
 export function cloudUpdateMaintenanceMessage(
   target: string,
@@ -195,12 +216,24 @@ export function cloudUpdateMaintenanceMessage(
 ): string {
   const restored = maintenance.last_run?.restored ?? []
   const errors = maintenance.last_run?.errors ?? []
-  if (errors.length === 0) {
-    return `Updated to v${target}. ${restored.length} ${restored.length === 1 ? 'agent' : 'agents'} restored.`
+  const restoreErrors = errors.filter(isRestoreError)
+  const warningCount = errors.length - restoreErrors.length
+  if (restoreErrors.length === 0) {
+    const parts = [
+      `Updated to v${target}.`,
+      `${restored.length} ${restored.length === 1 ? 'agent' : 'agents'} restored.`
+    ]
+    if (warningCount > 0) {
+      parts.push(`${warningCount} maintenance ${warningCount === 1 ? 'warning' : 'warnings'}.`)
+    }
+    return parts.join(' ')
   }
   const parts = [`Updated to v${target}.`]
   if (restored.length > 0) parts.push(`Restored: ${restored.join(', ')}.`)
-  parts.push(`Failed to restore: ${errors.map(failedRestoreDetail).join(', ')}.`)
+  parts.push(`Failed to restore: ${restoreErrors.map(failedRestoreDetail).join(', ')}.`)
+  if (warningCount > 0) {
+    parts.push(`${warningCount} maintenance ${warningCount === 1 ? 'warning' : 'warnings'}.`)
+  }
   return parts.join(' ')
 }
 
@@ -215,7 +248,10 @@ async function waitForBootMaintenance(
   for (;;) {
     try {
       const maintenance = await deps.getMaintenanceStatus()
-      if (maintenance.boot_pass_completed === true) {
+      if (
+        maintenance.boot_restore_completed === true ||
+        maintenance.boot_pass_completed === true
+      ) {
         return cloudUpdateMaintenanceMessage(target, maintenance)
       }
     } catch (error) {
@@ -240,23 +276,40 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Apply through desktop tfstate when it exists, otherwise through the
- * running Railway service identity. Never guesses at an unmanaged Docker CP. */
-export async function applyCloudUpdate(
-  options: ApplyCloudUpdateOptions,
-  deps: ApplyCloudUpdateDeps
-): Promise<CloudUpdateApplyResult> {
-  const targetImage = await resolveCloudImage(deps.fetchImpl ?? fetch)
-  const target = imageVersion(targetImage)
-  if (!targetImage || !target) {
+interface ResolvedCloudUpdateTarget {
+  image: string
+  version: string
+}
+
+async function resolveCloudUpdateTarget(
+  fetchImpl: typeof fetch
+): Promise<ResolvedCloudUpdateTarget | CloudUpdateApplyResult> {
+  const image = await resolveCloudImage(fetchImpl)
+  const version = imageVersion(image)
+  if (!image || !version) {
     return {
       ok: false,
       message: 'Could not resolve the latest stable control plane image from Docker Hub. Check your connection and try again.'
     }
   }
+  return { image, version }
+}
 
+function cloudUpdatePreflight(
+  options: ApplyCloudUpdateOptions,
+  target: string
+): CloudUpdateApplyResult | null {
   const current = options.running?.version ? cleanVersion(options.running.version) : null
-  if (current && compareAppVersions(target, current) === 0) {
+  if (!current) return null
+  const comparison = compareComparableVersions(target, current)
+  if (comparison === null) {
+    return {
+      ok: false,
+      target,
+      message: `Cannot update from running control plane v${current} to v${target} because those versions cannot be compared safely.`
+    }
+  }
+  if (comparison === 0) {
     return {
       ok: true,
       target,
@@ -264,13 +317,44 @@ export async function applyCloudUpdate(
       message: `Control plane is already running v${target}.`
     }
   }
-  if (current && compareAppVersions(target, current) < 0) {
+  if (comparison < 0) {
     return {
       ok: false,
       message: `Refusing to downgrade the running control plane from v${current} to v${target}.`
     }
   }
+  return null
+}
 
+async function applyResolvedCloudUpdate(
+  options: ApplyCloudUpdateOptions,
+  deps: ApplyCloudUpdateDeps,
+  resolved: ResolvedCloudUpdateTarget
+): Promise<CloudUpdateApplyResult> {
+  const targetImage = resolved.image
+  const target = resolved.version
+  const preflight = cloudUpdatePreflight(options, target)
+  if (preflight) return preflight
+  return performResolvedCloudUpdate(options, deps, targetImage, target)
+}
+
+/** Apply through desktop tfstate when it exists, otherwise through the
+ * running Railway service identity. Never guesses at an unmanaged Docker CP. */
+export async function applyCloudUpdate(
+  options: ApplyCloudUpdateOptions,
+  deps: ApplyCloudUpdateDeps
+): Promise<CloudUpdateApplyResult> {
+  const resolved = await resolveCloudUpdateTarget(deps.fetchImpl ?? fetch)
+  if ('ok' in resolved) return resolved
+  return applyResolvedCloudUpdate(options, deps, resolved)
+}
+
+async function performResolvedCloudUpdate(
+  options: ApplyCloudUpdateOptions,
+  deps: ApplyCloudUpdateDeps,
+  targetImage: string,
+  target: string
+): Promise<CloudUpdateApplyResult> {
   try {
     const path = cloudUpdateApplyPath(options)
     if (path === 'tfstate') {
@@ -303,9 +387,12 @@ export async function applyCloudUpdate(
     await sleep(POLL_INTERVAL_MS)
     try {
       const observed = await deps.getVersion()
+      const observedComparison = observed?.version
+        ? compareComparableVersions(cleanVersion(observed.version), target)
+        : null
       if (
         observed?.version && isSemver(cleanVersion(observed.version)) &&
-        compareAppVersions(cleanVersion(observed.version), target) >= 0 &&
+        observedComparison !== null && observedComparison >= 0 &&
         (
           previousDeploymentId === undefined ||
           observed.hosting.deployment_id !== previousDeploymentId
@@ -332,6 +419,7 @@ export async function applyCloudUpdate(
 export interface ApplyCloudUpdateWithRailwayTokenDeps {
   getAccessToken: () => Promise<string | null>
   createApplyDeps: (token: string) => ApplyCloudUpdateDeps
+  fetchImpl?: typeof fetch
 }
 
 /** Resolve deployment identity before requesting Railway auth. Unmanaged
@@ -343,6 +431,10 @@ export async function applyCloudUpdateWithRailwayToken(
   if (cloudUpdateApplyPath(options) === 'none') {
     return { ok: false, message: cloudUpdateApplyUnavailableMessage(options) }
   }
+  const resolved = await resolveCloudUpdateTarget(deps.fetchImpl ?? fetch)
+  if ('ok' in resolved) return resolved
+  const preflight = cloudUpdatePreflight(options, resolved.version)
+  if (preflight) return preflight
   const token = await deps.getAccessToken()
   if (!token) {
     return {
@@ -350,7 +442,7 @@ export async function applyCloudUpdateWithRailwayToken(
       message: 'Sign in to Railway before updating the cloud control plane.'
     }
   }
-  return applyCloudUpdate(options, deps.createApplyDeps(token))
+  return applyResolvedCloudUpdate(options, deps.createApplyDeps(token), resolved)
 }
 
 export interface CloudAutoUpdateStateIdentity {

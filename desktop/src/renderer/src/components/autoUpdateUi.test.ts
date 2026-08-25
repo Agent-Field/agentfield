@@ -3,8 +3,10 @@ import type { CloudUpdateStatus, RailwayStatus, SnapshotAgent } from '../../../s
 import { packageToInstalledAgent } from '../../../main/agentfield'
 import type { PackageInfo } from '../../../main/cpClient'
 import {
+  cloudUpdateApplyFeedback,
   cloudUpdateApplyResultVisible,
   cloudUpdateBannerActionVisible,
+  cloudUpdateBannerCopy,
   cloudUpdateBannerText,
   cloudUpdateBannerVisible
 } from './CloudUpdateBanner'
@@ -160,6 +162,26 @@ describe('cloud update controls and feedback', () => {
     expect(cloudUpdateApplyResultVisible(available, result, 11_000)).toBe(false)
     expect(cloudUpdateApplyResultVisible({ ...available, status: 'current' }, result, 1_001))
       .toBe(false)
+  })
+
+  it('H3 — makes failed apply feedback dismissible, status-scoped, and null-safe', () => {
+    const unknown = status({
+      status: 'unknown',
+      latest: null,
+      message: 'Could not check for updates.'
+    })
+    const failure = {
+      ok: false,
+      message: 'Cloud update failed: Railway denied it.',
+      shownAt: 1_000
+    }
+
+    expect(cloudUpdateApplyResultVisible(unknown, failure, 2_000)).toBe(true)
+    const copy = cloudUpdateBannerCopy(unknown, false, true, failure)
+    expect(copy).toBe('Cloud update failed: Railway denied it.')
+    expect(copy).not.toContain('vnull')
+    expect(cloudUpdateApplyFeedback(failure, { type: 'dismiss' })).toBeNull()
+    expect(cloudUpdateApplyFeedback(failure, { type: 'status' })).toBeNull()
   })
 })
 

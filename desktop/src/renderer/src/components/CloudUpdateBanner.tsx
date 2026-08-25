@@ -3,8 +3,21 @@ import type { CloudUpdateApplyResult, CloudUpdateStatus } from '../../../shared/
 
 const SUCCESS_VISIBLE_MS = 10_000
 
-interface ApplyFeedback extends CloudUpdateApplyResult {
+export interface ApplyFeedback extends CloudUpdateApplyResult {
   shownAt: number
+}
+
+type ApplyFeedbackEvent =
+  | { type: 'apply'; result: ApplyFeedback }
+  | { type: 'dismiss' | 'status' }
+
+/** Apply feedback belongs to one status snapshot: either an explicit dismiss
+ * or the next main-process status publication clears it. */
+export function cloudUpdateApplyFeedback(
+  _current: ApplyFeedback | null,
+  event: ApplyFeedbackEvent
+): ApplyFeedback | null {
+  return event.type === 'apply' ? event.result : null
 }
 
 export function cloudUpdateApplyResultVisible(
@@ -33,11 +46,24 @@ export function cloudUpdateBannerActionVisible(status: CloudUpdateStatus): boole
 }
 
 export function cloudUpdateBannerText(status: CloudUpdateStatus): string {
+  if (status.latest === null) return status.message
   const available = `Control plane v${status.latest} is available`
   if (status.status === 'legacy') {
     return `${available} — this one is too old to report its version`
   }
   return status.canApply ? available : `${available} — update your control plane image`
+}
+
+export function cloudUpdateBannerCopy(
+  status: CloudUpdateStatus,
+  bannerVisible: boolean,
+  resultVisible: boolean,
+  result: ApplyFeedback | null
+): string {
+  const parts: string[] = []
+  if (bannerVisible) parts.push(cloudUpdateBannerText(status))
+  if (resultVisible && result) parts.push(result.message)
+  return parts.join(' · ')
 }
 
 /** Cloud control-plane update strip. It owns a distinct status channel and a
@@ -55,7 +81,10 @@ export function CloudUpdateBanner() {
       setStatus(nextStatus)
       setDismissedVersion(nextSettings.cloud.dismissedUpdateVersion)
     })
-    return window.agentfield.onCloudUpdateStatus(setStatus)
+    return window.agentfield.onCloudUpdateStatus((next) => {
+      setStatus(next)
+      setResult((current) => cloudUpdateApplyFeedback(current, { type: 'status' }))
+    })
   }, [])
 
   useEffect(() => {
@@ -70,26 +99,33 @@ export function CloudUpdateBanner() {
   if (!status || (!bannerVisible && !resultVisible)) return null
 
   const apply = async () => {
-    setResult(null)
+    setResult((current) => cloudUpdateApplyFeedback(current, { type: 'dismiss' }))
     const next = await window.agentfield.applyCloudUpdate()
-    setResult({ ...next, shownAt: Date.now() })
+    setResult((current) => cloudUpdateApplyFeedback(current, {
+      type: 'apply',
+      result: { ...next, shownAt: Date.now() }
+    }))
   }
 
   const dismiss = async () => {
-    if (!status.latest) return
-    await window.agentfield.dismissCloudUpdate(status.latest)
-    setDismissedVersion(status.latest)
+    setResult((current) => cloudUpdateApplyFeedback(current, { type: 'dismiss' }))
+    if (status.latest) {
+      await window.agentfield.dismissCloudUpdate(status.latest)
+      setDismissedVersion(status.latest)
+    }
   }
 
   return (
     <div className="update-banner" role="status">
       <span className="update-banner-text">
-        {cloudUpdateBannerText(status)}
+        {bannerVisible && cloudUpdateBannerText(status)}
         {resultVisible && result && (
-          <span className={result.ok ? '' : 'error-text'}> · {result.message}</span>
+          <span className={result.ok ? '' : 'error-text'}>
+            {bannerVisible ? ' · ' : ''}{result.message}
+          </span>
         )}
       </span>
-      {cloudUpdateBannerActionVisible(status) && (
+      {bannerVisible && cloudUpdateBannerActionVisible(status) && (
         <button
           type="button"
           className="action-button primary"
@@ -102,8 +138,8 @@ export function CloudUpdateBanner() {
       <button
         type="button"
         className="update-banner-dismiss"
-        aria-label="Hide this control plane version"
-        title="Hide this control plane version"
+        aria-label={resultVisible ? 'Dismiss cloud update message' : 'Hide this control plane version'}
+        title={resultVisible ? 'Dismiss cloud update message' : 'Hide this control plane version'}
         onClick={() => void dismiss()}
       >
         ×

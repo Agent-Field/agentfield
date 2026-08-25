@@ -400,6 +400,8 @@ export interface PackageMaintenanceStatus {
   enabled: boolean
   reason: string
   interval: string
+  /** New control planes expose restore completion before update checks finish. */
+  boot_restore_completed?: boolean
   boot_pass_completed: boolean
   hosting: 'railway' | 'docker' | 'local'
   last_run: PackageMaintenanceRun | null

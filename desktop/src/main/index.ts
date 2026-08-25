@@ -556,14 +556,22 @@ function main(): void {
     // Agents view can show the two nodes arriving on a first launch off the
     // poll it already runs.
     ipcMain.handle('agentfield:snapshot', async () => {
-      if (localControlPlaneRestart?.status === 'restart_required' && !settings.cloud.enabled) {
-        try {
+      if (localControlPlaneRestart?.status === 'restart_required') {
+        if (settings.cloud.enabled) {
           localControlPlaneRestart = reconcileLocalControlPlaneRestart(
             localControlPlaneRestart,
-            await createCpClient().getVersion()
+            null,
+            true
           )
-        } catch {
-          // Keep the actionable warning while the local server is unreachable.
+        } else {
+          try {
+            localControlPlaneRestart = reconcileLocalControlPlaneRestart(
+              localControlPlaneRestart,
+              await createCpClient().getVersion()
+            )
+          } catch {
+            // Keep the actionable warning while the local server is unreachable.
+          }
         }
       }
       return getSnapshot({

@@ -28,9 +28,11 @@ const RESTART_VERIFY_TIMEOUT_MS = 30_000
 /** Clear the boot-time warning once the polled local server reaches the CLI. */
 export function reconcileLocalControlPlaneRestart(
   status: LocalControlPlaneRestartStatus | null,
-  running: ControlPlaneVersion | null
+  running: ControlPlaneVersion | null,
+  cloudEnabled = false
 ): LocalControlPlaneRestartStatus | null {
   if (status?.status !== 'restart_required' || !status.targetVersion) return status
+  if (cloudEnabled) return null
   const current = running?.version?.replace(/^v/, '')
   const target = status.targetVersion.replace(/^v/, '')
   if (
@@ -118,7 +120,7 @@ export async function restartAdoptedControlPlaneAfterCliSwap(
     ok: false,
     restarted: false,
     status: 'restart_required' as const,
-    message: `AgentField CLI updated to v${input.cliVersion}. Restart the local control plane: stop the running "af server" process and start it again (if AgentField Desktop started it, quit and reopen the app).`,
+    message: `AgentField CLI updated to v${input.cliVersion}. Restart the local control plane: stop the running "af server" process and start it again (af server), or restart this machine.`,
     targetVersion: input.cliVersion ?? undefined
   })
   if (!deps.restartControlPlane) return restartRequired()
