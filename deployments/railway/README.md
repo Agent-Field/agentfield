@@ -96,7 +96,7 @@ control-plane maintenance by default:
   old process is no longer alive. Their previous port is reused when available.
 - Legacy runtime records that have `started_at` but no process `start_time`
   still receive PID-reuse protection: the observed process start must fall
-  between 180 seconds before and 30 seconds after `started_at`. A process
+  between 180 seconds before and 5 seconds after `started_at`. A process
   outside that window is treated as a different process and is never signalled.
 - Before a live recorded process is declared unhealthy and restarted, the
   control plane confirms a silent health probe three times, about three seconds
