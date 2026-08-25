@@ -216,6 +216,11 @@ func TestPassUpdatesAvailablePackage(t *testing.T) {
 	if summary.Checked != 1 || len(summary.Updated) != 1 || summary.Updated[0] != "demo" {
 		t.Fatalf("summary = %+v", summary)
 	}
+	// E26: right after a successful unattended update the package reads as
+	// current at the HEAD that was installed, not as unchecked.
+	if memo := service.Checker().Cached("demo"); memo.Status != updatecheck.StatusCurrent || memo.LatestCommit != "new" {
+		t.Fatalf("post-update memo = %+v, want current@new", memo)
+	}
 }
 
 // Contract: pinned and explicitly paused packages are checked but never

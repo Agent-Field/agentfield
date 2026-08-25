@@ -535,7 +535,15 @@ func (s *Service) runPass(ctx context.Context, boot bool) (summary Summary) {
 				summary.Errors = appendUnique(summary.Errors, fmt.Sprintf("update %s: %v", result.ID, err))
 				continue
 			}
-			s.checker.Clear(result.ID)
+			// The job cleared the memo; the package now runs the HEAD that
+			// triggered this update, so record it as current — the desktop shows
+			// "Up to date" immediately instead of nothing until the next check.
+			s.checker.Set(result.ID, updatecheck.Update{
+				Status:       updatecheck.StatusCurrent,
+				LatestCommit: result.Update.LatestCommit,
+				CheckedAt:    s.now().UTC(),
+				Message:      "updated by the maintenance pass",
+			})
 			summary.Updated = append(summary.Updated, result.ID)
 		}
 	} else {
