@@ -3,13 +3,17 @@ package server
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	uihandlers "github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagejobs"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagemaint"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+	"github.com/gin-gonic/gin"
 )
 
 type activityStorage struct {
@@ -82,42 +86,71 @@ func writeActivityPackage(t *testing.T, home, packageName, nodeID string) {
 	}
 }
 
-func TestPackageExecutionActivityMatchesManifestAndEquivalentNodeIDs(t *testing.T) {
+func TestE20EquivalentRegistryAndManifestIDsRemainDistinctExactCandidates(t *testing.T) {
 	home := t.TempDir()
-	writeActivityPackage(t, home, "install-name", "manifest_node")
+	writeActivityPackage(t, home, "swe-planner", "swe_planner")
 	store := &activityStorage{
 		stubStorage: newStubStorage(),
 		records: map[string][]*types.Execution{
-			types.ExecutionStatusRunning: {{AgentNodeID: "unrelated-node"}, {AgentNodeID: "MANIFEST-NODE"}},
+			types.ExecutionStatusRunning: {{ExecutionID: "busy", AgentNodeID: "swe_planner"}},
 		},
 	}
-	busy, err := (packageExecutionActivity{storage: store, home: home}).HasActiveExecutions(context.Background(), "install-name")
+	busy, err := (packageExecutionActivity{storage: store, home: home}).HasActiveExecutions(context.Background(), "swe-planner")
 	if err != nil || !busy {
 		t.Fatalf("busy=%v err=%v calls=%+v", busy, err, store.calls)
 	}
-	if len(store.calls) != 3 || store.calls[0].AgentNodeID == nil || store.calls[1].AgentNodeID == nil || store.calls[2].AgentNodeID != nil {
-		t.Fatalf("activity query must try exact candidates before equivalence fallback: %+v", store.calls)
+	if len(store.calls) != 2 || store.calls[0].AgentNodeID == nil || *store.calls[0].AgentNodeID != "swe-planner" ||
+		store.calls[1].AgentNodeID == nil || *store.calls[1].AgentNodeID != "swe_planner" {
+		t.Fatalf("equivalent spellings were not retained as exact candidates: %+v", store.calls)
 	}
-	for index, call := range store.calls {
-		wantLimit := 1
-		if index == len(store.calls)-1 {
-			wantLimit = packageExecutionFallbackLimit
-		}
-		if call.Limit != wantLimit || !call.ExcludePayloads {
+	for _, call := range store.calls {
+		if call.Limit != 1 || !call.ExcludePayloads {
 			t.Fatalf("activity query limit/payload mismatch: %+v", call)
 		}
 	}
 }
 
-func TestPackageExecutionActivityFailsClosedWhenManifestCannotResolve(t *testing.T) {
+type e18PackageJobs struct {
+	activity packageExecutionActivity
+	ran      bool
+}
+
+func (j *e18PackageJobs) StartInstall(string, bool) (*packagejobs.Job, error) {
+	return nil, errors.New("unused")
+}
+func (j *e18PackageJobs) StartUpdate(name, _ string, _ bool) (*packagejobs.Job, error) {
+	if _, err := j.activity.ActiveExecutions(context.Background(), name); err != nil {
+		return nil, err
+	}
+	j.ran = true
+	return &packagejobs.Job{ID: "e18-job", Status: packagejobs.StatusRunning}, nil
+}
+func (j *e18PackageJobs) Uninstall(string) error { return errors.New("unused") }
+func (j *e18PackageJobs) GetJob(string) (*packagejobs.Job, bool) {
+	return nil, false
+}
+func (j *e18PackageJobs) ListJobs() []*packagejobs.Job { return nil }
+
+func TestE18UnreadableManifestUpdateReturnsAcceptedAndStartsJob(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    name: demo\n    path: /missing/package\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := &activityStorage{stubStorage: newStubStorage()}
-	busy, err := (packageExecutionActivity{storage: store, home: home}).HasActiveExecutions(context.Background(), "demo")
-	if err == nil || busy || len(store.calls) != 0 {
-		t.Fatalf("busy=%v err=%v calls=%+v", busy, err, store.calls)
+	jobs := &e18PackageJobs{activity: packageExecutionActivity{storage: store, home: home}}
+	router := gin.New()
+	router.POST("/api/ui/v1/agents/packages/:packageId/update", uihandlers.NewPackageInstallHandler(jobs).UpdatePackageHandler)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/ui/v1/agents/packages/demo/update", nil)
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !jobs.ran || len(store.calls) != 4 {
+		t.Fatalf("status=%d ran=%v calls=%+v body=%s", response.Code, jobs.ran, store.calls, response.Body.String())
+	}
+	for _, call := range store.calls {
+		if call.AgentNodeID == nil || *call.AgentNodeID != "demo" {
+			t.Fatalf("malformed manifest did not use registry identity: %+v", store.calls)
+		}
 	}
 }
 
@@ -228,15 +261,15 @@ func TestPackageAgentNodeIDResolutionErrorsAreFailClosed(t *testing.T) {
 func TestPackageUpdateGraceHookTracksManifestAndRegistryNames(t *testing.T) {
 	home := t.TempDir()
 	writeActivityPackage(t, home, "install-name", "runtime-node")
-	hook := &packageUpdateGraceHook{home: home, nodeIDs: make(map[string]string)}
+	hook := &packageUpdateGraceHook{home: home, entries: make(map[string]packageGraceEntry)}
 	hook.set("install-name", true)
 	t.Cleanup(func() { hook.set("install-name", false) })
-	if hook.nodeIDs["install-name"] != "runtime-node" {
-		t.Fatalf("tracked node IDs=%v", hook.nodeIDs)
+	if hook.entries["install-name"].nodeID != "runtime-node" {
+		t.Fatalf("tracked grace entries=%v", hook.entries)
 	}
 	hook.set("install-name", false)
-	if len(hook.nodeIDs) != 0 {
-		t.Fatalf("grace hook did not clear state: %v", hook.nodeIDs)
+	if len(hook.entries) != 0 {
+		t.Fatalf("grace hook did not clear state: %v", hook.entries)
 	}
 }
 

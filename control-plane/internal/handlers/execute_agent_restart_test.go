@@ -102,21 +102,26 @@ func TestAgentRestartGraceIsConfigurable(t *testing.T) {
 	assert.Equal(t, 42*time.Second, agentRestartGrace())
 }
 
-func TestPackageUpdateExtendsRestartGraceForOnlyThatNode(t *testing.T) {
+func TestE10PackageUpdateGraceIsReferenceCounted(t *testing.T) {
 	previous := agentRestartGrace()
 	SetAgentRestartGrace(15 * time.Second)
 	t.Cleanup(func() { SetAgentRestartGrace(previous) })
 	SetAgentUpdateInProgress("swe-planner", true)
+	SetAgentUpdateInProgress("swe-planner", true)
 	t.Cleanup(func() { SetAgentUpdateInProgress("swe-planner", false) })
 
-	if got := agentRestartGraceFor("swe_planner"); got != 10*time.Minute {
+	if got, extended := agentRestartGraceFor("swe_planner"); got != 10*time.Minute || !extended {
 		t.Fatalf("updating node grace = %s, want 10m", got)
 	}
-	if got := agentRestartGraceFor("other-node"); got != 15*time.Second {
+	if got, extended := agentRestartGraceFor("other-node"); got != 15*time.Second || extended {
 		t.Fatalf("unrelated node grace = %s, want configured default", got)
 	}
 	SetAgentUpdateInProgress("swe-planner", false)
-	if got := agentRestartGraceFor("swe-planner"); got != 15*time.Second {
+	if got, extended := agentRestartGraceFor("swe-planner"); got != 10*time.Minute || !extended {
+		t.Fatalf("one remaining owner grace = %s extended=%v, want 10m true", got, extended)
+	}
+	SetAgentUpdateInProgress("swe-planner", false)
+	if got, extended := agentRestartGraceFor("swe-planner"); got != 15*time.Second || extended {
 		t.Fatalf("completed update grace = %s, want configured default", got)
 	}
 }
@@ -128,7 +133,7 @@ func TestPackageUpdateDoesNotOverrideExplicitlyDisabledRestartGrace(t *testing.T
 	SetAgentUpdateInProgress("swe-planner", true)
 	t.Cleanup(func() { SetAgentUpdateInProgress("swe-planner", false) })
 
-	if got := agentRestartGraceFor("swe_planner"); got != 0 {
+	if got, extended := agentRestartGraceFor("swe_planner"); got != 0 || extended {
 		t.Fatalf("updating node grace=%s, want explicitly disabled", got)
 	}
 }
@@ -169,6 +174,44 @@ func TestC17InactiveNodeWithoutUpdateIsRejectedAsUnavailable(t *testing.T) {
 	require.ErrorAs(t, err, &precondition)
 	assert.Equal(t, http.StatusServiceUnavailable, precondition.HTTPStatusCode())
 	assert.Equal(t, "node_unavailable", precondition.ErrorCode())
+}
+
+func TestE11ConfiguredTenMinuteGraceDoesNotImplyAnUpdate(t *testing.T) {
+	withRestartGrace(t, 10*time.Minute)
+	agent := &types.AgentNode{ID: "demo-node", HealthStatus: types.HealthStatusInactive, LifecycleStatus: types.AgentStatusOffline}
+	err := ensureAgentDispatchable(agent, "demo-node")
+	var precondition *executionPreconditionError
+	require.ErrorAs(t, err, &precondition)
+	assert.Equal(t, http.StatusServiceUnavailable, precondition.HTTPStatusCode())
+	assert.Equal(t, "node_unavailable", precondition.ErrorCode())
+}
+
+func TestE12RestartWaitFallsBackWithinOnePollAfterExtendedGraceEnds(t *testing.T) {
+	withRestartGrace(t, time.Millisecond)
+	SetAgentUpdateInProgress("demo-node", true)
+	t.Cleanup(func() { SetAgentUpdateInProgress("demo-node", false) })
+	dead := &types.AgentNode{
+		ID: "demo-node", BaseURL: "http://" + deadAddress(t), DeploymentType: "long_running",
+		InstanceID: "old", LastHeartbeat: time.Now().Add(-time.Minute),
+		HealthStatus: types.HealthStatusInactive, LifecycleStatus: types.AgentStatusOffline,
+	}
+	store := &restartingStore{testExecutionStorage: newTestExecutionStorage(dead), after: dead, readsAt: 1 << 20}
+	controller := newExecutionController(store, nil, nil, 0, "")
+	done := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		_, err := controller.retryAfterAgentRestart(context.Background(), testPlan(dead), &net.OpError{Op: "dial", Err: errors.New("refused")})
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	SetAgentUpdateInProgress("demo-node", false)
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Less(t, time.Since(started), 2*agentRestartPoll)
+	case <-time.After(time.Second):
+		t.Fatal("restart wait did not notice the disarmed extended grace")
+	}
 }
 
 func TestAgentCameBack(t *testing.T) {

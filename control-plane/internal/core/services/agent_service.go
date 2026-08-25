@@ -3,7 +3,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,7 +17,6 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
-	"gopkg.in/yaml.v3"
 )
 
 // DefaultAgentService implements the AgentService interface
@@ -28,6 +26,7 @@ type DefaultAgentService struct {
 	registryStorage interfaces.RegistryStorage
 	agentClient     interfaces.AgentClient
 	agentfieldHome  string
+	confirmation    packages.ProcessConfirmationPolicy
 }
 
 // NewAgentService creates a new agent service instance
@@ -79,8 +78,7 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 	actuallyRunning, wasReconciled := as.reconcileLifecycleProcessState(&agentNode, name)
 	if wasReconciled || legacyDesiredState {
 		// Save reconciled state
-		registry.Installed[name] = agentNode
-		if err := as.saveRegistryDirect(registry); err != nil {
+		if err := as.updateRegistryEntry(name, agentNode); err != nil {
 			fmt.Printf("Warning: failed to save reconciled registry state: %v\n", err)
 		}
 	}
@@ -93,8 +91,7 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 			agentNode.Runtime.StartedAt = nil
 			agentNode.Runtime.BootID = ""
 			agentNode.Runtime.StartTime = ""
-			registry.Installed[name] = agentNode
-			if err := as.saveRegistryDirect(registry); err != nil {
+			if err := as.updateRegistryEntry(name, agentNode); err != nil {
 				return nil, fmt.Errorf("failed to reconcile running agent without a port: %w", err)
 			}
 		} else {
@@ -330,12 +327,18 @@ func (as *DefaultAgentService) stopAgent(name string, preserveDesiredState bool)
 		desiredStateChanged = true
 	}
 
-	// Check current state and reconcile if needed
-	actuallyRunning, wasReconciled := as.reconcileLifecycleProcessState(&pkg, name)
+	// Check current state and reconcile if needed. An existing PID whose
+	// identity cannot be established is deliberately not mutated: an explicit
+	// stop must tell the operator to kill it manually instead of erasing the
+	// only PID that can recover it.
+	assessment := as.assessLifecycleProcess(pkg, name)
+	actuallyRunning, wasReconciled := reconcileRecordedAssessment(&pkg, name, assessment)
+	if assessment.Ownership == packages.RecordedProcessUnknown {
+		return fmt.Errorf("could not verify that process %d is %s; stop it manually", *pkg.Runtime.PID, name)
+	}
 	if wasReconciled || desiredStateChanged {
 		// Save reconciled state
-		registry.Installed[name] = pkg
-		if err := as.saveRegistryDirect(registry); err != nil {
+		if err := as.updateRegistryEntry(name, pkg); err != nil {
 			return fmt.Errorf("failed to save reconciled registry state: %w", err)
 		}
 	}
@@ -347,9 +350,8 @@ func (as *DefaultAgentService) stopAgent(name string, preserveDesiredState bool)
 		return nil
 	}
 
-	assessment := packages.AssessRecordedProcess(context.Background(), name, pkg)
 	if assessment.Owned() {
-		result, err := packages.StopRecordedProcess(context.Background(), name, pkg)
+		result, err := packages.StopRecordedProcessWithAssessment(context.Background(), name, pkg, assessment)
 		if err != nil {
 			return err
 		}
@@ -370,10 +372,8 @@ func (as *DefaultAgentService) stopAgent(name string, preserveDesiredState bool)
 	pkg.Runtime.StartedAt = nil
 	pkg.Runtime.BootID = ""
 	pkg.Runtime.StartTime = ""
-	registry.Installed[name] = pkg
-
 	// Save registry
-	if err := as.saveRegistryDirect(registry); err != nil {
+	if err := as.updateRegistryEntry(name, pkg); err != nil {
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
@@ -400,8 +400,7 @@ func (as *DefaultAgentService) GetAgentStatus(name string) (*domain.AgentStatus,
 	actuallyRunning, reconciled := as.reconcileReadProcessState(&pkg, name)
 	if reconciled {
 		// Save updated registry if reconciliation occurred
-		registry.Installed[name] = pkg
-		if err := as.saveRegistryDirect(registry); err != nil {
+		if err := as.updateRegistryEntry(name, pkg); err != nil {
 			fmt.Printf("Warning: failed to save reconciled registry state: %v\n", err)
 		}
 	}
@@ -441,6 +440,20 @@ func (as *DefaultAgentService) reconcileLifecycleProcessState(pkg *packages.Inst
 		pkg, name, runtime.GOOS, true, make(map[int]packages.HealthIdentity),
 		packages.RuntimeProcessStatus, packages.ProbeHealthIdentity,
 	)
+}
+
+func (as *DefaultAgentService) assessLifecycleProcess(pkg packages.InstalledPackage, name string) packages.RecordedProcessAssessment {
+	return packages.AssessRecordedProcessWith(
+		context.Background(), name, pkg, packages.RuntimeProcessStatus,
+		packages.ProbeHealthIdentity, as.lifecycleConfirmationPolicy(),
+	)
+}
+
+func (as *DefaultAgentService) lifecycleConfirmationPolicy() packages.ProcessConfirmationPolicy {
+	if as.confirmation.Attempts > 0 {
+		return as.confirmation
+	}
+	return packages.LifecycleConfirmationPolicy()
 }
 
 // reconcileReadProcessState keeps the historical cheap Darwin projection while
@@ -538,11 +551,24 @@ func (as *DefaultAgentService) reconcileProcessStateWithProbes(
 			return packages.RuntimeProcessUnknown
 		}
 	}
+	policy := packages.ReadConfirmationPolicy()
+	selectedProbe := probe
+	if !lifecycle {
+		selectedProbe = memoizedProbe
+	} else {
+		policy = as.lifecycleConfirmationPolicy()
+	}
 	assessment := packages.AssessRecordedProcessWith(
-		context.Background(), name, *pkg, status, memoizedProbe,
+		context.Background(), name, *pkg, status, selectedProbe, policy,
 	)
+	return reconcileRecordedAssessment(pkg, name, assessment)
+
+}
+
+func reconcileRecordedAssessment(pkg *packages.InstalledPackage, name string, assessment packages.RecordedProcessAssessment) (bool, bool) {
 	if assessment.Ownership == packages.RecordedProcessOursHealthy ||
-		assessment.Ownership == packages.RecordedProcessOursUnhealthy {
+		assessment.Ownership == packages.RecordedProcessOursUnhealthy ||
+		assessment.Ownership == packages.RecordedProcessUnknown {
 		return true, false
 	}
 
@@ -580,31 +606,21 @@ func (as *DefaultAgentService) ListRunningAgents() ([]domain.RunningAgent, error
 // TODO: Eventually replace with registryStorage interface usage
 func (as *DefaultAgentService) loadRegistryDirect() (*packages.InstallationRegistry, error) {
 	registryPath := filepath.Join(as.agentfieldHome, "installed.yaml")
-
-	registry := &packages.InstallationRegistry{
-		Installed: make(map[string]packages.InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return nil, fmt.Errorf("failed to parse registry: %w", err)
-		}
-	}
-
-	return registry, nil
+	return packages.LoadInstallationRegistry(registryPath)
 }
 
 // saveRegistryDirect saves the registry using direct file system access
 // TODO: Eventually replace with registryStorage interface usage
 func (as *DefaultAgentService) saveRegistryDirect(registry *packages.InstallationRegistry) error {
 	registryPath := filepath.Join(as.agentfieldHome, "installed.yaml")
+	return packages.WriteInstallationRegistry(registryPath, registry)
+}
 
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	return os.WriteFile(registryPath, data, 0644)
+func (as *DefaultAgentService) updateRegistryEntry(name string, entry packages.InstalledPackage) error {
+	return packages.UpdateInstallationRegistry(filepath.Join(as.agentfieldHome, "installed.yaml"), func(registry *packages.InstallationRegistry) error {
+		registry.Installed[name] = entry
+		return nil
+	})
 }
 
 // convertToRunningAgent converts packages.InstalledPackage to domain.RunningAgent
@@ -834,12 +850,20 @@ func (as *DefaultAgentService) waitForAgentNode(port int, healthPath, expectedNo
 	if healthPath == "" {
 		healthPath = "/health"
 	}
-	client := &http.Client{Timeout: 1 * time.Second}
+	client := packages.NewNodeHTTPClient(1 * time.Second)
 	deadline := time.Now().Add(timeout)
 
 	impostor := ""
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(fmt.Sprintf("http://localhost:%d%s", port, healthPath))
+		request, requestErr := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%d%s", port, healthPath), nil)
+		if requestErr == nil {
+			request.Close = true
+		}
+		var resp *http.Response
+		err := requestErr
+		if requestErr == nil {
+			resp, err = client.Do(request)
+		}
 		if err == nil && resp.StatusCode == 200 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
@@ -863,37 +887,24 @@ func (as *DefaultAgentService) waitForAgentNode(port int, healthPath, expectedNo
 // updateRuntimeInfo updates the registry with runtime information
 func (as *DefaultAgentService) updateRuntimeInfo(agentNodeName string, port, pid int) error {
 	registryPath := filepath.Join(as.agentfieldHome, "installed.yaml")
-
-	// Load registry
-	registry := &packages.InstallationRegistry{}
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return fmt.Errorf("failed to parse registry: %w", err)
+	return packages.UpdateInstallationRegistry(registryPath, func(registry *packages.InstallationRegistry) error {
+		if agentNode, exists := registry.Installed[agentNodeName]; exists {
+			startedAt := time.Now().Format(time.RFC3339)
+			agentNode.Status = "running"
+			// Establish intent for legacy entries, but never overwrite an
+			// explicit stop issued while this start was waiting for readiness.
+			if agentNode.DesiredState == "" {
+				agentNode.DesiredState = packages.DesiredStateRunning
+			}
+			agentNode.Runtime.Port = &port
+			agentNode.Runtime.PID = &pid
+			agentNode.Runtime.StartedAt = &startedAt
+			agentNode.Runtime.BootID = packages.CurrentBootID()
+			agentNode.Runtime.StartTime = packages.CurrentProcessStartTime(pid)
+			registry.Installed[agentNodeName] = agentNode
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("failed to read registry: %w", err)
-	}
-
-	// Update runtime info
-	if agentNode, exists := registry.Installed[agentNodeName]; exists {
-		startedAt := time.Now().Format(time.RFC3339)
-		agentNode.Status = "running"
-		agentNode.DesiredState = packages.DesiredStateRunning
-		agentNode.Runtime.Port = &port
-		agentNode.Runtime.PID = &pid
-		agentNode.Runtime.StartedAt = &startedAt
-		agentNode.Runtime.BootID = packages.CurrentBootID()
-		agentNode.Runtime.StartTime = packages.CurrentProcessStartTime(pid)
-		registry.Installed[agentNodeName] = agentNode
-	}
-
-	// Save registry
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(registryPath, data, 0644)
+		return nil
+	})
 }
 
 // displayCapabilities fetches and displays agent node capabilities

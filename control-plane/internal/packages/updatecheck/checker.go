@@ -117,7 +117,10 @@ func (c *Checker) checkLocked(ctx context.Context, entries []Entry) []Result {
 			result.Update.Status = StatusFailed
 			result.Update.Message = previous.Message
 		}
-		if !(result.Update.Status == StatusError && ctx.Err() != nil) {
+		// A transient check failure carries no remote commit identity and must
+		// not erase the memo that suppresses a deterministic failed commit.
+		preserveFailedMemo := previous.Status == StatusFailed && result.Update.Status == StatusError
+		if !preserveFailedMemo && !(result.Update.Status == StatusError && ctx.Err() != nil) {
 			c.Set(entry.ID, result.Update)
 		}
 		results = append(results, result)

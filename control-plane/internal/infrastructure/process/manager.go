@@ -16,6 +16,9 @@ import (
 // It keeps track of running processes and provides methods to start, stop, and monitor them.
 type DefaultProcessManager struct {
 	runningProcesses map[int]*exec.Cmd
+	// stopProcess is a narrow test seam for the platform-specific bounded stop
+	// path. Production always uses stopManagedProcess below.
+	stopProcess func(*exec.Cmd, int) error
 }
 
 const gracefulStopTimeout = 5 * time.Second
@@ -88,14 +91,22 @@ func (pm *DefaultProcessManager) Stop(pid int) error {
 	if !exists {
 		return fmt.Errorf("process with PID %d not found in managed processes", pid)
 	}
+	// Tracking is bookkeeping, not proof that an unresponsive process was
+	// reaped. Every bounded return path must release the slot.
+	defer delete(pm.runningProcesses, pid)
 
 	// Check if process is still running
 	if cmd.Process == nil {
 		// Process already terminated, clean up
-		delete(pm.runningProcesses, pid)
 		return nil
 	}
+	if pm.stopProcess != nil {
+		return pm.stopProcess(cmd, pid)
+	}
+	return stopManagedProcess(cmd, pid)
+}
 
+func stopManagedProcess(cmd *exec.Cmd, pid int) error {
 	// Start reaping before signalling so every exit path is observed exactly
 	// once and a child that ignores SIGTERM cannot wedge the caller forever.
 	waited := make(chan struct{}, 1)
@@ -130,9 +141,6 @@ func (pm *DefaultProcessManager) Stop(pid int) error {
 			return fmt.Errorf("timed out reaping process %d after force kill", pid)
 		}
 	}
-
-	// Clean up tracking
-	delete(pm.runningProcesses, pid)
 
 	return nil
 }

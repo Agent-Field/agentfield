@@ -80,7 +80,8 @@ func probeHealthPath(ctx context.Context, port int, path string) HealthIdentity 
 	if err != nil {
 		return HealthIdentity{}
 	}
-	response, err := http.DefaultClient.Do(request)
+	request.Close = true
+	response, err := NewNodeHTTPClient(healthIdentityTimeout).Do(request)
 	if err != nil {
 		return HealthIdentity{}
 	}

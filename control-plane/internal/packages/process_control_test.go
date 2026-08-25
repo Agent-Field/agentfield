@@ -3,11 +3,13 @@ package packages
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -86,7 +88,7 @@ func TestStopPackageForReinstallOwnsLegacyProcessThroughHealthAndShutsDownFirst(
 	}
 }
 
-func TestStopPackageForReinstallTreatsSilentLegacyPortAsDeadWithoutSignal(t *testing.T) {
+func TestE7StopPackageForReinstallRefusesSilentProcessWithoutIdentity(t *testing.T) {
 	home := t.TempDir()
 	cmd := startStopTestProcess(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -97,15 +99,16 @@ func TestStopPackageForReinstallTreatsSilentLegacyPortAsDeadWithoutSignal(t *tes
 	_ = listener.Close()
 	writeRunningLegacyRegistry(t, home, port, cmd.Process.Pid)
 
-	if _, err := StopPackageForReinstall(context.Background(), home, "demo"); err != nil {
-		t.Fatal(err)
+	state, err := StopPackageForReinstall(context.Background(), home, "demo")
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("process %d", cmd.Process.Pid)) || !strings.Contains(err.Error(), "stop it manually") {
+		t.Fatalf("state=%+v err=%v", state, err)
 	}
 	if !processExists(cmd.Process.Pid) {
 		t.Fatal("silent legacy port caused the unidentified PID to be signalled")
 	}
 	entry := readRegistryFile(t, filepath.Join(home, "installed.yaml")).Installed["demo"]
-	if entry.Status != "stopped" || entry.Runtime.PID != nil {
-		t.Fatalf("stale entry=%+v", entry)
+	if entry.Status != "running" || entry.Runtime.PID == nil || *entry.Runtime.PID != cmd.Process.Pid {
+		t.Fatalf("record changed despite unverifiable identity: %+v", entry)
 	}
 }
 
@@ -314,7 +317,7 @@ func TestAssessRecordedProcessUnknownIdentityMatrix(t *testing.T) {
 		{name: "Go-shaped anonymous health is ours", state: RuntimeProcessUnknown, health: HealthIdentity{Healthy: true}, want: RecordedProcessOursHealthy, wantSignal: true},
 		{name: "equivalent node id is ours", state: RuntimeProcessUnknown, health: HealthIdentity{Healthy: true, NodeID: "DEMO_NODE"}, want: RecordedProcessOursHealthy, wantSignal: true},
 		{name: "different node id is foreign", state: RuntimeProcessUnknown, health: HealthIdentity{Healthy: true, NodeID: "somebody-else"}, want: RecordedProcessForeign},
-		{name: "silent port means dead", state: RuntimeProcessUnknown, health: HealthIdentity{}, want: RecordedProcessDead},
+		{name: "silent port keeps an existing unknown process", state: RuntimeProcessUnknown, health: HealthIdentity{}, want: RecordedProcessUnknown},
 		{name: "known dead PID with anonymous healthy replacement is ours but cannot be signalled", state: RuntimeProcessDead, health: HealthIdentity{Healthy: true}, want: RecordedProcessOursHealthy},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -322,6 +325,7 @@ func TestAssessRecordedProcessUnknownIdentityMatrix(t *testing.T) {
 				context.Background(), "demo-node", entry,
 				func(RuntimeInfo) RuntimeProcessState { return test.state },
 				func(context.Context, int, string) HealthIdentity { return test.health },
+				ProcessConfirmationPolicy{Attempts: 1, ProcessExists: func(int) bool { return test.state != RuntimeProcessDead }},
 			)
 			if assessment.Ownership != test.want || assessment.SignalAllowed != test.wantSignal {
 				t.Fatalf("assessment=%+v, want ownership=%v signal=%v", assessment, test.want, test.wantSignal)

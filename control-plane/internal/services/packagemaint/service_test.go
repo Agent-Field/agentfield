@@ -481,8 +481,8 @@ func TestRestoreNeverStopsUnidentifiedLegacyPID(t *testing.T) {
 	service.processAlive = func(packages.RuntimeInfo) bool { return true }
 	service.healthProbe = func(context.Context, int, string) packages.HealthIdentity { return packages.HealthIdentity{} }
 	summary := service.RunPass(context.Background())
-	if len(agent.stops) != 0 || len(agent.runs) != 1 || len(summary.Restored) != 1 {
-		t.Fatalf("legacy PID was signalled or not restored safely: stops=%v runs=%v summary=%+v", agent.stops, agent.runs, summary)
+	if len(agent.stops) != 0 || len(agent.runs) != 0 || !containsSkip(summary.Skipped, "legacy", "starting") {
+		t.Fatalf("legacy PID without identity was signalled or duplicated: stops=%v runs=%v summary=%+v", agent.stops, agent.runs, summary)
 	}
 }
 
@@ -915,7 +915,7 @@ func TestRestoreReportsFailureStoppingUnhealthyLiveProcess(t *testing.T) {
 	service.processAlive = func(packages.RuntimeInfo) bool { return true }
 	service.healthProbe = func(context.Context, int, string) packages.HealthIdentity { return packages.HealthIdentity{} }
 	summary := service.RunPass(context.Background())
-	if len(agent.runs) != 0 || len(summary.Errors) != 2 || !strings.Contains(summary.Errors[0], "stop unhealthy") {
+	if len(agent.runs) != 0 || len(summary.Errors) != 1 || !strings.Contains(summary.Errors[0], "stop unhealthy") {
 		t.Fatalf("runs=%v summary=%+v", agent.runs, summary)
 	}
 }
