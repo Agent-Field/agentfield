@@ -67,6 +67,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag_name: ${{ steps.version.outputs.tag_name }}
       release_sha: ${{ steps.version.outputs.release_sha }}
+      build_date: ${{ steps.version.outputs.build_date }}
       environment: ${{ steps.version.outputs.environment }}
       publish_pypi: ${{ steps.flags.outputs.publish_pypi }}
       publish_npm: ${{ steps.flags.outputs.publish_npm }}
@@ -204,6 +205,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag}" >> "$GITHUB_OUTPUT"
           echo "release_sha=${release_sha}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
           echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
 
   build-binaries:
@@ -525,6 +527,10 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.docker_meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            COMMIT=${{ needs.prepare.outputs.release_sha }}
+            BUILD_DATE=${{ needs.prepare.outputs.build_date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -537,6 +543,10 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.docker_meta.outputs.cloud_tags }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            COMMIT=${{ needs.prepare.outputs.release_sha }}
+            BUILD_DATE=${{ needs.prepare.outputs.build_date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

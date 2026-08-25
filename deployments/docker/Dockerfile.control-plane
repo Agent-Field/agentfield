@@ -20,6 +20,9 @@ WORKDIR /app
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
 ENV CGO_ENABLED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -39,7 +42,9 @@ COPY --from=ui-builder /app/web/dist ./control-plane/web/client/dist
 
 RUN cd control-plane && \
     if [ "${TARGETARCH}" = "arm64" ]; then export CC=aarch64-linux-gnu-gcc; else export CC=gcc; fi && \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags "embedded sqlite_fts5" -o /app/bin/agentfield-server ./cmd/agentfield-server
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags "embedded sqlite_fts5" \
+      -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
+      -o /app/bin/agentfield-server ./cmd/agentfield-server
 
 # Pre-create writable data directory for distroless runtime. The nonroot user
 # has UID/GID 65532 in the base image, so match that here.

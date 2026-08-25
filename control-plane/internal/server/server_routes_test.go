@@ -657,6 +657,33 @@ func TestSetupRoutesRegistersHealthEndpoint(t *testing.T) {
 	})
 }
 
+func TestSetupRoutesRegistersAuthenticatedVersionEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := &AgentFieldServer{
+		Router:            gin.New(),
+		storage:           newStubStorage(),
+		payloadStore:      &stubPayloadStore{},
+		webhookDispatcher: &stubWebhookDispatcher{},
+		config: &config.Config{
+			UI:  config.UIConfig{Enabled: false},
+			API: config.APIConfig{Auth: config.AuthConfig{APIKey: "super-secret-key"}},
+		},
+	}
+	srv.setupRoutes()
+
+	unauthorized := httptest.NewRecorder()
+	srv.Router.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/version", nil))
+	require.Equal(t, http.StatusUnauthorized, unauthorized.Code)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+	req.Header.Set("X-API-Key", "super-secret-key")
+	authorized := httptest.NewRecorder()
+	srv.Router.ServeHTTP(authorized, req)
+	require.Equal(t, http.StatusOK, authorized.Code)
+	require.Contains(t, authorized.Body.String(), `"features":["package_updates","boot_restore"]`)
+}
+
 //nolint:unused // Reserved for future test cases
 type stubHealthMonitor struct {
 	*services.HealthMonitor

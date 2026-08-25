@@ -28,6 +28,9 @@ WORKDIR /app
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
 ENV CGO_ENABLED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -49,7 +52,9 @@ COPY --from=ui-builder /app/web/dist ./control-plane/web/client/dist
 # CLI (af list / secrets / logs) against the same $AGENTFIELD_HOME.
 RUN cd control-plane && \
     if [ "${TARGETARCH}" = "arm64" ]; then export CC=aarch64-linux-gnu-gcc; else export CC=gcc; fi && \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags "embedded sqlite_fts5" -o /app/bin/af ./cmd/af
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags "embedded sqlite_fts5" \
+      -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
+      -o /app/bin/af ./cmd/af
 
 # aforge — the pinned coding-harness binary AgentField's harness providers
 # spawn (`aforge exec --json -w <dir>`). Fetched in its own stage so the

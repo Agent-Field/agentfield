@@ -74,13 +74,17 @@ func TestMCPRoutes_DisabledReturns404(t *testing.T) {
 }
 
 func TestSetBuildVersion(t *testing.T) {
-	original := buildVersion
-	defer func() { buildVersion = original }()
+	originalVersion, originalCommit, originalDate := buildVersion, buildCommit, buildDate
+	defer func() {
+		buildVersion, buildCommit, buildDate = originalVersion, originalCommit, originalDate
+	}()
 
 	buildVersion = "dev"
 	SetBuildVersion("  ") // blank must not overwrite
 	require.Equal(t, "dev", buildVersion)
 
-	SetBuildVersion("v9.9.9")
+	SetBuildVersion("v9.9.9", "abc123", "2026-08-24T19:40:00Z")
 	require.Equal(t, "v9.9.9", buildVersion)
+	require.Equal(t, "abc123", buildCommit)
+	require.Equal(t, "2026-08-24T19:40:00Z", buildDate)
 }
