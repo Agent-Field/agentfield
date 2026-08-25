@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages/updatecheck"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
@@ -16,11 +18,22 @@ import (
 // PackageHandler provides handlers for agent package management operations.
 type PackageHandler struct {
 	storage storage.StorageProvider
+	updates packageUpdateReader
+}
+
+type packageUpdateReader interface {
+	RegistryEntry(id string) (packages.InstalledPackage, bool, error)
+	RegistryEntries() (map[string]packages.InstalledPackage, error)
+	Checker() *updatecheck.Checker
 }
 
 // NewPackageHandler creates a new PackageHandler.
 func NewPackageHandler(storage storage.StorageProvider) *PackageHandler {
 	return &PackageHandler{storage: storage}
+}
+
+func (h *PackageHandler) ConfigurePackageUpdates(updates packageUpdateReader) {
+	h.updates = updates
 }
 
 // PackageListResponse represents the response for listing packages
@@ -39,33 +52,48 @@ type PackageInfo struct {
 	// "stopped", "uninstalled", ...), unlike Status which is a derived
 	// configuration summary. Clients listing actually-installed packages
 	// (e.g. the desktop app) must filter on this.
-	InstallStatus         string `json:"install_status"`
-	InstalledAt           string `json:"installed_at,omitempty"`
-	InstallPath           string `json:"install_path"`
-	Source                string `json:"source"`
-	ConfigurationRequired bool   `json:"configuration_required"`
-	ConfigurationComplete bool   `json:"configuration_complete"`
-	RunningNodeID         string `json:"running_node_id,omitempty"`
-	LastStarted           string `json:"last_started,omitempty"`
-	ProcessID             int    `json:"process_id,omitempty"`
-	Port                  int    `json:"port,omitempty"`
-	Description           string `json:"description"`
-	Author                string `json:"author"`
+	InstallStatus         string        `json:"install_status"`
+	InstalledAt           string        `json:"installed_at,omitempty"`
+	InstallPath           string        `json:"install_path"`
+	Source                string        `json:"source"`
+	ConfigurationRequired bool          `json:"configuration_required"`
+	ConfigurationComplete bool          `json:"configuration_complete"`
+	RunningNodeID         string        `json:"running_node_id,omitempty"`
+	LastStarted           string        `json:"last_started,omitempty"`
+	ProcessID             int           `json:"process_id,omitempty"`
+	Port                  int           `json:"port,omitempty"`
+	Description           string        `json:"description"`
+	Author                string        `json:"author"`
+	InstalledCommit       string        `json:"installed_commit"`
+	SourceRef             string        `json:"source_ref"`
+	AutoUpdate            bool          `json:"auto_update"`
+	Update                PackageUpdate `json:"update"`
+}
+
+type PackageUpdate struct {
+	Status       updatecheck.Status `json:"status"`
+	LatestCommit string             `json:"latest_commit"`
+	CheckedAt    string             `json:"checked_at"`
+	Message      string             `json:"message"`
 }
 
 // PackageDetailsResponse represents detailed package information
 type PackageDetailsResponse struct {
-	ID            string               `json:"id"`
-	Name          string               `json:"name"`
-	Version       string               `json:"version"`
-	Description   string               `json:"description"`
-	Author        string               `json:"author"`
-	InstallPath   string               `json:"install_path"`
-	Source        string               `json:"source"`
-	Status        string               `json:"status"`
-	Configuration PackageConfiguration `json:"configuration"`
-	Capabilities  *PackageCapabilities `json:"capabilities,omitempty"`
-	Runtime       *PackageRuntime      `json:"runtime,omitempty"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	Version         string               `json:"version"`
+	Description     string               `json:"description"`
+	Author          string               `json:"author"`
+	InstallPath     string               `json:"install_path"`
+	Source          string               `json:"source"`
+	Status          string               `json:"status"`
+	Configuration   PackageConfiguration `json:"configuration"`
+	Capabilities    *PackageCapabilities `json:"capabilities,omitempty"`
+	Runtime         *PackageRuntime      `json:"runtime,omitempty"`
+	InstalledCommit string               `json:"installed_commit"`
+	SourceRef       string               `json:"source_ref"`
+	AutoUpdate      bool                 `json:"auto_update"`
+	Update          PackageUpdate        `json:"update"`
 }
 
 // PackageConfiguration represents configuration information
@@ -119,60 +147,34 @@ func (h *PackageHandler) ListPackagesHandler(c *gin.Context) {
 
 	// Get all agent packages from storage
 	ctx := c.Request.Context()
-	packages, err := h.storage.QueryAgentPackages(ctx, types.PackageFilters{})
+	dbPackages, err := h.storage.QueryAgentPackages(ctx, types.PackageFilters{})
 	if err != nil {
 		RespondInternalError(c, "failed to list packages")
 		return
 	}
+	registry := map[string]packages.InstalledPackage{}
+	if h.updates != nil {
+		if snapshot, snapshotErr := h.updates.RegistryEntries(); snapshotErr == nil {
+			registry = snapshot
+		}
+	}
 
 	var packageInfos []PackageInfo
-	for _, pkg := range packages {
-		// Determine package status
-		packageStatus := h.determinePackageStatus(ctx, pkg)
-
-		// Apply filters
-		if status != "" && packageStatus != status {
-			continue
-		}
-
+	for _, pkg := range dbPackages {
 		if search != "" && !h.matchesSearch(pkg, search) {
 			continue
 		}
-
-		// Check configuration status
-		configRequired := len(pkg.ConfigurationSchema) > 0
-		configComplete := false
-
-		if configRequired {
-			// Check if configuration exists and is complete
-			config, err := h.storage.GetAgentConfiguration(ctx, pkg.ID, pkg.ID)
-			if err == nil && config.Status == types.ConfigurationStatusActive {
-				configComplete = true
-			}
-		} else {
-			// No configuration required means it's complete
-			configComplete = true
+		packageStatus := ""
+		if status != "" {
+			packageStatus = h.determinePackageStatus(ctx, pkg)
 		}
-
-		packageInfo := PackageInfo{
-			ID:                    pkg.ID,
-			Name:                  pkg.Name,
-			Version:               pkg.Version,
-			Status:                packageStatus,
-			InstallStatus:         string(pkg.Status),
-			InstallPath:           pkg.InstallPath,
-			Source:                h.safeStringValue(pkg.Repository),
-			ConfigurationRequired: configRequired,
-			ConfigurationComplete: configComplete,
-			Description:           h.safeStringValue(pkg.Description),
-			Author:                h.safeStringValue(pkg.Author),
+		if status != "" && packageStatus != status {
+			continue
 		}
-		if !pkg.InstalledAt.IsZero() {
-			packageInfo.InstalledAt = pkg.InstalledAt.UTC().Format(time.RFC3339)
+		packageInfo := h.buildPackageInfoWithStatus(ctx, pkg, packageStatus)
+		if entry, ok := registry[pkg.ID]; ok {
+			applyRegistryEntry(&packageInfo, pkg.ID, entry, h.updates.Checker().Cached(pkg.ID))
 		}
-
-		// TODO: Add runtime information when agent lifecycle management is implemented
-		// This would include RunningNodeID, LastStarted, ProcessID, Port
 
 		packageInfos = append(packageInfos, packageInfo)
 	}
@@ -183,6 +185,34 @@ func (h *PackageHandler) ListPackagesHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *PackageHandler) buildPackageInfo(ctx context.Context, pkg *types.AgentPackage) PackageInfo {
+	return h.buildPackageInfoWithStatus(ctx, pkg, "")
+}
+
+func (h *PackageHandler) buildPackageInfoWithStatus(ctx context.Context, pkg *types.AgentPackage, packageStatus string) PackageInfo {
+	configRequired := len(pkg.ConfigurationSchema) > 0
+	configComplete := !configRequired
+	if configRequired {
+		config, err := h.storage.GetAgentConfiguration(ctx, pkg.ID, pkg.ID)
+		configComplete = err == nil && config.Status == types.ConfigurationStatusActive
+	}
+	if packageStatus == "" {
+		packageStatus = h.determinePackageStatus(ctx, pkg)
+	}
+	info := PackageInfo{
+		ID: pkg.ID, Name: pkg.Name, Version: pkg.Version,
+		Status: packageStatus, InstallStatus: string(pkg.Status),
+		InstallPath: pkg.InstallPath, Source: h.safeStringValue(pkg.Repository),
+		ConfigurationRequired: configRequired, ConfigurationComplete: configComplete,
+		Description: h.safeStringValue(pkg.Description), Author: h.safeStringValue(pkg.Author),
+		AutoUpdate: true, Update: PackageUpdate{Status: updatecheck.StatusUnknown},
+	}
+	if !pkg.InstalledAt.IsZero() {
+		info.InstalledAt = pkg.InstalledAt.UTC().Format(time.RFC3339)
+	}
+	return info
 }
 
 // GetPackageDetailsHandler handles requests for getting detailed package information
@@ -242,12 +272,25 @@ func (h *PackageHandler) GetPackageDetailsHandler(c *gin.Context) {
 		InstallPath: pkg.InstallPath,
 		Source:      h.safeStringValue(pkg.Repository),
 		Status:      packageStatus,
+		AutoUpdate:  true,
+		Update:      PackageUpdate{Status: updatecheck.StatusUnknown},
 		Configuration: PackageConfiguration{
 			Required: configRequired,
 			Complete: configComplete,
 			Schema:   schema,
 			Current:  currentConfig,
 		},
+	}
+	if h.updates != nil {
+		if entry, ok, err := h.updates.RegistryEntry(packageID); err == nil && ok {
+			if entry.SourcePath != "" {
+				response.Source = entry.SourcePath
+			}
+			response.InstalledCommit = entry.Commit
+			response.SourceRef = entry.Ref
+			response.AutoUpdate = entry.AutoUpdateEnabled()
+			response.Update = packageUpdate(h.updates.Checker().Cached(packageID))
+		}
 	}
 
 	// TODO: Add capabilities parsing when agent introspection is implemented
@@ -257,6 +300,38 @@ func (h *PackageHandler) GetPackageDetailsHandler(c *gin.Context) {
 	// This would include process information, logs, etc.
 
 	c.JSON(http.StatusOK, response)
+}
+
+func applyRegistryEntry(info *PackageInfo, id string, entry packages.InstalledPackage, update updatecheck.Update) {
+	if info == nil {
+		return
+	}
+	overlay := packageInfoFromRegistry(id, entry, update)
+	if overlay.InstallStatus != "" {
+		info.InstallStatus = overlay.InstallStatus
+	}
+	if overlay.InstalledAt != "" {
+		info.InstalledAt = overlay.InstalledAt
+	}
+	if overlay.InstallPath != "" {
+		info.InstallPath = overlay.InstallPath
+	}
+	if overlay.Source != "" {
+		info.Source = overlay.Source
+	}
+	if overlay.LastStarted != "" {
+		info.LastStarted = overlay.LastStarted
+	}
+	if entry.Status == "running" && entry.Runtime.PID != nil {
+		info.ProcessID = overlay.ProcessID
+	}
+	if entry.Status == "running" && entry.Runtime.Port != nil {
+		info.Port = overlay.Port
+	}
+	info.InstalledCommit = overlay.InstalledCommit
+	info.SourceRef = overlay.SourceRef
+	info.AutoUpdate = overlay.AutoUpdate
+	info.Update = overlay.Update
 }
 
 // determinePackageStatus determines the current status of a package

@@ -32,6 +32,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagejobs"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagemaint"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/all" // register first-party trigger Sources
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
@@ -47,20 +48,22 @@ import (
 // AgentFieldServer represents the core AgentField orchestration service.
 type AgentFieldServer struct {
 	adminpb.UnimplementedAdminReasonerServiceServer
-	storage               storage.StorageProvider
-	cache                 storage.CacheProvider
-	Router                *gin.Engine
-	uiService             *services.UIService           // Add UIService
-	executionsUIService   *services.ExecutionsUIService // Add ExecutionsUIService
-	healthMonitor         *services.HealthMonitor
-	presenceManager       *services.PresenceManager
-	statusManager         *services.StatusManager // Add StatusManager for unified status management
-	agentService          interfaces.AgentService // Add AgentService for lifecycle management
-	agentClient           interfaces.AgentClient  // Add AgentClient for agent communication
-	packageJobs           *packagejobs.Manager    // Async package install/update jobs
-	config                *config.Config
-	storageHealthOverride func(context.Context) gin.H
-	cacheHealthOverride   func(context.Context) gin.H
+	storage                  storage.StorageProvider
+	cache                    storage.CacheProvider
+	Router                   *gin.Engine
+	uiService                *services.UIService           // Add UIService
+	executionsUIService      *services.ExecutionsUIService // Add ExecutionsUIService
+	healthMonitor            *services.HealthMonitor
+	presenceManager          *services.PresenceManager
+	statusManager            *services.StatusManager // Add StatusManager for unified status management
+	agentService             interfaces.AgentService // Add AgentService for lifecycle management
+	agentClient              interfaces.AgentClient  // Add AgentClient for agent communication
+	packageJobs              *packagejobs.Manager    // Async package install/update jobs
+	packageMaintenance       *packagemaint.Service   // Package restore/check/update loop
+	packageMaintenanceCancel context.CancelFunc
+	config                   *config.Config
+	storageHealthOverride    func(context.Context) gin.H
+	cacheHealthOverride      func(context.Context) gin.H
 	// DID Services
 	keystoreService     *services.KeystoreService
 	didService          *services.DIDService
@@ -171,6 +174,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	packageJobs.SetOnRegistryChange(func() {
 		_ = SyncPackagesFromRegistry(agentfieldHome, storageProvider)
 	})
+	packageMaintenance := newPackageMaintenance(agentfieldHome, storageProvider, agentService, packageJobs)
 
 	// Initialize StatusManager for unified status management
 	statusManagerConfig := services.StatusManagerConfig{
@@ -527,6 +531,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		agentService:           agentService,
 		agentClient:            agentClient,
 		packageJobs:            packageJobs,
+		packageMaintenance:     packageMaintenance,
 		config:                 cfg,
 		keystoreService:        keystoreService,
 		didService:             didService,
@@ -652,6 +657,12 @@ func (s *AgentFieldServer) Start() error {
 				logger.Logger.Warn().Err(err).Msg("source manager: LoadAll failed")
 			}
 		}()
+	}
+	if s.packageMaintenance != nil {
+		maintenanceCtx, cancel := context.WithCancel(context.Background())
+		s.packageMaintenanceCancel = cancel
+		s.packageMaintenance.SetLifecycleContext(maintenanceCtx)
+		go s.packageMaintenance.Run(maintenanceCtx)
 	}
 
 	// Start reasoner event heartbeat (30 second intervals)
@@ -844,6 +855,18 @@ func (s *AgentFieldServer) Stop() error {
 	if s.registryWatcherCancel != nil {
 		s.registryWatcherCancel()
 		s.registryWatcherCancel = nil
+	}
+
+	if s.packageMaintenanceCancel != nil {
+		s.packageMaintenanceCancel()
+		s.packageMaintenanceCancel = nil
+	}
+	if s.packageMaintenance != nil {
+		waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.packageMaintenance.Stop(waitCtx); err != nil {
+			logger.Logger.Warn().Err(err).Msg("timed out waiting for package maintenance to stop")
+		}
+		cancel()
 	}
 
 	// Stop UI service heartbeat
