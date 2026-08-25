@@ -388,7 +388,7 @@ func TestStopAgent_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	agentfieldHome := tmpDir
 
-	port := 8001
+	port := closedPort(t)
 	pid := 12345
 	startedAt := time.Now().Format(time.RFC3339)
 
@@ -951,7 +951,7 @@ func TestGetAgentStatus_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	agentfieldHome := tmpDir
 
-	port := 8001
+	port := closedPort(t)
 	pid := 12345
 	startedAt := time.Now().Format(time.RFC3339)
 
@@ -1035,7 +1035,7 @@ func TestReconcileProcessState_ProcessNotRunning(t *testing.T) {
 	tmpDir := t.TempDir()
 	agentfieldHome := tmpDir
 
-	port := 8001
+	port := closedPort(t)
 	pid := 12345
 	startedAt := time.Now().Format(time.RFC3339)
 
@@ -1081,7 +1081,7 @@ func TestReconcileProcessState_ProcessNotRunning(t *testing.T) {
 }
 
 func TestReconcileProcessState_ProcessRunning(t *testing.T) {
-	port := 8001
+	port := closedPort(t)
 	pid := 12345
 	startedAt := time.Now().Format(time.RFC3339)
 
@@ -1349,4 +1349,18 @@ func TestBuildProcessConfig(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "Expected AGENTFIELD_SERVER_URL in env")
+}
+
+// closedPort returns a loopback port nothing is listening on. Fixtures that
+// record a dead process must not depend on a fixed port being free: the read
+// path now probes the recorded port, and an anonymous healthy listener there
+// (a Go SDK node, or any dev server on the developer's machine) is legitimately
+// treated as ours.
+func closedPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := listener.Addr().(*net.TCPAddr).Port
+	require.NoError(t, listener.Close())
+	return port
 }
