@@ -870,8 +870,6 @@ func (as *DefaultAgentService) waitForAgentNode(port int, healthPath, expectedNo
 	impostor := ""
 	for time.Now().Before(deadline) {
 		request, requestErr := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%d%s", port, healthPath), nil)
-		if requestErr == nil {
-		}
 		var resp *http.Response
 		err := requestErr
 		if requestErr == nil {
