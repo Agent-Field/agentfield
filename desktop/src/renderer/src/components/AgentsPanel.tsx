@@ -75,14 +75,18 @@ export function visibleBundledRows(
 
 export function agentUpdateChip(agent: SnapshotAgent): string | null {
   if (agent.update?.status === 'failed') return 'Update failed'
+  if (agent.update?.status === 'error') return 'Update check failed'
   if (agent.autoUpdate === false) return 'Paused'
   if (agent.update?.status === 'available') return 'Update available'
+  // The pass found an update but the node was busy; it retries on its own.
+  if (agent.update?.status === 'deferred') return 'Update waiting for the node to be idle'
   if (agent.update?.status === 'pinned') return 'Pinned'
   return null
 }
 
 export function agentUpdateChipTitle(agent: SnapshotAgent): string | undefined {
-  return agent.update?.status === 'failed' ? agent.update.message : undefined
+  const status = agent.update?.status
+  return status === 'failed' || status === 'error' || status === 'deferred' ? agent.update?.message : undefined
 }
 
 export function agentManualUpdateActionVisible(_agent: SnapshotAgent): boolean {

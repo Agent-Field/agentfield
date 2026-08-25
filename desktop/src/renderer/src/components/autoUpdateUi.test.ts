@@ -252,6 +252,13 @@ describe('agent update chips', () => {
     expect(agentUpdateChip({ ...agent, update: { status: 'available', latestCommit: 'new', checkedAt: '', message: '' } })).toBe('Update available')
     expect(agentUpdateChip({ ...agent, update: { status: 'pinned', latestCommit: 'new', checkedAt: '', message: '' } })).toBe('Pinned')
     expect(agentUpdateChip({ ...agent, autoUpdate: false })).toBe('Paused')
+    // A deferred or errored check must not make a pending update disappear.
+    expect(agentUpdateChip({ ...agent, update: { status: 'deferred', latestCommit: 'new', checkedAt: '', message: 'active executions did not finish' } }))
+      .toBe('Update waiting for the node to be idle')
+    expect(agentUpdateChip({ ...agent, update: { status: 'error', latestCommit: '', checkedAt: '', message: 'git ls-remote failed' } }))
+      .toBe('Update check failed')
+    expect(agentUpdateChipTitle({ ...agent, update: { status: 'error', latestCommit: '', checkedAt: '', message: 'git ls-remote failed' } }))
+      .toBe('git ls-remote failed')
   })
 
   it('D10 — shows failed unattended updates while retaining manual update', () => {

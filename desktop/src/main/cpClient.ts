@@ -10,6 +10,10 @@ export type FetchLike = typeof fetch
 const READ_TIMEOUT_MS = 3_000
 const VERSION_TIMEOUT_MS = 10_000
 const MUTATION_TIMEOUT_MS = 10_000
+// Stopping a node that has stopped answering takes the control plane a
+// confirmation window (three probes) plus the graceful-shutdown wait before
+// it signals; the request must outlive that.
+const LIFECYCLE_TIMEOUT_MS = 60_000
 const PACKAGE_MAINTENANCE_TIMEOUT_MS = 120_000
 const DEFAULT_WATCH_INTERVAL_MS = 1_000
 const DEFAULT_WATCH_TIMEOUT_MS = 15 * 60_000
@@ -427,14 +431,14 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
       return request(
         `/api/ui/v1/agents/${encodeURIComponent(agentId)}/start`,
         { method: 'POST', body: JSON.stringify(startOptions ?? {}) },
-        { mutation: true }
+        { mutation: true, timeoutMs: LIFECYCLE_TIMEOUT_MS }
       )
     },
     stopAgent(agentId) {
       return request(
         `/api/ui/v1/agents/${encodeURIComponent(agentId)}/stop`,
         { method: 'POST' },
-        { mutation: true }
+        { mutation: true, timeoutMs: LIFECYCLE_TIMEOUT_MS }
       )
     },
     getAgentStatus(agentId) {
