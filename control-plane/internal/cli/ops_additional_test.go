@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagemaint"
 )
 
 func TestStopperAndUtilityHelpers(t *testing.T) {
@@ -68,7 +71,52 @@ func TestStopperAndUtilityHelpers(t *testing.T) {
 	})
 }
 
+type recordingRestoreAgent struct{ runs int }
+
+func (a *recordingRestoreAgent) RunAgent(string, domain.RunOptions) (*domain.RunningAgent, error) {
+	a.runs++
+	return &domain.RunningAgent{}, nil
+}
+
+func TestExplicitCLIStopDisarmsNextMaintenanceRestore(t *testing.T) {
+	for _, observedStatus := range []string{"running", "stopped"} {
+		t.Run(observedStatus, func(t *testing.T) {
+			home := t.TempDir()
+			port := 8123
+			stopper := &AgentNodeStopper{AgentFieldHome: home, Quiet: true}
+			registry := makeRegistry("demo", observedStatus, &port, nil)
+			entry := registry.Installed["demo"]
+			entry.DesiredState = packages.DesiredStateRunning
+			registry.Installed["demo"] = entry
+			require.NoError(t, stopper.saveRegistry(registry))
+
+			require.NoError(t, stopper.StopAgentNode("demo"))
+			stopped, err := stopper.loadRegistry()
+			require.NoError(t, err)
+			require.Equal(t, packages.DesiredStateStopped, stopped.Installed["demo"].DesiredState)
+
+			agent := &recordingRestoreAgent{}
+			maintenance := packagemaint.New(packagemaint.Config{
+				AgentFieldHome: home,
+				Agent:          agent,
+				Enabled:        func() (bool, string) { return false, "disabled" },
+				ProcessAlive:   func(packages.RuntimeInfo) bool { return false },
+				HealthProbe:    func(context.Context, int, string) packages.HealthIdentity { return packages.HealthIdentity{} },
+			})
+			summary := maintenance.RunPass(context.Background())
+			require.Zero(t, agent.runs, "a package explicitly stopped by af stop was restored")
+			require.Empty(t, summary.Restored)
+		})
+	}
+}
+
 func makeRegistry(name, status string, port, pid *int) *packages.InstallationRegistry {
+	startTime := ""
+	bootID := ""
+	if pid != nil {
+		startTime = packages.CurrentProcessStartTime(*pid)
+		bootID = packages.CurrentBootID()
+	}
 	return &packages.InstallationRegistry{
 		Installed: map[string]packages.InstalledPackage{
 			name: {
@@ -76,9 +124,11 @@ func makeRegistry(name, status string, port, pid *int) *packages.InstallationReg
 				Path:   filepath.Join("/tmp", name),
 				Status: status,
 				Runtime: packages.RuntimeInfo{
-					Port:    port,
-					PID:     pid,
-					LogFile: filepath.Join("/tmp", name+".log"),
+					Port:      port,
+					PID:       pid,
+					LogFile:   filepath.Join("/tmp", name+".log"),
+					BootID:    bootID,
+					StartTime: startTime,
 				},
 			},
 		},

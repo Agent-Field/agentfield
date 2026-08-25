@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
@@ -52,7 +54,8 @@ const (
 	// agentRestartPoll is how often the node record is re-read while waiting.
 	// The SDK heartbeats every 2s and re-registers immediately on boot, so a
 	// sub-second poll turns the recovery around as soon as it is visible.
-	agentRestartPoll = 250 * time.Millisecond
+	agentRestartPoll          = 250 * time.Millisecond
+	packageUpdateRestartGrace = 10 * time.Minute
 )
 
 // agentRestartGraceNanos holds the configured grace window. It follows the
@@ -60,6 +63,10 @@ const (
 // server startup, read on every dispatch. Stored as an int64 so tests can
 // change it without racing the async worker pool.
 var agentRestartGraceNanos atomic.Int64
+var updatingAgentNodes = struct {
+	sync.RWMutex
+	names map[string]bool
+}{names: make(map[string]bool)}
 
 func init() {
 	agentRestartGraceNanos.Store(int64(defaultAgentRestartGrace))
@@ -74,6 +81,33 @@ func SetAgentRestartGrace(d time.Duration) {
 
 func agentRestartGrace() time.Duration {
 	return time.Duration(agentRestartGraceNanos.Load())
+}
+
+// SetAgentUpdateInProgress extends dispatch restart tolerance for one node
+// while its package job deliberately takes the process down.
+func SetAgentUpdateInProgress(nodeID string, active bool) {
+	updatingAgentNodes.Lock()
+	defer updatingAgentNodes.Unlock()
+	if active {
+		updatingAgentNodes.names[nodeID] = true
+		return
+	}
+	delete(updatingAgentNodes.names, nodeID)
+}
+
+func agentRestartGraceFor(nodeID string) time.Duration {
+	configured := agentRestartGrace()
+	if configured <= 0 {
+		return configured
+	}
+	updatingAgentNodes.RLock()
+	defer updatingAgentNodes.RUnlock()
+	for updating := range updatingAgentNodes.names {
+		if packages.NodeIDsEquivalent(updating, nodeID) {
+			return packageUpdateRestartGrace
+		}
+	}
+	return configured
 }
 
 // agentHealthMarker is the optional slice of storage used to demote a node we
@@ -203,10 +237,10 @@ func (c *executionController) dispatchAgentRequest(ctx context.Context, plan *pr
 // Serverless nodes have no resident process to come back, so a dial failure
 // against one is a real outage and must surface immediately.
 func (c *executionController) agentMayRestart(plan *preparedExecution) bool {
-	if agentRestartGrace() <= 0 {
+	if plan == nil || plan.agent == nil || plan.target == nil {
 		return false
 	}
-	if plan == nil || plan.agent == nil || plan.target == nil {
+	if agentRestartGraceFor(plan.target.NodeID) <= 0 {
 		return false
 	}
 	return plan.agent.DeploymentType != "serverless"
@@ -235,12 +269,13 @@ func (c *executionController) agentMayRestart(plan *preparedExecution) bool {
 func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *preparedExecution, dialErr error) (*http.Response, error) {
 	observedInstance := plan.agent.InstanceID
 	observedHeartbeat := plan.agent.LastHeartbeat
-	deadline := time.Now().Add(agentRestartGrace())
+	grace := agentRestartGraceFor(plan.target.NodeID)
+	deadline := time.Now().Add(grace)
 
 	logger.Logger.Info().
 		Str("execution_id", plan.exec.ExecutionID).
 		Str("agent_node_id", plan.target.NodeID).
-		Dur("grace", agentRestartGrace()).
+		Dur("grace", grace).
 		Msg("agent node did not accept the connection; waiting for it to come back before failing the execution")
 
 	// Claim the execution before the node re-registers, so the orphan reaper

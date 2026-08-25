@@ -102,6 +102,37 @@ func TestAgentRestartGraceIsConfigurable(t *testing.T) {
 	assert.Equal(t, 42*time.Second, agentRestartGrace())
 }
 
+func TestPackageUpdateExtendsRestartGraceForOnlyThatNode(t *testing.T) {
+	previous := agentRestartGrace()
+	SetAgentRestartGrace(15 * time.Second)
+	t.Cleanup(func() { SetAgentRestartGrace(previous) })
+	SetAgentUpdateInProgress("swe-planner", true)
+	t.Cleanup(func() { SetAgentUpdateInProgress("swe-planner", false) })
+
+	if got := agentRestartGraceFor("swe_planner"); got != 10*time.Minute {
+		t.Fatalf("updating node grace = %s, want 10m", got)
+	}
+	if got := agentRestartGraceFor("other-node"); got != 15*time.Second {
+		t.Fatalf("unrelated node grace = %s, want configured default", got)
+	}
+	SetAgentUpdateInProgress("swe-planner", false)
+	if got := agentRestartGraceFor("swe-planner"); got != 15*time.Second {
+		t.Fatalf("completed update grace = %s, want configured default", got)
+	}
+}
+
+func TestPackageUpdateDoesNotOverrideExplicitlyDisabledRestartGrace(t *testing.T) {
+	previous := agentRestartGrace()
+	SetAgentRestartGrace(0)
+	t.Cleanup(func() { SetAgentRestartGrace(previous) })
+	SetAgentUpdateInProgress("swe-planner", true)
+	t.Cleanup(func() { SetAgentUpdateInProgress("swe-planner", false) })
+
+	if got := agentRestartGraceFor("swe_planner"); got != 0 {
+		t.Fatalf("updating node grace=%s, want explicitly disabled", got)
+	}
+}
+
 func TestAgentCameBack(t *testing.T) {
 	base := time.Now().Add(-time.Minute)
 
@@ -320,6 +351,9 @@ func TestDispatchAgentRequestGivesUpAndDemotesTheNode(t *testing.T) {
 		restartingStore: &restartingStore{testExecutionStorage: newTestExecutionStorage(dead)},
 	}
 	controller := newExecutionController(store, nil, nil, 0, "")
+	controller.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	})
 
 	resp, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
 	require.Error(t, err)
@@ -612,10 +646,13 @@ func TestDispatchAgentRequestToleratesFailingNodeReads(t *testing.T) {
 		InstanceID:     "instance-old",
 	}
 	controller := newExecutionController(&errAgentReadStore{newTestExecutionStorage(dead)}, nil, nil, 0, "")
+	controller.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	})
 
 	_, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
 	require.Error(t, err)
-	assert.True(t, isDialFailure(err))
+	assert.True(t, isDialFailure(err), "error type %T: %v", err, err)
 }
 
 func TestDispatchAgentRequestKeepsWaitingWhenTheNodeIsNotServingYet(t *testing.T) {
@@ -640,6 +677,9 @@ func TestDispatchAgentRequestKeepsWaitingWhenTheNodeIsNotServingYet(t *testing.T
 		},
 	}
 	controller := newExecutionController(store, nil, nil, 0, "")
+	controller.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	})
 
 	_, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
 	require.Error(t, err)
