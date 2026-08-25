@@ -23,6 +23,7 @@ const (
 	StatusUnknown   Status = "unknown"
 	StatusDeferred  Status = "deferred"
 	StatusError     Status = "error"
+	StatusFailed    Status = "failed"
 )
 
 type Update struct {
@@ -109,7 +110,13 @@ func (c *Checker) checkLocked(ctx context.Context, entries []Entry) []Result {
 	results := make([]Result, 0, len(entries))
 	for _, entry := range entries {
 		result := Result{ID: entry.ID, Name: entry.Name, InstalledCommit: entry.InstalledCommit}
+		previous := c.Cached(entry.ID)
 		result.Update = c.checkOne(ctx, entry, checkedAt)
+		if previous.Status == StatusFailed && result.Update.Status == StatusAvailable &&
+			previous.LatestCommit != "" && previous.LatestCommit == result.Update.LatestCommit {
+			result.Update.Status = StatusFailed
+			result.Update.Message = previous.Message
+		}
 		if !(result.Update.Status == StatusError && ctx.Err() != nil) {
 			c.Set(entry.ID, result.Update)
 		}

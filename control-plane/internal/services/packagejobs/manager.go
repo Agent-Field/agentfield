@@ -37,6 +37,14 @@ var (
 	ansiRE       = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 )
 
+type ErrExecutionsActive struct {
+	Count int
+}
+
+func (e *ErrExecutionsActive) Error() string {
+	return fmt.Sprintf("%d active execution(s) must finish before updating", e.Count)
+}
+
 type JobKind string
 
 const (
@@ -84,16 +92,18 @@ type updateStopper interface {
 }
 
 type Manager struct {
-	mu               sync.RWMutex
-	installer        installer
-	agentService     interfaces.AgentService
-	agentfieldHome   string
-	jobs             map[string]*Job
-	order            []string
-	active           bool
-	portAvailable    func(int) bool
-	clearUpdateCache func(string)
-	onUpdateState    func(string, bool)
+	mu                sync.RWMutex
+	installer         installer
+	agentService      interfaces.AgentService
+	agentfieldHome    string
+	jobs              map[string]*Job
+	order             []string
+	active            bool
+	activePackage     string
+	portAvailable     func(int) bool
+	clearUpdateCache  func(string)
+	onUpdateState     func(string, bool)
+	executionActivity func(string) (int, error)
 	// onRegistryChange runs synchronously after a mutation lands in
 	// installed.yaml so API reads are consistent with API writes (the
 	// fsnotify watcher also syncs, but asynchronously).
@@ -142,6 +152,12 @@ func (m *Manager) SetUpdateCacheClearer(fn func(string)) {
 func (m *Manager) SetUpdateStateHook(fn func(string, bool)) {
 	m.mu.Lock()
 	m.onUpdateState = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) SetExecutionActivity(fn func(packageName string) (int, error)) {
+	m.mu.Lock()
+	m.executionActivity = fn
 	m.mu.Unlock()
 }
 
@@ -198,23 +214,37 @@ func (m *Manager) StartInstall(source string, force bool) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	return m.startJob(JobInstall, normalized, "", force, "", 0)
+	return m.startJob(JobInstall, normalized, "", force, "", 0, nil)
 }
 
-func (m *Manager) StartUpdate(packageName, source string) (*Job, error) {
-	return m.startUpdate(packageName, source, false)
+func (m *Manager) StartUpdate(packageName, source string, force bool) (*Job, error) {
+	return m.startUpdate(packageName, source, false, force)
 }
 
 // StartMaintenanceUpdate applies the same recorded-source update contract as
 // StartUpdate while constraining superseded redirects to the current name.
 func (m *Manager) StartMaintenanceUpdate(packageName, source string) (*Job, error) {
-	return m.startUpdate(packageName, source, true)
+	return m.startUpdate(packageName, source, true, true)
 }
 
-func (m *Manager) startUpdate(packageName, source string, unattended bool) (*Job, error) {
+func (m *Manager) startUpdate(packageName, source string, unattended, force bool) (*Job, error) {
 	entry, err := m.registryEntry(packageName)
 	if err != nil {
 		return nil, err
+	}
+	if !unattended && !force {
+		m.mu.RLock()
+		activity := m.executionActivity
+		m.mu.RUnlock()
+		if activity != nil {
+			count, activityErr := activity(packageName)
+			if activityErr != nil {
+				return nil, activityErr
+			}
+			if count > 0 {
+				return nil, &ErrExecutionsActive{Count: count}
+			}
+		}
 	}
 	if strings.TrimSpace(source) != "" {
 		// Desktop catalog updates deliberately replace a stale recorded source;
@@ -234,10 +264,21 @@ func (m *Manager) startUpdate(packageName, source string, unattended bool) (*Job
 	if entry.Runtime.Port != nil {
 		previousPort = *entry.Runtime.Port
 	}
-	return m.startJob(JobUpdate, source, packageName, true, expectedName, previousPort)
+	var beforeLaunch func()
+	if !unattended {
+		beforeLaunch = func() {
+			m.mu.RLock()
+			clear := m.clearUpdateCache
+			m.mu.RUnlock()
+			if clear != nil {
+				clear(packageName)
+			}
+		}
+	}
+	return m.startJob(JobUpdate, source, packageName, true, expectedName, previousPort, beforeLaunch)
 }
 
-func (m *Manager) startJob(kind JobKind, source, packageName string, force bool, expectedName string, previousPort int) (*Job, error) {
+func (m *Manager) startJob(kind JobKind, source, packageName string, force bool, expectedName string, previousPort int, beforeLaunch func()) (*Job, error) {
 	m.mu.Lock()
 	if m.active {
 		m.mu.Unlock()
@@ -254,12 +295,16 @@ func (m *Manager) startJob(kind JobKind, source, packageName string, force bool,
 		previousPort: previousPort,
 	}
 	m.active = true
+	m.activePackage = packageName
 	m.jobs[job.ID] = job
 	m.order = append(m.order, job.ID)
 	m.evictLocked()
 	result := cloneJob(job)
 	m.mu.Unlock()
 
+	if beforeLaunch != nil {
+		beforeLaunch()
+	}
 	go m.run(job.ID, force)
 	return result, nil
 }
@@ -282,18 +327,25 @@ func (m *Manager) run(jobID string, force bool) {
 	m.appendLine(jobID, fmt.Sprintf("installing %s", source))
 	var err error
 	var wasRunning bool
+	var replaceHookFired bool
 	if kind == JobUpdate {
 		wasRunning, err = m.isRunning(packageName)
-		if err == nil && wasRunning {
-			m.appendLine(jobID, fmt.Sprintf("stopping %s", packageName))
-			err = m.stopForUpdate(packageName)
-		}
 	}
 
 	before := m.installedNames()
 	if err == nil {
 		installSource, options := splitSubdir(source, force)
 		options.ExpectedPackageName = expectedName
+		if kind == JobUpdate {
+			options.BeforeReplace = func() error {
+				replaceHookFired = true
+				if !wasRunning {
+					return nil
+				}
+				m.appendLine(jobID, fmt.Sprintf("stopping %s", packageName))
+				return m.stopForUpdate(packageName)
+			}
+		}
 		if reporting, ok := m.installer.(resultInstaller); ok {
 			var installedName string
 			installedName, err = reporting.InstallPackageWithResult(installSource, options)
@@ -314,7 +366,7 @@ func (m *Manager) run(jobID string, force bool) {
 	if err == nil && packageName == "" {
 		packageName = m.discoverPackageName(before)
 	}
-	if kind == JobUpdate && wasRunning {
+	if kind == JobUpdate && wasRunning && replaceHookFired {
 		restartName := packageName
 		if err != nil {
 			restartName = job.PackageName
@@ -341,7 +393,9 @@ func (m *Manager) run(jobID string, force bool) {
 			clear := m.clearUpdateCache
 			m.mu.RUnlock()
 			if clear != nil {
-				clear(job.PackageName)
+				if expectedName != "" {
+					clear(job.PackageName)
+				}
 				if packageName != job.PackageName {
 					clear(packageName)
 				}
@@ -413,10 +467,12 @@ func (m *Manager) Uninstall(packageName string) error {
 		return ErrBusy
 	}
 	m.active = true
+	m.activePackage = packageName
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
 		m.active = false
+		m.activePackage = ""
 		m.mu.Unlock()
 	}()
 
@@ -447,6 +503,14 @@ func (m *Manager) GetJob(id string) (*Job, bool) {
 		return nil, false
 	}
 	return cloneJob(job), true
+}
+
+// ActiveFor reports whether the package currently owns the manager's single
+// mutation slot. Restore uses it to avoid launching from files being replaced.
+func (m *Manager) ActiveFor(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.active && m.activePackage != "" && packages.NodeIDsEquivalent(m.activePackage, name)
 }
 
 func (m *Manager) ListJobs() []*Job {
@@ -488,6 +552,7 @@ func (m *Manager) finish(id, packageName string, runErr error) {
 		job.Status = StatusSucceeded
 	}
 	m.active = false
+	m.activePackage = ""
 }
 
 func (m *Manager) evictLocked() {

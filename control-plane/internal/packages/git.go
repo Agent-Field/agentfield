@@ -44,6 +44,10 @@ type GitInstaller struct {
 	// that keep the installed name and rejects a rename before any replacement
 	// package is copied.
 	ExpectedName string
+	// BeforeReplace is the update job's stop boundary. It is deliberately later
+	// than cloning, validation, metadata parsing, and superseded_by resolution,
+	// so failures in those phases never take a live node down.
+	BeforeReplace func() error
 	// BeforeForceInstall stops an existing running package before its files are
 	// replaced. Tests and higher-level callers may inject the lifecycle effect;
 	// the default uses the persisted PID identity directly.
@@ -255,29 +259,34 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	if !force && replacing {
 		return fmt.Errorf("package %s already installed (use --force to reinstall)", metadata.Name)
 	}
+	// Install using existing flow
+	destPath := filepath.Join(gi.AgentFieldHome, "packages", metadata.Name)
 	reinstallState := ReinstallState{}
 	if force && replacing {
-		stop := gi.BeforeForceInstall
-		if stop == nil {
-			var stateErr error
-			reinstallState, stateErr = StopPackageForReinstall(context.Background(), gi.AgentFieldHome, metadata.Name)
-			if stateErr != nil {
-				return fmt.Errorf("failed to stop %s before reinstall: %w", metadata.Name, stateErr)
+		if gi.BeforeReplace != nil {
+			if err := gi.BeforeReplace(); err != nil {
+				return fmt.Errorf("failed to prepare %s for replacement: %w", metadata.Name, err)
 			}
 		} else {
-			var stateErr error
-			reinstallState, stateErr = PackageReinstallState(gi.AgentFieldHome, metadata.Name)
-			if stateErr != nil {
-				return fmt.Errorf("failed to read %s before reinstall: %w", metadata.Name, stateErr)
-			}
-			if err := stop(metadata.Name); err != nil {
-				return fmt.Errorf("failed to stop %s before reinstall: %w", metadata.Name, err)
+			stop := gi.BeforeForceInstall
+			if stop == nil {
+				var stateErr error
+				reinstallState, stateErr = StopPackageForReinstall(context.Background(), gi.AgentFieldHome, metadata.Name)
+				if stateErr != nil {
+					return fmt.Errorf("failed to stop %s before reinstall: %w", metadata.Name, stateErr)
+				}
+			} else {
+				var stateErr error
+				reinstallState, stateErr = PackageReinstallState(gi.AgentFieldHome, metadata.Name)
+				if stateErr != nil {
+					return fmt.Errorf("failed to read %s before reinstall: %w", metadata.Name, stateErr)
+				}
+				if err := stop(metadata.Name); err != nil {
+					return fmt.Errorf("failed to stop %s before reinstall: %w", metadata.Name, err)
+				}
 			}
 		}
 	}
-
-	// Install using existing flow
-	destPath := filepath.Join(gi.AgentFieldHome, "packages", metadata.Name)
 
 	// Reinstalling clears the destination before the replacement is copied,
 	// and long before its dependencies finish building — a missing toolchain
@@ -548,6 +557,7 @@ func (gi *GitInstaller) followSupersededBy(fromName, target string, force bool) 
 		Verbose:            gi.Verbose,
 		redirects:          gi.redirects + 1,
 		ExpectedName:       gi.ExpectedName,
+		BeforeReplace:      gi.BeforeReplace,
 		BeforeForceInstall: gi.BeforeForceInstall,
 		AfterForceInstall:  gi.AfterForceInstall,
 	}

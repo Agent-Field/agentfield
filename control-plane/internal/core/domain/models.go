@@ -75,6 +75,10 @@ type InstallOptions struct {
 	// ExpectedPackageName constrains unattended updates to an in-place package
 	// name. Empty preserves interactive/user-initiated supersede behaviour.
 	ExpectedPackageName string `json:"-"`
+	// BeforeReplace is a git-install transaction boundary. It runs only after
+	// the incoming tree and manifest have been validated, immediately before
+	// the installed directory is stashed for replacement.
+	BeforeReplace func() error `json:"-"`
 }
 
 // RunOptions represents options for running an agent

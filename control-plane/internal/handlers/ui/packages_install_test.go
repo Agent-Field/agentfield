@@ -13,16 +13,20 @@ import (
 )
 
 type stubPackageJobManager struct {
-	startInstall func(string, bool) (*packagejobs.Job, error)
-	startUpdate  func(string, string) (*packagejobs.Job, error)
-	uninstall    func(string) error
-	jobs         map[string]*packagejobs.Job
+	startInstall      func(string, bool) (*packagejobs.Job, error)
+	startUpdate       func(string, string) (*packagejobs.Job, error)
+	startUpdateForced func(string, string, bool) (*packagejobs.Job, error)
+	uninstall         func(string) error
+	jobs              map[string]*packagejobs.Job
 }
 
 func (s *stubPackageJobManager) StartInstall(source string, force bool) (*packagejobs.Job, error) {
 	return s.startInstall(source, force)
 }
-func (s *stubPackageJobManager) StartUpdate(name, source string) (*packagejobs.Job, error) {
+func (s *stubPackageJobManager) StartUpdate(name, source string, force bool) (*packagejobs.Job, error) {
+	if s.startUpdateForced != nil {
+		return s.startUpdateForced(name, source, force)
+	}
 	return s.startUpdate(name, source)
 }
 func (s *stubPackageJobManager) Uninstall(name string) error { return s.uninstall(name) }
@@ -198,6 +202,45 @@ func TestUpdatePackageHandlerMapsInvalidSourceToBadRequest(t *testing.T) {
 	NewPackageInstallHandler(manager).UpdatePackageHandler(ctx)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestC23ManualUpdateRequiresForceWhenExecutionsAreActive(t *testing.T) {
+	manager := &stubPackageJobManager{startUpdateForced: func(name, source string, force bool) (*packagejobs.Job, error) {
+		if name != "demo" || source != "" {
+			t.Fatalf("name=%q source=%q", name, source)
+		}
+		if !force {
+			return nil, &packagejobs.ErrExecutionsActive{Count: 1}
+		}
+		return &packagejobs.Job{ID: "forced"}, nil
+	}}
+	handler := NewPackageInstallHandler(manager)
+	ctx, response := testContext(http.MethodPost, "/", nil, gin.Param{Key: "packageId", Value: "demo"})
+	handler.UpdatePackageHandler(ctx)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var conflict struct {
+		Code             string `json:"code"`
+		ActiveExecutions int    `json:"active_executions"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &conflict); err != nil || conflict.Code != "executions_active" || conflict.ActiveExecutions != 1 {
+		t.Fatalf("conflict=%+v err=%v", conflict, err)
+	}
+	ctx, response = testContext(http.MethodPost, "/", []byte(`{"force":true}`), gin.Param{Key: "packageId", Value: "demo"})
+	handler.UpdatePackageHandler(ctx)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("forced status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	manager.startUpdateForced = func(string, string, bool) (*packagejobs.Job, error) {
+		return &packagejobs.Job{ID: "idle"}, nil
+	}
+	ctx, response = testContext(http.MethodPost, "/", nil, gin.Param{Key: "packageId", Value: "demo"})
+	handler.UpdatePackageHandler(ctx)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("idle status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

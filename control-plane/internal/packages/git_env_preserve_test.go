@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestGitReinstallPreservesExistingDotEnv(t *testing.T) {
+func TestC22GitReinstallPreservesExistingDotEnv(t *testing.T) {
 	home := t.TempDir()
 	repo := filepath.Join(t.TempDir(), "repo")
 	writeTestPackage(t, repo, "name: env-demo\nversion: 2.0.0\n")

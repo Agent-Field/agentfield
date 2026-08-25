@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -233,7 +234,7 @@ func TestInstallCommand_MetadataAndExecute(t *testing.T) {
 			if pkgSvc.lastSource != tt.wantSource {
 				t.Fatalf("InstallPackage() source = %q, want %q", pkgSvc.lastSource, tt.wantSource)
 			}
-			if pkgSvc.lastOptions != tt.wantOptions {
+			if !reflect.DeepEqual(pkgSvc.lastOptions, tt.wantOptions) {
 				t.Fatalf("InstallPackage() options = %+v, want %+v", pkgSvc.lastOptions, tt.wantOptions)
 			}
 			if pkgSvc.listCalls != tt.wantListCalls {
