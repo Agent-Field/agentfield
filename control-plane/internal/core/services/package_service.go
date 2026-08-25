@@ -61,6 +61,7 @@ func (ps *DefaultPackageService) InstallPackageWithResult(source string, options
 	depOptions := options
 	depOptions.Path = ""
 	depOptions.ExpectedPackageName = ""
+	depOptions.BeforeReplace = nil
 	if err := ps.installNodeDependencies(installedName, depOptions, map[string]bool{installedName: true}); err != nil {
 		return "", err
 	}
@@ -76,6 +77,7 @@ func (ps *DefaultPackageService) installOne(source string, options domain.Instal
 			Verbose:        options.Verbose,
 			Subdir:         options.Path,
 			ExpectedName:   options.ExpectedPackageName,
+			BeforeReplace:  options.BeforeReplace,
 		}
 		if err := installer.InstallFromGit(source, options.Force); err != nil {
 			return "", err

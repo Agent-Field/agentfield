@@ -29,6 +29,10 @@ func (j unattendedPackageJobs) GetJob(id string) (*packagejobs.Job, bool) {
 	return j.manager.GetJob(id)
 }
 
+func (j unattendedPackageJobs) ActiveFor(name string) bool {
+	return j.manager.ActiveFor(name)
+}
+
 type packageExecutionActivity struct {
 	storage storage.StorageProvider
 	home    string
@@ -48,10 +52,7 @@ func (a packageExecutionActivity) HasActiveExecutions(ctx context.Context, packa
 		for _, candidate := range candidates {
 			candidate := candidate
 			executions, err := a.storage.QueryExecutionRecords(ctx, types.ExecutionFilter{
-				AgentNodeID:     &candidate,
-				Status:          &status,
-				Limit:           1,
-				ExcludePayloads: true,
+				AgentNodeID: &candidate, Status: &status, Limit: 1, ExcludePayloads: true,
 			})
 			if err != nil {
 				return false, err
@@ -60,17 +61,11 @@ func (a packageExecutionActivity) HasActiveExecutions(ctx context.Context, packa
 				return true, nil
 			}
 		}
-
 		if len(candidates) == 1 {
 			continue
 		}
-		// More than one resolved candidate means the registry/manifest names do
-		// not identify one exact execution key. Scan a bounded compatibility
-		// window for older SDK punctuation/case variants only in that case.
 		executions, err := a.storage.QueryExecutionRecords(ctx, types.ExecutionFilter{
-			Status:          &status,
-			Limit:           packageExecutionFallbackLimit,
-			ExcludePayloads: true,
+			Status: &status, Limit: packageExecutionFallbackLimit, ExcludePayloads: true,
 		})
 		if err != nil {
 			return false, err
@@ -87,6 +82,65 @@ func (a packageExecutionActivity) HasActiveExecutions(ctx context.Context, packa
 		}
 	}
 	return false, nil
+}
+
+func (a packageExecutionActivity) ActiveExecutions(ctx context.Context, packageName string) (int, error) {
+	candidates, err := packageAgentNodeIDs(a.home, packageName)
+	if err != nil {
+		return 0, err
+	}
+	active := make(map[string]struct{})
+	for _, status := range []string{
+		types.ExecutionStatusRunning,
+		types.ExecutionStatusPending,
+		types.ExecutionStatusQueued,
+		types.ExecutionStatusWaiting,
+	} {
+		for _, candidate := range candidates {
+			candidate := candidate
+			executions, err := a.storage.QueryExecutionRecords(ctx, types.ExecutionFilter{
+				AgentNodeID:     &candidate,
+				Status:          &status,
+				Limit:           packageExecutionFallbackLimit,
+				ExcludePayloads: true,
+			})
+			if err != nil {
+				return 0, err
+			}
+			for _, execution := range executions {
+				if execution != nil {
+					active[execution.ExecutionID] = struct{}{}
+				}
+			}
+		}
+
+		if len(candidates) == 1 {
+			continue
+		}
+		// More than one resolved candidate means the registry/manifest names do
+		// not identify one exact execution key. Scan a bounded compatibility
+		// window for older SDK punctuation/case variants only in that case.
+		executions, err := a.storage.QueryExecutionRecords(ctx, types.ExecutionFilter{
+			Status:          &status,
+			Limit:           packageExecutionFallbackLimit,
+			ExcludePayloads: true,
+		})
+		if err != nil {
+			return 0, err
+		}
+		for _, execution := range executions {
+			if execution == nil {
+				continue
+			}
+			for _, candidate := range candidates {
+				if packages.NodeIDsEquivalent(execution.AgentNodeID, candidate) {
+					active[execution.ExecutionID] = struct{}{}
+					break
+				}
+			}
+		}
+	}
+	return len(active), nil
 }
 
 func packageAgentNodeIDs(home, packageName string) ([]string, error) {
@@ -154,16 +208,22 @@ func (h *packageUpdateGraceHook) set(packageName string, active bool) {
 	}
 }
 
-func newPackageMaintenance(home string, store storage.StorageProvider, agent interfaces.AgentService, jobs *packagejobs.Manager) *packagemaint.Service {
+func newPackageMaintenance(home string, store storage.StorageProvider, agent interfaces.AgentService, jobs *packagejobs.Manager, ready <-chan struct{}) *packagemaint.Service {
+	grace := &packageUpdateGraceHook{home: home, nodeIDs: make(map[string]string)}
+	activity := packageExecutionActivity{storage: store, home: home}
 	maintenance := packagemaint.New(packagemaint.Config{
 		AgentFieldHome:   home,
 		Jobs:             unattendedPackageJobs{manager: jobs},
 		Agent:            agent,
-		Executions:       packageExecutionActivity{storage: store, home: home},
+		Executions:       activity,
+		Ready:            ready,
+		OnRestoreState:   grace.set,
 		OnRegistryChange: func() { _ = SyncPackagesFromRegistry(home, store) },
 	})
 	jobs.SetUpdateCacheClearer(maintenance.Checker().Clear)
-	grace := &packageUpdateGraceHook{home: home, nodeIDs: make(map[string]string)}
 	jobs.SetUpdateStateHook(grace.set)
+	jobs.SetExecutionActivity(func(packageName string) (int, error) {
+		return activity.ActiveExecutions(context.Background(), packageName)
+	})
 	return maintenance
 }

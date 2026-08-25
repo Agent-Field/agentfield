@@ -10,6 +10,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -294,22 +295,22 @@ func (s *AgentFieldServer) versionHandler(c *gin.Context) {
 }
 
 func detectHosting() hostingInfo {
-	if serviceID := os.Getenv("RAILWAY_SERVICE_ID"); serviceID != "" {
+	platform := packages.HostingPlatform()
+	if platform == packages.HostingRailway {
+		serviceID := os.Getenv("RAILWAY_SERVICE_ID")
 		return hostingInfo{
-			Platform:      "railway",
+			Platform:      platform,
 			ProjectID:     os.Getenv("RAILWAY_PROJECT_ID"),
 			EnvironmentID: os.Getenv("RAILWAY_ENVIRONMENT_ID"),
 			ServiceID:     serviceID,
 			DeploymentID:  os.Getenv("RAILWAY_DEPLOYMENT_ID"),
 			Region:        os.Getenv("RAILWAY_REPLICA_REGION"),
 		}
+	} else if platform == packages.HostingDocker {
+		return hostingInfo{Platform: platform}
 	}
 
-	if _, err := os.Stat("/.dockerenv"); err == nil || os.Getenv("AGENTFIELD_HOME") == "/data" {
-		return hostingInfo{Platform: "docker"}
-	}
-
-	return hostingInfo{Platform: "local"}
+	return hostingInfo{Platform: packages.HostingLocal}
 }
 
 // checkStorageHealth performs a lightweight storage readiness probe.

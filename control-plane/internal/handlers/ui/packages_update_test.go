@@ -31,6 +31,15 @@ func (r *requestContextRunner) Run(ctx context.Context, _ ...string) ([]byte, er
 	return []byte("new\tHEAD\n"), nil
 }
 
+func TestC18PackagesListExposesFailedUpdateMessage(t *testing.T) {
+	info := packageInfoFromRegistry("demo", packages.InstalledPackage{Name: "demo"}, updatecheck.Update{
+		Status: updatecheck.StatusFailed, LatestCommit: "deadbeef", Message: "rename requires a manual update",
+	})
+	if info.Update.Status != updatecheck.StatusFailed || info.Update.Message != "rename requires a manual update" {
+		t.Fatalf("update=%+v", info.Update)
+	}
+}
+
 type endpointMaintenance struct {
 	entries       []updatecheck.Entry
 	entriesErr    error

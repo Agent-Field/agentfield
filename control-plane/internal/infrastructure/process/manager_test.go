@@ -3,7 +3,9 @@ package process
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -67,6 +69,23 @@ func TestDefaultProcessManager_StopHandlesExitedProcess(t *testing.T) {
 	require.Error(t, err, "process should be removed after stop")
 }
 
+func TestC10StopKillsChildThatIgnoresSIGTERMWithinSixSeconds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process helper uses POSIX signals")
+	}
+	pm := NewProcessManager().(*DefaultProcessManager)
+	pid, err := pm.Start(helperProcessConfig("ignore-term"))
+	require.NoError(t, err)
+	time.Sleep(100 * time.Millisecond)
+	process := pm.runningProcesses[pid].Process
+	started := time.Now()
+	require.NoError(t, pm.Stop(pid))
+	elapsed := time.Since(started)
+	assert.Less(t, elapsed, 6*time.Second)
+	assert.GreaterOrEqual(t, elapsed, 4*time.Second)
+	assert.Error(t, process.Signal(syscall.Signal(0)), "force-killed child still exists")
+}
+
 func TestProcessHelper(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
@@ -79,6 +98,9 @@ func TestProcessHelper(t *testing.T) {
 
 	switch mode {
 	case "block":
+		select {}
+	case "ignore-term":
+		signal.Ignore(syscall.SIGTERM)
 		select {}
 	case "exit":
 		// Exit immediately

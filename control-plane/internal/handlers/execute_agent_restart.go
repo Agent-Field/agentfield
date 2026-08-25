@@ -128,8 +128,11 @@ var _ agentHealthMarker = (*storage.LocalStorage)(nil)
 // heartbeated yet — common in the seconds after registration — and must be
 // allowed through, otherwise the very first call of a session fails. Same for
 // "degraded", which is a partial-capacity signal, not an outage.
-func ensureAgentDispatchable(agent *types.AgentNode) error {
+func ensureAgentDispatchable(agent *types.AgentNode, nodeID string) error {
 	if agent == nil {
+		return nil
+	}
+	if agentRestartGraceFor(nodeID) == packageUpdateRestartGrace {
 		return nil
 	}
 	if agent.HealthStatus == types.HealthStatusInactive {
@@ -270,6 +273,7 @@ func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *
 	observedInstance := plan.agent.InstanceID
 	observedHeartbeat := plan.agent.LastHeartbeat
 	grace := agentRestartGraceFor(plan.target.NodeID)
+	updateGrace := grace == packageUpdateRestartGrace
 	deadline := time.Now().Add(grace)
 
 	logger.Logger.Info().
@@ -312,7 +316,7 @@ func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *
 			// Waiting longer cannot help — it would only serialize behind a
 			// verdict that has already been reached — so surface the dial
 			// error now instead of burning the rest of the grace.
-			if agent.HealthStatus == types.HealthStatusInactive || agent.LifecycleStatus == types.AgentStatusOffline {
+			if !updateGrace && (agent.HealthStatus == types.HealthStatusInactive || agent.LifecycleStatus == types.AgentStatusOffline) {
 				break
 			}
 			continue
@@ -360,7 +364,9 @@ func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *
 	}
 
 	c.clearExecutionAwaitingRestart(ctx, plan)
-	c.markAgentUnreachable(ctx, plan)
+	if !updateGrace {
+		c.markAgentUnreachable(ctx, plan)
+	}
 	return nil, lastErr
 }
 

@@ -252,7 +252,7 @@ func TestPackageMaintenanceServerAdapterWiresRegistryChangesAndUnattendedJobs(t 
 	if _, ok := adapter.GetJob("missing"); ok {
 		t.Fatal("unknown job unexpectedly exists")
 	}
-	maintenance := newPackageMaintenance(home, store, nil, jobs)
+	maintenance := newPackageMaintenance(home, store, nil, jobs, nil)
 	if _, err := maintenance.SetAutoUpdate("demo", false); err != nil {
 		t.Fatal(err)
 	}

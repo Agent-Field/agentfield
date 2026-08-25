@@ -1604,7 +1604,7 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 	// contacting the agent, so the node being down must not reject it (a
 	// replay miss simply dials and fails exactly as it did before this gate).
 	if agent.DeploymentType != "serverless" && strings.TrimSpace(headers.replaySourceRunID) == "" {
-		if err := ensureAgentDispatchable(agent); err != nil {
+		if err := ensureAgentDispatchable(agent, target.NodeID); err != nil {
 			return nil, err
 		}
 	}

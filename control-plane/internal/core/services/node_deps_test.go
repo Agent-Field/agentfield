@@ -113,7 +113,7 @@ func TestStartNodeDependencies_SkipsRunningDep(t *testing.T) {
 				Name:    "dep-node",
 				Path:    depDir,
 				Status:  "running",
-				Runtime: packages.RuntimeInfo{PID: &pid, Port: &port},
+				Runtime: packages.RuntimeInfo{PID: &pid, Port: &port, StartTime: packages.CurrentProcessStartTime(pid)},
 			},
 		},
 	})
