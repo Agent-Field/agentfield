@@ -1,3 +1,4 @@
+import os
 import socket
 
 import pytest
@@ -105,9 +106,13 @@ def test_is_port_available(monkeypatch, available):
     result = AgentUtils.is_port_available(4321)
     assert result is available
     assert calls.get("created") is True
-    assert calls.get("reuseaddr") == (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if os.name != "nt":
+        assert calls.get("reuseaddr") == (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    else:
+        assert "reuseaddr" not in calls
 
 
+@pytest.mark.skipif(os.name == "nt", reason="TIME_WAIT reuse is POSIX bind semantics")
 def test_is_port_available_agrees_with_a_reuseaddr_server_after_time_wait():
     """A port whose last connection is in TIME_WAIT is one uvicorn can bind
     (it sets SO_REUSEADDR), so the availability check must say so — otherwise a
