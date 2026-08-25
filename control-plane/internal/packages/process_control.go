@@ -244,6 +244,17 @@ func StopRecordedProcessWithAssessment(ctx context.Context, name string, entry I
 	}
 
 	if !assessment.SignalAllowed {
+		// The port still answers as this node but the recorded PID is not the
+		// process serving it (restarted by hand, a supervisor, …) and there is
+		// no shutdown endpoint to fall back on. Say so instead of reporting a
+		// stop that did not happen — the caller keeps the record.
+		if assessment.Ownership == RecordedProcessOursHealthy && !result.HTTPAccepted {
+			port := 0
+			if entry.Runtime.Port != nil {
+				port = *entry.Runtime.Port
+			}
+			return result, fmt.Errorf("agent %s still answers on port %d but its process is not the recorded PID %d; stop it manually", name, port, *entry.Runtime.PID)
+		}
 		return result, nil
 	}
 	interruptSent, forceKillNeeded, err := stopProcessWith(

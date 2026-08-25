@@ -6,12 +6,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -141,4 +143,35 @@ func TestE4SlowHealthReadKeepsExistingPIDOnLinuxAndWindows(t *testing.T) {
 			require.Equal(t, pid, *entry.Runtime.PID)
 		})
 	}
+}
+
+// E7 (service level): an explicit stop of a record whose PID is alive but
+// cannot be identified — no start_time, no started_at, silent port — must
+// say so and leave both the process and the record alone.
+func TestE7StopAgentRefusesToGuessAboutAnUnidentifiedLivePID(t *testing.T) {
+	home := t.TempDir()
+	child := exec.Command("sleep", "60")
+	require.NoError(t, child.Start())
+	t.Cleanup(func() { _ = child.Process.Kill(); _, _ = child.Process.Wait() })
+	pid := child.Process.Pid
+	port := closedPort(t)
+	registry := &packages.InstallationRegistry{Installed: map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Version: "1.0.0", Path: filepath.Join(home, "packages", "demo"), Status: "running",
+			DesiredState: packages.DesiredStateRunning, Runtime: packages.RuntimeInfo{PID: &pid, Port: &port}},
+	}}
+	createTestRegistry(t, home, registry)
+	service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), newMockAgentClient(), home).(*DefaultAgentService)
+
+	err := service.StopAgent("demo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not verify")
+	assert.NoError(t, child.Process.Signal(syscall.Signal(0)), "the unidentified process must not be signalled")
+
+	reloaded, loadErr := service.loadRegistryDirect()
+	require.NoError(t, loadErr)
+	entry := reloaded.Installed["demo"]
+	require.NotNil(t, entry.Runtime.PID)
+	assert.Equal(t, pid, *entry.Runtime.PID, "the only PID that can recover the node is kept")
+	assert.Equal(t, "running", entry.Status)
+	assert.Equal(t, packages.DesiredStateRunning, entry.DesiredState, "an honest refusal records no intent change")
 }
