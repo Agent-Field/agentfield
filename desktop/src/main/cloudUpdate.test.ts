@@ -7,6 +7,7 @@ import {
   autoUpdateModeAfterDeploy,
   checkCloudUpdate,
   cloudUpdateApplyPath,
+  cloudUpdateMaintenanceMessage,
   cloudUpdateRailwayControlsAvailable,
   CloudUpdateChecker,
   setCloudAutoUpdateSchedule
@@ -117,6 +118,29 @@ function applyDeps(version = '0.1.135') {
 }
 
 describe('applyCloudUpdate path selection', () => {
+  it('H1 — refuses non-comparable versions without any Railway effects', async () => {
+    const deps = applyDeps('0.1.136')
+    const result = await applyCloudUpdate({
+      running: running('0.1.136+abc', {
+        platform: 'railway',
+        service_id: 'service',
+        environment_id: 'environment',
+        deployment_id: 'deployment'
+      }),
+      tfstateImage: null
+    }, deps)
+
+    expect(result).toEqual({
+      ok: false,
+      target: '0.1.136',
+      message: 'Cannot update from running control plane v0.1.136+abc to v0.1.136 because those versions cannot be compared safely.'
+    })
+    expect(deps.refreshAndDeploy).not.toHaveBeenCalled()
+    expect(deps.setServiceImage).not.toHaveBeenCalled()
+    expect(deps.redeploy).not.toHaveBeenCalled()
+    expect(deps.getVersion).not.toHaveBeenCalled()
+  })
+
   it('D1 — returns already-current without Railway or tofu effects', async () => {
     const deps = applyDeps()
     const result = await applyCloudUpdate({
@@ -289,6 +313,31 @@ describe('applyCloudUpdate path selection', () => {
     expect(getAccessToken).not.toHaveBeenCalled()
     expect(createApplyDeps).not.toHaveBeenCalled()
   })
+
+  it('H2 — returns already-current before requiring a Railway token', async () => {
+    const getAccessToken = vi.fn(async () => null)
+    const createApplyDeps = vi.fn(() => applyDeps('0.1.135'))
+
+    await expect(applyCloudUpdateWithRailwayToken({
+      running: running('0.1.135', {
+        platform: 'railway',
+        service_id: 'service',
+        environment_id: 'environment'
+      }),
+      tfstateImage: null
+    }, {
+      getAccessToken,
+      createApplyDeps,
+      fetchImpl: dockerHub('0.1.135')
+    })).resolves.toEqual({
+      ok: true,
+      target: '0.1.135',
+      alreadyCurrent: true,
+      message: 'Control plane is already running v0.1.135.'
+    })
+    expect(getAccessToken).not.toHaveBeenCalled()
+    expect(createApplyDeps).not.toHaveBeenCalled()
+  })
 })
 
 describe('CloudUpdateChecker background cadence', () => {
@@ -409,6 +458,22 @@ describe('CloudUpdateChecker background cadence', () => {
 })
 
 describe('six-minute apply polling', () => {
+  it('H1 — treats a non-comparable observed version as not yet updated', async () => {
+    const deps = applyDeps('0.1.135')
+    deps.getVersion
+      .mockResolvedValueOnce(running('0.1.135+abc'))
+      .mockResolvedValueOnce(running('0.1.135'))
+
+    await expect(applyCloudUpdate({
+      running: running('0.1.134', {
+        platform: 'railway', service_id: 'service', environment_id: 'environment'
+      }),
+      tfstateImage: null
+    }, deps)).resolves.toMatchObject({ ok: true, target: '0.1.135' })
+
+    expect(deps.getVersion).toHaveBeenCalledTimes(2)
+  })
+
   it('D2 — rejects the pre-restart deployment and accepts the new deployment id', async () => {
     const deps = applyDeps()
     deps.getVersion
@@ -494,6 +559,47 @@ describe('six-minute apply polling', () => {
       ok: true,
       message: 'Updated to v0.1.135 — agents are being restored by the control plane.'
     })
+  })
+
+  it('H6 — stops on restore completion and separates restore failures from warnings', async () => {
+    const maintenance: PackageMaintenanceStatus = {
+      enabled: true,
+      reason: '',
+      interval: '6h0m0s',
+      boot_restore_completed: true,
+      boot_pass_completed: false,
+      hosting: 'railway',
+      last_run: {
+        started_at: 'start',
+        finished_at: '',
+        checked: 0,
+        updated: [],
+        restored: ['a'],
+        skipped: [],
+        errors: ['check a: remote unreachable']
+      },
+      next_run_at: 'later'
+    }
+    const deps = { ...applyDeps(), getMaintenanceStatus: vi.fn(async () => maintenance) }
+
+    await expect(applyCloudUpdate({
+      running: running('0.1.134', {
+        platform: 'railway', service_id: 'service', environment_id: 'environment'
+      }),
+      tfstateImage: null
+    }, deps)).resolves.toMatchObject({
+      ok: true,
+      message: 'Updated to v0.1.135. 1 agent restored. 1 maintenance warning.'
+    })
+    expect(deps.getMaintenanceStatus).toHaveBeenCalledTimes(1)
+
+    expect(cloudUpdateMaintenanceMessage('0.1.135', {
+      ...maintenance,
+      last_run: {
+        ...maintenance.last_run!,
+        errors: ['restore c: boom']
+      }
+    })).toBe('Updated to v0.1.135. Restored: a. Failed to restore: c (boom).')
   })
 
   it('keeps polling across multiple iterations until the target is reported', async () => {

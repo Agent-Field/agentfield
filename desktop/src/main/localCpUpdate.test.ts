@@ -16,7 +16,7 @@ function deps(reported: ControlPlaneVersion | null) {
 }
 
 describe('local control-plane restart after a managed CLI swap', () => {
-  it.each(['win32', 'linux'] as const)('does not spawn beside an older adopted server on %s', async (platform) => {
+  it.each(['win32', 'linux'] as const)('H4 — renders truthful restart instructions on %s', async (platform) => {
     const d = deps(version('0.1.134'))
     const result = await restartAdoptedControlPlaneAfterCliSwap({
       managedBinaryReplaced: true,
@@ -30,9 +30,10 @@ describe('local control-plane restart after a managed CLI swap', () => {
       ok: false,
       restarted: false,
       status: 'restart_required',
-      message: 'AgentField CLI updated to v0.1.135. Restart the local control plane: stop the running "af server" process and start it again (if AgentField Desktop started it, quit and reopen the app).',
+      message: 'AgentField CLI updated to v0.1.135. Restart the local control plane: stop the running "af server" process and start it again (af server), or restart this machine.',
       targetVersion: '0.1.135'
     })
+    expect(result.message).not.toMatch(/quit|reopen/i)
   })
 
   it('D6 — clears the global restart warning when the polled local CP reaches the CLI', () => {
@@ -47,6 +48,18 @@ describe('local control-plane restart after a managed CLI swap', () => {
     expect(reconcileLocalControlPlaneRestart(status, version('0.1.134'))).toBe(status)
     expect(reconcileLocalControlPlaneRestart(status, version('v0.1.135'))).toBeNull()
     expect(reconcileLocalControlPlaneRestart(status, version('0.1.136'))).toBeNull()
+  })
+
+  it('H5 — clears restart-required on the next cloud-enabled snapshot', () => {
+    const status = {
+      at: '',
+      ok: false,
+      restarted: false,
+      status: 'restart_required' as const,
+      message: 'restart',
+      targetVersion: '0.1.135'
+    }
+    expect(reconcileLocalControlPlaneRestart(status, null, true)).toBeNull()
   })
 
   it('treats a missing version endpoint on an adopted Windows server as restart-required', async () => {
