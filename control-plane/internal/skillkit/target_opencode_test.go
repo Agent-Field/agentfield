@@ -99,6 +99,31 @@ func TestOpenCodeTargetStatusHandlesMissingAndBrokenLinks(t *testing.T) {
 	}
 }
 
+func TestOpenCodeTargetStatusResolvesCurrentLink(t *testing.T) {
+	home := withTempHome(t)
+	target := opencodeTarget{}
+	link, err := target.skillLink(Catalog[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	versionDir := filepath.Join(home, "canonical", "1.2.3")
+	if err := os.MkdirAll(versionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(versionDir, filepath.Join(filepath.Dir(link), "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("current", link); err != nil {
+		t.Fatal(err)
+	}
+	if installed, version, err := target.Status(); err != nil || !installed || version != "1.2.3" {
+		t.Fatalf("current-link Status = %v %q %v", installed, version, err)
+	}
+}
+
 func TestOpenCodeTargetUninstallRemovesCatalogEntries(t *testing.T) {
 	target := opencodeTarget{}
 	root, err := target.TargetPath()

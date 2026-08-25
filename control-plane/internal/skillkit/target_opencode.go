@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -103,6 +104,15 @@ func (t opencodeTarget) Status() (bool, string, error) {
 	dest, err := os.Readlink(link)
 	if err != nil {
 		return false, "", err
+	}
+	if !filepath.IsAbs(dest) {
+		dest = filepath.Join(filepath.Dir(link), dest)
+	}
+	base := filepath.Base(dest)
+	// Older installations link directly to a version directory, which may
+	// have been removed temporarily. Preserve that version from the link name.
+	if base != "current" && strings.Count(base, ".") >= 2 && len(base) > 0 && base[0] >= '0' && base[0] <= '9' {
+		return true, base, nil
 	}
 	resolved, err := filepath.EvalSymlinks(dest)
 	if err != nil {
