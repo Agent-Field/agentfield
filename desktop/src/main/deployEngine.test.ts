@@ -5,7 +5,15 @@ import { delimiter, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync } from 'node:fs'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { checkCloudImageUpdate, generateApiKey, hasDeployment, resolveCloudImage, resolveTofuBinary, runDeploy, runDestroy } from './deployEngine'
+import {
+  generateApiKey,
+  hasDeployment,
+  refreshDeploymentState,
+  resolveCloudImage,
+  resolveTofuBinary,
+  runDeploy,
+  runDestroy
+} from './deployEngine'
 
 type Script = { stdout?: string; stderr?: string; code?: number }
 
@@ -55,10 +63,16 @@ function workspace(mirror = false) {
   return { root, binaryDir, opts: { railwayToken: 'token', workspaceId: 'workspace', workspaceDir: join(root, 'work'), binaryDir } }
 }
 
-function deployedState(apiKey = 'prior-key', subdomain = 'agentfield-dead', sourceImage?: string) {
+function deployedState(
+  apiKey = 'prior-key',
+  subdomain = 'agentfield-dead',
+  sourceImage?: string,
+  workspaceId?: string
+) {
   return JSON.stringify({
     resources: [
       { type: 'railway_service_domain', name: 'cp', instances: [{ attributes: { subdomain } }] },
+      ...(workspaceId ? [{ type: 'railway_project', name: 'cp', instances: [{ attributes: { workspace_id: workspaceId } }] }] : []),
       ...(sourceImage ? [{ type: 'railway_service', name: 'cp', instances: [{ attributes: { source_image: sourceImage } }] }] : [])
     ],
     outputs: { api_key: { value: apiKey } }
@@ -171,17 +185,27 @@ describe('deployment module and execution', () => {
     expect(generateApiKey()).toMatch(/^[a-f0-9]{48}$/)
     const fresh = workspace()
     const first = harness([{}, {}, { stdout: outputs({ url: { value: 'u' }, api_key: { value: 'returned' } }) }])
-    await runDeploy(fresh.opts, first.deps)
+    expect(await runDeploy(fresh.opts, first.deps)).toMatchObject({
+      ok: true,
+      firstDeploy: true
+    })
     expect(first.calls[0].env.TF_VAR_api_key).toMatch(/^[a-f0-9]{48}$/)
     expect(first.calls[0].env.TF_VAR_subdomain).toMatch(/^agentfield-[a-f0-9]{4}$/)
 
     const existing = workspace()
     mkdirSync(existing.opts.workspaceDir, { recursive: true })
-    writeFileSync(join(existing.opts.workspaceDir, 'terraform.tfstate'), deployedState())
+    writeFileSync(
+      join(existing.opts.workspaceDir, 'terraform.tfstate'),
+      deployedState('prior-key', 'agentfield-dead', undefined, 'state-workspace')
+    )
     const again = harness([{}, {}, { stdout: outputs({ url: { value: 'u' }, api_key: { value: 'prior-key' } }) }])
-    await runDeploy(existing.opts, again.deps)
+    expect(await runDeploy(existing.opts, again.deps)).toMatchObject({
+      ok: true,
+      firstDeploy: false
+    })
     expect(again.calls[0].env.TF_VAR_api_key).toBe('prior-key')
     expect(again.calls[0].env.TF_VAR_subdomain).toBe('agentfield-dead')
+    expect(again.calls[0].env.TF_VAR_workspace_id).toBe('state-workspace')
     expect(hasDeployment(existing.opts.workspaceDir)).toBe(true)
   })
 
@@ -199,9 +223,13 @@ describe('deployment module and execution', () => {
 
     expect(await runDeploy({ ...fixture.opts, onLine: (line) => lines.push(line) }, fake.deps)).toEqual({
       ok: true,
+      firstDeploy: true,
       url: 'https://cp.test',
       apiKey: 'key',
       furrowAddress: 'furrow.proxy.test:12345',
+      projectId: 'project',
+      environmentId: 'environment',
+      serviceId: 'service',
       message: 'AgentField deployed to Railway.'
     })
     expect(fetchImpl).toHaveBeenCalledTimes(3)
@@ -246,52 +274,31 @@ describe('deployment module and execution', () => {
 })
 
 describe('cloud image updates', () => {
-  it('compares the image recorded in state with the latest production pin', async () => {
+  it('refreshes tfstate before apply and uses the workspace recorded in state', async () => {
     const fixture = workspace()
     mkdirSync(fixture.opts.workspaceDir, { recursive: true })
-    writeFileSync(join(fixture.opts.workspaceDir, 'terraform.tfstate'), deployedState(
-      'prior-key',
-      'agentfield-dead',
-      'agentfield/control-plane-cloud:v0.1.124'
-    ))
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ results: [
-      { name: 'latest', digest: 'sha256:new' },
-      { name: 'v0.1.125', digest: 'sha256:new' }
-    ] }), { status: 200 })) as typeof fetch
+    writeFileSync(join(fixture.opts.workspaceDir, 'terraform.tfstate'), JSON.stringify({
+      resources: [
+        { type: 'railway_project', name: 'cp', instances: [{ attributes: { workspace_id: 'state-workspace' } }] },
+        { type: 'railway_service_domain', name: 'cp', instances: [{ attributes: { subdomain: 'agentfield-test' } }] },
+        { type: 'railway_service', name: 'cp', instances: [{ attributes: { source_image: 'agentfield/control-plane-cloud:v0.1.134' } }] }
+      ],
+      outputs: { api_key: { value: 'prior-key' } }
+    }))
+    const fake = harness([{}, {}])
 
-    await expect(checkCloudImageUpdate(fixture.opts.workspaceDir, fetchImpl)).resolves.toEqual({
-      current: 'agentfield/control-plane-cloud:v0.1.124',
-      latest: 'agentfield/control-plane-cloud:v0.1.125',
-      updateAvailable: true
+    await expect(refreshDeploymentState(fixture.opts, fake.deps)).resolves.toEqual({
+      ok: true,
+      message: 'Railway deployment state refreshed.'
     })
+    expect(fake.calls.map((call) => call.args)).toEqual([
+      ['init', '-input=false'],
+      ['refresh', '-input=false']
+    ])
+    expect(fake.calls[1].env.TF_VAR_workspace_id).toBe('state-workspace')
+    expect(fake.calls[1].env.TF_VAR_image).toBe('agentfield/control-plane-cloud:v0.1.134')
   })
 
-  it('does not look up a release when deployment state is absent', async () => {
-    const fetchImpl = vi.fn() as unknown as typeof fetch
-    await expect(checkCloudImageUpdate('/does/not/exist', fetchImpl)).resolves.toEqual({
-      current: null,
-      latest: null,
-      updateAvailable: false
-    })
-    expect(fetchImpl).not.toHaveBeenCalled()
-  })
-
-  it('keeps the current pin and reports no update when lookup fails', async () => {
-    const fixture = workspace()
-    mkdirSync(fixture.opts.workspaceDir, { recursive: true })
-    writeFileSync(join(fixture.opts.workspaceDir, 'terraform.tfstate'), deployedState(
-      'prior-key',
-      'agentfield-dead',
-      'agentfield/control-plane-cloud:v0.1.124'
-    ))
-    const fetchImpl = vi.fn(async () => { throw new Error('offline') }) as typeof fetch
-
-    await expect(checkCloudImageUpdate(fixture.opts.workspaceDir, fetchImpl)).resolves.toEqual({
-      current: 'agentfield/control-plane-cloud:v0.1.124',
-      latest: null,
-      updateAvailable: false
-    })
-  })
 })
 
 describe('cloud image resolution', () => {
@@ -338,6 +345,34 @@ describe('cloud image resolution', () => {
       }), { status: 200 })) as typeof fetch)
     expect((await runDeploy(fixture.opts, online.deps)).ok).toBe(true)
     expect(online.calls[0].env.TF_VAR_image).toBe('agentfield/control-plane-cloud:v0.1.125')
+  })
+
+  it('an explicit image override beats both Docker Hub and the state pin', async () => {
+    const fixture = workspace()
+    mkdirSync(fixture.opts.workspaceDir, { recursive: true })
+    writeFileSync(
+      join(fixture.opts.workspaceDir, 'terraform.tfstate'),
+      deployedState(
+        'prior-key',
+        'agentfield-dead',
+        'agentfield/control-plane-cloud:v0.1.120',
+        'state-workspace'
+      )
+    )
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      data: { project: { volumes: { edges: [{ node: { id: 'volume', name: 'data' } }] } } }
+    }), { status: 200 })) as typeof fetch
+    const fake = harness([{}, {}, { stdout: outputs() }], fetchImpl)
+
+    await expect(runDeploy({
+      ...fixture.opts,
+      image: 'agentfield/control-plane-cloud:v0.1.140'
+    }, fake.deps)).resolves.toMatchObject({ ok: true, firstDeploy: false })
+    expect(fake.calls[0].env.TF_VAR_image).toBe(
+      'agentfield/control-plane-cloud:v0.1.140'
+    )
+    // The only fetch is the volume lookup: explicit image selection skipped Hub.
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 })
 

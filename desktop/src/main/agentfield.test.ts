@@ -38,6 +38,11 @@ const API_PACKAGES: PackageInfo[] = [
     status: 'configured', install_status: 'running',
     install_path: '/home/abir/.agentfield/packages/pr-af',
     source: 'https://github.com/owner/pr-af',
+    installed_commit: 'abc123', auto_update: false,
+    update: {
+      status: 'available', latest_commit: 'def456', checked_at: '2026-08-24T00:00:00Z',
+      message: 'A newer commit is available.'
+    },
     port: 9001, process_id: 4242, configuration_required: false,
     configuration_complete: true, author: ''
   },
@@ -155,7 +160,15 @@ describe('readInstalledAgents', () => {
       path: '/home/abir/.agentfield/packages/pr-af',
       source: 'https://github.com/owner/pr-af',
       port: 9001,
-      pid: 4242
+      pid: 4242,
+      installedCommit: 'abc123',
+      autoUpdate: false,
+      update: {
+        status: 'available',
+        latestCommit: 'def456',
+        checkedAt: '2026-08-24T00:00:00Z',
+        message: 'A newer commit is available.'
+      }
     })
 
     // Entry without a `name` field falls back to its registry key; nulls stay null.
@@ -769,6 +782,25 @@ describe('getSnapshot', () => {
 
     const with_ = await getSnapshot({ cpClient: packagesClient(), fetchImpl, bundled })
     expect(with_.bundled).toEqual(bundled)
+  })
+
+  it('carries the local control-plane restart result from main-process boot state', async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new TypeError('fetch failed')
+    }
+    const localControlPlaneRestart = {
+      at: '2026-08-24T00:00:00.000Z',
+      ok: true,
+      restarted: true,
+      status: 'restarted' as const,
+      message: 'Local control plane restarted after the CLI update.'
+    }
+    const snapshot = await getSnapshot({
+      cpClient: packagesClient(),
+      fetchImpl,
+      localControlPlaneRestart
+    })
+    expect(snapshot.localControlPlaneRestart).toEqual(localControlPlaneRestart)
   })
 
   it('reports an unreachable control plane and an absent registry gracefully', async () => {

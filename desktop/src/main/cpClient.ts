@@ -1,8 +1,16 @@
 import { getApiKey, getBaseUrl } from './connection'
+import type {
+  ControlPlaneVersion,
+  PackageMaintenanceStatus,
+  PackageUpdateCheckResponse,
+  PackageUpdateStatus
+} from '../shared/types'
 export type FetchLike = typeof fetch
 
 const READ_TIMEOUT_MS = 3_000
+const VERSION_TIMEOUT_MS = 10_000
 const MUTATION_TIMEOUT_MS = 10_000
+const PACKAGE_MAINTENANCE_TIMEOUT_MS = 120_000
 const DEFAULT_WATCH_INTERVAL_MS = 1_000
 const DEFAULT_WATCH_TIMEOUT_MS = 15 * 60_000
 
@@ -56,6 +64,15 @@ export interface PackageInfo {
   port?: number
   description: string
   author: string
+  installed_commit?: string
+  source_ref?: string
+  auto_update?: boolean
+  update?: {
+    status: PackageUpdateStatus
+    latest_commit: string
+    checked_at: string
+    message: string
+  }
 }
 
 export interface PackageListResponse {
@@ -172,6 +189,8 @@ export class CpApiError extends Error {
 }
 
 export interface CpClient {
+  /** GET /api/v1/version. A 404 means a legacy control plane and maps to null. */
+  getVersion(): Promise<ControlPlaneVersion | null>
   /** POST /api/ui/v1/agents/packages/install. */
   installPackage(source: string, force?: boolean): Promise<{ job_id: string }>
   /** GET /api/ui/v1/agents/packages/install/jobs/:jobId. */
@@ -184,6 +203,14 @@ export interface CpClient {
   updatePackage(packageId: string, source?: string): Promise<{ job_id: string }>
   /** GET /api/ui/v1/agents/packages. */
   listPackages(): Promise<PackageListResponse>
+  /** POST /api/ui/v1/agents/packages/check-updates. */
+  checkPackageUpdates(): Promise<PackageUpdateCheckResponse>
+  /** PUT /api/ui/v1/agents/packages/:id/auto-update. */
+  setPackageAutoUpdate(packageId: string, enabled: boolean): Promise<PackageInfo>
+  /** GET /api/ui/v1/agents/packages/maintenance. */
+  getMaintenanceStatus(): Promise<PackageMaintenanceStatus>
+  /** POST /api/ui/v1/agents/packages/maintenance/run. */
+  runPackageMaintenance(): Promise<{ started: boolean }>
   /** POST /api/ui/v1/agents/:agentId/start. */
   startAgent(
     agentId: string,
@@ -287,8 +314,7 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
   async function request<T>(
     path: string,
     init: Omit<RequestInit, 'signal'> = {},
-    mutation = false,
-    noContent = false
+    options: { mutation?: boolean; noContent?: boolean; timeoutMs?: number } = {}
   ): Promise<T> {
     const headers = new Headers(init.headers)
     const key = apiKey()
@@ -298,20 +324,32 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
     const response = await fetchImpl(`${baseUrl().replace(/\/+$/, '')}${path}`, {
       ...init,
       headers,
-      signal: AbortSignal.timeout(mutation ? MUTATION_TIMEOUT_MS : READ_TIMEOUT_MS)
+      signal: AbortSignal.timeout(
+        options.timeoutMs ?? (options.mutation ? MUTATION_TIMEOUT_MS : READ_TIMEOUT_MS)
+      )
     })
     if (!response.ok) throw await apiError(response)
-    if (noContent) return undefined as T
+    if (options.noContent) return undefined as T
     return (await response.json()) as T
   }
 
   const client: CpClient = {
+    async getVersion() {
+      try {
+        return await request<ControlPlaneVersion>('/api/v1/version', {}, {
+          timeoutMs: VERSION_TIMEOUT_MS
+        })
+      } catch (error) {
+        if (error instanceof CpApiError && error.status === 404) return null
+        throw error
+      }
+    },
     installPackage(source, force) {
       const body = force === undefined ? { source } : { source, force }
       return request('/api/ui/v1/agents/packages/install', {
         method: 'POST',
         body: JSON.stringify(body)
-      }, true)
+      }, { mutation: true })
     },
     async getInstallJob(jobId) {
       const job = await request<Omit<InstallJob, 'lines'> & { lines: string[] | null }>(
@@ -327,7 +365,7 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
       return request(
         `/api/ui/v1/agents/packages/${encodeURIComponent(packageId)}/uninstall`,
         { method: 'POST' },
-        true
+        { mutation: true }
       )
     },
     updatePackage(packageId, source) {
@@ -336,7 +374,7 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
         source === undefined
           ? { method: 'POST' }
           : { method: 'POST', body: JSON.stringify({ source }) },
-        true
+        { mutation: true }
       )
     },
     async listPackages() {
@@ -347,18 +385,40 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
       )
       return { ...response, packages: response.packages ?? [] }
     },
+    checkPackageUpdates() {
+      return request('/api/ui/v1/agents/packages/check-updates', { method: 'POST' }, {
+        mutation: true,
+        timeoutMs: PACKAGE_MAINTENANCE_TIMEOUT_MS
+      })
+    },
+    setPackageAutoUpdate(packageId, enabled) {
+      return request(
+        `/api/ui/v1/agents/packages/${encodeURIComponent(packageId)}/auto-update`,
+        { method: 'PUT', body: JSON.stringify({ enabled }) },
+        { mutation: true }
+      )
+    },
+    getMaintenanceStatus() {
+      return request('/api/ui/v1/agents/packages/maintenance')
+    },
+    runPackageMaintenance() {
+      return request('/api/ui/v1/agents/packages/maintenance/run', { method: 'POST' }, {
+        mutation: true,
+        timeoutMs: PACKAGE_MAINTENANCE_TIMEOUT_MS
+      })
+    },
     startAgent(agentId, startOptions) {
       return request(
         `/api/ui/v1/agents/${encodeURIComponent(agentId)}/start`,
         { method: 'POST', body: JSON.stringify(startOptions ?? {}) },
-        true
+        { mutation: true }
       )
     },
     stopAgent(agentId) {
       return request(
         `/api/ui/v1/agents/${encodeURIComponent(agentId)}/stop`,
         { method: 'POST' },
-        true
+        { mutation: true }
       )
     },
     getAgentStatus(agentId) {
@@ -381,8 +441,7 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
       return request(
         `/api/ui/v1/agents/${encodeURIComponent(agentId)}/secrets`,
         { method: 'PUT', body: JSON.stringify(body) },
-        true,
-        true
+        { mutation: true, noContent: true }
       )
     },
     deleteAgentSecret(agentId, key, scope) {
@@ -390,8 +449,7 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
       return request(
         `/api/ui/v1/agents/${encodeURIComponent(agentId)}/secrets/${encodeURIComponent(key)}${query}`,
         { method: 'DELETE' },
-        true,
-        true
+        { mutation: true, noContent: true }
       )
     },
     async listAllSecrets() {

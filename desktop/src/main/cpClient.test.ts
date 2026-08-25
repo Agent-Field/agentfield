@@ -112,6 +112,102 @@ describe('createCpClient', () => {
     expect(calls[1][1]?.body).toBeUndefined()
   })
 
+  it('implements the version and package-maintenance API contracts', async () => {
+    const version = {
+      version: '0.1.135',
+      commit: 'abc123',
+      build_date: '2026-08-24T00:00:00Z',
+      hosting: { platform: 'railway' },
+      features: ['package_updates']
+    }
+    const check = { checked_at: 'now', packages: [] }
+    const maintenance = {
+      enabled: true,
+      reason: '',
+      interval: '6h0m0s',
+      last_run: null,
+      next_run_at: 'later'
+    }
+    const fetchImpl = mockFetch([
+      json(version),
+      json(check),
+      json({ id: 'pkg', name: 'pkg', auto_update: false }),
+      json(maintenance),
+      json({ started: true }, 202)
+    ])
+    const client = createCpClient({ baseUrl: () => 'http://cp', fetchImpl })
+
+    await expect(client.getVersion()).resolves.toEqual(version)
+    await expect(client.checkPackageUpdates()).resolves.toEqual(check)
+    await expect(client.setPackageAutoUpdate('pkg/name', false)).resolves.toMatchObject({
+      auto_update: false
+    })
+    await expect(client.getMaintenanceStatus()).resolves.toEqual(maintenance)
+    await expect(client.runPackageMaintenance()).resolves.toEqual({ started: true })
+
+    const calls = vi.mocked(fetchImpl).mock.calls
+    expect(calls.map(([url, init]) => [url, init?.method ?? 'GET'])).toEqual([
+      ['http://cp/api/v1/version', 'GET'],
+      ['http://cp/api/ui/v1/agents/packages/check-updates', 'POST'],
+      ['http://cp/api/ui/v1/agents/packages/pkg%2Fname/auto-update', 'PUT'],
+      ['http://cp/api/ui/v1/agents/packages/maintenance', 'GET'],
+      ['http://cp/api/ui/v1/agents/packages/maintenance/run', 'POST']
+    ])
+    expect(JSON.parse(String(calls[2][1]?.body))).toEqual({ enabled: false })
+  })
+
+  it('gives update checks and maintenance runs a 120-second request budget', async () => {
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal)
+    const timeout = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockImplementation((milliseconds) => originalTimeout(milliseconds))
+    const client = createCpClient({
+      fetchImpl: mockFetch([
+        json({ checked_at: 'now', packages: [] }),
+        json({ started: true }, 202)
+      ])
+    })
+
+    await client.checkPackageUpdates()
+    await client.runPackageMaintenance()
+
+    expect(timeout.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
+      120_000,
+      120_000
+    ])
+    timeout.mockRestore()
+  })
+
+  it('gives the remote control-plane version read a 10-second request budget', async () => {
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal)
+    const timeout = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockImplementation((milliseconds) => originalTimeout(milliseconds))
+    const client = createCpClient({
+      fetchImpl: mockFetch([json({
+        version: '0.1.135',
+        commit: '',
+        build_date: '',
+        hosting: { platform: 'railway' },
+        features: []
+      })])
+    })
+
+    await client.getVersion()
+
+    expect(timeout).toHaveBeenCalledWith(10_000)
+    timeout.mockRestore()
+  })
+
+  it('maps only a 404 version endpoint to legacy null', async () => {
+    await expect(createCpClient({
+      fetchImpl: mockFetch([json({ error: 'missing' }, 404)])
+    }).getVersion()).resolves.toBeNull()
+    await expect(createCpClient({
+      fetchImpl: mockFetch([json({ error: 'denied' }, 401)])
+    }).getVersion()).rejects.toMatchObject({ status: 401 })
+  })
+
   it('normalizes Go nil slices in list responses', async () => {
     const fetchImpl = mockFetch([
       json({ packages: null, total: 0 }),

@@ -9,6 +9,11 @@ const api: AgentFieldApi = {
   installFromSource: (source) => ipcRenderer.invoke('agentfield:install-source', source),
   uninstall: (name) => ipcRenderer.invoke('agentfield:uninstall', name),
   update: (name) => ipcRenderer.invoke('agentfield:update', name),
+  checkPackageUpdates: () => ipcRenderer.invoke('agentfield:package-updates-check'),
+  setPackageAutoUpdate: (id, enabled) =>
+    ipcRenderer.invoke('agentfield:package-auto-update-set', id, enabled),
+  getMaintenanceStatus: () => ipcRenderer.invoke('agentfield:package-maintenance-get'),
+  runPackageMaintenance: () => ipcRenderer.invoke('agentfield:package-maintenance-run'),
   onInstallProgress: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, line: string) => listener(line)
     ipcRenderer.on('agentfield:install-progress', wrapped)
@@ -24,10 +29,22 @@ const api: AgentFieldApi = {
   revokeSecret: (key, scope) => ipcRenderer.invoke('agentfield:secrets-revoke', key, scope),
   getSettings: () => ipcRenderer.invoke('agentfield:settings-get'),
   setSettings: (patch) => ipcRenderer.invoke('agentfield:settings-set', patch),
+  setCloudProfile: (profile) => ipcRenderer.invoke('agentfield:cloud-profile-set', profile),
   cloudTest: (url, apiKey) => ipcRenderer.invoke('agentfield:cloud-test', url, apiKey),
   cloudDeployRailway: () => ipcRenderer.invoke('agentfield:cloud-deploy-railway'),
   railwayStatus: () => ipcRenderer.invoke('agentfield:railway-status'),
-  checkCloudImageUpdate: () => ipcRenderer.invoke('agentfield:cloud-image-update'),
+  checkCloudUpdate: () => ipcRenderer.invoke('agentfield:cloud-update-check'),
+  applyCloudUpdate: () => ipcRenderer.invoke('agentfield:cloud-update-apply'),
+  dismissCloudUpdate: (version) => ipcRenderer.invoke('agentfield:cloud-update-dismiss', version),
+  setCloudAutoUpdate: (mode) => ipcRenderer.invoke('agentfield:cloud-auto-update-set', mode),
+  onCloudUpdateStatus: (listener) => {
+    const wrapped = (
+      _event: Electron.IpcRendererEvent,
+      status: Parameters<typeof listener>[0]
+    ) => listener(status)
+    ipcRenderer.on('agentfield:cloud-update-status', wrapped)
+    return () => ipcRenderer.removeListener('agentfield:cloud-update-status', wrapped)
+  },
   railwayLogin: () => ipcRenderer.invoke('agentfield:railway-login'),
   railwayLogout: () => ipcRenderer.invoke('agentfield:railway-logout'),
   cloudDeploy: (workspaceId) => ipcRenderer.invoke('agentfield:cloud-deploy', workspaceId),

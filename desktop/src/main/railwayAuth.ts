@@ -2,6 +2,9 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { join } from 'node:path'
+import { createRailwayApi, type RailwayWorkspace } from './railwayApi'
+
+export type { RailwayWorkspace } from './railwayApi'
 
 export interface RailwayTokens {
   accessToken: string
@@ -20,11 +23,6 @@ export interface RailwayAuthDeps {
   now?: () => number
   codec?: TokenCodec
   storePath?: string
-}
-
-export interface RailwayWorkspace {
-  id: string
-  name: string
 }
 
 const OAUTH_BASE = 'https://backboard.railway.com/oauth'
@@ -337,20 +335,11 @@ export function logout(deps: RailwayAuthDeps = {}): void {
 }
 
 export async function listWorkspaces(accessToken: string, deps: { fetchImpl?: typeof fetch } = {}): Promise<RailwayWorkspace[]> {
-  const response = await (deps.fetchImpl ?? fetch)('https://backboard.railway.com/graphql/v2', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({ query: 'query { me { workspaces { id name } } }' }),
-  })
-  const body = await response.json().catch(() => ({})) as {
-    data?: { me?: { workspaces?: RailwayWorkspace[] } }
-    errors?: Array<{ message?: string }>
+  try {
+    return await createRailwayApi(accessToken, deps.fetchImpl ?? fetch).listWorkspaces()
+  } catch (error) {
+    throw new Error(`Failed to list Railway workspaces: ${errorMessage(error)}`)
   }
-  if (!response.ok || body.errors?.length) {
-    const detail = body.errors?.[0]?.message || `${response.status} ${response.statusText}`.trim()
-    throw new Error(`Failed to list Railway workspaces: ${detail}`)
-  }
-  return body.data?.me?.workspaces ?? []
 }
 
 export const railwayAuthTestUtils = {

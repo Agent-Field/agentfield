@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRailwayApi } from './railwayApi'
 
 export interface DeploySpawnDeps {
   spawnImpl?: typeof import('node:child_process').spawn
@@ -17,20 +18,21 @@ export interface DeployEngineOptions {
   workspaceDir: string
   binaryDir?: string | null
   onLine?: (line: string) => void
+  /** Exact image selected by the cloud updater; ordinary deploys resolve it. */
+  image?: string
 }
 
 export interface DeployResult {
   ok: boolean
+  /** True when this apply created state rather than reconciling existing state. */
+  firstDeploy?: boolean
   url?: string
   apiKey?: string
   furrowAddress?: string
+  projectId?: string
+  environmentId?: string
+  serviceId?: string
   message: string
-}
-
-export interface CloudImageUpdate {
-  current: string | null
-  latest: string | null
-  updateAvailable: boolean
 }
 
 const MODULE = `terraform {
@@ -229,17 +231,26 @@ function stateSourceImage(state: TfState | null): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
-export async function checkCloudImageUpdate(
-  workspaceDir: string,
-  fetchImpl: typeof fetch = fetch
-): Promise<CloudImageUpdate> {
-  const current = stateSourceImage(readState(workspaceDir))
-  if (!current) return { current: null, latest: null, updateAvailable: false }
-  const latest = await resolveCloudImage(fetchImpl)
+export interface DeploymentStateInfo {
+  workspaceId: string | null
+  projectId: string | null
+  environmentId: string | null
+  serviceId: string | null
+  url: string | null
+  image: string | null
+}
+
+/** Identity recorded by the desktop's tfstate, used without exposing secrets. */
+export function deploymentStateInfo(workspaceDir: string): DeploymentStateInfo | null {
+  const state = readState(workspaceDir)
+  if (!state || (state.resources?.length ?? 0) === 0) return null
   return {
-    current,
-    latest,
-    updateAvailable: latest !== null && latest !== current
+    workspaceId: stateWorkspaceId(state),
+    projectId: stateOutput(state, 'project_id'),
+    environmentId: stateOutput(state, 'environment_id'),
+    serviceId: stateOutput(state, 'service_id'),
+    url: stateOutput(state, 'url'),
+    image: stateSourceImage(state)
   }
 }
 
@@ -336,8 +347,6 @@ function providerReady(workspaceDir: string): boolean {
   }
 }
 
-const RAILWAY_GRAPHQL = 'https://backboard.railway.com/graphql/v2'
-
 async function ensureVolume(
   railwayToken: string,
   projectId: string,
@@ -345,35 +354,9 @@ async function ensureVolume(
   serviceId: string,
   fetchImpl: typeof fetch
 ): Promise<void> {
-  const request = async (query: string, variables: Record<string, string>): Promise<Record<string, unknown>> => {
-    const response = await fetchImpl(RAILWAY_GRAPHQL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${railwayToken}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'agentfield-desktop'
-      },
-      body: JSON.stringify({ query, variables })
-    })
-    const payload = await response.json() as { data?: Record<string, unknown>; errors?: Array<{ message?: string }> }
-    if (!response.ok || payload.errors?.length) {
-      throw new Error(payload.errors?.map((error) => error.message).filter(Boolean).join('; ') || `Railway GraphQL request failed (${response.status})`)
-    }
-    if (!payload.data) throw new Error('Railway GraphQL response contained no data')
-    return payload.data
-  }
-
-  const query = `query Volumes($projectId: String!) {
-  project(id: $projectId) { volumes { edges { node { id name } } } }
-}`
-  const data = await request(query, { projectId })
-  const project = data.project as { volumes?: { edges?: unknown[] } } | undefined
-  if ((project?.volumes?.edges?.length ?? 0) > 0) return
-
-  const mutation = `mutation VolumeCreate($projectId: String!, $environmentId: String!, $serviceId: String!, $mountPath: String!) {
-  volumeCreate(input: {projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId, mountPath: $mountPath}) { id name }
-}`
-  await request(mutation, { projectId, environmentId, serviceId, mountPath: '/data' })
+  const api = createRailwayApi(railwayToken, fetchImpl)
+  if ((await api.listVolumes(projectId)).length > 0) return
+  await api.volumeCreate(projectId, environmentId, serviceId, '/data')
 }
 
 export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps = {}): Promise<DeployResult> {
@@ -383,6 +366,11 @@ export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps
   writeFileSync(join(opts.workspaceDir, 'main.tf'), MODULE)
   const state = readState(opts.workspaceDir)
   const existing = (state?.resources?.length ?? 0) > 0
+  const workspaceId = existing ? (stateWorkspaceId(state) ?? opts.workspaceId) : opts.workspaceId
+  if (!workspaceId) {
+    return { ok: false, message: 'Choose the Railway workspace that owns this deployment.' }
+  }
+  const effectiveOpts = { ...opts, workspaceId }
   // Credentials are deployment identity: only create one for new state and never rotate it on reconciliation.
   const apiKey = existing ? stateOutput(state, 'api_key') : generateApiKey()
   if (!apiKey) return { ok: false, message: 'Existing deployment is missing its API key; refusing to rotate it automatically.' }
@@ -393,9 +381,9 @@ export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps
   // Newest release when the lookup succeeds; the deployment's recorded pin
   // when it doesn't (so an outage never rewrites a working image and forces
   // a pointless redeploy); the floating tag only for a brand-new deployment.
-  const image = (await resolveCloudImage(deps.fetchImpl ?? fetch)) ?? stateSourceImage(state) ?? CLOUD_IMAGE_LATEST
+  const image = opts.image ?? (await resolveCloudImage(deps.fetchImpl ?? fetch)) ?? stateSourceImage(state) ?? CLOUD_IMAGE_LATEST
   opts.onLine?.(`Deploying ${image}`)
-  const env = deployEnv(opts, apiKey, subdomain, cliConfig, deps, image)
+  const env = deployEnv(effectiveOpts, apiKey, subdomain, cliConfig, deps, image)
 
   if (!providerReady(opts.workspaceDir)) {
     const init = await runCommand(binary, ['init', '-input=false'], opts.workspaceDir, env, deps, false)
@@ -435,10 +423,68 @@ export async function runDeploy(opts: DeployEngineOptions, deps: DeploySpawnDeps
       return { ok: false, message: `Deployed, but attaching the storage volume failed: ${detail}. Re-run deploy to retry.` }
     }
     opts.onLine?.('Storage volume ready')
-    return { ok: true, url, apiKey: outputKey, furrowAddress, message: 'AgentField deployed to Railway.' }
+    return {
+      ok: true,
+      firstDeploy: !existing,
+      url,
+      apiKey: outputKey,
+      furrowAddress,
+      projectId,
+      environmentId,
+      serviceId,
+      message: 'AgentField deployed to Railway.'
+    }
   } catch {
     return { ok: false, message: 'Deployment completed, but required outputs are missing.' }
   }
+}
+
+/** Refresh Railway-owned state before an update apply. This records image tags
+ * changed by Railway Image Auto Updates so OpenTofu does not plan them back. */
+export async function refreshDeploymentState(
+  opts: DeployEngineOptions,
+  deps: DeploySpawnDeps = {}
+): Promise<{ ok: boolean; message: string }> {
+  const binary = resolveTofuBinary(opts.binaryDir)
+  if (!binary) return { ok: false, message: NO_ENGINE }
+  const state = readState(opts.workspaceDir)
+  if (!state || (state.resources?.length ?? 0) === 0) {
+    return { ok: false, message: 'No desktop deployment state is available to refresh.' }
+  }
+  const workspaceId = stateWorkspaceId(state) ?? opts.workspaceId
+  const apiKey = stateOutput(state, 'api_key')
+  const subdomain = stateSubdomain(state)
+  if (!workspaceId || !apiKey || !subdomain) {
+    return { ok: false, message: 'Desktop deployment state is missing Railway identity or credentials.' }
+  }
+  mkdirSync(opts.workspaceDir, { recursive: true })
+  writeFileSync(join(opts.workspaceDir, 'main.tf'), MODULE)
+  const cliConfig = writeConfig(opts.workspaceDir, opts.binaryDir)
+  const env = deployEnv(
+    { ...opts, workspaceId },
+    apiKey,
+    subdomain,
+    cliConfig,
+    deps,
+    stateSourceImage(state) ?? undefined
+  )
+  if (!providerReady(opts.workspaceDir)) {
+    const init = await runCommand(binary, ['init', '-input=false'], opts.workspaceDir, env, deps, false)
+    if (init.code !== 0) {
+      return { ok: false, message: init.lastError ?? 'OpenTofu initialization failed before refresh.' }
+    }
+  }
+  const refreshed = await runCommand(
+    binary,
+    ['refresh', '-input=false'],
+    opts.workspaceDir,
+    env,
+    deps,
+    false
+  )
+  return refreshed.code === 0
+    ? { ok: true, message: 'Railway deployment state refreshed.' }
+    : { ok: false, message: refreshed.lastError ?? 'Could not refresh Railway deployment state.' }
 }
 
 export async function runDestroy(opts: DeployEngineOptions, deps: DeploySpawnDeps = {}): Promise<{ ok: boolean; message: string }> {

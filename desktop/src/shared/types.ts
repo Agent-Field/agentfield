@@ -34,6 +34,27 @@ export interface InstalledAgent {
   source?: string
   port: number | null
   pid: number | null
+  /** Resolved git commit recorded when this package was installed. */
+  installedCommit?: string
+  /** Whether the control plane may update this package during maintenance. */
+  autoUpdate?: boolean
+  /** Last package update-check result (absent on older control planes). */
+  update?: PackageUpdateResult
+}
+
+export type PackageUpdateStatus =
+  | 'current'
+  | 'available'
+  | 'pinned'
+  | 'unknown'
+  | 'deferred'
+  | 'error'
+
+export interface PackageUpdateResult {
+  status: PackageUpdateStatus
+  latestCommit: string
+  checkedAt: string
+  message: string
 }
 
 /** Registry read result. Missing file/dir is a graceful empty state, not an error. */
@@ -188,9 +209,21 @@ export interface CliStatus {
  * plane up, starts the agents you selected, and everything is queryable the
  * moment Claude/Codex/anything asks.
  */
+export type CloudAutoUpdateMode = 'off' | 'nightly' | 'weekends' | 'anytime'
+
 export interface DesktopSettings {
   /** Remote control-plane profile. The API key remains in main-process settings. */
-  cloud: { enabled: boolean; serverUrl: string; apiKey: string }
+  cloud: {
+    enabled: boolean
+    serverUrl: string
+    apiKey: string
+    /** Railway Image Auto Updates maintenance window; null until applied. */
+    autoUpdate: CloudAutoUpdateMode | null
+    /** Railway service identity against which autoUpdate is interpreted. */
+    autoUpdateServiceId: string | null
+    /** Cloud control-plane version dismissed from the update banner. */
+    dismissedUpdateVersion: string | null
+  }
   /** Launch the app when you log in (starts hidden, in the tray). */
   openAtLogin: boolean
   /** Follow the OS appearance, or explicitly force the light/dark palette. */
@@ -271,10 +304,47 @@ export interface CloudTestResult {
   message: string
 }
 
-export interface CloudImageUpdate {
+export interface ControlPlaneHosting {
+  platform: 'railway' | 'docker' | 'local'
+  project_id?: string
+  environment_id?: string
+  service_id?: string
+  deployment_id?: string
+  region?: string
+}
+
+/** GET /api/v1/version response. Field names intentionally match the API. */
+export interface ControlPlaneVersion {
+  version: string
+  commit: string
+  build_date: string
+  hosting: ControlPlaneHosting
+  features: string[]
+}
+
+export type CloudUpdateCheckStatus = 'current' | 'available' | 'unknown' | 'legacy'
+
+export interface CloudUpdateCheck {
+  status: CloudUpdateCheckStatus
   current: string | null
   latest: string | null
-  updateAvailable: boolean
+  message: string
+}
+
+/** Main-process cloud updater state, sent on its own IPC channel. */
+export interface CloudUpdateStatus extends CloudUpdateCheck {
+  checking: boolean
+  applying: boolean
+  lastCheckedAt: string | null
+  /** Whether Desktop can safely identify a Railway service to update. */
+  canApply: boolean
+  hosting?: ControlPlaneHosting
+}
+
+export interface CloudUpdateApplyResult {
+  ok: boolean
+  target?: string
+  message: string
 }
 
 export interface RailwayStatus {
@@ -282,12 +352,57 @@ export interface RailwayStatus {
   engineAvailable: boolean
   hasDeployment: boolean
   workspaces: Array<{ id: string; name: string }>
+  /** Workspace recorded in the desktop deployment's tfstate, when present. */
+  deploymentWorkspaceId?: string
+  /** Non-fatal Railway lookup problem; login remains valid. */
+  message?: string
 }
 
 export interface CloudDeployResult {
   ok: boolean
   url?: string
   furrowAddress?: string
+  message: string
+}
+
+export interface PackageUpdateCheckResponse {
+  checked_at: string
+  packages: Array<{
+    id: string
+    name: string
+    installed_commit: string
+    update: {
+      status: PackageUpdateStatus
+      latest_commit: string
+      checked_at: string
+      message: string
+    }
+  }>
+}
+
+export interface PackageMaintenanceRun {
+  started_at: string
+  finished_at: string
+  checked: number
+  updated: string[]
+  restored: string[]
+  skipped: Array<{ name: string; reason: string }>
+  errors: string[]
+}
+
+export interface PackageMaintenanceStatus {
+  enabled: boolean
+  reason: string
+  interval: string
+  last_run: PackageMaintenanceRun | null
+  next_run_at: string
+}
+
+export interface LocalControlPlaneRestartStatus {
+  at: string
+  ok: boolean
+  restarted: boolean
+  status: 'not_required' | 'restart_required' | 'restarted' | 'failed'
   message: string
 }
 
@@ -393,6 +508,8 @@ export interface AgentFieldSnapshot {
    * like skillSync, riding the existing snapshot poll rather than a second one.
    */
   bundled: BundledStatus[]
+  /** Result of checking/restarting an adopted local CP after a managed CLI swap. */
+  localControlPlaneRestart: LocalControlPlaneRestartStatus | null
   /** ISO timestamp of when this snapshot was assembled. */
   fetchedAt: string
 }
@@ -400,10 +517,24 @@ export interface AgentFieldSnapshot {
 /** Surface exposed on window.agentfield by the preload script. */
 export interface AgentFieldApi {
   cloudTest(url: string, apiKey: string): Promise<CloudTestResult>
+  /** Replace only renderer-owned connection fields; main merges cloud state. */
+  setCloudProfile(profile: {
+    enabled: boolean
+    serverUrl: string
+    apiKey: string
+  }): Promise<DesktopSettings>
   /** Open the guided Railway deployment flow for a hosted control plane. */
   cloudDeployRailway(): Promise<boolean>
   railwayStatus(): Promise<RailwayStatus>
-  checkCloudImageUpdate(): Promise<CloudImageUpdate>
+  /** Check the running cloud control plane against Docker Hub's stable release. */
+  checkCloudUpdate(): Promise<CloudUpdateStatus>
+  /** Apply the cloud control-plane update and wait for the target version. */
+  applyCloudUpdate(): Promise<CloudUpdateApplyResult>
+  /** Dismiss exactly one cloud control-plane version in the main process. */
+  dismissCloudUpdate(version: string): Promise<void>
+  /** Configure Railway Image Auto Updates for the connected control plane. */
+  setCloudAutoUpdate(mode: CloudAutoUpdateMode): Promise<{ ok: boolean; message: string }>
+  onCloudUpdateStatus(listener: (status: CloudUpdateStatus) => void): () => void
   railwayLogin(): Promise<{ ok: boolean; message: string; workspaces?: RailwayStatus['workspaces'] }>
   railwayLogout(): Promise<void>
   cloudDeploy(workspaceId: string): Promise<CloudDeployResult>
@@ -423,11 +554,16 @@ export interface AgentFieldApi {
   /** Uninstall an installed agent (stops it first; removes files + secrets). */
   uninstall(name: string): Promise<AgentActionResult>
   /**
-   * Update an installed catalog agent to the latest version of its source
-   * (reinstall in place; secrets survive). A running agent is stopped for
-   * the update and restarted after; a stopped one stays stopped.
+   * Update an installed agent. Catalog agents follow the catalog source;
+   * other agents follow the source recorded by the control plane.
    */
   update(name: string): Promise<InstallResult>
+  /** Ask the control plane to refresh package update availability. */
+  checkPackageUpdates(): Promise<PackageUpdateCheckResponse>
+  /** Pause/resume unattended updates for one installed package. */
+  setPackageAutoUpdate(id: string, enabled: boolean): Promise<AgentActionResult>
+  getMaintenanceStatus(): Promise<PackageMaintenanceStatus>
+  runPackageMaintenance(): Promise<{ started: boolean }>
   /** Start / stop / restart an installed agent by its registry name. */
   agentAction(action: 'start' | 'stop' | 'restart', name: string): Promise<AgentActionResult>
   /** Bring up the local AgentField control plane and wait until healthy. */

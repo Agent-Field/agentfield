@@ -5,6 +5,7 @@ import {
   SERVER_LABEL,
   planControlPlaneLaunch,
   runAgentAction,
+  setAgentPackageAutoUpdate,
   uninstallAgent,
   startControlPlane,
   serverSpawnEnv
@@ -129,6 +130,20 @@ describe('HTTP agent management', () => {
       ok: false,
       message: 'Could not reach the control plane — start the control plane and try again'
     })
+  })
+
+  it('maps a missing package auto-update endpoint to the old-control-plane message', async () => {
+    const client = managementClient({
+      setPackageAutoUpdate: vi.fn(async () => {
+        throw new CpApiError({ status: 404, message: 'route not found' })
+      })
+    })
+
+    await expect(setAgentPackageAutoUpdate('agent', false, { cpClient: client }))
+      .resolves.toEqual({
+        ok: false,
+        message: 'Control plane update required — update AgentField CLI'
+      })
   })
 })
 
