@@ -61,6 +61,8 @@ type AgentFieldServer struct {
 	packageJobs              *packagejobs.Manager    // Async package install/update jobs
 	packageMaintenance       *packagemaint.Service   // Package restore/check/update loop
 	packageMaintenanceCancel context.CancelFunc
+	maintenanceReady         chan struct{}
+	maintenanceReadyOnce     sync.Once
 	config                   *config.Config
 	storageHealthOverride    func(context.Context) gin.H
 	cacheHealthOverride      func(context.Context) gin.H
@@ -174,7 +176,8 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	packageJobs.SetOnRegistryChange(func() {
 		_ = SyncPackagesFromRegistry(agentfieldHome, storageProvider)
 	})
-	packageMaintenance := newPackageMaintenance(agentfieldHome, storageProvider, agentService, packageJobs)
+	packageMaintenanceReady := make(chan struct{})
+	packageMaintenance := newPackageMaintenance(agentfieldHome, storageProvider, agentService, packageJobs, packageMaintenanceReady)
 
 	// Initialize StatusManager for unified status management
 	statusManagerConfig := services.StatusManagerConfig{
@@ -532,6 +535,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		agentClient:            agentClient,
 		packageJobs:            packageJobs,
 		packageMaintenance:     packageMaintenance,
+		maintenanceReady:       packageMaintenanceReady,
 		config:                 cfg,
 		keystoreService:        keystoreService,
 		didService:             didService,
@@ -693,7 +697,16 @@ func (s *AgentFieldServer) Start() error {
 	if !s.setHTTPServer(httpServer) {
 		return nil
 	}
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
+	}
+	s.maintenanceReadyOnce.Do(func() {
+		if s.maintenanceReady != nil {
+			close(s.maintenanceReady)
+		}
+	})
+	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
 	}
 	return nil

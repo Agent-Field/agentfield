@@ -64,7 +64,10 @@ type maintJobs struct {
 	startErrors []error
 	missing     bool
 	jobError    string
+	activeFor   string
 }
+
+func (j *maintJobs) ActiveFor(name string) bool { return j.activeFor == name }
 
 func (j *maintJobs) StartUpdate(name, source string) (*packagejobs.Job, error) {
 	j.calls = append(j.calls, name+":"+source)
@@ -102,6 +105,27 @@ type maintAgent struct {
 
 type runOnlyMaintAgent struct {
 	runs int
+}
+
+type alwaysFailMaintAgent struct{ err error }
+
+func (a *alwaysFailMaintAgent) RunAgent(string, domain.RunOptions) (*domain.RunningAgent, error) {
+	return nil, a.err
+}
+
+type blockingRestoreAgent struct {
+	started chan struct{}
+	release chan struct{}
+	calls   int
+}
+
+func (a *blockingRestoreAgent) RunAgent(name string, options domain.RunOptions) (*domain.RunningAgent, error) {
+	a.calls++
+	if a.calls == 1 {
+		close(a.started)
+		<-a.release
+	}
+	return &domain.RunningAgent{Name: name, Port: options.Port}, nil
 }
 
 func (a *runOnlyMaintAgent) RunAgent(string, domain.RunOptions) (*domain.RunningAgent, error) {
@@ -161,15 +185,17 @@ func intPtr(value int) *int    { return &value }
 func enabledService(home string, runner updatecheck.Runner, jobs JobManager, agent AgentRunner, busy ActiveExecutionChecker) *Service {
 	checker := updatecheck.NewChecker(runner)
 	return New(Config{
-		AgentFieldHome: home,
-		Checker:        checker,
-		Jobs:           jobs,
-		Agent:          agent,
-		Executions:     busy,
-		Enabled:        func() (bool, string) { return true, "" },
-		ProcessAlive:   func(packages.RuntimeInfo) bool { return false },
-		HealthProbe:    func(context.Context, int, string) packages.HealthIdentity { return packages.HealthIdentity{} },
-		Sleep:          func(context.Context, time.Duration) error { return nil },
+		AgentFieldHome:    home,
+		Checker:           checker,
+		Jobs:              jobs,
+		Agent:             agent,
+		Executions:        busy,
+		Enabled:           func() (bool, string) { return true, "" },
+		ProcessAlive:      func(packages.RuntimeInfo) bool { return false },
+		HealthProbe:       func(context.Context, int, string) packages.HealthIdentity { return packages.HealthIdentity{} },
+		Sleep:             func(context.Context, time.Duration) error { return nil },
+		HostedInContainer: func() bool { return false },
+		Hosting:           func() string { return packages.HostingLocal },
 	})
 }
 
@@ -963,4 +989,294 @@ func TestRegistryErrorContracts(t *testing.T) {
 	if err != nil || registry.Installed == nil {
 		t.Fatalf("empty registry=%+v err=%v", registry, err)
 	}
+}
+
+func TestC6ContainerLegacyStoppedEntryMigratesToRunningAndRestores(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped"},
+	})
+	agent := &maintAgent{}
+	service := enabledService(home, &maintRunner{sha: "unused"}, &maintJobs{}, agent, &busySequence{})
+	service.hostedInContainer = func() bool { return true }
+	service.enabled = func() (bool, string) { return false, "disabled" }
+	summary := service.RunPass(context.Background())
+	entry := readMaintEntry(t, home, "demo")
+	if entry.DesiredState != packages.DesiredStateRunning || len(agent.runs) != 1 || len(summary.Restored) != 1 {
+		t.Fatalf("entry=%+v runs=%v summary=%+v", entry, agent.runs, summary)
+	}
+}
+
+func TestC7LocalLegacyStoppedEntryMigratesToStoppedWithoutRestore(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped"},
+	})
+	agent := &maintAgent{}
+	service := enabledService(home, &maintRunner{sha: "unused"}, &maintJobs{}, agent, &busySequence{})
+	service.enabled = func() (bool, string) { return false, "disabled" }
+	service.RunPass(context.Background())
+	entry := readMaintEntry(t, home, "demo")
+	if entry.DesiredState != packages.DesiredStateStopped || len(agent.runs) != 0 {
+		t.Fatalf("entry=%+v runs=%v", entry, agent.runs)
+	}
+}
+
+func TestC8ExplicitStopAfterMigrationIsNotResurrected(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped"},
+	})
+	agent := &maintAgent{}
+	service := enabledService(home, &maintRunner{sha: "unused"}, &maintJobs{}, agent, &busySequence{})
+	service.hostedInContainer = func() bool { return true }
+	service.enabled = func() (bool, string) { return false, "disabled" }
+	service.RunPass(context.Background())
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped", DesiredState: packages.DesiredStateStopped},
+	})
+	agent.runs = nil
+	service.RunPass(context.Background())
+	if len(agent.runs) != 0 || readMaintEntry(t, home, "demo").DesiredState != packages.DesiredStateStopped {
+		t.Fatalf("explicit stop was resurrected: runs=%v entry=%+v", agent.runs, readMaintEntry(t, home, "demo"))
+	}
+}
+
+func TestC9ExistingDesiredStateIsUntouchedByContainerMigration(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "running", DesiredState: packages.DesiredStateStopped},
+	})
+	agent := &maintAgent{}
+	service := enabledService(home, &maintRunner{sha: "unused"}, &maintJobs{}, agent, &busySequence{})
+	service.hostedInContainer = func() bool { return true }
+	service.enabled = func() (bool, string) { return false, "disabled" }
+	service.RunPass(context.Background())
+	if readMaintEntry(t, home, "demo").DesiredState != packages.DesiredStateStopped || len(agent.runs) != 0 {
+		t.Fatalf("entry=%+v runs=%v", readMaintEntry(t, home, "demo"), agent.runs)
+	}
+}
+
+func TestC11TimedOutRestoreDoesNotBlockLaterRunNowPass(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped", DesiredState: packages.DesiredStateRunning},
+	})
+	agent := &blockingRestoreAgent{started: make(chan struct{}), release: make(chan struct{})}
+	service := enabledService(home, &maintRunner{sha: "unused"}, &maintJobs{}, agent, &busySequence{})
+	service.enabled = func() (bool, string) { return false, "disabled" }
+	service.restoreTimeout = 10 * time.Millisecond
+	summary := service.RunPass(context.Background())
+	if len(summary.Errors) == 0 || !strings.Contains(summary.Errors[0], "timed out") {
+		t.Fatalf("summary=%+v", summary)
+	}
+	close(agent.release)
+	if err := service.StartPass(); err != nil {
+		t.Fatalf("run-now after timeout: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.WaitForIdle(waitCtx); err != nil {
+		t.Fatalf("later pass did not finish: %v", err)
+	}
+}
+
+func TestC12RestoreFailuresUseOneFiveFifteenThenIntervalBackoff(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped", DesiredState: packages.DesiredStateRunning},
+	})
+	base := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	service := enabledService(home, &maintRunner{sha: "unused"}, &maintJobs{}, &alwaysFailMaintAgent{err: errors.New("cold start")}, &busySequence{})
+	service.enabled = func() (bool, string) { return false, "disabled" }
+	service.now = func() time.Time { return base }
+	service.interval = time.Hour
+	for index, want := range []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour} {
+		service.RunPass(context.Background())
+		if got := service.Status().NextRunAt.Sub(base); got != want {
+			t.Fatalf("pass %d delay=%s want=%s", index+1, got, want)
+		}
+	}
+}
+
+func TestC13CleanPassResetsBackoffAndUsesConfiguredInterval(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped", DesiredState: packages.DesiredStateRunning},
+	})
+	base := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	service := enabledService(home, &maintRunner{sha: "unused"}, &maintJobs{}, &alwaysFailMaintAgent{err: errors.New("cold start")}, &busySequence{})
+	service.enabled = func() (bool, string) { return false, "disabled" }
+	service.now = func() time.Time { return base }
+	service.interval = time.Hour
+	service.RunPass(context.Background())
+	service.agent = &maintAgent{}
+	service.RunPass(context.Background())
+	if got := service.Status().NextRunAt.Sub(base); got != time.Hour {
+		t.Fatalf("clean delay=%s", got)
+	}
+	service.agent = &alwaysFailMaintAgent{err: errors.New("again")}
+	service.RunPass(context.Background())
+	if got := service.Status().NextRunAt.Sub(base); got != time.Minute {
+		t.Fatalf("backoff did not reset: %s", got)
+	}
+}
+
+func TestC14BootPassUsesReadinessSettleOrTwentySecondFallback(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		ready <-chan struct{}
+		want  []time.Duration
+	}{
+		{name: "ready", ready: closedChannel(), want: []time.Duration{bootSettleDelay}},
+		{name: "fallback", ready: make(chan struct{}), want: []time.Duration{bootDelay}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			var sleeps []time.Duration
+			service := New(Config{
+				AgentFieldHome: t.TempDir(), Ready: test.ready,
+				Enabled: func() (bool, string) { return false, "disabled" },
+				Sleep: func(_ context.Context, duration time.Duration) error {
+					sleeps = append(sleeps, duration)
+					return nil
+				},
+				HostedInContainer: func() bool { return false }, Hosting: func() string { return packages.HostingLocal },
+			})
+			done := make(chan struct{})
+			go func() { service.Run(ctx); close(done) }()
+			deadline := time.Now().Add(time.Second)
+			for !service.Status().BootPassCompleted && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			cancel()
+			<-done
+			if len(sleeps) != len(test.want) {
+				t.Fatalf("sleeps=%v want=%v", sleeps, test.want)
+			}
+		})
+	}
+}
+
+func TestC15BootRestoreArmsAndClearsPackageUpdateGrace(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped", DesiredState: packages.DesiredStateRunning},
+	})
+	settling := make(chan struct{})
+	release := make(chan struct{})
+	states := make(chan bool, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	service := New(Config{
+		AgentFieldHome: home, Agent: &maintAgent{}, Ready: closedChannel(),
+		Enabled: func() (bool, string) { return false, "disabled" },
+		Sleep:   func(context.Context, time.Duration) error { close(settling); <-release; return nil },
+		OnRestoreState: func(name string, active bool) {
+			if name == "demo" {
+				states <- active
+			}
+		},
+		HostedInContainer: func() bool { return false }, Hosting: func() string { return packages.HostingLocal },
+	})
+	done := make(chan struct{})
+	go func() { service.Run(ctx); close(done) }()
+	<-settling
+	if active := <-states; !active {
+		t.Fatal("restore grace was not armed before readiness settle")
+	}
+	close(release)
+	if active := <-states; active {
+		t.Fatal("restore grace was not cleared after the attempt")
+	}
+	cancel()
+	<-done
+}
+
+func TestC18FailedCommitIsMemoizedAndSkippedWhileHeadIsUnchanged(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Source: "github", SourcePath: "https://github.com/acme/demo", Commit: "old"},
+	})
+	jobs := &maintJobs{result: packagejobs.StatusFailed, jobError: "unattended update of demo would rename the package to demo-v2"}
+	service := enabledService(home, &maintRunner{sha: "failed-head"}, jobs, &maintAgent{}, &busySequence{})
+	service.RunPass(context.Background())
+	service.RunPass(context.Background())
+	cached := service.Checker().Cached("demo")
+	if len(jobs.calls) != 1 || cached.Status != updatecheck.StatusFailed || cached.LatestCommit != "failed-head" || !strings.Contains(cached.Message, "rename") {
+		t.Fatalf("calls=%v cached=%+v", jobs.calls, cached)
+	}
+}
+
+func TestC19MovedHeadRetriesAPreviouslyFailedUpdate(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Source: "github", SourcePath: "https://github.com/acme/demo", Commit: "old"},
+	})
+	runner := &sequenceMaintRunner{results: []struct {
+		output string
+		err    error
+	}{{output: "head-1\tHEAD\n"}, {output: "head-2\tHEAD\n"}}}
+	jobs := &maintJobs{result: packagejobs.StatusFailed, jobError: "build broke"}
+	service := enabledService(home, runner, jobs, &maintAgent{}, &busySequence{})
+	service.RunPass(context.Background())
+	jobs.result = packagejobs.StatusSucceeded
+	service.RunPass(context.Background())
+	if len(jobs.calls) != 2 {
+		t.Fatalf("moved head was not retried: %v", jobs.calls)
+	}
+}
+
+func TestC24RestoreSkipsPackageWithActiveUpdateJob(t *testing.T) {
+	home := t.TempDir()
+	writeMaintRegistry(t, home, map[string]packages.InstalledPackage{
+		"demo": {Name: "demo", Status: "stopped", DesiredState: packages.DesiredStateRunning},
+	})
+	agent := &maintAgent{}
+	service := enabledService(home, &maintRunner{sha: "unused"}, &maintJobs{activeFor: "demo"}, agent, &busySequence{})
+	service.enabled = func() (bool, string) { return false, "disabled" }
+	summary := service.RunPass(context.Background())
+	if len(agent.runs) != 0 || !containsSkip(summary.Skipped, "demo", "updating") {
+		t.Fatalf("runs=%v summary=%+v", agent.runs, summary)
+	}
+}
+
+func TestC25MaintenanceStatusMarksCompletedBootPassAndPopulatesLastRun(t *testing.T) {
+	ready := closedChannel()
+	ctx, cancel := context.WithCancel(context.Background())
+	service := New(Config{
+		AgentFieldHome: t.TempDir(), Ready: ready,
+		Enabled:           func() (bool, string) { return false, "disabled" },
+		Sleep:             func(context.Context, time.Duration) error { return nil },
+		HostedInContainer: func() bool { return false }, Hosting: func() string { return packages.HostingLocal },
+	})
+	if before := service.Status(); before.BootPassCompleted || before.LastRun != nil {
+		t.Fatalf("before=%+v", before)
+	}
+	done := make(chan struct{})
+	go func() { service.Run(ctx); close(done) }()
+	deadline := time.Now().Add(time.Second)
+	for !service.Status().BootPassCompleted && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	after := service.Status()
+	cancel()
+	<-done
+	if !after.BootPassCompleted || after.LastRun == nil || after.Hosting != packages.HostingLocal {
+		t.Fatalf("after=%+v", after)
+	}
+}
+
+func readMaintEntry(t *testing.T, home, name string) packages.InstalledPackage {
+	t.Helper()
+	registry, err := loadRegistryFile(filepath.Join(home, "installed.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry.Installed[name]
+}
+
+func closedChannel() <-chan struct{} {
+	ready := make(chan struct{})
+	close(ready)
+	return ready
 }

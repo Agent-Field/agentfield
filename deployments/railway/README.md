@@ -81,14 +81,26 @@ Railway hosting metadata; it never returns Railway tokens or credentials.
 The cloud image contains Git, so installed agent packages participate in
 control-plane maintenance by default:
 
-- About 20 seconds after startup, and then every six hours, the control plane
-  checks unpinned Git-installed packages and updates eligible packages.
+- Once the HTTP listener is ready (normally after a two-second settle), and
+  then every six hours, the control plane checks unpinned Git-installed
+  packages and updates eligible packages. If readiness is not observed, the
+  boot pass uses a 20-second compatibility fallback.
 - A source with an explicit `@ref` remains pinned. A package with
   `auto_update: false` in `installed.yaml` remains paused.
 - Updates preserve the package's `.env`. A running execution defers an update,
   and the control plane retries it during the maintenance pass.
+- A failed unattended update is recorded as `update.status: failed` with its
+  error message and remote commit. That commit is not retried until remote HEAD
+  moves; a manual update clears the failed memo.
 - On container startup, packages recorded as `running` are restored when their
   old process is no longer alive. Their previous port is reused when available.
+- On the first boot after upgrading a legacy registry, entries without
+  `desired_state` migrate to `running` in Railway/Docker and are restored.
+  Local installations keep the historical status-derived intent. Once an
+  explicit stop writes `desired_state: stopped`, later boots do not resurrect it.
+- Failed restores or deferred updates schedule the next pass after 1 minute,
+  then 5 minutes, then 15 minutes, before returning to the configured interval.
+  A clean pass resets this backoff.
 
 Both features depend on the state under `/data`. Without a persistent volume,
 the registry and installed packages disappear when Railway replaces the
@@ -104,6 +116,10 @@ container, so there is nothing to restore.
 Per-package control is stored as `auto_update: false` in `installed.yaml` and
 can also be changed through the package API or AgentField Desktop. Explicit
 source pins remain pinned regardless of the global interval.
+
+A manual `POST /api/ui/v1/agents/packages/:id/update` returns HTTP 409 with
+`code: executions_active` and `active_executions` when runs are in flight.
+Clients may confirm the interruption and retry with `{"force": true}`.
 
 ## Updating and recovery
 

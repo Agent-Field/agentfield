@@ -25,15 +25,23 @@ const (
 	defaultInterval = 6 * time.Hour
 	minimumInterval = 15 * time.Minute
 	bootDelay       = 20 * time.Second
+	bootSettleDelay = 2 * time.Second
 	busyRetryDelay  = 10 * time.Minute
 	jobPollInterval = 250 * time.Millisecond
 	jobWaitTimeout  = 30 * time.Minute
+	restoreTimeout  = 90 * time.Second
 	maxBusyChecks   = 3
 )
+
+var restoreRetryDelays = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
 
 type JobManager interface {
 	StartUpdate(name, source string) (*packagejobs.Job, error)
 	GetJob(id string) (*packagejobs.Job, bool)
+}
+
+type ActiveJobChecker interface {
+	ActiveFor(name string) bool
 }
 
 type AgentRunner interface {
@@ -57,58 +65,75 @@ type Summary struct {
 	Restored   []string  `json:"restored"`
 	Skipped    []Skip    `json:"skipped"`
 	Errors     []string  `json:"errors"`
+	retrySoon  bool
 }
 
 type Status struct {
-	Enabled   bool      `json:"enabled"`
-	Reason    string    `json:"reason"`
-	Interval  string    `json:"interval"`
-	LastRun   *Summary  `json:"last_run"`
-	NextRunAt time.Time `json:"next_run_at"`
+	Enabled           bool      `json:"enabled"`
+	Reason            string    `json:"reason"`
+	Interval          string    `json:"interval"`
+	LastRun           *Summary  `json:"last_run"`
+	NextRunAt         time.Time `json:"next_run_at"`
+	BootPassCompleted bool      `json:"boot_pass_completed"`
+	Hosting           string    `json:"hosting"`
 }
 
 type Config struct {
-	AgentFieldHome   string
-	Checker          *updatecheck.Checker
-	Jobs             JobManager
-	Agent            AgentRunner
-	Executions       ActiveExecutionChecker
-	Enabled          func() (bool, string)
-	ProcessAlive     func(packages.RuntimeInfo) bool
-	HealthProbe      func(context.Context, int, string) packages.HealthIdentity
-	PortAvailable    func(int) bool
-	Sleep            func(context.Context, time.Duration) error
-	Now              func() time.Time
-	Interval         time.Duration
-	JobWaitTimeout   time.Duration
-	OnRegistryChange func()
+	AgentFieldHome    string
+	Checker           *updatecheck.Checker
+	Jobs              JobManager
+	Agent             AgentRunner
+	Executions        ActiveExecutionChecker
+	Enabled           func() (bool, string)
+	ProcessAlive      func(packages.RuntimeInfo) bool
+	HealthProbe       func(context.Context, int, string) packages.HealthIdentity
+	PortAvailable     func(int) bool
+	Sleep             func(context.Context, time.Duration) error
+	Now               func() time.Time
+	Interval          time.Duration
+	JobWaitTimeout    time.Duration
+	RestoreTimeout    time.Duration
+	Ready             <-chan struct{}
+	OnRestoreState    func(packageName string, active bool)
+	HostedInContainer func() bool
+	Hosting           func() string
+	OnRegistryChange  func()
 }
 
 type Service struct {
-	home             string
-	checker          *updatecheck.Checker
-	jobs             JobManager
-	agent            AgentRunner
-	executions       ActiveExecutionChecker
-	enabled          func() (bool, string)
-	processAlive     func(packages.RuntimeInfo) bool
-	healthProbe      func(context.Context, int, string) packages.HealthIdentity
-	portAvailable    func(int) bool
-	sleep            func(context.Context, time.Duration) error
-	now              func() time.Time
-	interval         time.Duration
-	jobWaitTimeout   time.Duration
-	onRegistryChange func()
+	home              string
+	checker           *updatecheck.Checker
+	jobs              JobManager
+	agent             AgentRunner
+	executions        ActiveExecutionChecker
+	enabled           func() (bool, string)
+	processAlive      func(packages.RuntimeInfo) bool
+	healthProbe       func(context.Context, int, string) packages.HealthIdentity
+	portAvailable     func(int) bool
+	sleep             func(context.Context, time.Duration) error
+	now               func() time.Time
+	interval          time.Duration
+	jobWaitTimeout    time.Duration
+	restoreTimeout    time.Duration
+	ready             <-chan struct{}
+	onRestoreState    func(string, bool)
+	hostedInContainer func() bool
+	hosting           func() string
+	onRegistryChange  func()
 
-	mu           sync.RWMutex
-	running      bool
-	stopping     bool
-	lastRun      *Summary
-	nextRunAt    time.Time
-	registryMu   sync.Mutex
-	lifecycleMu  sync.RWMutex
-	lifecycleCtx context.Context
-	idle         chan struct{}
+	mu                sync.RWMutex
+	running           bool
+	stopping          bool
+	lastRun           *Summary
+	nextRunAt         time.Time
+	bootPassCompleted bool
+	backoffStep       int
+	restoreGrace      map[string]bool
+	scheduleChanged   chan struct{}
+	registryMu        sync.Mutex
+	lifecycleMu       sync.RWMutex
+	lifecycleCtx      context.Context
+	idle              chan struct{}
 }
 
 var (
@@ -145,16 +170,29 @@ func New(cfg Config) *Service {
 	if cfg.JobWaitTimeout <= 0 {
 		cfg.JobWaitTimeout = jobWaitTimeout
 	}
+	if cfg.RestoreTimeout <= 0 {
+		cfg.RestoreTimeout = restoreTimeout
+	}
+	if cfg.HostedInContainer == nil {
+		cfg.HostedInContainer = packages.HostedInContainer
+	}
+	if cfg.Hosting == nil {
+		cfg.Hosting = packages.HostingPlatform
+	}
 	idle := make(chan struct{})
 	close(idle)
 	return &Service{
 		home: cfg.AgentFieldHome, checker: cfg.Checker, jobs: cfg.Jobs,
 		agent: cfg.Agent, executions: cfg.Executions, enabled: cfg.Enabled,
 		processAlive: cfg.ProcessAlive, healthProbe: cfg.HealthProbe, portAvailable: cfg.PortAvailable, sleep: cfg.Sleep, now: cfg.Now,
-		interval: interval, jobWaitTimeout: cfg.JobWaitTimeout, onRegistryChange: cfg.OnRegistryChange,
-		nextRunAt:    cfg.Now().UTC().Add(bootDelay),
-		lifecycleCtx: context.Background(),
-		idle:         idle,
+		interval: interval, jobWaitTimeout: cfg.JobWaitTimeout, restoreTimeout: cfg.RestoreTimeout,
+		ready: cfg.Ready, onRestoreState: cfg.OnRestoreState, hostedInContainer: cfg.HostedInContainer, hosting: cfg.Hosting,
+		onRegistryChange: cfg.OnRegistryChange,
+		nextRunAt:        cfg.Now().UTC().Add(bootDelay),
+		restoreGrace:     make(map[string]bool),
+		scheduleChanged:  make(chan struct{}, 1),
+		lifecycleCtx:     context.Background(),
+		idle:             idle,
 	}
 }
 
@@ -218,22 +256,71 @@ func (s *Service) lifecycleContext() context.Context {
 	return s.lifecycleCtx
 }
 
-// Run owns the delayed startup pass and recurring maintenance cadence.
+// Run owns the readiness-gated startup pass and adaptive maintenance cadence.
 func (s *Service) Run(ctx context.Context) {
 	s.SetLifecycleContext(ctx)
-	if err := s.sleep(ctx, bootDelay); err != nil {
+	s.armBootRestoreGrace()
+	ready, err := s.waitForReady(ctx)
+	if err != nil {
+		s.clearAllRestoreGrace()
 		return
 	}
+	if ready {
+		if err := s.sleep(ctx, bootSettleDelay); err != nil {
+			s.clearAllRestoreGrace()
+			return
+		}
+	}
 	s.RunPass(ctx)
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
+	s.mu.Lock()
+	s.bootPassCompleted = true
+	s.mu.Unlock()
+	s.clearAllRestoreGrace()
+
 	for {
+		s.mu.RLock()
+		delay := s.nextRunAt.Sub(s.now().UTC())
+		s.mu.RUnlock()
+		if delay < 0 {
+			delay = 0
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-s.scheduleChanged:
+			timer.Stop()
+			continue
+		case <-timer.C:
 			s.RunPass(ctx)
 		}
+	}
+}
+
+// waitForReady returns true when readiness won and false when the 20-second
+// compatibility fallback elapsed. The fallback already includes the settle
+// allowance promised by C14, so only the readiness path sleeps another 2s.
+func (s *Service) waitForReady(ctx context.Context) (bool, error) {
+	if s.ready == nil {
+		return false, s.sleep(ctx, bootDelay)
+	}
+	select {
+	case <-s.ready:
+		return true, nil
+	default:
+	}
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	fallback := make(chan error, 1)
+	go func() { fallback <- s.sleep(waitCtx, bootDelay) }()
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-s.ready:
+		return true, nil
+	case err := <-fallback:
+		return false, err
 	}
 }
 
@@ -321,9 +408,10 @@ func (s *Service) runPass(ctx context.Context) (summary Summary) {
 			summary = s.finish(summary)
 		}
 	}()
-	registry, err := s.loadRegistry()
+	registry, err := s.loadRegistryForPass()
 	if err != nil {
 		summary.Errors = append(summary.Errors, err.Error())
+		summary.retrySoon = true
 		return s.finish(summary)
 	}
 	s.restore(ctx, registry, &summary)
@@ -335,6 +423,10 @@ func (s *Service) runPass(ctx context.Context) (summary Summary) {
 		summary.Checked = len(results)
 		for _, result := range results {
 			entry := registry.Installed[result.ID]
+			if result.Update.Status == updatecheck.StatusFailed {
+				summary.Skipped = append(summary.Skipped, Skip{Name: result.ID, Reason: "failed"})
+				continue
+			}
 			if result.Update.Status == updatecheck.StatusPinned {
 				summary.Skipped = append(summary.Skipped, Skip{Name: result.ID, Reason: "pinned"})
 				continue
@@ -362,6 +454,7 @@ func (s *Service) runPass(ctx context.Context) (summary Summary) {
 				deferred.Message = "active executions did not finish after three checks"
 				s.checker.Set(result.ID, deferred)
 				summary.Skipped = append(summary.Skipped, Skip{Name: result.ID, Reason: "deferred"})
+				summary.retrySoon = true
 				continue
 			}
 			if err := s.updateOne(ctx, result.ID); err != nil {
@@ -369,6 +462,10 @@ func (s *Service) runPass(ctx context.Context) (summary Summary) {
 					s.deferUpdate(result.ID, "another package operation remained active after three checks", &summary)
 					continue
 				}
+				failed := result.Update
+				failed.Status = updatecheck.StatusFailed
+				failed.Message = err.Error()
+				s.checker.Set(result.ID, failed)
 				summary.Errors = append(summary.Errors, fmt.Sprintf("%s: %v", result.ID, err))
 				continue
 			}
@@ -390,8 +487,21 @@ func (s *Service) finish(summary Summary) Summary {
 	s.mu.Lock()
 	copy := summary
 	s.lastRun = &copy
-	s.nextRunAt = summary.FinishedAt.Add(s.interval)
+	delay := s.interval
+	if summary.retrySoon {
+		if s.backoffStep < len(restoreRetryDelays) {
+			delay = restoreRetryDelays[s.backoffStep]
+		}
+		s.backoffStep++
+	} else {
+		s.backoffStep = 0
+	}
+	s.nextRunAt = summary.FinishedAt.Add(delay)
 	s.mu.Unlock()
+	select {
+	case s.scheduleChanged <- struct{}{}:
+	default:
+	}
 	logger.Logger.Info().Int("checked", summary.Checked).Strs("updated", summary.Updated).Strs("restored", summary.Restored).Int("errors", len(summary.Errors)).Msg("package maintenance pass finished")
 	return summary
 }
@@ -465,62 +575,100 @@ func (s *Service) deferUpdate(name, message string, summary *Summary) {
 	deferred.Message = message
 	s.checker.Set(name, deferred)
 	summary.Skipped = append(summary.Skipped, Skip{Name: name, Reason: "deferred"})
+	summary.retrySoon = true
 }
 
 func (s *Service) restore(ctx context.Context, registry *packages.InstallationRegistry, summary *Summary) {
 	if s.agent == nil {
+		for _, name := range sortedNames(registry) {
+			s.finishRestoreGrace(name)
+		}
 		return
 	}
 	names := sortedNames(registry)
 	for _, name := range names {
 		entry := registry.Installed[name]
 		if entry.EffectiveDesiredState() != packages.DesiredStateRunning || contains(summary.Restored, name) {
+			s.finishRestoreGrace(name)
 			continue
 		}
-		assessment := packages.AssessRecordedProcessWith(
-			ctx,
-			name,
-			entry,
-			func(info packages.RuntimeInfo) packages.RuntimeProcessState {
-				if strings.TrimSpace(info.StartTime) == "" {
-					return packages.RuntimeProcessUnknown
-				}
-				if s.processAlive(info) {
-					return packages.RuntimeProcessAliveState
-				}
-				return packages.RuntimeProcessDead
-			},
-			s.healthProbe,
-		)
-		// An equivalent or anonymous healthy endpoint is already our node, even
-		// when the recorded PID is dead or its identity is unavailable. Starting
-		// another copy would duplicate a live Go-SDK node.
-		if assessment.Ownership == packages.RecordedProcessOursHealthy {
+		if active, ok := s.jobs.(ActiveJobChecker); ok && active.ActiveFor(name) {
+			if !containsSkip(summary.Skipped, name, "updating") {
+				summary.Skipped = append(summary.Skipped, Skip{Name: name, Reason: "updating"})
+			}
+			s.finishRestoreGrace(name)
 			continue
 		}
-		if assessment.Ownership == packages.RecordedProcessOursUnhealthy && assessment.SignalAllowed {
-			stopper, ok := s.agent.(interface{ StopAgentForUpdate(string) error })
-			if !ok {
-				summary.Errors = append(summary.Errors, fmt.Sprintf("restore %s: cannot safely stop the unhealthy recorded process", name))
-				continue
+		s.restoreOne(ctx, name, entry, summary)
+		s.finishRestoreGrace(name)
+	}
+}
+
+func (s *Service) restoreOne(ctx context.Context, name string, entry packages.InstalledPackage, summary *Summary) {
+	assessment := packages.AssessRecordedProcessWith(
+		ctx,
+		name,
+		entry,
+		func(info packages.RuntimeInfo) packages.RuntimeProcessState {
+			if strings.TrimSpace(info.StartTime) == "" {
+				return packages.RuntimeProcessUnknown
 			}
-			if err := stopper.StopAgentForUpdate(name); err != nil {
-				summary.Errors = append(summary.Errors, fmt.Sprintf("restore %s: stop unhealthy process: %v", name, err))
-				continue
+			if s.processAlive(info) {
+				return packages.RuntimeProcessAliveState
 			}
+			return packages.RuntimeProcessDead
+		},
+		s.healthProbe,
+	)
+	// An equivalent or anonymous healthy endpoint is already our node, even
+	// when the recorded PID is dead or its identity is unavailable. Starting
+	// another copy would duplicate a live Go-SDK node.
+	if assessment.Ownership == packages.RecordedProcessOursHealthy {
+		return
+	}
+	if assessment.Ownership == packages.RecordedProcessOursUnhealthy && assessment.SignalAllowed {
+		stopper, ok := s.agent.(interface{ StopAgentForUpdate(string) error })
+		if !ok {
+			summary.Errors = append(summary.Errors, fmt.Sprintf("restore %s: cannot safely stop the unhealthy recorded process", name))
+			summary.retrySoon = true
+			return
 		}
-		port := 0
-		if entry.Runtime.Port != nil {
-			port = *entry.Runtime.Port
-			if assessment.Ownership == packages.RecordedProcessForeign || !s.portAvailable(port) {
-				port = 0
-			}
+		if err := stopper.StopAgentForUpdate(name); err != nil {
+			summary.Errors = append(summary.Errors, fmt.Sprintf("restore %s: stop unhealthy process: %v", name, err))
+			summary.retrySoon = true
+			return
 		}
-		if _, err := s.agent.RunAgent(name, domain.RunOptions{Port: port, Detach: true, PortIsPreference: true}); err != nil {
-			summary.Errors = append(summary.Errors, fmt.Sprintf("restore %s: %v", name, err))
-			continue
+	}
+	port := 0
+	if entry.Runtime.Port != nil {
+		port = *entry.Runtime.Port
+		if assessment.Ownership == packages.RecordedProcessForeign || !s.portAvailable(port) {
+			port = 0
 		}
-		summary.Restored = append(summary.Restored, name)
+	}
+	if err := s.runAgentWithTimeout(ctx, name, domain.RunOptions{Port: port, Detach: true, PortIsPreference: true}); err != nil {
+		summary.Errors = append(summary.Errors, fmt.Sprintf("restore %s: %v", name, err))
+		summary.retrySoon = true
+		return
+	}
+	summary.Restored = append(summary.Restored, name)
+}
+
+func (s *Service) runAgentWithTimeout(ctx context.Context, name string, options domain.RunOptions) error {
+	result := make(chan error, 1)
+	go func() {
+		_, err := s.agent.RunAgent(name, options)
+		result <- err
+	}()
+	timer := time.NewTimer(s.restoreTimeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-result:
+		return err
+	case <-timer.C:
+		return errors.New("timed out")
 	}
 }
 
@@ -569,10 +717,110 @@ func contains(values []string, target string) bool {
 	return false
 }
 
+func containsSkip(values []Skip, name, reason string) bool {
+	for _, value := range values {
+		if value.Name == name && value.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) loadRegistry() (*packages.InstallationRegistry, error) {
 	s.registryMu.Lock()
 	defer s.registryMu.Unlock()
 	return loadRegistryFile(filepath.Join(s.home, "installed.yaml"))
+}
+
+// loadRegistryForPass performs the legacy desired_state migration as one
+// read/modify/write before restore observes any package. Later passes find no
+// empty fields, so an explicit stopped intent can never be resurrected.
+func (s *Service) loadRegistryForPass() (*packages.InstallationRegistry, error) {
+	s.registryMu.Lock()
+	path := filepath.Join(s.home, "installed.yaml")
+	registry, err := loadRegistryFile(path)
+	if err != nil {
+		s.registryMu.Unlock()
+		return nil, err
+	}
+	migrated := make([]string, 0)
+	hosted := s.hostedInContainer()
+	for _, name := range sortedNames(registry) {
+		entry := registry.Installed[name]
+		if entry.DesiredState != "" {
+			continue
+		}
+		if hosted {
+			entry.DesiredState = packages.DesiredStateRunning
+		} else {
+			entry.DesiredState = entry.EffectiveDesiredState()
+		}
+		registry.Installed[name] = entry
+		migrated = append(migrated, name)
+	}
+	if len(migrated) > 0 {
+		err = writeRegistryFile(path, registry)
+	}
+	s.registryMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if len(migrated) > 0 {
+		logger.Logger.Info().Msgf("package maintenance: migrated desired_state for %v", migrated)
+		if s.onRegistryChange != nil {
+			s.onRegistryChange()
+		}
+	}
+	return registry, nil
+}
+
+func (s *Service) armBootRestoreGrace() {
+	registry, err := s.loadRegistryForPass()
+	if err != nil {
+		logger.Logger.Warn().Err(err).Msg("package maintenance: could not prepare boot restore grace")
+		return
+	}
+	for _, name := range sortedNames(registry) {
+		if registry.Installed[name].EffectiveDesiredState() != packages.DesiredStateRunning {
+			continue
+		}
+		s.mu.Lock()
+		if s.restoreGrace[name] {
+			s.mu.Unlock()
+			continue
+		}
+		s.restoreGrace[name] = true
+		s.mu.Unlock()
+		if s.onRestoreState != nil {
+			s.onRestoreState(name, true)
+		}
+	}
+}
+
+func (s *Service) finishRestoreGrace(name string) {
+	s.mu.Lock()
+	active := s.restoreGrace[name]
+	delete(s.restoreGrace, name)
+	s.mu.Unlock()
+	if active && s.onRestoreState != nil {
+		s.onRestoreState(name, false)
+	}
+}
+
+func (s *Service) clearAllRestoreGrace() {
+	s.mu.Lock()
+	names := make([]string, 0, len(s.restoreGrace))
+	for name := range s.restoreGrace {
+		names = append(names, name)
+	}
+	s.restoreGrace = make(map[string]bool)
+	s.mu.Unlock()
+	sort.Strings(names)
+	if s.onRestoreState != nil {
+		for _, name := range names {
+			s.onRestoreState(name, false)
+		}
+	}
 }
 
 func loadRegistryFile(path string) (*packages.InstallationRegistry, error) {
@@ -591,6 +839,35 @@ func loadRegistryFile(path string) (*packages.InstallationRegistry, error) {
 		registry.Installed = make(map[string]packages.InstalledPackage)
 	}
 	return registry, nil
+}
+
+func writeRegistryFile(path string, registry *packages.InstallationRegistry) error {
+	data, err := yaml.Marshal(registry)
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Chmod(mode); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 func (s *Service) Entries() ([]updatecheck.Entry, error) {
@@ -636,32 +913,7 @@ func (s *Service) SetAutoUpdate(id string, enabled bool) (packages.InstalledPack
 	}
 	entry.AutoUpdate = &enabled
 	registry.Installed[id] = entry
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return packages.InstalledPackage{}, err
-	}
-	mode := os.FileMode(0o644)
-	if info, statErr := os.Stat(path); statErr == nil {
-		mode = info.Mode().Perm()
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return packages.InstalledPackage{}, err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if _, err := temp.Write(data); err != nil {
-		_ = temp.Close()
-		return packages.InstalledPackage{}, err
-	}
-	if err := temp.Chmod(mode); err != nil {
-		_ = temp.Close()
-		return packages.InstalledPackage{}, err
-	}
-	if err := temp.Close(); err != nil {
-		return packages.InstalledPackage{}, err
-	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := writeRegistryFile(path, registry); err != nil {
 		return packages.InstalledPackage{}, err
 	}
 	if s.onRegistryChange != nil {
@@ -679,5 +931,8 @@ func (s *Service) Status() Status {
 		copy := *s.lastRun
 		lastRun = &copy
 	}
-	return Status{Enabled: enabled, Reason: reason, Interval: s.interval.String(), LastRun: lastRun, NextRunAt: s.nextRunAt}
+	return Status{
+		Enabled: enabled, Reason: reason, Interval: s.interval.String(), LastRun: lastRun,
+		NextRunAt: s.nextRunAt, BootPassCompleted: s.bootPassCompleted, Hosting: s.hosting(),
+	}
 }
