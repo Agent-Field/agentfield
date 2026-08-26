@@ -401,3 +401,91 @@ def test_resolve_callback_url_with_detection_disabled_falls_back_locally(monkeyp
     monkeypatch.setenv("AGENTFIELD_DISABLE_IP_DETECTION", "true")
 
     assert _resolve_callback_url(None, 8080) == "http://host.docker.internal:8080"
+
+
+# ---------------------------------------------------------------------------
+# The same guarantee, one level lower.
+#
+# The tests above stub _detect_container_ip itself, so they prove "the helper is
+# not called". The literal symptom in #624 is stronger: no HTTP request leaves
+# the process. The two tests below leave _detect_container_ip in place and
+# assert against its only outbound entry point, requests.get.
+# ---------------------------------------------------------------------------
+
+
+def _stub_everything_but_the_probe(monkeypatch):
+    """Force the in-container branch without touching _detect_container_ip."""
+
+    monkeypatch.setattr(agent_mod, "_is_running_in_container", lambda: True)
+    monkeypatch.setattr(agent_mod, "_detect_local_ip", lambda: "10.0.0.5")
+    monkeypatch.setattr(agent_mod.socket, "gethostname", lambda: "agent-host")
+    for name in (
+        "AGENT_CALLBACK_URL",
+        "AGENTFIELD_DISABLE_IP_DETECTION",
+        "RAILWAY_SERVICE_NAME",
+        "RAILWAY_ENVIRONMENT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize(
+    "callback_url, env",
+    [
+        ("https://agent.svc.example:8443", {}),
+        (None, {"AGENT_CALLBACK_URL": "http://my-agent.default.svc:8001"}),
+        (None, {"AGENTFIELD_DISABLE_IP_DETECTION": "1"}),
+    ],
+    ids=["callback_argument", "callback_env_var", "disable_flag"],
+)
+def test_no_http_request_is_made_when_the_callback_url_is_known(
+    monkeypatch, callback_url, env
+):
+    """No packet is aimed at the metadata services or api.ipify.org.
+
+    ``requests.get`` is ``_detect_container_ip``'s only outbound entry point
+    (it imports ``requests`` lazily and makes no other network call), so a
+    tripwire there covers every probe target. The tripwire *records* each
+    attempt as well as raising, because ``_detect_container_ip`` wraps each
+    request in ``except Exception: pass`` — a bare ``AssertionError`` would be
+    swallowed by the code under test, and the recorded list would not be.
+    """
+
+    _stub_everything_but_the_probe(monkeypatch)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    attempted = []
+
+    def forbidden_get(url, *args, **kwargs):
+        attempted.append(url)
+        raise AssertionError("no HTTP probe expected")
+
+    monkeypatch.setattr("requests.get", forbidden_get)
+
+    candidates = _build_callback_candidates(callback_url, 9000)
+
+    assert attempted == []
+    assert candidates, "the agent still needs somewhere to be called back on"
+
+
+def test_http_request_is_made_when_nothing_is_configured(monkeypatch):
+    """Control case: the tripwire above would fire if the probe still ran."""
+
+    _stub_everything_but_the_probe(monkeypatch)
+
+    attempted = []
+
+    class DummyResponse:
+        status_code = 200
+        text = "198.51.100.5"
+
+    def fake_get(url, *args, **kwargs):
+        attempted.append(url)
+        return DummyResponse()
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    candidates = _build_callback_candidates(None, 9000)
+
+    assert attempted == ["http://169.254.169.254/latest/meta-data/public-ipv4"]
+    assert "http://198.51.100.5:9000" in candidates
