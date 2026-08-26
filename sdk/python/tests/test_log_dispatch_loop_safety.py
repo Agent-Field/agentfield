@@ -610,3 +610,43 @@ async def test_closed_loops_do_not_accumulate_in_the_per_loop_table(httpx_stub):
     # The primary slot is untouched by any of it.
     assert cp_client._async_http_client_loop is agent_loop
     assert await cp_client.get_async_http_client() is mine
+
+
+# ---------------------------------------------------------------------------
+# The last-resort dispatch loop must stay a guest
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_a_fallback_dispatch_loop_never_claims_the_primary_slot(
+    httpx_stub, monkeypatch, capsys
+):
+    """When the shared loop cannot start, the loop that replaces it is worse.
+
+    The fallback loop closes as soon as its coroutine finishes. If it is not
+    recognised as a dispatch loop it takes the primary slot on the way past,
+    and the agent's own loop is then permanently on the per-loop path against
+    a client whose loop is already dead — the #620 shape the loop affinity
+    exists to prevent.
+    """
+    from agentfield import run_async
+
+    monkeypatch.setattr(run_async, "_background_loop", lambda: None)
+
+    cp_client = AgentFieldClient(base_url="http://control-plane.invalid")
+    logger = AgentFieldLogger("test.dispatch.fallback")
+    logger._cp_client = cp_client
+
+    _emit_from_a_thread_without_a_loop(logger, "exec-fallback")
+    assert await _wait_for(lambda: len(httpx_stub.requested_urls) == 1)
+    fallback_client = httpx_stub.clients[0]
+
+    assert cp_client._async_http_client is None, "the fallback loop took the slot"
+    assert cp_client._async_http_client_loop is None
+
+    # The agent's own loop can still claim it afterwards, and gets a client of
+    # its own rather than the one the dead loop opened.
+    agent_client = await cp_client.get_async_http_client()
+    assert agent_client is not fallback_client
+    assert cp_client._async_http_client_loop is asyncio.get_running_loop()
+    capsys.readouterr()

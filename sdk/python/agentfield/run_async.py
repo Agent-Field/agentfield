@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
+import weakref
 from typing import Any, Coroutine, Optional, TypeVar
 
 from .logger import get_logger
@@ -38,6 +39,15 @@ _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 _BACKGROUND_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _BACKGROUND_LOOP_LOCK = threading.Lock()
 _BACKGROUND_LOOP_START_TIMEOUT = 5.0
+
+# Every loop that best-effort dispatch runs on: the shared background loop
+# above *and* the one-shot fallback loop ``_submit_to_background_loop`` uses
+# when the shared one cannot be started. Both are loops the caller does not
+# own and (for the fallback) that are about to close, so per-loop resources
+# such as the SDK's shared httpx.AsyncClient must never be handed to them as
+# if they belonged to the agent (#620). Held weakly so a finished fallback
+# loop is not kept alive by the registry itself.
+_DISPATCH_LOOPS: "weakref.WeakSet[asyncio.AbstractEventLoop]" = weakref.WeakSet()
 
 
 def _has_running_loop() -> bool:
@@ -111,6 +121,7 @@ def _background_loop() -> Optional[asyncio.AbstractEventLoop]:
             logger.debug("Could not create the background event loop", exc_info=True)
             return None
 
+        _DISPATCH_LOOPS.add(loop)
         running = threading.Event()
 
         def _run() -> None:
@@ -141,11 +152,27 @@ def background_dispatch_loop() -> Optional[asyncio.AbstractEventLoop]:
     bringing a thread to life as a side effect of asking — see
     ``AgentFieldClient.get_async_http_client``, which must not let this loop
     take ownership of the agent's shared HTTP client.
+
+    Callers that only need the yes/no answer should use
+    :func:`is_background_dispatch_loop`, which also covers the fallback loop.
     """
     loop = _BACKGROUND_LOOP
     if loop is None or loop.is_closed():
         return None
     return loop
+
+
+def is_background_dispatch_loop(loop: asyncio.AbstractEventLoop) -> bool:
+    """True when ``loop`` is a loop this module runs best-effort work on.
+
+    Covers the shared background loop *and* the one-shot fallback loop used
+    when the shared one could not be started — the fallback is the more
+    dangerous of the two, since it closes as soon as its coroutine finishes.
+    A caller that keeps loop-affine state (``AgentFieldClient``'s shared
+    ``httpx.AsyncClient``) uses this to keep dispatch work from taking
+    ownership of it. Asking never starts a loop or a thread.
+    """
+    return loop in _DISPATCH_LOOPS
 
 
 def run_coroutine(coro: Coroutine[Any, Any, T]) -> T:
@@ -245,9 +272,16 @@ def _submit_to_background_loop(coro: Coroutine[Any, Any, Any]) -> None:
     # Last resort: a one-shot loop on its own thread. Only reached when the
     # shared loop could not be started at all, in which case dropping the
     # work outright would be worse than the throwaway loop.
+    async def _dispatch() -> None:
+        # Registered before the first await so that anything the coroutine
+        # touches sees this loop for what it is: a dispatch loop that is
+        # about to close, not a loop worth binding a connection pool to.
+        _DISPATCH_LOOPS.add(asyncio.get_running_loop())
+        await coro
+
     def _worker() -> None:
         try:
-            asyncio.run(coro)
+            asyncio.run(_dispatch())
         except Exception:
             logger.debug("fire_and_forget background task failed", exc_info=True)
 

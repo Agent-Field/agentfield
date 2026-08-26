@@ -142,14 +142,20 @@ class _Submission:
 
 
 def _is_background_dispatch_loop(loop: asyncio.AbstractEventLoop) -> bool:
-    """True when ``loop`` is the SDK's shared background dispatch loop.
+    """True when ``loop`` is one of the SDK's background dispatch loops.
+
+    That is the shared background loop *and* the one-shot fallback loop
+    ``run_async`` falls back to when the shared one cannot be started. The
+    fallback closes as soon as its coroutine finishes, so letting it claim the
+    primary client slot would strand the pool on a dead loop — the very
+    failure this module's loop affinity exists to prevent (#620).
 
     Imported lazily: ``agentfield.run_async`` pulls in this package's logger,
     which type-hints this module.
     """
-    from .run_async import background_dispatch_loop
+    from .run_async import is_background_dispatch_loop
 
-    return background_dispatch_loop() is loop
+    return is_background_dispatch_loop(loop)
 
 
 class AgentFieldClient:

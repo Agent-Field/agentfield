@@ -295,3 +295,69 @@ def test_background_dispatch_loop_does_not_start_one(monkeypatch):
     after = {thread.ident for thread in threading.enumerate()}
 
     assert after - before == set(), "asking started a thread"
+
+
+# ---------------------------------------------------------------------------
+# The fallback loop must be recognisable too
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_dispatch_loop_is_recognised_as_a_dispatch_loop(monkeypatch):
+    """The last-resort loop is a dispatch loop, and the loudest kind.
+
+    When the shared loop cannot be started, ``fire_and_forget`` runs the work
+    on a one-shot loop that closes the moment it finishes. A caller that keeps
+    loop-affine state must be able to tell — otherwise that loop looks like an
+    ordinary caller, claims the state, and takes it to the grave (#620).
+    """
+    monkeypatch.setattr(run_async, "_background_loop", lambda: None)
+
+    seen = {}
+    ran = threading.Semaphore(0)
+
+    async def record():
+        loop = asyncio.get_running_loop()
+        seen["loop"] = loop
+        seen["is_dispatch"] = run_async.is_background_dispatch_loop(loop)
+        ran.release()
+
+    fire_and_forget(record())
+
+    assert ran.acquire(timeout=5), "the fallback path never ran the work"
+    assert seen["is_dispatch"] is True
+
+
+def test_the_shared_background_loop_is_recognised_as_a_dispatch_loop():
+    loops = []
+    ran = threading.Semaphore(0)
+
+    async def record():
+        loops.append(asyncio.get_running_loop())
+        ran.release()
+
+    fire_and_forget(record())
+    assert ran.acquire(timeout=5)
+
+    assert run_async.is_background_dispatch_loop(loops[0]) is True
+
+
+def test_an_ordinary_loop_is_not_a_dispatch_loop():
+    loop = asyncio.new_event_loop()
+    try:
+        assert run_async.is_background_dispatch_loop(loop) is False
+    finally:
+        loop.close()
+
+
+def test_recognising_a_dispatch_loop_starts_nothing(monkeypatch):
+    """The yes/no answer must not be what brings a thread to life."""
+    monkeypatch.setattr(run_async, "_BACKGROUND_LOOP", None)
+
+    loop = asyncio.new_event_loop()
+    before = {thread.ident for thread in threading.enumerate()}
+    try:
+        assert run_async.is_background_dispatch_loop(loop) is False
+    finally:
+        loop.close()
+
+    assert {thread.ident for thread in threading.enumerate()} - before == set()
