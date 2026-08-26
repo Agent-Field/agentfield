@@ -147,6 +147,7 @@ func realHomeSnapshot(t *testing.T) string {
 		filepath.Join(realHomeBeforeIsolation, ".codex", "skills"),
 		filepath.Join(realHomeBeforeIsolation, ".codex", "AGENTS.override.md"),
 		filepath.Join(realHomeBeforeIsolation, ".gemini", "GEMINI.md"),
+		filepath.Join(realHomeBeforeIsolation, ".config", "opencode", "skills"),
 		filepath.Join(realHomeBeforeIsolation, ".config", "opencode", "AGENTS.md"),
 		filepath.Join(realHomeBeforeIsolation, ".aider.conventions.md"),
 		filepath.Join(realHomeBeforeIsolation, ".aider.conf.yml"),
