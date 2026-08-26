@@ -753,6 +753,7 @@ class Agent(FastAPI):
         # one, and a re-import in the same process keeps the same one (since the
         # same Agent instance is being used).
         import uuid as _uuid
+
         self.agent_instance_id = _uuid.uuid4().hex
 
         # Memory-efficient handler registries (replaces old list-based storage)
@@ -835,6 +836,7 @@ class Agent(FastAPI):
         # before any user-defined reasoners are registered so the path is
         # always available for the control-plane callback.
         from .cancel import install_cancel_route
+
         install_cancel_route(self)
 
         # Initialize async execution manager (will be lazily created when needed)
@@ -1070,7 +1072,11 @@ class Agent(FastAPI):
                 metadata["accepts_webhook"] = "true"
             elif accepts_webhook is False:
                 metadata["accepts_webhook"] = "false"
-            elif isinstance(accepts_webhook, str) and accepts_webhook in ("true", "false", "warn"):
+            elif isinstance(accepts_webhook, str) and accepts_webhook in (
+                "true",
+                "false",
+                "warn",
+            ):
                 metadata["accepts_webhook"] = accepts_webhook
             else:
                 metadata["accepts_webhook"] = "warn"
@@ -1709,8 +1715,7 @@ class Agent(FastAPI):
     @property
     def sessions(self) -> List[Dict[str, Any]]:
         return [
-            entry["definition"].to_dict()
-            for entry in self._session_registry.values()
+            entry["definition"].to_dict() for entry in self._session_registry.values()
         ]
 
     def session(
@@ -1725,7 +1730,10 @@ class Agent(FastAPI):
         tools: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> Callable[[Callable[[RealtimeSession], Awaitable[Any]]], Callable[[RealtimeSession], Awaitable[Any]]]:
+    ) -> Callable[
+        [Callable[[RealtimeSession], Awaitable[Any]]],
+        Callable[[RealtimeSession], Awaitable[Any]],
+    ]:
         """Register a realtime/voice session endpoint.
 
         Provider and transport are both explicit; AgentField does not infer or
@@ -1746,7 +1754,7 @@ class Agent(FastAPI):
         )
 
         def decorator(
-            func: Callable[[RealtimeSession], Awaitable[Any]]
+            func: Callable[[RealtimeSession], Awaitable[Any]],
         ) -> Callable[[RealtimeSession], Awaitable[Any]]:
             self._session_registry[name] = {"definition": definition, "handler": func}
             setattr(func, "_agentfield_session", definition)
@@ -2154,6 +2162,7 @@ class Agent(FastAPI):
                     # execute_async_with_callback handles its own
                     # cancellation accounting on top of this.
                     from .cancel import register_execution_task
+
                     await register_execution_task(self, execution_id_header, task)
                     return JSONResponse(
                         status_code=202,
@@ -2180,6 +2189,7 @@ class Agent(FastAPI):
                             register_execution_task,
                             deregister_execution,
                         )
+
                         sync_task = asyncio.create_task(run_reasoner())
                         await register_execution_task(
                             self, execution_id_header, sync_task
@@ -2258,7 +2268,7 @@ class Agent(FastAPI):
             vc_setting = self._effective_component_vc_setting(
                 reasoner_id, self._reasoner_vc_overrides
             )
-            
+
             self._reasoner_registry[reasoner_id] = ReasonerEntry(
                 id=reasoner_id,
                 func=func,
@@ -2294,7 +2304,9 @@ class Agent(FastAPI):
 
         return decorator
 
-    def _detect_and_unwrap_trigger_envelope(self, payload_dict: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Any]]:
+    def _detect_and_unwrap_trigger_envelope(
+        self, payload_dict: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], Optional[Any]]:
         """
         Detect dispatcher webhook envelope {event: ..., _meta: ...} and unwrap it.
         Returns (unwrapped_input, trigger_context_or_none).
@@ -2303,23 +2315,25 @@ class Agent(FastAPI):
         # Check if this looks like a dispatcher envelope
         if not isinstance(payload_dict, dict):
             return payload_dict, None
-        
+
         if "event" in payload_dict and "_meta" in payload_dict:
             # This is a dispatcher envelope
             event_data = payload_dict.get("event", {})
             meta_data = payload_dict.get("_meta", {})
-            
+
             # Parse metadata into TriggerContext
             try:
                 from datetime import datetime
                 from .triggers import TriggerContext
-                
+
                 received_at_str = meta_data.get("received_at", "")
                 if received_at_str:
-                    received_at = datetime.fromisoformat(received_at_str.replace('Z', '+00:00'))
+                    received_at = datetime.fromisoformat(
+                        received_at_str.replace("Z", "+00:00")
+                    )
                 else:
                     received_at = datetime.utcnow()
-                
+
                 trigger_ctx = TriggerContext(
                     trigger_id=meta_data.get("trigger_id", ""),
                     source=meta_data.get("source", ""),
@@ -2333,15 +2347,17 @@ class Agent(FastAPI):
             except Exception:
                 # If parsing fails, return raw envelope for compatibility
                 return payload_dict, None
-        
+
         # Not an envelope
         return payload_dict, None
 
-    def _apply_trigger_transform(self, trigger_ctx, bindings: list, input_data: dict) -> dict:
+    def _apply_trigger_transform(
+        self, trigger_ctx, bindings: list, input_data: dict
+    ) -> dict:
         """
         Match trigger context against reasoner bindings and apply transform if found.
         Returns transformed input or original input if no match.
-        
+
         Matching logic:
         1. Find bindings where binding.source == trigger_ctx.source
         2. Check event_type: binding.types empty OR trigger_ctx.event_type matches (exact or prefix)
@@ -2349,21 +2365,21 @@ class Agent(FastAPI):
         4. Apply transform if binding has one
         """
         from .triggers import EventTrigger
-        
+
         if not bindings or not trigger_ctx:
             return input_data
-        
+
         # Find best-matching binding
         best_match = None
         best_specificity = -1  # -1 = no match, 0 = broad (empty types), 1+ = specific
-        
+
         for binding in bindings:
             if not isinstance(binding, EventTrigger):
                 continue
-            
+
             if binding.source != trigger_ctx.source:
                 continue
-            
+
             # Check event_type match
             if binding.types:
                 # binding has specific types — check for match
@@ -2378,21 +2394,23 @@ class Agent(FastAPI):
             else:
                 # binding accepts all types
                 specificity = 0
-            
+
             # This binding matches; is it better than current best?
             if specificity > best_specificity:
                 best_match = binding
                 best_specificity = specificity
-        
+
         # Apply transform if found
         if best_match and best_match.transform:
             try:
                 return best_match.transform(input_data)
             except Exception as e:
                 if self.dev_mode:
-                    log_warn(f"Transform failed for {trigger_ctx.source}/{trigger_ctx.event_type}: {e}; using raw input")
+                    log_warn(
+                        f"Transform failed for {trigger_ctx.source}/{trigger_ctx.event_type}: {e}; using raw input"
+                    )
                 return input_data
-        
+
         return input_data
 
     async def _execute_reasoner_endpoint(
@@ -2411,7 +2429,9 @@ class Agent(FastAPI):
         execution_context = ExecutionContext.from_request(request, self.node_id)
         payload_dict = input_data  # Already a dict from runtime validation
         # Unwrap dispatcher envelope if present (Phase 5 webhook DX)
-        payload_dict, trigger_context = self._detect_and_unwrap_trigger_envelope(payload_dict)
+        payload_dict, trigger_context = self._detect_and_unwrap_trigger_envelope(
+            payload_dict
+        )
         if trigger_context:
             execution_context.trigger = trigger_context
 
@@ -2460,9 +2480,7 @@ class Agent(FastAPI):
                 trigger_bindings = getattr(func, "_reasoner_triggers", [])
             if execution_context.trigger and trigger_bindings:
                 payload_dict = self._apply_trigger_transform(
-                    execution_context.trigger,
-                    trigger_bindings,
-                    payload_dict
+                    execution_context.trigger, trigger_bindings, payload_dict
                 )
 
             # When invoked via an inbound trigger, the (possibly transformed)
@@ -2787,6 +2805,7 @@ class Agent(FastAPI):
             # plane records status=failed WITHOUT discarding the rich result
             # (it stores the result payload regardless of terminal status).
             from .exceptions import ReasonerFailed
+
             if isinstance(exc, ReasonerFailed) and exc.result is not None:
                 payload["result"] = jsonable_encoder(exc.result)
             log_error(f"Execution {execution_id} failed asynchronously: {exc}")
@@ -2808,6 +2827,7 @@ class Agent(FastAPI):
             self._pause_clocks.pop(execution_id, None)
             # Deregister the cancel hook regardless of outcome.
             from .cancel import deregister_execution
+
             await deregister_execution(self, execution_id)
         # Attach usage on non-success terminal states too — a reasoner that
         # failed or was cancelled may still have consumed tokens before ending.
@@ -2863,7 +2883,9 @@ class Agent(FastAPI):
             + f"/api/v1/executions/{execution_id}/status"
         )
 
-    def on_change(self, pattern: Union[str, List[str]]) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
+    def on_change(
+        self, pattern: Union[str, List[str]]
+    ) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
         """
         Decorator to mark a function as a memory event listener.
 
@@ -3826,9 +3848,10 @@ class Agent(FastAPI):
             cache_creation = getattr(result, "cache_creation_tokens", 0) or 0
             cost = getattr(result, "cost_usd", None)
 
-            if not any(
-                (input_tokens, output_tokens, cache_read, cache_creation)
-            ) and cost is None:
+            if (
+                not any((input_tokens, output_tokens, cache_read, cache_creation))
+                and cost is None
+            ):
                 return
 
             tracker = get_current_cost_tracker()
@@ -3849,9 +3872,7 @@ class Agent(FastAPI):
                 or self._harness_model_name()
                 or (resolved_provider or "harness")
             )
-            total = getattr(result, "total_tokens", 0) or (
-                input_tokens + output_tokens
-            )
+            total = getattr(result, "total_tokens", 0) or (input_tokens + output_tokens)
             ctx = self._get_current_execution_context()
             tracker.record(
                 model=str(model_name),
@@ -4593,6 +4614,7 @@ class Agent(FastAPI):
                             ExecutionFailedError,
                             ExecutionTimeoutError,
                         )
+
                         if isinstance(
                             async_error,
                             (
@@ -4811,9 +4833,7 @@ class Agent(FastAPI):
                     if self.dev_mode:
                         from agentfield.logger import log_debug
 
-                        log_debug(
-                            f"NOTE DEBUG: api_base: {self.client.api_base}"
-                        )
+                        log_debug(f"NOTE DEBUG: api_base: {self.client.api_base}")
                         log_debug(
                             f"NOTE DEBUG: Full URL: {self.client.api_base}/executions/note"
                         )

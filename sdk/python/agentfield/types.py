@@ -346,9 +346,7 @@ class HarnessConfig(BaseModel):
         default="opencode", description="Path to opencode binary."
     )
     aforge_bin: str = Field(default="aforge", description="Path to aforge binary.")
-    grok_bin: str = Field(
-        default="grok", description="Path to Grok Build CLI binary."
-    )
+    grok_bin: str = Field(default="grok", description="Path to Grok Build CLI binary.")
     schema_mode: str = Field(
         default="single",
         description=(

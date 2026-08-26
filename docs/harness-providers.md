@@ -133,7 +133,10 @@ result = await app.harness(
 )
 ```
 
-An explicit `variant="high"` keyword wins over the suffix. Per provider:
+An explicit `variant="high"` keyword wins over the suffix. In Python,
+`variant` is also available on `HarnessConfig` and `HarnessRunner.run`; a
+per-call `Agent.harness(..., variant=...)` value overrides the configured
+default. Per provider:
 
 | Provider | Model flag | Variant handling |
 | --- | --- | --- |
@@ -145,6 +148,36 @@ An explicit `variant="high"` keyword wins over the suffix. Per provider:
 
 The `#` separator is safe in model ids: `:` belongs to OpenRouter suffixes like
 `:free`, and `@` to Vertex-style ids, but no provider uses `#`.
+
+### OpenCode standalone runs (Python)
+
+The Python OpenCode adapter uses `opencode run` for each call; it does not use
+`opencode serve` or attach to a session. It selects the fixed
+`agentfield-harness` agent with `--agent` and supplies that agent through the
+child process's `OPENCODE_CONFIG_CONTENT` environment variable. The generated
+overlay sets `$schema` to `https://opencode.ai/config.json`, selects
+`agentfield-harness` as the default agent, and fixes its mode to `primary` with
+`steps` set to `500`. It does not modify shared OpenCode configuration files.
+
+A non-blank `system_prompt`, the resolved base `model`, and
+`reasoningEffort` are included in the agent overlay only when available. The
+base model is also passed with `-m`; a resolved variant is passed exactly once
+with `--variant`. An explicit `variant` wins over a `#variant` model suffix.
+AgentField `max_turns` remains a runner limit and is not serialized as
+OpenCode `steps`.
+
+OpenCode's initial permission baseline is headless and compatibility-oriented:
+the wildcard action is allowed, while AgentField `Read`, `Write`/`Edit`,
+`Glob`, `Grep`, and `Bash` map to OpenCode `read`, `edit`, `glob`, `grep`, and
+`bash`. Only `question` and `task` are explicitly denied, and no `ask`
+permission is generated. Omitted tools are not denied; this baseline is not
+per-role authorization. `Write`/`Edit` retain `edit` access because
+schema-constrained runs write their result file.
+
+The task prompt (including the runner's schema instructions, when applicable)
+is the only prompt sent to OpenCode: it is positional on POSIX and is the sole
+stdin payload on Windows. The system prompt is configured on the generated
+agent instead of being appended to the task.
 
 ## Verify
 
