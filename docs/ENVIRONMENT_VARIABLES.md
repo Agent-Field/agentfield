@@ -162,6 +162,7 @@ The same concept applies to **Docker**:
 - `AGENTFIELD_URL` (recommended): Control plane base URL.
 - `AGENT_NODE_ID` (optional): Node id.
 - `AGENT_CALLBACK_URL` (recommended in Docker/Kubernetes): URL the control plane will call back to (examples: `http://my-agent:8001`, or for host-run agents with Dockerized control plane: `http://host.docker.internal:8001`).
+- `AGENTFIELD_DISABLE_IP_DETECTION` (optional, default off): Set to `1`, `true` or `yes` (case-insensitive) to stop the SDK from probing the cloud metadata services (`169.254.169.254`, `metadata.google.internal`) and `https://api.ipify.org` while it works out its own public address. The probe only ever runs inside a container, and it is skipped automatically when a callback URL is already configured — either the `callback_url` constructor argument or `AGENT_CALLBACK_URL` — so this variable is for clusters that want the guarantee without pinning a URL. On Kubernetes those requests are typically denied by a `NetworkPolicy` and show up as deny-log noise. Turning detection off removes the public-IP candidate from callback discovery; the Railway internal hostname, the node's local-network address, the container hostname, `host.docker.internal` and the localhost fallbacks are all still offered.
 
 Many Python examples also require model provider credentials (for example `OPENAI_API_KEY`), depending on the `AIConfig` you choose.
 
