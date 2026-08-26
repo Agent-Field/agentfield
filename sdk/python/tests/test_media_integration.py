@@ -551,10 +551,15 @@ class TestOpenRouterMusicE2E:
                 prompt="upbeat jazz piano solo",
                 model="google/lyria-3-pro",
                 duration=30,
+                format="pcm16",  # SSE streaming emits pcm16 audio deltas
             )
 
         assert result.audio is not None
         assert result.audio.data == "MUSIC"
+        assert result.audio.format == "pcm16"
+        # pcm16 is the only wire format OpenRouter streams (#584) — this test
+        # must keep exercising the SSE path.
+        assert mock_session.post.call_args.kwargs["json"]["stream"] is True
 
     @pytest.mark.asyncio
     async def test_music_invalid_duration_rejected(self):

@@ -2722,8 +2722,7 @@ class OpenRouterProvider(MediaProvider):
             doc = json_mod.loads(raw.decode("utf-8"))
         except json_mod.JSONDecodeError as exc:
             raise RuntimeError(
-                f"OpenRouter {label} non-stream response was not valid JSON: "
-                f"{exc}"
+                f"OpenRouter {label} non-stream response was not valid JSON: {exc}"
             ) from exc
 
         choices = doc.get("choices") or []
@@ -2742,8 +2741,7 @@ class OpenRouterProvider(MediaProvider):
             total_size = len(b64_data)
             if total_size > MAX_AUDIO_B64_BYTES:
                 raise RuntimeError(
-                    f"Audio base64 data exceeded "
-                    f"{MAX_AUDIO_B64_BYTES} byte limit"
+                    f"Audio base64 data exceeded {MAX_AUDIO_B64_BYTES} byte limit"
                 )
 
         return b64_data, transcript
@@ -2969,14 +2967,20 @@ class OpenRouterProvider(MediaProvider):
         """
         Generate music via OpenRouter using a music-capable model.
 
-        Uses SSE streaming chat completions with audio modality, similar to
-        generate_audio but targeting music generation models.
+        Uses chat completions with the audio modality, similar to
+        generate_audio but targeting music generation models. The transport is
+        chosen from the requested format, exactly as in generate_audio:
+        ``wav``/``pcm16`` stream over SSE (``wav`` is requested as ``pcm16`` on
+        the wire and wrapped in a RIFF container client-side), while any other
+        format (mp3 / flac / opus) uses the non-streaming JSON response,
+        because OpenRouter rejects ``stream=true`` for those (Issue #584).
 
         Args:
             prompt: Text description of the music to generate
             model: Music model (defaults to "google/lyria-3-pro")
             duration: Duration hint in seconds (must be >0 and <=600)
-            **kwargs: Additional parameters (timeout overrides default 300s)
+            **kwargs: Additional parameters (``format`` defaults to ``wav``;
+                ``timeout`` overrides the default 300s)
 
         Returns:
             MultimodalResponse with generated audio (48kHz stereo)
@@ -3006,12 +3010,22 @@ class OpenRouterProvider(MediaProvider):
         audio_format = kwargs.pop("format", "wav")
         timeout = kwargs.pop("timeout", 300.0)
 
+        # SSE streaming only emits pcm16 audio deltas — ask for pcm16 over the
+        # wire when the caller wants wav and synthesize the RIFF container
+        # client-side below (same trick as generate_audio).
+        wire_format = "pcm16" if audio_format == "wav" else audio_format
+        # OpenRouter rejects stream=true for any wire format other than pcm16
+        # ("'audio.format' does not support 'wav' when stream=true"), so any
+        # other format (mp3 / flac / opus) must use the non-streaming JSON
+        # response path instead (see: Issue #584).
+        use_stream = wire_format == "pcm16"
+
         payload = {
             "model": send_model,
             "messages": [{"role": "user", "content": user_content}],
             "modalities": ["text", "audio"],
-            "audio": {"format": audio_format},
-            "stream": True,
+            "audio": {"format": wire_format},
+            "stream": use_stream,
         }
 
         headers = {
@@ -3020,9 +3034,18 @@ class OpenRouterProvider(MediaProvider):
         }
         headers = merge_attribution_headers(headers)
 
-        b64_full, transcript = await self._stream_openrouter_audio(
-            payload, headers, timeout=timeout, label="music"
-        )
+        if use_stream:
+            b64_full, transcript = await self._stream_openrouter_audio(
+                payload, headers, timeout=timeout, label="music"
+            )
+        else:
+            b64_full, transcript = await self._nonstream_openrouter_audio(
+                payload, headers, timeout=timeout, label="music"
+            )
+
+        # Re-wrap pcm16 -> wav if the caller asked for wav.
+        if audio_format == "wav" and b64_full:
+            b64_full = _wrap_pcm16_as_wav_b64(b64_full, sample_rate=24000)
 
         audio_output = AudioOutput(
             data=b64_full if b64_full else None,
