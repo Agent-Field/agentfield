@@ -11,8 +11,25 @@ import {
   cloudUpdateBannerVisible
 } from './CloudUpdateBanner'
 import {
+  CLOUD_AUTO_UPDATE_FALLBACK_HINT,
+  CLOUD_AUTO_UPDATE_CUSTOM_HINT,
+  CLOUD_AUTO_UPDATE_LOADING_HINT,
+  CLOUD_AUTO_UPDATE_MINOR_HINT,
+  CLOUD_AUTO_UPDATE_NOT_SET_LABEL,
+  CLOUD_AUTO_UPDATE_SAVING_HINT,
+  CLOUD_AUTO_UPDATE_UNKNOWN_LABEL,
+  cloudAutoUpdateForTarget,
+  cloudAutoUpdateReadEnabled,
+  cloudAutoUpdateSelectState,
+  cloudAutoUpdateSnapshotAfterRead,
+  cloudAutoUpdateStoredMode,
+  cloudAutoUpdateTargetKey,
+  cloudDeployAutoUpdateFeedback,
   cloudUpdateActionLabel,
   cloudUpdateActionVisible,
+  cloudUpdateFeedbackForTarget,
+  cloudUpdateFeedbackAfterSave,
+  cloudUpdateFeedbackAfterTargetChange,
   cloudUpdateFeedbackClass,
   deployedWorkspacePickerDisabled,
   deployedWorkspacePickerVisible,
@@ -121,6 +138,251 @@ describe('deployed Railway workspace picker', () => {
       deploymentWorkspaceId: 'recorded',
       workspaces: [{ id: 'recorded', name: 'Recorded' }, { id: 'other', name: 'Other' }]
     }, 'other')).toBe('recorded')
+  })
+})
+
+describe('Railway live auto-update control', () => {
+  it('C1 — shows the not-set choice when Railway has no policy', () => {
+    expect(cloudAutoUpdateSelectState({
+      ok: true,
+      mode: null,
+      policy: null
+    }, 'nightly')).toEqual({
+      value: '',
+      placeholder: CLOUD_AUTO_UPDATE_NOT_SET_LABEL,
+      hint: null,
+      disabled: false
+    })
+    expect(CLOUD_AUTO_UPDATE_NOT_SET_LABEL).toBe('Not set — choose a window')
+  })
+
+  it('C6 — selects the re-read live value instead of the stored preference', () => {
+    expect(cloudAutoUpdateSelectState({
+      ok: true,
+      mode: 'nightly',
+      policy: 'patch'
+    }, 'weekends')).toEqual({
+      value: 'nightly',
+      placeholder: CLOUD_AUTO_UPDATE_NOT_SET_LABEL,
+      hint: null,
+      disabled: false
+    })
+  })
+
+  it('C7 / H3 — failed reads leave the placeholder selected and disclose the cached mode', () => {
+    expect(cloudAutoUpdateSelectState({
+      ok: false,
+      mode: null,
+      policy: null,
+      settingsUrl: 'https://railway.com/dashboard'
+    }, 'weekends')).toEqual({
+      value: '',
+      placeholder: CLOUD_AUTO_UPDATE_UNKNOWN_LABEL,
+      hint: `Last known window: Weekends. ${CLOUD_AUTO_UPDATE_FALLBACK_HINT}`,
+      disabled: false
+    })
+  })
+
+  it('F2 — a target change hides stale state and reads only an eligible target', () => {
+    const live = { ok: true, mode: 'nightly', policy: 'patch' } as const
+    expect(cloudAutoUpdateForTarget({ target: 'old', state: live }, 'new')).toBeNull()
+    expect(cloudAutoUpdateForTarget({ target: 'new', state: live }, 'new')).toBe(live)
+    expect(cloudAutoUpdateReadEnabled(true, true)).toBe(true)
+    expect(cloudAutoUpdateReadEnabled(false, true)).toBe(false)
+    expect(cloudAutoUpdateReadEnabled(true, false)).toBe(false)
+  })
+
+  it('F4 / H5 — loading shows one checking label and only hints at a cached mode', () => {
+    expect(cloudAutoUpdateSelectState(null, 'weekends')).toEqual({
+      value: 'weekends',
+      placeholder: CLOUD_AUTO_UPDATE_LOADING_HINT,
+      hint: 'Last known window: Weekends',
+      disabled: true
+    })
+    expect(cloudAutoUpdateSelectState(null, null)).toEqual({
+      value: '',
+      placeholder: CLOUD_AUTO_UPDATE_LOADING_HINT,
+      hint: null,
+      disabled: true
+    })
+  })
+
+  it('F6 / H3 — failed reads combine cached disclosure and cause without the raw URL', () => {
+    expect(cloudAutoUpdateSelectState({
+      ok: false,
+      mode: null,
+      policy: null,
+      message: 'Railway could not read image auto-updates: network down. https://railway.com/dashboard',
+      settingsUrl: 'https://railway.com/dashboard'
+    }, 'nightly')).toEqual({
+      value: '',
+      placeholder: CLOUD_AUTO_UPDATE_UNKNOWN_LABEL,
+      hint: 'Last known window: Nightly. Railway could not read image auto-updates: network down.',
+      disabled: false
+    })
+  })
+
+  it('F9 — a live minor policy is explained in the hint', () => {
+    expect(cloudAutoUpdateSelectState({
+      ok: true,
+      mode: 'nightly',
+      policy: 'minor'
+    }, null)).toEqual({
+      value: 'nightly',
+      placeholder: CLOUD_AUTO_UPDATE_NOT_SET_LABEL,
+      hint: CLOUD_AUTO_UPDATE_MINOR_HINT,
+      disabled: false
+    })
+  })
+
+  it('F11 — select state owns the actual busy disabled expression', () => {
+    const live = { ok: true, mode: 'nightly', policy: 'patch' } as const
+    expect(cloudAutoUpdateSelectState(live, null, false).disabled).toBe(false)
+    expect(cloudAutoUpdateSelectState(live, null, true).disabled).toBe(true)
+  })
+
+  it('F1 — deploy auto-update fields become the shared feedback row model', () => {
+    expect(cloudDeployAutoUpdateFeedback({
+      ok: true,
+      message: 'deployed',
+      autoUpdateOk: false,
+      autoUpdateMessage: 'patch commit rejected',
+      autoUpdateSettingsUrl: 'https://railway.com/project/project/service/service/settings'
+    })).toEqual({
+      ok: false,
+      text: 'patch commit rejected',
+      settingsUrl: 'https://railway.com/project/project/service/service/settings'
+    })
+  })
+
+  it('G3 — placeholder distinguishes loading, failed unknown, and successful not-set state', () => {
+    expect(cloudAutoUpdateSelectState(null, null).placeholder)
+      .toBe('Checking Railway…')
+    expect(cloudAutoUpdateSelectState({
+      ok: false,
+      mode: null,
+      policy: null
+    }, null).placeholder).toBe('Current window unknown — choose one to set it')
+    expect(cloudAutoUpdateSelectState({
+      ok: true,
+      mode: null,
+      policy: null
+    }, null).placeholder).toBe('Not set — choose a window')
+  })
+
+  it('G4 — target-keyed feedback never exposes a rejected write link on another service', () => {
+    const snapshot = {
+      target: 'logged-in|enabled|https://service-a.example',
+      feedback: {
+        ok: false,
+        text: 'write rejected',
+        settingsUrl: 'https://railway.com/project/p/service/a/settings'
+      }
+    }
+    expect(cloudUpdateFeedbackForTarget(snapshot, snapshot.target))
+      .toEqual(snapshot.feedback)
+    expect(cloudUpdateFeedbackForTarget(
+      snapshot,
+      'logged-in|enabled|https://service-b.example'
+    )).toBeNull()
+  })
+
+  it('H1 — first-deploy feedback keeps its post-deploy target', () => {
+    const preDeployTarget = cloudAutoUpdateTargetKey(true, {
+      enabled: false,
+      serverUrl: ''
+    })
+    const postDeployTarget = cloudAutoUpdateTargetKey(true, {
+      enabled: true,
+      serverUrl: 'https://deployed.example'
+    })
+    const snapshot = {
+      target: postDeployTarget,
+      feedback: { ok: true, text: 'Railway image auto-updates set to Nightly.' }
+    }
+
+    expect(preDeployTarget).toBe('logged-in|disabled|')
+    expect(postDeployTarget).toBe('logged-in|enabled|https://deployed.example')
+    expect(cloudUpdateFeedbackAfterTargetChange(snapshot, postDeployTarget))
+      .toBe(snapshot)
+    expect(cloudUpdateFeedbackAfterTargetChange(snapshot, preDeployTarget))
+      .toBeNull()
+  })
+
+  it('I6 / H6 — feedback clears only after the cloud profile save succeeds', () => {
+    const snapshot = {
+      target: 'logged-in|enabled|https://service.example',
+      feedback: { ok: false, text: 'write rejected' }
+    }
+
+    expect(cloudUpdateFeedbackAfterSave(snapshot, false)).toBe(snapshot)
+    expect(cloudUpdateFeedbackAfterSave(snapshot, true)).toBeNull()
+  })
+
+  it('I2 — a pending selection is shown while Railway saves it', () => {
+    expect(cloudAutoUpdateSelectState({
+      ok: true,
+      mode: 'nightly',
+      policy: 'patch',
+      serviceId: 'service'
+    }, null, true, 'weekends')).toEqual({
+      value: 'weekends',
+      placeholder: CLOUD_AUTO_UPDATE_NOT_SET_LABEL,
+      hint: CLOUD_AUTO_UPDATE_SAVING_HINT,
+      disabled: true
+    })
+  })
+
+  it('I3 — a service B read failure cannot show service A cached state', () => {
+    const serviceBFailure = {
+      ok: false,
+      mode: null,
+      policy: null,
+      serviceId: 'service-b',
+      message: 'read failed'
+    } as const
+    const scoped = cloudAutoUpdateStoredMode(
+      serviceBFailure,
+      'nightly',
+      'service-a',
+      'service-a'
+    )
+
+    expect(scoped).toBeNull()
+    expect(cloudAutoUpdateSelectState(serviceBFailure, scoped).hint)
+      .toBe('read failed')
+    expect(cloudAutoUpdateStoredMode(null, 'nightly', 'service-a', 'service-a'))
+      .toBe('nightly')
+  })
+
+  it('I4 — cached copy describes a neutral last-known window', () => {
+    expect(cloudAutoUpdateSelectState({
+      ok: false,
+      mode: null,
+      policy: null
+    }, 'nightly')).toMatchObject({
+      value: '',
+      placeholder: CLOUD_AUTO_UPDATE_UNKNOWN_LABEL,
+      hint: `Last known window: Nightly. ${CLOUD_AUTO_UPDATE_FALLBACK_HINT}`
+    })
+    expect(CLOUD_AUTO_UPDATE_CUSTOM_HINT).toContain(
+      'minor policy is preserved unless you choose Off'
+    )
+  })
+
+  it('G8 — a stale read cannot replace the snapshot for a newly rendered target', () => {
+    const current = {
+      target: 'service-b',
+      state: null
+    }
+    const staleState = { ok: true, mode: 'nightly', policy: 'patch' } as const
+    expect(cloudAutoUpdateSnapshotAfterRead(current, 'service-a', staleState))
+      .toBe(current)
+    expect(cloudAutoUpdateSnapshotAfterRead(
+      { target: 'service-a', state: null },
+      'service-a',
+      staleState
+    )).toEqual({ target: 'service-a', state: staleState })
   })
 })
 

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type {
+    CloudAutoUpdateLiveMode,
     CloudAutoUpdateMode,
+    CloudAutoUpdateStateResult,
     CloudDeployResult,
     CloudTestResult,
     CloudUpdateStatus,
@@ -49,7 +51,175 @@ export function cloudUpdateActionLabel(status: CloudUpdateStatus): string {
     return status.status === "legacy" ? "Update control plane" : "Update now";
 }
 
-type CloudUpdateFeedback = { ok: boolean; text: string };
+type CloudUpdateFeedback = { ok: boolean; text: string; settingsUrl?: string };
+
+export interface CloudUpdateFeedbackSnapshot {
+    target: string;
+    feedback: CloudUpdateFeedback;
+}
+
+export interface CloudAutoUpdateSnapshot {
+    target: string;
+    state: CloudAutoUpdateStateResult | null;
+}
+
+export const CLOUD_AUTO_UPDATE_FALLBACK_HINT =
+    "Railway could not be reached.";
+export const CLOUD_AUTO_UPDATE_NOT_SET_LABEL = "Not set — choose a window";
+export const CLOUD_AUTO_UPDATE_UNKNOWN_LABEL =
+    "Current window unknown — choose one to set it";
+export const CLOUD_AUTO_UPDATE_LOADING_HINT = "Checking Railway…";
+export const CLOUD_AUTO_UPDATE_SAVING_HINT = "Saving to Railway…";
+export const CLOUD_AUTO_UPDATE_MINOR_HINT =
+    "Railway applies minor updates and patches.";
+export const CLOUD_AUTO_UPDATE_CUSTOM_HINT =
+    "Choosing a Desktop window replaces the custom Railway window; an existing minor policy is preserved unless you choose Off.";
+
+const CLOUD_AUTO_UPDATE_MODE_LABELS: Record<CloudAutoUpdateMode, string> = {
+    off: "Off",
+    nightly: "Nightly",
+    weekends: "Weekends",
+    anytime: "Anytime",
+};
+
+export function cloudAutoUpdateTargetKey(
+    railwayLoggedIn: boolean | undefined,
+    cloud: Pick<DesktopSettings["cloud"], "enabled" | "serverUrl"> | null | undefined,
+): string {
+    return [
+        railwayLoggedIn === true ? "logged-in" : "logged-out",
+        cloud?.enabled === true ? "enabled" : "disabled",
+        cloud?.serverUrl ?? "",
+    ].join("|");
+}
+
+export function cloudAutoUpdateReadEnabled(
+    railwayLoggedIn: boolean | undefined,
+    cloudEnabled: boolean | undefined,
+): boolean {
+    return railwayLoggedIn === true && cloudEnabled === true;
+}
+
+export function cloudAutoUpdateForTarget(
+    snapshot: CloudAutoUpdateSnapshot | null,
+    target: string,
+): CloudAutoUpdateStateResult | null {
+    return snapshot?.target === target ? snapshot.state : null;
+}
+
+export function cloudAutoUpdateSnapshotAfterRead(
+    snapshot: CloudAutoUpdateSnapshot | null,
+    target: string,
+    state: CloudAutoUpdateStateResult,
+): CloudAutoUpdateSnapshot | null {
+    return snapshot?.target === target ? { target, state } : snapshot;
+}
+
+export function cloudUpdateFeedbackForTarget(
+    snapshot: CloudUpdateFeedbackSnapshot | null,
+    target: string,
+): CloudUpdateFeedback | null {
+    return snapshot?.target === target ? snapshot.feedback : null;
+}
+
+export function cloudUpdateFeedbackAfterTargetChange(
+    snapshot: CloudUpdateFeedbackSnapshot | null,
+    target: string,
+): CloudUpdateFeedbackSnapshot | null {
+    return snapshot?.target === target ? snapshot : null;
+}
+
+export function cloudUpdateFeedbackAfterSave(
+    snapshot: CloudUpdateFeedbackSnapshot | null,
+    saved: boolean,
+): CloudUpdateFeedbackSnapshot | null {
+    return saved ? null : snapshot;
+}
+
+export function cloudAutoUpdateStoredMode(
+    live: CloudAutoUpdateStateResult | null,
+    storedMode: CloudAutoUpdateMode | null,
+    storedServiceId: string | null,
+    tfstateServiceId: string | null,
+): CloudAutoUpdateMode | null {
+    const serviceId = live?.serviceId ?? tfstateServiceId;
+    return serviceId && storedServiceId === serviceId ? storedMode : null;
+}
+
+export function cloudAutoUpdateSelectState(
+    live: CloudAutoUpdateStateResult | null,
+    stored: CloudAutoUpdateMode | null,
+    busy = false,
+    pending: CloudAutoUpdateMode | null = null,
+): {
+    value: Exclude<CloudAutoUpdateLiveMode, null> | "";
+    placeholder: string;
+    hint: string | null;
+    disabled: boolean;
+} {
+    if (pending) {
+        return {
+            value: pending,
+            placeholder: CLOUD_AUTO_UPDATE_NOT_SET_LABEL,
+            hint: CLOUD_AUTO_UPDATE_SAVING_HINT,
+            disabled: true,
+        };
+    }
+    if (live?.ok) {
+        return {
+            value: live.mode ?? "",
+            placeholder: CLOUD_AUTO_UPDATE_NOT_SET_LABEL,
+            hint: live.policy === "minor" ? CLOUD_AUTO_UPDATE_MINOR_HINT : null,
+            disabled: busy,
+        };
+    }
+    if (live) {
+        const messageDetail = live.message
+            ? cloudAutoUpdateFeedbackText({
+                ok: false,
+                text: live.message,
+                settingsUrl: live.settingsUrl,
+            })
+            : "";
+        const detail = messageDetail || CLOUD_AUTO_UPDATE_FALLBACK_HINT;
+        const cached = stored
+            ? `Last known window: ${CLOUD_AUTO_UPDATE_MODE_LABELS[stored]}. `
+            : "";
+        return {
+            value: "",
+            placeholder: CLOUD_AUTO_UPDATE_UNKNOWN_LABEL,
+            hint: `${cached}${detail}`,
+            disabled: busy,
+        };
+    }
+    return {
+        value: stored ?? "",
+        placeholder: CLOUD_AUTO_UPDATE_LOADING_HINT,
+        hint: stored
+            ? `Last known window: ${CLOUD_AUTO_UPDATE_MODE_LABELS[stored]}`
+            : null,
+        disabled: true,
+    };
+}
+
+export function cloudAutoUpdateFeedbackText(feedback: CloudUpdateFeedback): string {
+    if (!feedback.settingsUrl) return feedback.text;
+    return feedback.text.replace(feedback.settingsUrl, "").trim();
+}
+
+export function cloudDeployAutoUpdateFeedback(
+    result: CloudDeployResult,
+): CloudUpdateFeedback | null {
+    if (
+        typeof result.autoUpdateOk !== "boolean" ||
+        !result.autoUpdateMessage
+    ) return null;
+    return {
+        ok: result.autoUpdateOk,
+        text: result.autoUpdateMessage,
+        settingsUrl: result.autoUpdateSettingsUrl,
+    };
+}
 
 export function cloudUpdateFeedbackClass(feedback: CloudUpdateFeedback): string {
     return feedback.ok ? "row-sub" : "row-sub error-text";
@@ -79,9 +249,13 @@ export function CloudPanel() {
     const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
     const [railway, setRailway] = useState<RailwayStatus | null>(null);
     const [cloudUpdate, setCloudUpdate] = useState<CloudUpdateStatus | null>(null);
+    const [cloudAutoUpdateSnapshot, setCloudAutoUpdateSnapshot] =
+        useState<CloudAutoUpdateSnapshot | null>(null);
     const [cloudUpdateBusy, setCloudUpdateBusy] = useState<"apply" | "schedule" | null>(null);
-    const [cloudUpdateMessage, setCloudUpdateMessage] =
-        useState<CloudUpdateFeedback | null>(null);
+    const [pendingAutoUpdateMode, setPendingAutoUpdateMode] =
+        useState<CloudAutoUpdateMode | null>(null);
+    const [cloudUpdateMessageSnapshot, setCloudUpdateMessageSnapshot] =
+        useState<CloudUpdateFeedbackSnapshot | null>(null);
     const [railwayBusy, setRailwayBusy] = useState<
         "login" | "deploy" | "destroy" | null
     >(null);
@@ -94,6 +268,49 @@ export function CloudPanel() {
     const [showDestroy, setShowDestroy] = useState(false);
     const [destroyed, setDestroyed] = useState(false);
     const [activeTab, setActiveTab] = useState<CloudTab>("railway");
+
+    const cloudAutoUpdateTarget = cloudAutoUpdateTargetKey(
+        railway?.loggedIn,
+        settings?.cloud,
+    );
+    const cloudAutoUpdate = cloudAutoUpdateForTarget(
+        cloudAutoUpdateSnapshot,
+        cloudAutoUpdateTarget,
+    );
+    const cloudUpdateMessage = cloudUpdateFeedbackForTarget(
+        cloudUpdateMessageSnapshot,
+        cloudAutoUpdateTarget,
+    );
+    const setCloudUpdateMessage = (
+        feedback: CloudUpdateFeedback | null,
+        target = cloudAutoUpdateTarget,
+    ) => {
+        setCloudUpdateMessageSnapshot(feedback
+            ? { target, feedback }
+            : null);
+    };
+
+    const refreshCloudAutoUpdate = async () => {
+        const target = cloudAutoUpdateTarget;
+        setCloudAutoUpdateSnapshot({ target, state: null });
+        if (!cloudAutoUpdateReadEnabled(
+            railway?.loggedIn,
+            settings?.cloud.enabled,
+        )) return;
+        try {
+            const state = await window.agentfield.getCloudAutoUpdate();
+            setCloudAutoUpdateSnapshot((snapshot) =>
+                cloudAutoUpdateSnapshotAfterRead(snapshot, target, state));
+        } catch (err) {
+            setCloudAutoUpdateSnapshot((snapshot) =>
+                cloudAutoUpdateSnapshotAfterRead(snapshot, target, {
+                    ok: false,
+                    mode: null,
+                    policy: null,
+                    message: err instanceof Error ? err.message : String(err),
+                }));
+        }
+    };
 
     useEffect(() => {
         void window.agentfield.getSettings().then((next) => {
@@ -114,6 +331,12 @@ export function CloudPanel() {
             setDeployLines((lines) => [...lines.slice(-199), line]);
         });
     }, []);
+
+    useEffect(() => {
+        setCloudUpdateMessageSnapshot((snapshot) =>
+            cloudUpdateFeedbackAfterTargetChange(snapshot, cloudAutoUpdateTarget));
+        void refreshCloudAutoUpdate();
+    }, [cloudAutoUpdateTarget]);
 
     useEffect(() => {
         if (!settings?.cloud.enabled) return;
@@ -178,12 +401,13 @@ export function CloudPanel() {
     };
 
     const saveCloud = async () => {
+        let proceed = true;
         if (!result?.ok) {
-            const proceed = window.confirm(
+            proceed = window.confirm(
                 "The connection has not passed its test. Switch to this remote control plane anyway?",
             );
-            if (!proceed) return;
         }
+        if (!proceed) return;
         setSaving(true);
         setError(null);
         setConfirmation(null);
@@ -194,6 +418,8 @@ export function CloudPanel() {
                 apiKey: apiKey.trim(),
             });
             setSettings(next);
+            setCloudUpdateMessageSnapshot((snapshot) =>
+                cloudUpdateFeedbackAfterSave(snapshot, true));
             setServerUrl(next.cloud?.serverUrl ?? serverUrl.trim());
             setApiKey(next.cloud?.apiKey ?? apiKey.trim());
             setConfirmation({
@@ -208,6 +434,7 @@ export function CloudPanel() {
     };
 
     const disconnect = async () => {
+        setCloudUpdateMessage(null);
         setSaving(true);
         setError(null);
         setConfirmation(null);
@@ -260,19 +487,32 @@ export function CloudPanel() {
         setDeployResult(null);
         setDestroyed(false);
         setError(null);
+        setCloudUpdateMessage(null);
         try {
             const nextResult =
                 await window.agentfield.cloudDeploy(actionWorkspaceId);
             setDeployResult(nextResult);
+            const feedback = cloudDeployAutoUpdateFeedback(nextResult);
+            let feedbackTarget = cloudAutoUpdateTarget;
+            let targetChanged = false;
             if (nextResult.ok) {
                 const next = await window.agentfield.getSettings();
+                feedbackTarget = cloudAutoUpdateTargetKey(
+                    railway?.loggedIn,
+                    next.cloud,
+                );
+                targetChanged =
+                    next.cloud.enabled !== settings?.cloud.enabled ||
+                    next.cloud.serverUrl !== settings?.cloud.serverUrl;
                 setSettings(next);
                 setServerUrl(next.cloud.serverUrl);
                 setApiKey(next.cloud.apiKey);
             }
+            setCloudUpdateMessage(feedback, feedbackTarget);
             await refreshRailway();
             if (nextResult.ok) {
                 setCloudUpdate(await window.agentfield.checkCloudUpdate());
+                if (!targetChanged) await refreshCloudAutoUpdate();
             }
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
@@ -285,6 +525,7 @@ export function CloudPanel() {
         if (deleteText !== "delete") return;
         setRailwayBusy("destroy");
         setError(null);
+        setCloudUpdateMessage(null);
         try {
             const result = await window.agentfield.cloudDestroy();
             if (!result.ok) {
@@ -313,6 +554,7 @@ export function CloudPanel() {
             const applied = await window.agentfield.applyCloudUpdate();
             setCloudUpdateMessage({ ok: applied.ok, text: applied.message });
             setCloudUpdate(await window.agentfield.checkCloudUpdate());
+            if (applied.ok) await refreshCloudAutoUpdate();
         } catch (err) {
             setCloudUpdateMessage({
                 ok: false,
@@ -324,12 +566,17 @@ export function CloudPanel() {
     };
 
     const setAutoUpdate = async (mode: CloudAutoUpdateMode) => {
+        setPendingAutoUpdateMode(mode);
         setCloudUpdateBusy("schedule");
         setCloudUpdateMessage(null);
         try {
             const changed = await window.agentfield.setCloudAutoUpdate(mode);
             if (!changed.ok) {
-                setCloudUpdateMessage({ ok: false, text: changed.message });
+                setCloudUpdateMessage({
+                    ok: false,
+                    text: changed.message,
+                    settingsUrl: changed.settingsUrl,
+                });
                 return;
             }
             const next = await window.agentfield.getSettings();
@@ -341,6 +588,8 @@ export function CloudPanel() {
                 text: `${err instanceof Error ? err.message : String(err)} Try again.`,
             });
         } finally {
+            await refreshCloudAutoUpdate();
+            setPendingAutoUpdateMode(null);
             setCloudUpdateBusy(null);
         }
     };
@@ -352,6 +601,19 @@ export function CloudPanel() {
             </div>
         );
     }
+
+    const storedAutoUpdateMode = cloudAutoUpdateStoredMode(
+        cloudAutoUpdate,
+        settings.cloud.autoUpdate,
+        settings.cloud.autoUpdateServiceId,
+        railway?.deploymentServiceId ?? null,
+    );
+    const autoUpdateSelect = cloudAutoUpdateSelectState(
+        cloudAutoUpdate,
+        storedAutoUpdateMode,
+        cloudUpdateBusy !== null,
+        pendingAutoUpdateMode,
+    );
 
     return (
         <>
@@ -412,7 +674,20 @@ export function CloudPanel() {
                         <span className="row-sub">{cloudUpdate.message}</span>
                         {cloudUpdateMessage && (
                             <span className={cloudUpdateFeedbackClass(cloudUpdateMessage)}>
-                                {cloudUpdateMessage.text}
+                                {cloudAutoUpdateFeedbackText(cloudUpdateMessage)}
+                                {cloudUpdateMessage.settingsUrl && (
+                                    <>
+                                        {" "}
+                                        <a
+                                            className="link-button"
+                                            href={cloudUpdateMessage.settingsUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                        >
+                                            Open Railway settings
+                                        </a>
+                                    </>
+                                )}
                             </span>
                         )}
                     </div>
@@ -433,23 +708,58 @@ export function CloudPanel() {
                             railwayImageUpdatesVisible(cloudUpdate) && (
                                 <label className="cloud-workspace-field">
                                     <span className="row-sub">Railway image updates</span>
-                                    <select
-                                        className="env-input"
-                                        aria-label="Railway image auto-update schedule"
-                                        value={settings.cloud.autoUpdate ?? ""}
-                                        disabled={cloudUpdateBusy !== null}
-                                        onChange={(event) =>
-                                            void setAutoUpdate(event.target.value as CloudAutoUpdateMode)
+                                        <select
+                                            className="env-input"
+                                            aria-label="Railway image auto-update schedule"
+                                            value={autoUpdateSelect.value}
+                                            disabled={autoUpdateSelect.disabled}
+                                            title={autoUpdateSelect.value === "custom"
+                                                ? CLOUD_AUTO_UPDATE_CUSTOM_HINT
+                                                : undefined}
+                                            onChange={(event) =>
+                                                void setAutoUpdate(event.target.value as CloudAutoUpdateMode)
                                         }
                                     >
                                         <option value="" disabled>
-                                            Not set — choose a window
+                                            {autoUpdateSelect.placeholder}
                                         </option>
+                                        {autoUpdateSelect.value === "custom" && (
+                                            <option
+                                                value="custom"
+                                                disabled
+                                                title={CLOUD_AUTO_UPDATE_CUSTOM_HINT}
+                                            >
+                                                Custom — set in Railway
+                                            </option>
+                                        )}
                                         <option value="off">Off — never update automatically</option>
                                         <option value="nightly">Nightly — every day, 02:00–06:00 UTC</option>
                                         <option value="weekends">Weekends — Saturday and Sunday, all day UTC</option>
                                         <option value="anytime">Anytime — apply after Railway detects a release</option>
                                     </select>
+                                    {autoUpdateSelect.hint && (
+                                        <span className="row-sub">
+                                            {autoUpdateSelect.hint}
+                                            {cloudAutoUpdate?.settingsUrl && (
+                                                <>
+                                                    {" "}
+                                                    <a
+                                                        className="link-button"
+                                                        href={cloudAutoUpdate.settingsUrl}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                    >
+                                                        Open Railway settings
+                                                    </a>
+                                                </>
+                                            )}
+                                        </span>
+                                    )}
+                                    {autoUpdateSelect.value === "custom" && (
+                                        <span className="row-sub">
+                                            {CLOUD_AUTO_UPDATE_CUSTOM_HINT}
+                                        </span>
+                                    )}
                                 </label>
                             )}
                     </div>
