@@ -269,7 +269,7 @@ Storage interface is unified—services call storage layer methods, storage laye
 
 ### Memory Scopes
 
-The control plane defines four scopes: `global`, `session`, `actor`, and `workflow`. Other strings (such as `agent` or `run`) are not rejected, but they are stored in a namespace that an unscoped `get` never walks, so a value written there can only be read back with the same explicit scope. Python and TypeScript use these names directly; the Go SDK's constant for the actor scope is `agent.ScopeUser` (`"user"`), which `apiScope` translates to `actor` on the wire (`sdk/go/agent/control_plane_memory_backend.go`).
+The control plane defines four scopes: `global`, `session`, `actor`, and `workflow`. The HTTP handler does not alias `agent` or `run` to those scopes. Python's `MemoryInterface` rejects any name outside `_VALID_SCOPES = ("global", "session", "actor", "workflow")`. The Go SDK remaps unknown names (including `agent` and `run`) to `global` before they hit the wire; its constant for the actor scope is `agent.ScopeUser` (`"user"`), which `apiScope` translates to `actor` (`sdk/go/agent/control_plane_memory_backend.go`). Do not use `agent` or `run` as scope names.
 
 - **`global`:** Shared by every agent and session; fixed scope id `global`
 - **`session`:** One conversation, keyed by `X-Session-ID`
@@ -278,7 +278,7 @@ The control plane defines four scopes: `global`, `session`, `actor`, and `workfl
 
 `session`, `actor` and `workflow` are sibling dimensions, not a nested chain. A read with no explicit scope resolves `workflow -> session -> actor -> global` and returns the first hit. Scope controls lookup and isolation, not lifetime: nothing is purged when a session or run ends — values persist until explicitly deleted.
 
-Agents access via SDK methods: `agent.memory.get/set(scope, key, value)`. See `sdk/python/agentfield/memory.py` for the authoritative description.
+Agents access via SDK methods: `agent.memory.get(key, default=None, scope=..., scope_id=...)` / `agent.memory.set(key, data, scope=..., scope_id=...)`. See `sdk/python/agentfield/memory.py` for the authoritative description.
 
 ### DID/VC (Cryptographic Identity)
 - Opt-in per agent: Set `app.vc_generator.set_enabled(True)` in Python or equivalent in Go

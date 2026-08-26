@@ -1567,13 +1567,16 @@ class Agent(FastAPI):
             - `app.memory.clear(pattern="*")`: Clear keys matching pattern
 
         Memory Scopes:
-            - Session: Data persists for the duration of a user session
-            - Workflow: Data persists for the duration of a workflow execution
-            - Agent: Data persists across all executions for this agent
-            - Global: Data shared across all agents (use with caution)
+            - Session: One conversation, keyed by X-Session-ID
+            - Actor: One actor across all its sessions, keyed by X-Actor-ID
+            - Workflow: One workflow run, keyed by X-Workflow-ID
+            - Global: Shared by every agent and session; fixed scope id "global"
+
+            session, actor, and workflow are sibling dimensions, not a nested
+            chain. There is no Agent or Run scope.
 
         Note:
-            - Memory is automatically cleaned up based on retention policies
+            - Values persist until explicitly deleted; scope is lookup/isolation, not lifetime
             - Large objects should be stored efficiently (consider serialization)
             - Memory operations are atomic and thread-safe
             - Memory events can trigger `@on_change` listeners
