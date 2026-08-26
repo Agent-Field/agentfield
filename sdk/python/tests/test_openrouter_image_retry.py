@@ -148,6 +148,7 @@ async def test_exhausted_retries_retry_once_with_image_config_stripped(no_sleep)
     # Everything else about the request is unchanged.
     assert session.bodies[3]["messages"] == session.bodies[0]["messages"]
     assert session.bodies[3]["modalities"] == ["image"]
+    assert [c.args[0] for c in no_sleep.await_args_list] == [1.0, 2.0, 4.0]
 
 
 @pytest.mark.asyncio

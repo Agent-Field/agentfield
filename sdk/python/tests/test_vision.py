@@ -315,7 +315,7 @@ async def test_generate_image_openrouter_retries_on_no_endpoints_then_succeeds(
     monkeypatch,
 ):
     """First call hits 'No endpoints found' 404; second call succeeds (issue #5)."""
-    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    monkeypatch.setattr("agentfield.openrouter_retry.sleep", AsyncMock())
 
     success_response = _build_openrouter_success_response()
     failure = Exception(_NO_ENDPOINTS_MSG)
@@ -343,7 +343,7 @@ async def test_generate_image_openrouter_strips_image_config_after_retries(
     monkeypatch,
 ):
     """All 3 in-loop attempts fail; strip-and-retry succeeds without image_config (issue #3)."""
-    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    monkeypatch.setattr("agentfield.openrouter_retry.sleep", AsyncMock())
 
     success_response = _build_openrouter_success_response()
     failure = Exception(_NO_ENDPOINTS_MSG)
@@ -378,7 +378,7 @@ async def test_generate_image_openrouter_strips_image_config_after_retries(
 @pytest.mark.asyncio
 async def test_generate_image_openrouter_does_not_retry_on_other_errors(monkeypatch):
     """Generic exceptions propagate immediately; no retry, no strip."""
-    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    monkeypatch.setattr("agentfield.openrouter_retry.sleep", AsyncMock())
 
     mock_litellm = MagicMock()
     mock_litellm.acompletion = AsyncMock(side_effect=RuntimeError("boom"))
@@ -406,7 +406,7 @@ async def test_generate_image_openrouter_gives_up_after_all_retries_no_image_con
 
     No strip attempt is performed (nothing to strip), so total call count is 3.
     """
-    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    monkeypatch.setattr("agentfield.openrouter_retry.sleep", AsyncMock())
 
     failure = Exception(_NO_ENDPOINTS_MSG)
     mock_litellm = MagicMock()

@@ -13,11 +13,12 @@ import asyncio
 import os
 from typing import Any, Dict, Optional
 from agentfield.logger import log_error, log_warn
+from agentfield import openrouter_retry
 from agentfield.openrouter_retry import (
     NO_ENDPOINTS_INTER_SLEEPS,
-    NO_ENDPOINTS_MARKER,
     NO_ENDPOINTS_STRIP_SLEEP,
     NO_ENDPOINTS_TOTAL_ATTEMPTS,
+    is_no_endpoints_error,
 )
 
 
@@ -192,11 +193,11 @@ async def generate_image_openrouter(
                 )
                 break
             except Exception as e:
-                if NO_ENDPOINTS_MARKER not in str(e):
+                if not is_no_endpoints_error(str(e)):
                     raise
                 last_exc = e
                 if attempt < len(NO_ENDPOINTS_INTER_SLEEPS):
-                    await asyncio.sleep(NO_ENDPOINTS_INTER_SLEEPS[attempt])
+                    await openrouter_retry.sleep(NO_ENDPOINTS_INTER_SLEEPS[attempt])
         if response is None:
             # All in-loop attempts exhausted. If image_config was set, try once
             # without it before giving up. Falsy check (not `is not None`) is
@@ -209,7 +210,7 @@ async def generate_image_openrouter(
                     "accepted the requested image_config)."
                 )
                 completion_params.pop("image_config", None)
-                await asyncio.sleep(NO_ENDPOINTS_STRIP_SLEEP)
+                await openrouter_retry.sleep(NO_ENDPOINTS_STRIP_SLEEP)
                 response = await asyncio.wait_for(
                     litellm.acompletion(**completion_params),
                     timeout=timeout,
