@@ -691,9 +691,22 @@ class AgentFieldClient:
             # per-loop survives an aclose().
             self._foreign_loop_http_clients.clear()
 
+        first_error: Optional[BaseException] = None
         for client in (primary, mine):
-            if client is not None:
+            if client is None:
+                continue
+            try:
                 await client.aclose()
+            except BaseException as exc:
+                # Every client has to be attempted. The slots above are
+                # already cleared, so a client skipped here is one nothing
+                # will ever close — abandoning ``mine`` because ``primary``
+                # failed leaks the pool this very loop opened.
+                if first_error is None:
+                    first_error = exc
+
+        if first_error is not None:
+            raise first_error
 
     def register_node(self, node_data: Dict[str, Any]) -> Dict[str, Any]:
         """

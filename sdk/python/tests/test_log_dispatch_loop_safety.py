@@ -650,3 +650,70 @@ async def test_a_fallback_dispatch_loop_never_claims_the_primary_slot(
     assert agent_client is not fallback_client
     assert cp_client._async_http_client_loop is asyncio.get_running_loop()
     capsys.readouterr()
+
+
+# ---------------------------------------------------------------------------
+# aclose() must attempt every client it dropped
+# ---------------------------------------------------------------------------
+
+
+def _seed_two_clients(cp_client, loop, sink):
+    """Give ``cp_client`` a primary and a per-loop client, both owned by ``loop``."""
+    primary = _LoopBoundAsyncClient(sink)
+    mine = _LoopBoundAsyncClient(sink)
+    cp_client._async_http_client = primary
+    cp_client._async_http_client_loop = loop
+    cp_client._foreign_loop_http_clients[loop] = mine
+    return primary, mine
+
+
+@pytest.mark.unit
+async def test_aclose_closes_the_second_client_when_the_first_raises(httpx_stub):
+    """A failed close must not abandon the pool behind it.
+
+    ``aclose()`` clears both slots before awaiting, so a client it skips is one
+    nothing will ever close again.
+    """
+    cp_client = AgentFieldClient(base_url="http://control-plane.invalid")
+    loop = asyncio.get_running_loop()
+    primary, mine = _seed_two_clients(cp_client, loop, httpx_stub.requested_urls)
+
+    async def _refuse() -> None:
+        raise RuntimeError("primary refuses to close")
+
+    primary.aclose = _refuse
+
+    with pytest.raises(RuntimeError, match="primary refuses to close"):
+        await cp_client.aclose()
+
+    assert mine.is_closed is True
+    assert mine.closed_on_loop is loop
+    assert cp_client._async_http_client is None
+    assert cp_client._async_http_client_loop is None
+    assert len(cp_client._foreign_loop_http_clients) == 0
+
+
+@pytest.mark.unit
+async def test_aclose_reports_the_first_close_failure(httpx_stub):
+    """A later failure must not mask the one that happened first."""
+    cp_client = AgentFieldClient(base_url="http://control-plane.invalid")
+    loop = asyncio.get_running_loop()
+    primary, mine = _seed_two_clients(cp_client, loop, httpx_stub.requested_urls)
+
+    attempted = []
+
+    async def _refuse_primary() -> None:
+        attempted.append("primary")
+        raise RuntimeError("primary refuses to close")
+
+    async def _refuse_mine() -> None:
+        attempted.append("mine")
+        raise RuntimeError("per-loop client refuses to close")
+
+    primary.aclose = _refuse_primary
+    mine.aclose = _refuse_mine
+
+    with pytest.raises(RuntimeError, match="primary refuses to close"):
+        await cp_client.aclose()
+
+    assert attempted == ["primary", "mine"]
