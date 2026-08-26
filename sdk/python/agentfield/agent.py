@@ -1491,11 +1491,15 @@ class Agent(FastAPI):
         agents to store and retrieve data across function calls, workflow steps,
         and even across different agent interactions.
 
-        Memory is automatically scoped by:
-        - Execution context (workflow instance)
-        - Agent node ID
-        - Session information
-        - User context (if available)
+        A write with no explicit scope lands in the most specific scope the current
+        request carries, picked from the execution-context headers the SDK sends:
+        X-Workflow-ID (workflow), then X-Session-ID (session), then X-Actor-ID
+        (actor), falling back to the shared "global" scope when none is present.
+        A read with no explicit scope walks the same dimensions in the order
+        workflow -> session -> actor -> global and returns the first hit.
+
+        The agent's node ID travels with the request as X-Agent-Node-ID, but it is
+        attribution on the emitted memory change event - it is not a scope key.
 
         Returns:
             MemoryInterface: Interface for memory operations if execution context is available.
@@ -1508,16 +1512,16 @@ class Agent(FastAPI):
                 '''Analyze message with conversation history context.'''
 
                 # Store current message in conversation history
-                history = app.memory.get("conversation.history", [])
+                history = await app.memory.get("conversation.history", [])
                 history.append({
                     "message": message,
                     "timestamp": datetime.now().isoformat(),
                     "role": "user"
                 })
-                app.memory.set("conversation.history", history)
+                await app.memory.set("conversation.history", history)
 
                 # Get user preferences for analysis
-                user_prefs = app.memory.get("user.analysis_preferences", {
+                user_prefs = await app.memory.get("user.analysis_preferences", {
                     "sentiment_analysis": True,
                     "topic_extraction": True,
                     "language_detection": False
@@ -1540,16 +1544,16 @@ class Agent(FastAPI):
                 )
 
                 # Store analysis results
-                app.memory.set("conversation.last_analysis", result.model_dump())
+                await app.memory.set("conversation.last_analysis", result.model_dump())
 
                 return result
 
             @app.skill()
-            def get_conversation_summary() -> dict:
+            async def get_conversation_summary() -> dict:
                 '''Get summary of current conversation.'''
 
-                history = app.memory.get("conversation.history", [])
-                last_analysis = app.memory.get("conversation.last_analysis", {})
+                history = await app.memory.get("conversation.history", [])
+                last_analysis = await app.memory.get("conversation.last_analysis", {})
 
                 return {
                     "message_count": len(history),
@@ -1559,12 +1563,31 @@ class Agent(FastAPI):
             ```
 
         Memory Operations:
-            - `app.memory.get(key, default=None)`: Retrieve value by key
-            - `app.memory.set(key, value)`: Store value by key
-            - `app.memory.delete(key)`: Remove value by key
-            - `app.memory.exists(key)`: Check if key exists
-            - `app.memory.keys(pattern="*")`: List keys matching pattern
-            - `app.memory.clear(pattern="*")`: Clear keys matching pattern
+            `app.memory` is a `MemoryInterface`. Every value operation on it is a
+            coroutine and has to be awaited:
+
+            - `await app.memory.get(key, default=None, scope=None, scope_id=None)`:
+              Read a value; with `scope=None` this is the hierarchical lookup above
+            - `await app.memory.set(key, data, scope=None, scope_id=None)`: Store a value
+            - `await app.memory.delete(key, scope=None, scope_id=None)`: Remove a value
+            - `await app.memory.exists(key)`: Present, but it answers True for any key
+              as long as the backend is reachable; compare
+              `await app.memory.get(key, sentinel)` against a sentinel instead
+            - `await app.memory.set_vector(key, embedding, metadata=None)`: Store an embedding
+            - `await app.memory.delete_vector(key)`: Remove an embedding
+            - `await app.memory.similarity_search(query_embedding, top_k=10, filters=None,
+              scope=None, scope_id=None)`: Search stored embeddings
+
+            The scope accessors are ordinary (non-async) calls returning a scoped
+            client whose own methods are coroutines:
+
+            - `app.memory.session(session_id)`, `app.memory.actor(actor_id)`,
+              `app.memory.workflow(workflow_id)`, `app.memory.global_scope`
+            - `await app.memory.global_scope.list_keys()`: List the keys in one scope -
+              `list_keys` lives on the scoped clients, not on `app.memory` itself
+            - `@app.memory.on_change(patterns)`: Register a memory change listener
+
+            There is no `keys()` and no `clear()` method on `app.memory`.
 
         Memory Scopes:
             - Session: One conversation, keyed by X-Session-ID
