@@ -2751,85 +2751,6 @@ class OpenRouterProvider(MediaProvider):
         transcript = "".join(transcript_parts)
         return b64_full, transcript
 
-    async def _nonstream_openrouter_audio(
-        self,
-        payload: Dict[str, Any],
-        headers: Dict[str, str],
-        *,
-        timeout: float = 300.0,
-        label: str = "audio",
-    ) -> tuple:
-        """
-        Non-streaming helper for OpenRouter audio (chat-completions) requests.
-
-        Used when the requested wire format is *not* ``pcm16``, because the
-        OpenRouter SSE streaming endpoint only emits ``pcm16`` audio deltas
-        and will reject other formats (mp3 / flac / opus) with a 400.
-
-        The non-streaming response is a single JSON document whose shape
-        mirrors the last SSE event::
-
-            {"choices": [{"message": {"audio": {"data": "...",
-                                                  "transcript": "..."}}]}]}
-
-        Args:
-            payload: JSON body for the chat completions request (``stream``
-                must already be set to ``False`` by the caller).
-            headers: HTTP headers including Authorization
-            timeout: Total request timeout in seconds (default 300)
-            label: Label for error messages ("audio" or "music")
-
-        Returns:
-            Tuple of ``(b64_data: str, transcript: str)``
-        """
-        import json as json_mod
-
-        import aiohttp
-
-        client_timeout = aiohttp.ClientTimeout(total=timeout)
-
-        async with aiohttp.ClientSession(timeout=client_timeout) as session:
-            async with session.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                json=payload,
-                headers=headers,
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    raise RuntimeError(
-                        f"OpenRouter {label} request failed ({resp.status}): "
-                        f"{body[:500]}"
-                    )
-                raw = await resp.read()
-
-        try:
-            doc = json_mod.loads(raw.decode("utf-8"))
-        except json_mod.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"OpenRouter {label} non-stream response was not valid JSON: {exc}"
-            ) from exc
-
-        choices = doc.get("choices") or []
-        if not choices:
-            return "", ""
-
-        # OpenRouter non-stream response places the final audio+transcript
-        # under choices[0].message.audio — mirroring the SSE delta schema but
-        # using the full "message" instead of a "delta".
-        message = choices[0].get("message") or {}
-        audio = message.get("audio") or {}
-        b64_data = audio.get("data") or ""
-        transcript = audio.get("transcript") or ""
-
-        if b64_data:
-            total_size = len(b64_data)
-            if total_size > MAX_AUDIO_B64_BYTES:
-                raise RuntimeError(
-                    f"Audio base64 data exceeded {MAX_AUDIO_B64_BYTES} byte limit"
-                )
-
-        return b64_data, transcript
-
     async def generate_audio(
         self,
         text: str,
@@ -2862,9 +2783,11 @@ class OpenRouterProvider(MediaProvider):
                 "hexgrad/kokoro-82m"). Default: ``hexgrad/kokoro-82m``.
             voice: Voice identifier (model-specific — e.g. ``alloy`` for
                 OpenAI, ``af_bella`` for Kokoro)
-            format: Audio format (wav, mp3, flac, opus, pcm16). ``wav`` is
-                synthesized client-side when the upstream endpoint only emits
-                pcm.
+            format: Audio format. ``/audio/speech`` models accept
+                wav / mp3 / flac / opus / aac; chat-audio models
+                (``openai/gpt-audio*``) can only deliver ``pcm16``, so only
+                ``pcm16`` and ``wav`` (wrapped client-side from pcm16) are
+                accepted there — any other value raises ``ValueError``.
             speed: Optional speech speed for ``/audio/speech`` models.
             extra: Optional extra request fields for ``/audio/speech`` models.
             system: Optional system instructions for chat-completions audio
@@ -2873,6 +2796,11 @@ class OpenRouterProvider(MediaProvider):
 
         Returns:
             MultimodalResponse with generated audio
+
+        Raises:
+            ValueError: if a chat-audio model is asked for a container other
+                than ``pcm16``/``wav`` (raised before the generation request
+                is sent).
         """
         import os
 
@@ -2936,32 +2864,34 @@ class OpenRouterProvider(MediaProvider):
             )
 
         # Chat-completions audio modality path (gpt-audio family).
-        # Streaming on the OpenAI provider only emits pcm16 — fall back to
-        # pcm16 over the wire and re-wrap to user's requested format below.
-        wire_format = "pcm16" if audio_format == "wav" else audio_format
+        # OpenRouter's gateway rejects stream=false for *any* audio-output
+        # request, and the streaming transport only ever emits pcm16 deltas —
+        # so pcm16 is the only container this route can deliver. Refuse the
+        # impossible formats here, before a request is spent on a 400. (The
+        # /audio/speech route above is unaffected and still serves
+        # mp3/flac/opus/aac.)
+        if audio_format not in ("wav", "pcm16"):
+            raise ValueError(
+                f"format={audio_format!r} is not available from OpenRouter "
+                f"chat-audio models: the audio modality delivers pcm16 only. "
+                f"Use format='pcm16', or format='wav' to have the pcm16 "
+                f"stream wrapped in a RIFF container client-side."
+            )
+
+        wire_format = "pcm16"
         messages = [{"role": "user", "content": text}]
         if system is not None:
             messages.insert(0, {"role": "system", "content": system})
-        # OpenRouter SSE streaming only supports pcm16 wire format — any
-        # other format (mp3 / flac / opus) must use the non-streaming JSON
-        # response path, otherwise OpenRouter rejects the request with a
-        # format-related error (see: Issue #584).
-        use_stream = wire_format == "pcm16"
         payload = {
             "model": send_model,
             "messages": messages,
             "modalities": ["text", "audio"],
             "audio": {"voice": voice, "format": wire_format},
-            "stream": use_stream,
+            "stream": True,
         }
-        if use_stream:
-            b64_full, transcript = await self._stream_openrouter_audio(
-                payload, headers, timeout=timeout, label="audio"
-            )
-        else:
-            b64_full, transcript = await self._nonstream_openrouter_audio(
-                payload, headers, timeout=timeout, label="audio"
-            )
+        b64_full, transcript = await self._stream_openrouter_audio(
+            payload, headers, timeout=timeout, label="audio"
+        )
 
         # Re-wrap pcm16 -> wav if user asked for wav.
         if audio_format == "wav" and b64_full:

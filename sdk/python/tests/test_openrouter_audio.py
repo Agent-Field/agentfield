@@ -3,6 +3,7 @@ Tests for OpenRouter audio output and music generation.
 
 Covers:
 - SSE stream parsing for generate_audio
+- generate_audio rejecting containers OpenRouter cannot deliver
 - Audio chunk concatenation
 - Transcript extraction
 - Model prefix stripping
@@ -352,93 +353,45 @@ class TestOpenRouterGenerateAudio:
         assert result.audio.data == valid_b64
 
 
-class _FakeJsonResponse:
-    """Fake aiohttp response for non-stream JSON body."""
+class TestOpenRouterChatAudioFormatGuard:
+    """Chat-audio models can only deliver pcm16, so anything else fails fast.
 
-    def __init__(
-        self, body: bytes, status: int = 200, content_type: str = "application/json"
-    ):
-        self.status = status
-        self._body = body
-        self.headers = {"Content-Type": content_type}
+    OpenRouter's gateway rejects ``stream: false`` for *any* audio-output
+    request (whatever the model), and the streaming transport only ever emits
+    pcm16 deltas — there is no combination that yields mp3/flac/opus from a
+    chat-audio model, so asking for one must raise before a request is spent.
+    """
 
-    async def read(self) -> bytes:
-        return self._body
-
-    async def text(self) -> str:
-        return self._body.decode("utf-8", errors="replace")
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        pass
-
-
-class TestOpenRouterNonStreamAudio:
-    """Tests for the non-streaming chat-completions path when format != pcm16 (#584)."""
-
+    @pytest.mark.parametrize("fmt", ["mp3", "flac", "opus", "pcm"])
     @pytest.mark.asyncio
-    async def test_mp3_format_uses_nonstream_and_parses_json(self, monkeypatch):
-        """mp3 request must go non-stream and parse the single-JSON audio response."""
-        import base64 as _b64
-
-        audio_b64 = _b64.b64encode(b"hello-mp3-bytes").decode()
-        payload_doc = {
-            "choices": [
-                {
-                    "message": {
-                        "audio": {
-                            "data": audio_b64,
-                            "transcript": "Hi there",
-                        }
-                    }
-                }
-            ]
-        }
-        body = json.dumps(payload_doc).encode()
-        fake_resp = _FakeJsonResponse(body, status=200)
-        fake_session = _FakeSession(fake_resp)
+    async def test_unsupported_format_raises_before_any_request(self, monkeypatch, fmt):
+        """A1: ValueError naming the format, and nothing goes over the wire."""
+        fake_session = _FakeSession(_FakeStreamResponse(_make_sse_lines([])))
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
             _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
-            result = await provider.generate_audio(
-                text="Say hi",
-                model="openai/gpt-audio-mini",
-                voice="alloy",
-                format="mp3",
-            )
+            with pytest.raises(ValueError) as excinfo:
+                await provider.generate_audio(
+                    text="Say hi", model="openai/gpt-audio-mini", format=fmt
+                )
 
-        # Verify stream=False was sent and we hit chat/completions
-        assert fake_session._last_post_url.endswith("/chat/completions")
-        sent_payload = fake_session._last_post_kwargs["json"]
-        assert sent_payload["stream"] is False, (
-            "mp3 must disable streaming (SSE only emits pcm16)"
+        message = str(excinfo.value)
+        assert fmt in message
+        assert "pcm16" in message
+        assert "wav" in message
+        assert not hasattr(fake_session, "_last_post_kwargs"), (
+            "no request may be spent on a format that cannot come back"
         )
-        assert sent_payload["audio"]["format"] == "mp3"
-
-        assert result.has_audio
-        assert result.audio.data == audio_b64
-        assert result.audio.format == "mp3"
-        assert result.text == "Hi there"
 
     @pytest.mark.asyncio
-    async def test_flac_format_uses_nonstream(self, monkeypatch):
-        """flac format should also use the non-stream JSON path."""
-        import base64 as _b64
-
-        audio_b64 = _b64.b64encode(b"flac-audio").decode()
-        payload_doc = {
-            "choices": [
-                {"message": {"audio": {"data": audio_b64, "transcript": "music notes"}}}
-            ]
-        }
-        body = json.dumps(payload_doc).encode()
-        fake_resp = _FakeJsonResponse(body, status=200)
-        fake_session = _FakeSession(fake_resp)
+    async def test_unknown_format_still_falls_back_to_wav(self, monkeypatch):
+        """A1: an unrecognised format is normalised to wav, not rejected."""
+        pcm = b"\x00\x01" * 32
+        events = [_audio_event(b64_chunk=base64.b64encode(pcm).decode())]
+        fake_session = _FakeSession(_FakeStreamResponse(_make_sse_lines(events)))
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
@@ -446,58 +399,19 @@ class TestOpenRouterNonStreamAudio:
             provider = OpenRouterProvider()
             _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
             result = await provider.generate_audio(
-                text="play", model="openai/gpt-audio-mini", format="flac"
+                text="hi", model="openai/gpt-audio-mini", format="aac"
             )
 
-        sent_payload = fake_session._last_post_kwargs["json"]
-        assert sent_payload["stream"] is False
-        assert sent_payload["audio"]["format"] == "flac"
-        assert result.audio.format == "flac"
-        assert result.audio.data == audio_b64
-        assert result.text == "music notes"
+        assert fake_session._last_post_kwargs["json"]["audio"]["format"] == "pcm16"
+        assert result.audio.format == "wav"
 
     @pytest.mark.asyncio
-    async def test_nonstream_http_error_raises(self, monkeypatch):
-        """Non-200 response on non-stream path should raise RuntimeError."""
-        body = b'{"error": {"message": "format mp3 unsupported for stream"}}'
-        fake_resp = _FakeJsonResponse(body, status=400)
-        fake_session = _FakeSession(fake_resp)
-
-        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-        with patch("aiohttp.ClientSession", return_value=fake_session):
-            provider = OpenRouterProvider()
-            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
-            with pytest.raises(RuntimeError, match="request failed.*400"):
-                await provider.generate_audio(
-                    text="test", model="openai/gpt-audio-mini", format="mp3"
-                )
-
-    @pytest.mark.asyncio
-    async def test_nonstream_invalid_json_raises(self, monkeypatch):
-        """Non-stream response body that is not JSON should raise RuntimeError."""
-        body = b"<html>gateway timeout</html>"
-        fake_resp = _FakeJsonResponse(body, status=200, content_type="text/html")
-        fake_session = _FakeSession(fake_resp)
-
-        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-        with patch("aiohttp.ClientSession", return_value=fake_session):
-            provider = OpenRouterProvider()
-            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
-            with pytest.raises(
-                RuntimeError, match="non-stream response was not valid JSON"
-            ):
-                await provider.generate_audio(
-                    text="test", model="openai/gpt-audio-mini", format="opus"
-                )
-
-    @pytest.mark.asyncio
-    async def test_nonstream_empty_choices_returns_text_only(self, monkeypatch):
-        """Response without choices should return empty audio but preserve request text."""
-        body = json.dumps({"choices": []}).encode()
-        fake_resp = _FakeJsonResponse(body, status=200)
-        fake_session = _FakeSession(fake_resp)
+    async def test_wav_streams_as_pcm16_and_returns_riff(self, monkeypatch):
+        """A3: wav is still requested as pcm16 and wrapped client-side."""
+        pcm = b"\x00\x01" * 32
+        chunk = base64.b64encode(pcm).decode()
+        events = [_audio_event(b64_chunk=chunk, transcript="wav path")]
+        fake_session = _FakeSession(_FakeStreamResponse(_make_sse_lines(events)))
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
@@ -505,15 +419,25 @@ class TestOpenRouterNonStreamAudio:
             provider = OpenRouterProvider()
             _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
             result = await provider.generate_audio(
-                text="silence", model="openai/gpt-audio-mini", format="flac"
+                text="hi", model="openai/gpt-audio-mini", format="wav"
             )
 
-        assert not result.has_audio
-        assert result.text == "silence"  # falls back to input text
+        sent = fake_session._last_post_kwargs["json"]
+        assert sent["stream"] is True
+        assert sent["audio"]["format"] == "pcm16"
+
+        assert result.audio.format == "wav"
+        wav_bytes = base64.b64decode(result.audio.data)
+        assert wav_bytes[:4] == b"RIFF"
+        assert wav_bytes[8:12] == b"WAVE"
+        with wave.open(io.BytesIO(wav_bytes)) as handle:
+            assert handle.getframerate() == 24000
+            assert handle.getnchannels() == 1
+        assert pcm in wav_bytes
 
     @pytest.mark.asyncio
     async def test_pcm16_format_still_uses_sse_streaming(self, monkeypatch):
-        """Format pcm16 must keep using SSE streaming (original path)."""
+        """A2: pcm16 keeps streaming and returns the base64 verbatim."""
         chunk1 = base64.b64encode(b"pcm_audio").decode()
         events = [_audio_event(b64_chunk=chunk1, transcript="SSE path")]
         sse_lines = _make_sse_lines(events)
@@ -605,6 +529,8 @@ class TestOpenRouterAudioSpeechEndpoint:
         payload = fake_session._last_post_kwargs["json"]
         assert payload["speed"] == 1.25
         assert payload["language"] == "en-US"
+        # A4: the chat-audio pcm16 guard must not reach the /audio/speech
+        # route, which serves mp3/flac/opus natively.
         assert payload["response_format"] == "mp3"
 
 
