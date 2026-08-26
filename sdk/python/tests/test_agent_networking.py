@@ -29,11 +29,22 @@ def test_detect_container_ip_prefers_metadata(monkeypatch):
     def fake_get(url, headers=None, timeout=None):
         calls.append(url)
         parsed = urlparse(url)
-        if parsed.netloc == "169.254.169.254" and parsed.path == "/latest/meta-data/public-ipv4":
+        if (
+            parsed.netloc == "169.254.169.254"
+            and parsed.path == "/latest/meta-data/public-ipv4"
+        ):
             return DummyResponse(200, "198.51.100.5")
-        if parsed.netloc == "metadata.google.internal" and parsed.path == "/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip":
+        if (
+            parsed.netloc == "metadata.google.internal"
+            and parsed.path
+            == "/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip"
+        ):
             return DummyResponse(200, "203.0.113.7")
-        if parsed.scheme == "https" and parsed.netloc == "api.ipify.org" and parsed.path in {"", "/"}:
+        if (
+            parsed.scheme == "https"
+            and parsed.netloc == "api.ipify.org"
+            and parsed.path in {"", "/"}
+        ):
             return DummyResponse(200, "192.0.2.9")
         return DummyResponse(404, "")
 
@@ -65,6 +76,16 @@ def test_detect_container_ip_fallback_to_external(monkeypatch):
 
     monkeypatch.setattr("requests.get", fake_get)
     assert agent_mod._detect_container_ip() == "203.0.113.9"
+
+
+def test_detect_container_ip_can_be_disabled(monkeypatch):
+    def fail_get(*args, **kwargs):
+        raise AssertionError("IP detection should be skipped")
+
+    monkeypatch.setenv("AGENTFIELD_SKIP_IP_DETECTION", "true")
+    monkeypatch.setattr("requests.get", fail_get)
+
+    assert agent_mod._detect_container_ip() is None
 
 
 def test_is_running_in_container_checks_dockerenv(monkeypatch, tmp_path):
