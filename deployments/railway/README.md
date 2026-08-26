@@ -25,20 +25,42 @@ control-plane databases, credentials, package registry, and installed agents.
 
 ## Control-plane image updates
 
-After a successful deploy, Desktop enables Railway Image Auto Updates with the
-**Nightly** window: every day from 02:00 to 06:00 UTC. You can choose **Off**,
-**Nightly**, **Weekends**, or **Anytime** in Desktop's Cloud settings.
+After the first successful deploy, Desktop enables Railway Image Auto Updates
+with the **patch** policy and the **Nightly** window: every day from 02:00 to
+06:00 UTC. The concrete `vX.Y.Z` image tag therefore follows patch releases
+without jumping to a new minor release. On later deploys, Desktop keeps any
+policy already present in Railway; it seeds the saved Desktop window only when
+Railway has no policy. Desktop's Cloud settings map to Railway as follows:
 
-You can also change the schedule directly in Railway:
+- **Off** disables the auto-update policy and has no maintenance window.
+- **Nightly** uses the patch policy every day from 02:00 to 06:00 UTC.
+- **Weekends** uses the patch policy all day Saturday and Sunday UTC.
+- **Anytime** uses the patch policy all day, every day.
+
+If the service already uses Railway's **minor** policy, Desktop preserves it
+when changing to an enabled window; Railway will then apply minor updates and
+patches. Choosing **Off** replaces it with the disabled policy. Otherwise,
+Desktop uses the patch policy described above.
+
+Desktop shows Railway's current value whenever it can read it. While that read
+is in progress, the control is disabled, retains the last known window for that
+service, and says **Checking Railway…**; loading is never presented as **Not set**.
+If the read fails, the select shows **Current window unknown — choose one to set
+it** with **Last known window: Nightly** (or the applicable cached window) in the
+note, not as the selected option. **Not set — choose a window** appears only
+after Railway successfully reports that the service has no policy. A window set
+to something else in Railway appears as **Custom**; choosing one of the Desktop
+options replaces that custom value while preserving a live minor policy unless
+you choose **Off**. The same setting is visible and editable directly in Railway:
 
 1. Open the control-plane service.
 2. Open **Settings**.
 3. Under **Source**, select **Configure Auto Updates**.
 4. Choose the update policy and maintenance window, or disable auto updates.
 
-Railway checks the semantic image tag for a newer stable release and redeploys
-the service during the selected window. Its maintenance schedules use UTC.
-Because the service has an attached volume, allow for a brief interruption
+Railway checks the semantic image tag according to the selected policy and
+redeploys the service during the selected window. Its maintenance schedules use
+UTC. Because the service has an attached volume, allow for a brief interruption
 during replacement. See [Railway Image Auto Updates](https://docs.railway.com/deployments/image-auto-updates)
 for Railway's update, backup, and notification behavior.
 
@@ -55,9 +77,10 @@ To manage the Railway service yourself:
 6. Generate a public domain under **Settings** → **Networking**.
 7. Set the health-check path to `/health`.
 
-The mutable `latest` tag tracks the latest stable control-plane release. A
-Railway auto-update schedule for this tag redeploys the service when the image
-digest changes. For repeatable rollbacks, use a concrete `vX.Y.Z` tag instead.
+The mutable `latest` tag tracks the latest stable control-plane release. When
+Railway Image Auto Updates are enabled with an update policy and window, the
+service is redeployed after that tag's image digest changes. For repeatable
+rollbacks, use a concrete `vX.Y.Z` tag instead.
 
 The default local storage backend works when `/data` is persistent. A separate
 PostgreSQL service is optional; configure it with the normal AgentField storage
