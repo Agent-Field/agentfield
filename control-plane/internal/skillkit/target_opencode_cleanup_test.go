@@ -222,25 +222,70 @@ func TestOpenCodeCleanupIsANoOpWithoutALegacyRulesFile(t *testing.T) {
 	}
 }
 
-// Contract (g): a legacy rules file that cannot be read is reported, not
-// silently skipped — matching the target's own Uninstall error contract.
-func TestOpenCodeCleanupReportsAnUnreadableLegacyRulesFile(t *testing.T) {
+// Contract (g): uninstall reports a legacy rules file it cannot read, rather
+// than silently leaving the block behind — there, stripping the block is the
+// entire point of the call.
+func TestOpenCodeUninstallReportsAnUnreadableLegacyRulesFile(t *testing.T) {
 	_, legacy := opencodeLegacyHome(t)
 	// A directory where the rules file belongs: readable path, unreadable file.
 	if err := os.MkdirAll(legacy, 0o755); err != nil {
 		t.Fatalf("mkdir over legacy rules path: %v", err)
 	}
 
-	target := opencodeTarget{}
-	if _, err := target.Install(Catalog[0], seedCurrentDir(t)); err == nil {
-		t.Fatal("Install should report a legacy rules file it cannot read")
-	}
-	if err := target.Uninstall(); err == nil {
+	err := (opencodeTarget{}).Uninstall()
+	if err == nil {
 		t.Fatal("Uninstall should report a legacy rules file it cannot read")
+	}
+	if !strings.Contains(err.Error(), "AGENTS.md") {
+		t.Fatalf("error should name the file it could not read: %v", err)
 	}
 }
 
-// Contract (h): every write the cleanup performs is reported when it fails.
+// Contract (h): the cleanup is a migration courtesy, not part of making the
+// skill work. A legacy rules file af cannot clean up must not fail an install
+// whose symlink is already on disk: the caller records nothing for a failed
+// target, so failing here would report OpenCode as not installed while it is
+// live, and every later `af skill install` would exit non-zero over a stale
+// block OpenCode never reads.
+func TestOpenCodeInstallSurvivesALegacyRulesFileItCannotClean(t *testing.T) {
+	home := withTempHome(t)
+	legacy := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	// A directory where the rules file belongs: readable path, unreadable file.
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatalf("mkdir over legacy rules path: %v", err)
+	}
+
+	report, err := Install(InstallOptions{SkillName: Catalog[0].Name, Targets: []string{"opencode"}})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if len(report.TargetsFailed) != 0 {
+		t.Fatalf("an uncleanable legacy rules file failed the install: %+v", report.TargetsFailed)
+	}
+	if len(report.TargetsInstalled) != 1 || report.TargetsInstalled[0].TargetName != "opencode" {
+		t.Fatalf("opencode was not reported as installed: %+v", report)
+	}
+
+	link := filepath.Join(home, ".config", "opencode", "skills", Catalog[0].Name)
+	if _, err := os.Lstat(link); err != nil {
+		t.Fatalf("native skill link missing: %v", err)
+	}
+	// The link is on disk, so state has to agree — otherwise `af skill list`
+	// and the next install both disagree with reality.
+	state, err := LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	recorded, ok := state.Skills[Catalog[0].Name].Targets["opencode"]
+	if !ok {
+		t.Fatal("a live OpenCode install was not recorded in state")
+	}
+	if recorded.Path != link {
+		t.Fatalf("recorded path = %q, want the link on disk %q", recorded.Path, link)
+	}
+}
+
+// Contract (i): every write the cleanup performs is reported when it fails.
 // These branches are unreachable through real filesystem permissions on some
 // platforms, so they are driven through the package's reconcile* seams — the
 // same way the reconciler's own rewrite failures are covered.

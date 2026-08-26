@@ -84,8 +84,17 @@ func (t opencodeTarget) Install(skill Skill, canonicalCurrentDir string) (Instal
 	}
 	// The native skill is in place; finish the migration off the old
 	// AGENTS.md block so the user is not left carrying both.
+	//
+	// AGENTS.md belongs to the user, and by this point the integration is
+	// already live on disk. Failing the install over a file the skill does
+	// not need would push the caller down its failure path, which records
+	// nothing in state — leaving `af skill list` reporting OpenCode as not
+	// installed and every later install exiting non-zero, over a stale block
+	// that has nothing to do with whether OpenCode can load the skill. So the
+	// cleanup is advisory here and only Uninstall, where the block is the
+	// whole point of the call, treats it as fatal.
 	if err := t.removeLegacyMarkerBlock(skill, root); err != nil {
-		return InstalledTarget{}, err
+		fmt.Fprintf(os.Stderr, "warning: could not clean the legacy OpenCode rules block: %v\n", err)
 	}
 	return InstalledTarget{TargetName: t.Name(), Method: t.Method(), Path: link, Version: skill.Version, InstalledAt: time.Now().UTC()}, nil
 }
@@ -157,8 +166,9 @@ func (t opencodeTarget) Status() (bool, string, error) {
 // equivalent: a file holding no block of ours is not opened for writing at
 // all (its bytes and mtime stay exactly as the user left them), and the file
 // is deleted only when removing our block is what emptied it. Other tools'
-// blocks and any user prose are preserved. Failures other than a missing file
-// are reported to the caller.
+// blocks and any user prose are preserved. A missing file is a no-op; every
+// other failure is returned, and the two callers weigh it differently —
+// Uninstall propagates it, Install warns (see there).
 //
 // Every filesystem call goes through the package's reconcile* seams so each
 // failure branch below is reachable from a test.
