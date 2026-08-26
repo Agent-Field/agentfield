@@ -1498,6 +1498,12 @@ class Agent(FastAPI):
         A read with no explicit scope walks the same dimensions in the order
         workflow -> session -> actor -> global and returns the first hit.
 
+        In practice the Python SDK always sends X-Workflow-ID (it falls back to
+        the run id when no workflow id is set), so an unscoped write from a
+        reasoner lands in the workflow scope of that run, and a later run in
+        the same session will not see it. Pass scope="session" (or use
+        app.memory.session(...)) for values that must outlive one run.
+
         The agent's node ID travels with the request as X-Agent-Node-ID, but it is
         attribution on the emitted memory change event - it is not a scope key.
 
