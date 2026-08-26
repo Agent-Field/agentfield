@@ -3,6 +3,8 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog"
 )
 
 // ExecutionStore captures the storage operations required by the simplified execution handlers.
@@ -1952,12 +1955,15 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 	}
 
 	if plan.agent.DeploymentType == "serverless" {
-		logger.Logger.Debug().
-			Str("agent", plan.target.NodeID).
-			Str("reasoner", plan.target.TargetName).
-			Str("url", url).
-			Int("status", resp.StatusCode).
-			Msgf("serverless response: %s", truncateForLog(body))
+		annotateBodyForLog(
+			logger.Logger.Debug().
+				Str("agent", plan.target.NodeID).
+				Str("reasoner", plan.target.TargetName).
+				Str("url", url).
+				Int("status", resp.StatusCode),
+			resp.Header.Get("Content-Type"),
+			body,
+		).Msg("serverless response")
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
@@ -2854,6 +2860,31 @@ func truncateForLog(body []byte) string {
 		return string(body)
 	}
 	return string(body[:limit]) + "..."
+}
+
+// annotateBodyForLog describes an agent response body on a log event.
+//
+// Agent responses are caller data, so they follow the same redaction switch as
+// execution payloads (logging.redact_payloads / AGENTFIELD_LOG_REDACT_PAYLOADS,
+// see SetRedactPayloads). With redaction on — the default — only
+// non-reversible metadata is attached: the response content type, the body
+// length in bytes and the first 8 hex characters of its SHA-256 digest. That
+// is enough to recognise "same body as before" and to find the full payload in
+// the database, without the body itself reaching stdout. With redaction
+// explicitly disabled the previous truncated preview is attached instead.
+func annotateBodyForLog(event *zerolog.Event, contentType string, body []byte) *zerolog.Event {
+	if event == nil {
+		return nil
+	}
+	if contentType != "" {
+		event = event.Str("content_type", contentType)
+	}
+	event = event.Int("body_bytes", len(body))
+	if !defaultRedactPayloads {
+		return event.Str("body", truncateForLog(body))
+	}
+	digest := sha256.Sum256(body)
+	return event.Bool("body_redacted", true).Str("body_sha256", hex.EncodeToString(digest[:])[:8])
 }
 
 func (c *executionController) savePayload(ctx context.Context, data []byte) *string {
