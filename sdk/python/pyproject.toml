@@ -147,5 +147,5 @@ extend-select = [
 "tests/debug_complex_json.py" = ["ASYNC230", "ASYNC240"]
 "tests/test_cancel.py" = ["ASYNC110"]
 "tests/test_harness_functional.py" = ["ASYNC230", "ASYNC240"]
-"tests/test_harness_runner.py" = ["ASYNC230", "ASYNC240"]
+"tests/test_harness_runner.py" = ["ASYNC230"]
 "tests/test_memory_events.py" = ["ASYNC110"]
