@@ -21,8 +21,7 @@ import (
 // against a hosted control plane would otherwise raise a warning each, which
 // is precisely the alert-level noise operators asked to be rid of. It is
 // logged at INFO so it is still visible by default but never trips alerting
-// keyed on level >= warn. The 4xx that do indicate a misconfigured client or
-// deployment — 400, 401, 403, 409, 422 — stay at WARN.
+// keyed on level >= warn. All other 4xx stay at WARN.
 func requestLogEvent(statusCode int) *zerolog.Event {
 	switch {
 	case statusCode >= http.StatusInternalServerError:

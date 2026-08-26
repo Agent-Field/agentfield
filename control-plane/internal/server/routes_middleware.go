@@ -38,7 +38,9 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 
 	// Structured request logging via the control-plane's zerolog logger,
 	// replacing gin's verbose stdout [GIN] lines (see middleware.GinLogger).
-	s.Router.Use(middleware.GinLogger())
+	// Recovery is installed immediately after so a panicking handler still
+	// emits http_request at error/500 (logger outer, recovery inner).
+	useStructuredRequestLogging(s.Router)
 
 	// Request timeout middleware (1 hour for long-running executions)
 	s.Router.Use(func(c *gin.Context) {
@@ -110,6 +112,15 @@ func (s *AgentFieldServer) noteOwnershipEnforced() bool {
 		return true
 	}
 	return s.config.Features.DID.Enabled && s.config.Features.DID.Authorization.DIDAuthEnabled && s.didWebService != nil
+}
+
+// useStructuredRequestLogging installs GinLogger then Recovery. First Use is
+// outermost, so the logger wraps recovery: a panicking handler still produces
+// a structured http_request at error/500. Production and tests share this
+// helper so the order cannot drift.
+func useStructuredRequestLogging(router *gin.Engine) {
+	router.Use(middleware.GinLogger())
+	router.Use(gin.Recovery())
 }
 
 func streamingQueryAPIKeyAllowedPaths() []string {

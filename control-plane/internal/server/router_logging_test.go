@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
-	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -48,7 +47,7 @@ func TestRouterDoesNotWriteGinPlaintextRequestLines(t *testing.T) {
 	logOut := captureServerLogger(t, zerolog.DebugLevel)
 
 	router := newRouter()
-	router.Use(middleware.GinLogger())
+	useStructuredRequestLogging(router)
 	router.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 	recorder := httptest.NewRecorder()
@@ -71,6 +70,7 @@ func TestRouterRecoversFromHandlerPanic(t *testing.T) {
 	captureServerLogger(t, zerolog.DebugLevel)
 
 	router := newRouter()
+	useStructuredRequestLogging(router)
 	router.GET("/boom", func(c *gin.Context) { panic("kaboom") })
 
 	recorder := httptest.NewRecorder()
@@ -78,4 +78,33 @@ func TestRouterRecoversFromHandlerPanic(t *testing.T) {
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/boom", nil))
 	})
 	require.Equal(t, http.StatusInternalServerError, recorder.Code)
+}
+
+// TestRouterLogsHandlerPanicAsError covers the review fix: Recovery is inner
+// to GinLogger, so a panicking handler still emits a structured http_request
+// at error/500. Recovery's plaintext stack on DefaultErrorWriter is pre-existing
+// and is not asserted here.
+func TestRouterLogsHandlerPanicAsError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	captureGinWriters(t)
+	logOut := captureServerLogger(t, zerolog.DebugLevel)
+
+	router := newRouter()
+	useStructuredRequestLogging(router)
+	router.GET("/boom", func(c *gin.Context) { panic("kaboom") })
+
+	recorder := httptest.NewRecorder()
+	require.NotPanics(t, func() {
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/boom", nil))
+	})
+	require.Equal(t, http.StatusInternalServerError, recorder.Code)
+
+	lines := bytes.Split(bytes.TrimSpace(logOut.Bytes()), []byte("\n"))
+	require.Len(t, lines, 1, "expected exactly one structured log line")
+
+	var entry map[string]interface{}
+	require.NoError(t, json.Unmarshal(lines[0], &entry))
+	require.Equal(t, "http_request", entry["message"])
+	require.Equal(t, float64(http.StatusInternalServerError), entry["status"])
+	require.Equal(t, "error", entry["level"])
 }
