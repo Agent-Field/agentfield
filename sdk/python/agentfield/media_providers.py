@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote, urlparse
 
+from agentfield import openrouter_retry
 from agentfield.openrouter_attribution import merge_attribution_headers
 from agentfield.multimodal_response import (
     AudioOutput,
@@ -2275,18 +2276,64 @@ class OpenRouterProvider(MediaProvider):
 
         timeout = aiohttp.ClientTimeout(total=120.0)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                json=body,
-            ) as resp:
-                if resp.status >= 400:
-                    detail = await resp.text()
-                    raise RuntimeError(
-                        f"OpenRouter image generation failed ({resp.status}): "
-                        f"{detail[:500]}"
+
+            async def post(request_body: Dict[str, Any]):
+                """POST once. Returns (ok, status, detail_text, payload)."""
+                async with session.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=request_body,
+                ) as resp:
+                    if resp.status >= 400:
+                        return False, resp.status, await resp.text(), None
+                    return True, resp.status, "", await resp.json()
+
+            def fail(status: int, detail: str) -> RuntimeError:
+                return RuntimeError(
+                    f"OpenRouter image generation failed ({status}): {detail[:500]}"
+                )
+
+            # OpenRouter answers a 404 carrying "No endpoints found that support
+            # the requested output modalities" when routing lands on an upstream
+            # replica without the image modality (transient, issue #588) or when
+            # no upstream provider accepts the requested image_config
+            # (deterministic, issue #586). Retry the transient case; strip
+            # image_config once for the deterministic one. Every other failure
+            # raises on the first response.
+            last_status = 0
+            last_detail = ""
+            for attempt in range(openrouter_retry.NO_ENDPOINTS_TOTAL_ATTEMPTS):
+                ok, status, detail, payload = await post(body)
+                if ok:
+                    break
+                if not (
+                    status == 404 and openrouter_retry.is_no_endpoints_error(detail)
+                ):
+                    raise fail(status, detail)
+                last_status, last_detail = status, detail
+                if attempt < len(openrouter_retry.NO_ENDPOINTS_INTER_SLEEPS):
+                    await openrouter_retry.sleep(
+                        openrouter_retry.NO_ENDPOINTS_INTER_SLEEPS[attempt]
                     )
-                payload = await resp.json()
+            else:
+                # Retries exhausted. A falsy image_config (absent or {}) produces
+                # an identical wire call whether stripped or not, so there is
+                # nothing left to try.
+                if not body.get("image_config"):
+                    raise fail(last_status, last_detail)
+
+                from agentfield.logger import log_warn
+
+                log_warn(
+                    "OpenRouter returned 'No endpoints found' after retries; "
+                    "retrying once with image_config stripped (no upstream "
+                    "provider accepted the requested image_config)."
+                )
+                stripped = {k: v for k, v in body.items() if k != "image_config"}
+                await openrouter_retry.sleep(openrouter_retry.NO_ENDPOINTS_STRIP_SLEEP)
+                ok, status, detail, payload = await post(stripped)
+                if not ok:
+                    raise fail(status, detail)
 
         images: List[ImageOutput] = []
         text_content = ""
