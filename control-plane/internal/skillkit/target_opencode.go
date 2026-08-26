@@ -38,16 +38,16 @@ func (opencodeTarget) TargetPath() (string, error) {
 	return filepath.Join(h, ".config", "opencode", "skills"), nil
 }
 
-// legacyRulesPath is the file older af binaries appended marker blocks to.
+// legacyRulesPath is the file older af binaries appended marker blocks to. It
+// is derived from an already-resolved skills root, so unlike Codex's variant
+// it cannot fail: every caller has proven TargetPath() succeeds before it gets
+// here.
+//
 // Unlike Codex's AGENTS.override.md — a file af created for itself — this one
 // is authored by the user and read by OpenCode, so it is only ever read, and
 // only rewritten when it still holds a block of ours.
-func (t opencodeTarget) legacyRulesPath() (string, error) {
-	root, err := t.TargetPath()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(root), "AGENTS.md"), nil
+func (opencodeTarget) legacyRulesPath(root string) string {
+	return filepath.Join(filepath.Dir(root), "AGENTS.md")
 }
 
 func (t opencodeTarget) skillLink(skill Skill) (string, error) {
@@ -84,7 +84,7 @@ func (t opencodeTarget) Install(skill Skill, canonicalCurrentDir string) (Instal
 	}
 	// The native skill is in place; finish the migration off the old
 	// AGENTS.md block so the user is not left carrying both.
-	if err := t.removeLegacyMarkerBlock(skill); err != nil {
+	if err := t.removeLegacyMarkerBlock(skill, root); err != nil {
 		return InstalledTarget{}, err
 	}
 	return InstalledTarget{TargetName: t.Name(), Method: t.Method(), Path: link, Version: skill.Version, InstalledAt: time.Now().UTC()}, nil
@@ -94,14 +94,12 @@ func (t opencodeTarget) Uninstall() error {
 	// Resolve the target root up front so failures (for example, an
 	// unavailable home directory) are reported to the caller instead of
 	// being silently ignored while iterating over the catalog.
-	if _, err := t.TargetPath(); err != nil {
+	root, err := t.TargetPath()
+	if err != nil {
 		return err
 	}
 	for _, s := range Catalog {
-		link, err := t.skillLink(s)
-		if err != nil {
-			return err
-		}
+		link := filepath.Join(root, s.Name)
 		if info, err := os.Lstat(link); err == nil && (info.Mode()&os.ModeSymlink != 0 || info.IsDir() || info.Mode().IsRegular()) {
 			if err := os.RemoveAll(link); err != nil {
 				return fmt.Errorf("remove %s: %w", link, err)
@@ -109,7 +107,7 @@ func (t opencodeTarget) Uninstall() error {
 		}
 		// Machines that never ran an install in between still carry the
 		// legacy block; uninstall has to clear it too.
-		if err := t.removeLegacyMarkerBlock(s); err != nil {
+		if err := t.removeLegacyMarkerBlock(s, root); err != nil {
 			return err
 		}
 	}
@@ -161,12 +159,12 @@ func (t opencodeTarget) Status() (bool, string, error) {
 // is deleted only when removing our block is what emptied it. Other tools'
 // blocks and any user prose are preserved. Failures other than a missing file
 // are reported to the caller.
-func (t opencodeTarget) removeLegacyMarkerBlock(skill Skill) error {
-	path, err := t.legacyRulesPath()
-	if err != nil {
-		return err
-	}
-	data, err := os.ReadFile(path)
+//
+// Every filesystem call goes through the package's reconcile* seams so each
+// failure branch below is reachable from a test.
+func (t opencodeTarget) removeLegacyMarkerBlock(skill Skill, root string) error {
+	path := t.legacyRulesPath(root)
+	data, err := reconcileReadFile(path)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -180,7 +178,7 @@ func (t opencodeTarget) removeLegacyMarkerBlock(skill Skill) error {
 	cleaned := strings.TrimRight(stripMarkerBlock(string(data), skill), "\n")
 	if strings.TrimSpace(cleaned) == "" {
 		// Our block was the only thing in it, so the file was ours alone.
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := reconcileRemove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}
 		return nil
@@ -191,10 +189,10 @@ func (t opencodeTarget) removeLegacyMarkerBlock(skill Skill) error {
 		perm = info.Mode().Perm()
 	}
 	tmp := path + ".af-tmp"
-	if err := os.WriteFile(tmp, []byte(cleaned+"\n"), perm); err != nil {
+	if err := reconcileWriteFile(tmp, []byte(cleaned+"\n"), perm); err != nil {
 		return fmt.Errorf("write %s: %w", tmp, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := reconcileRename(tmp, path); err != nil {
 		return fmt.Errorf("rename into %s: %w", path, err)
 	}
 	return nil
