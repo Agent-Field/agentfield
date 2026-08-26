@@ -708,7 +708,7 @@ export class OpenRouterMediaProvider implements MediaProvider {
           resp.audio = { data: audio.data, format: requestedFormat };
         }
         if (!resp.text) {
-          if (typeof audio?.transcript === 'string') {
+          if (typeof audio?.transcript === 'string' && audio.transcript) {
             resp.text = audio.transcript;
           } else if (typeof msg.content === 'string') {
             resp.text = msg.content;
@@ -738,7 +738,10 @@ export class OpenRouterMediaProvider implements MediaProvider {
       );
 
     const declared = Number(res.headers?.get?.('content-length'));
-    if (Number.isFinite(declared) && declared > limit) throw tooLarge();
+    if (Number.isFinite(declared) && declared > limit) {
+      void res.body?.cancel?.();
+      throw tooLarge();
+    }
 
     const reader = res.body?.getReader?.();
     if (!reader) {

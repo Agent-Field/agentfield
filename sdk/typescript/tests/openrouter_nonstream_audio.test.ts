@@ -146,6 +146,27 @@ describe('generateAudio transport selection (#584)', () => {
     expect(resp.audio!.data).toBe('YQ==');
   });
 
+  it('falls back to message content when the transcript is empty', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          choices: [
+            { message: { content: 'plain text', audio: { data: 'YQ==', transcript: '' } } },
+          ],
+        }),
+    });
+
+    const resp = await chatAudioProvider().generateAudio({
+      text: 'hello',
+      model: 'openai/gpt-audio-mini',
+      format: 'mp3',
+    });
+
+    expect(resp.text).toBe('plain text');
+    expect(resp.audio!.data).toBe('YQ==');
+  });
+
   it('surfaces an upstream failure with status and body', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
@@ -195,10 +216,12 @@ describe('generateAudio transport selection (#584)', () => {
 
   it('refuses a body whose declared Content-Length exceeds the cap', async () => {
     const text = vi.fn();
+    const cancel = vi.fn();
     mockFetch.mockResolvedValueOnce({
       ok: true,
       headers: { get: (h: string) => (h === 'content-length' ? String(200 * 1024 * 1024) : null) },
       text,
+      body: { cancel },
     });
 
     await expect(
@@ -209,6 +232,7 @@ describe('generateAudio transport selection (#584)', () => {
       })
     ).rejects.toThrow(MediaProviderError);
     expect(text).not.toHaveBeenCalled(); // rejected before buffering the body
+    expect(cancel).toHaveBeenCalled();
   });
 
   it('stops reading an undeclared body once it runs past the cap', async () => {
