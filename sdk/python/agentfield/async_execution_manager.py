@@ -359,9 +359,25 @@ class AsyncExecutionManager:
             self._event_stream_task,
         ]
 
+        # First failure seen while tearing things down. Teardown continues
+        # past it and it is re-raised once everything has been attempted, so
+        # one stubborn task or execution cannot strand the rest.
+        first_error: Optional[BaseException] = None
+
         try:
             for task in tasks_to_cancel:
-                await cancel_and_await_if_same_loop(task, owning_loop)
+                try:
+                    await cancel_and_await_if_same_loop(task, owning_loop)
+                except BaseException as exc:  # noqa: BLE001 - re-raised below
+                    # Keep sweeping. The finally below drops the last
+                    # reference to every task in this list, so a task that
+                    # refuses to die must not leave the ones behind it
+                    # pending and unreachable. BaseException rather than
+                    # Exception on purpose: narrowing it would let a
+                    # CancelledError skip the cleanup, the #909 regression
+                    # this finally-based structure exists to prevent.
+                    if first_error is None:
+                        first_error = exc
         finally:
             self._polling_task = None
             self._cleanup_task = None
@@ -376,21 +392,25 @@ class AsyncExecutionManager:
                 # cancellation on the owning loop instead.
                 if owning_loop is current_loop:
                     async with self._execution_lock:
-                        for execution in self._executions.values():
-                            if execution.is_active:
-                                execution.cancel("Manager shutdown")
-                                self._release_capacity_for_execution(execution)
+                        cancel_error = self._cancel_active_executions(
+                            "Manager shutdown"
+                        )
+                    if first_error is None:
+                        first_error = cancel_error
                 elif owning_loop is not None and not owning_loop.is_closed():
 
                     def _cancel_on_owner():
                         async def _do_cancel():
                             async with self._execution_lock:
-                                for execution in self._executions.values():
-                                    if execution.is_active:
-                                        execution.cancel(
-                                            "Manager shutdown (cross-loop)"
-                                        )
-                                        self._release_capacity_for_execution(execution)
+                                error = self._cancel_active_executions(
+                                    "Manager shutdown (cross-loop)"
+                                )
+                            if error is not None:
+                                # Nobody is waiting on this task, so the
+                                # failure is reported here rather than lost.
+                                logger.debug(
+                                    f"Cross-loop execution cancel failed: {error!r}"
+                                )
 
                         owning_loop.create_task(_do_cancel())
 
@@ -407,7 +427,35 @@ class AsyncExecutionManager:
                 finally:
                     await self.result_cache.stop()
 
+        if first_error is not None:
+            logger.warning(
+                f"AsyncExecutionManager stopped, but teardown reported {first_error!r}"
+            )
+            raise first_error
+
         logger.info("AsyncExecutionManager stopped")
+
+    def _cancel_active_executions(self, reason: str) -> Optional[BaseException]:
+        """Cancel every active execution, returning the first failure.
+
+        Each execution gets its own try/except so a cancel that raises cannot
+        leave the executions behind it QUEUED forever with their capacity
+        slots held. The failure is returned rather than swallowed; the caller
+        decides whether to re-raise it.
+
+        Callers must already hold ``_execution_lock``.
+        """
+        first_error: Optional[BaseException] = None
+        for execution in list(self._executions.values()):
+            if not execution.is_active:
+                continue
+            try:
+                execution.cancel(reason)
+                self._release_capacity_for_execution(execution)
+            except BaseException as exc:  # noqa: BLE001 - returned to caller
+                if first_error is None:
+                    first_error = exc
+        return first_error
 
     async def submit_execution(
         self,
