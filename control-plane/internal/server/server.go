@@ -115,13 +115,22 @@ type AgentFieldServer struct {
 	stopping     bool
 }
 
-// newRouter builds the gin engine the control plane serves from.
+// newRouter builds the gin engine the control plane serves from, with the
+// structured request logger already installed as its outermost middleware.
 //
-// gin.New() avoids gin.Default()'s plaintext logger; Recovery is installed
-// AFTER GinLogger so a panicking handler still produces a structured
-// http_request at error/500. GIN_MODE still governs the [GIN-debug] route table.
+// gin.New() avoids gin.Default()'s plaintext logger. The logging pair is
+// attached here rather than alongside the rest of the global middleware so
+// that nothing can be registered ahead of it: gin runs middleware in
+// registration order, and a middleware that aborts (CORS rejecting a
+// disallowed Origin, for instance) never reaches the handlers behind it — so
+// any request handled before the logger would be invisible at every level.
+// Recovery is installed after GinLogger so a panicking handler still produces
+// a structured http_request at error/500. GIN_MODE still governs the
+// [GIN-debug] route table.
 func newRouter() *gin.Engine {
-	return gin.New()
+	router := gin.New()
+	useStructuredRequestLogging(router)
+	return router
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.

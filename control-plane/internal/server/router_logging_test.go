@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
@@ -47,7 +48,6 @@ func TestRouterDoesNotWriteGinPlaintextRequestLines(t *testing.T) {
 	logOut := captureServerLogger(t, zerolog.DebugLevel)
 
 	router := newRouter()
-	useStructuredRequestLogging(router)
 	router.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 	recorder := httptest.NewRecorder()
@@ -70,7 +70,6 @@ func TestRouterRecoversFromHandlerPanic(t *testing.T) {
 	captureServerLogger(t, zerolog.DebugLevel)
 
 	router := newRouter()
-	useStructuredRequestLogging(router)
 	router.GET("/boom", func(c *gin.Context) { panic("kaboom") })
 
 	recorder := httptest.NewRecorder()
@@ -90,7 +89,6 @@ func TestRouterLogsHandlerPanicAsError(t *testing.T) {
 	logOut := captureServerLogger(t, zerolog.DebugLevel)
 
 	router := newRouter()
-	useStructuredRequestLogging(router)
 	router.GET("/boom", func(c *gin.Context) { panic("kaboom") })
 
 	recorder := httptest.NewRecorder()
@@ -107,4 +105,128 @@ func TestRouterLogsHandlerPanicAsError(t *testing.T) {
 	require.Equal(t, "http_request", entry["message"])
 	require.Equal(t, float64(http.StatusInternalServerError), entry["status"])
 	require.Equal(t, "error", entry["level"])
+}
+
+// corsRestrictedServer builds the router the way the control plane does —
+// newRouter() followed by applyGlobalMiddleware() — with CORS narrowed to a
+// single allowed origin, and registers one API route on it. The returned
+// buffer holds the structured log and is emptied once construction is done, so
+// only per-request output is asserted on.
+func corsRestrictedServer(t *testing.T, level zerolog.Level) (*AgentFieldServer, *bytes.Buffer) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	captureGinWriters(t)
+	logOut := captureServerLogger(t, level)
+
+	cfg := &config.Config{}
+	cfg.API.CORS.AllowedOrigins = []string{"http://allowed.example"}
+	srv := &AgentFieldServer{Router: newRouter(), config: cfg}
+	srv.applyGlobalMiddleware()
+	srv.Router.GET("/api/v1/health", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	logOut.Reset()
+	return srv, logOut
+}
+
+// requestLogEntries decodes the structured http_request events written to buf.
+func requestLogEntries(t *testing.T, buf *bytes.Buffer) []map[string]interface{} {
+	t.Helper()
+	entries := []map[string]interface{}{}
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var entry map[string]interface{}
+		require.NoError(t, json.Unmarshal(line, &entry), "log line is not JSON: %s", line)
+		if entry["message"] == "http_request" {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
+}
+
+// TestRouterLogsCORSRejectedRequest covers contract V1: a request CORS rejects
+// because of a disallowed Origin is answered with 403 AND recorded as exactly
+// one structured http_request line at warn. Before the logger was moved ahead
+// of CORS, gin's abort meant the request reached no logging middleware at all
+// and was invisible at every level.
+func TestRouterLogsCORSRejectedRequest(t *testing.T) {
+	srv, logOut := corsRestrictedServer(t, zerolog.InfoLevel)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("Origin", "http://evil.example")
+	recorder := httptest.NewRecorder()
+	srv.Router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code, "CORS must still reject the origin")
+
+	entries := requestLogEntries(t, logOut)
+	require.Len(t, entries, 1, "a CORS-rejected request must be logged exactly once, got: %s", logOut.String())
+	require.Equal(t, "warn", entries[0]["level"])
+	require.Equal(t, float64(http.StatusForbidden), entries[0]["status"])
+	require.Equal(t, "/api/v1/health", entries[0]["path"])
+	require.Equal(t, http.MethodGet, entries[0]["method"])
+}
+
+// TestRouterLogsCORSRejectedPreflight covers contract V2: a preflight from a
+// disallowed origin is rejected with 403 and logged once at warn, same as a
+// simple request.
+func TestRouterLogsCORSRejectedPreflight(t *testing.T) {
+	srv, logOut := corsRestrictedServer(t, zerolog.InfoLevel)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/health", nil)
+	req.Header.Set("Origin", "http://evil.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	recorder := httptest.NewRecorder()
+	srv.Router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+
+	entries := requestLogEntries(t, logOut)
+	require.Len(t, entries, 1, "a rejected preflight must be logged exactly once, got: %s", logOut.String())
+	require.Equal(t, "warn", entries[0]["level"])
+	require.Equal(t, float64(http.StatusForbidden), entries[0]["status"])
+	require.Equal(t, http.MethodOptions, entries[0]["method"])
+}
+
+// TestRouterLogsCORSAnsweredPreflight covers contract V3: a preflight CORS
+// answers itself never reaches a route handler, but it is still one request
+// and still produces exactly one structured line (at debug, since it succeeds).
+func TestRouterLogsCORSAnsweredPreflight(t *testing.T) {
+	srv, logOut := corsRestrictedServer(t, zerolog.DebugLevel)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/health", nil)
+	req.Header.Set("Origin", "http://allowed.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	recorder := httptest.NewRecorder()
+	srv.Router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.Equal(t, "http://allowed.example", recorder.Header().Get("Access-Control-Allow-Origin"))
+
+	entries := requestLogEntries(t, logOut)
+	require.Len(t, entries, 1, "an answered preflight must be logged exactly once, got: %s", logOut.String())
+	require.Equal(t, "debug", entries[0]["level"])
+	require.Equal(t, float64(http.StatusNoContent), entries[0]["status"])
+}
+
+// TestRouterLogsAllowedCrossOriginRequest covers contract V4: the fix does not
+// change what an allowed cross-origin caller sees — the route still runs, the
+// CORS header is still set, and the request is logged once.
+func TestRouterLogsAllowedCrossOriginRequest(t *testing.T) {
+	srv, logOut := corsRestrictedServer(t, zerolog.DebugLevel)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("Origin", "http://allowed.example")
+	recorder := httptest.NewRecorder()
+	srv.Router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "ok", recorder.Body.String())
+	require.Equal(t, "http://allowed.example", recorder.Header().Get("Access-Control-Allow-Origin"))
+
+	entries := requestLogEntries(t, logOut)
+	require.Len(t, entries, 1, "an allowed request must be logged exactly once, got: %s", logOut.String())
+	require.Equal(t, "debug", entries[0]["level"])
+	require.Equal(t, float64(http.StatusOK), entries[0]["status"])
 }
