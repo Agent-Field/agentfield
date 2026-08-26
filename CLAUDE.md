@@ -268,12 +268,17 @@ Storage interface is unified—services call storage layer methods, storage laye
 - Never direct agent-to-agent HTTP—always through control plane
 
 ### Memory Scopes
-- **Global:** Shared across all agents/sessions
-- **Agent:** Scoped to one agent, all sessions
-- **Session:** Scoped to one session (multi-turn conversation)
-- **Run:** Scoped to single execution/workflow run
 
-Automatically synced by control plane. Agents access via SDK methods: `agent.memory.get/set(scope, key, value)`
+The control plane defines four scopes: `global`, `session`, `actor`, and `workflow`. Other strings (such as `agent` or `run`) are not rejected, but they are stored in a namespace that an unscoped `get` never walks, so a value written there can only be read back with the same explicit scope. Python and TypeScript use these names directly; the Go SDK's constant for the actor scope is `agent.ScopeUser` (`"user"`), which `apiScope` translates to `actor` on the wire (`sdk/go/agent/control_plane_memory_backend.go`).
+
+- **`global`:** Shared by every agent and session; fixed scope id `global`
+- **`session`:** One conversation, keyed by `X-Session-ID`
+- **`actor`:** One actor across all its sessions, keyed by `X-Actor-ID`
+- **`workflow`:** One workflow run, keyed by `X-Workflow-ID`
+
+`session`, `actor` and `workflow` are sibling dimensions, not a nested chain. A read with no explicit scope resolves `workflow -> session -> actor -> global` and returns the first hit. Scope controls lookup and isolation, not lifetime: nothing is purged when a session or run ends — values persist until explicitly deleted.
+
+Agents access via SDK methods: `agent.memory.get/set(scope, key, value)`. See `sdk/python/agentfield/memory.py` for the authoritative description.
 
 ### DID/VC (Cryptographic Identity)
 - Opt-in per agent: Set `app.vc_generator.set_enabled(True)` in Python or equivalent in Go
