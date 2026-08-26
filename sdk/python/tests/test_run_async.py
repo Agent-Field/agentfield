@@ -361,3 +361,61 @@ def test_recognising_a_dispatch_loop_starts_nothing(monkeypatch):
         loop.close()
 
     assert {thread.ident for thread in threading.enumerate()} - before == set()
+
+
+# ---------------------------------------------------------------------------
+# A background loop that never signals readiness is not left running
+# ---------------------------------------------------------------------------
+
+
+def test_background_loop_that_never_starts_is_not_left_behind(monkeypatch):
+    """A start that times out must not strand its loop and thread.
+
+    ``_BACKGROUND_LOOP`` is only published on success, so a loop left running
+    after a timeout is unreachable forever — and the next call builds another
+    one beside it.
+    """
+    monkeypatch.setattr(run_async, "_BACKGROUND_LOOP", None)
+    monkeypatch.setattr(run_async, "_BACKGROUND_LOOP_START_TIMEOUT", 0.25)
+
+    real_new_event_loop = asyncio.new_event_loop
+    park = threading.Event()
+    arm = {"on": False}
+
+    def _stalled_loop():
+        loop = real_new_event_loop()
+        if arm["on"]:
+            arm["on"] = False
+            # Queued ahead of the readiness callback, so the loop is busy
+            # here when the start timeout expires.
+            loop.call_soon_threadsafe(lambda: park.wait(timeout=10))
+        return loop
+
+    monkeypatch.setattr(asyncio, "new_event_loop", _stalled_loop)
+
+    before = {
+        t for t in threading.enumerate() if t.name == "agentfield-background-loop"
+    }
+
+    started = []
+    try:
+        for _ in range(3):
+            arm["on"] = True
+            assert run_async._background_loop() is None
+            started = [
+                t
+                for t in threading.enumerate()
+                if t.name == "agentfield-background-loop" and t not in before
+            ]
+    finally:
+        park.set()
+
+    assert started, "the test never created a background-loop thread to strand"
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and any(t.is_alive() for t in started):
+        time.sleep(0.01)
+
+    assert not [t for t in started if t.is_alive()], (
+        "a background loop that failed to start was left running"
+    )

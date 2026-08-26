@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import threading
 import weakref
 from typing import Any, Coroutine, Optional, TypeVar
@@ -127,7 +128,14 @@ def _background_loop() -> Optional[asyncio.AbstractEventLoop]:
         def _run() -> None:
             asyncio.set_event_loop(loop)
             loop.call_soon(running.set)
-            loop.run_forever()
+            try:
+                loop.run_forever()
+            finally:
+                # Only reached when something stopped the loop, which today
+                # is the start-timeout path below. Closing it here keeps the
+                # thread from leaving an unclosed loop behind and makes the
+                # next ``_background_loop()`` call build a fresh one.
+                loop.close()
 
         thread = threading.Thread(
             target=_run,
@@ -138,6 +146,13 @@ def _background_loop() -> Optional[asyncio.AbstractEventLoop]:
 
         if not running.wait(timeout=_BACKGROUND_LOOP_START_TIMEOUT):
             logger.debug("Background event loop did not start in time")
+            # Do not leave the loop and its thread behind: ``_BACKGROUND_LOOP``
+            # is never published here, so the next call would create a second
+            # one, and a third, with none of them ever reachable again.
+            # Stopping makes ``run_forever`` return (immediately, if it has
+            # not started yet), which closes the loop and ends the thread.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(loop.stop)
             return None
 
         _BACKGROUND_LOOP = loop
