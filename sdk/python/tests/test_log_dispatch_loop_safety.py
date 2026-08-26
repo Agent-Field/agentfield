@@ -551,3 +551,62 @@ async def test_client_construction_survives_two_loops_arriving_together(httpx_st
     assert "error" not in other, other.get("error")
     assert other["client"] is not None
     assert other["client"] is not mine
+
+
+# ---------------------------------------------------------------------------
+# The per-loop client table must not grow once per short-lived loop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_closed_loops_do_not_accumulate_in_the_per_loop_table(httpx_stub):
+    """Dead loops' clients are evicted, not kept for the life of the process.
+
+    The table is keyed weakly, which reads as self-cleaning but is not: an
+    httpx.AsyncClient reaches back to its own loop through the anyio streams
+    its transport opened, so every value keeps its own key alive. Without an
+    explicit eviction the table grows by one entry — one client, one socket
+    pool — for every short-lived loop the process ever runs.
+    """
+    cp_client = AgentFieldClient(base_url="http://control-plane.invalid")
+
+    agent_loop = asyncio.get_running_loop()
+    mine = await cp_client.get_async_http_client()
+    await cp_client.post_execution_logs("exec-agent", {"message": "from the agent"})
+
+    reused_within_one_loop = []
+
+    def _use_a_throwaway_loop() -> None:
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                cp_client.post_execution_logs("exec-throwaway", {"message": "hi"})
+            )
+            first = loop.run_until_complete(cp_client.get_async_http_client())
+            second = loop.run_until_complete(cp_client.get_async_http_client())
+            reused_within_one_loop.append(first is second)
+        finally:
+            loop.close()
+
+    for _ in range(50):
+        thread = threading.Thread(target=_use_a_throwaway_loop, daemon=True)
+        thread.start()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert len(httpx_stub.requested_urls) == 51, "the throwaway loops never posted"
+    # A loop that is still alive keeps its client — eviction is about dead
+    # loops, not about handing out a fresh client per call.
+    assert all(reused_within_one_loop)
+
+    # At most the most recent loop's entry survives: it is dropped by the next
+    # foreign-loop caller, and nothing else is left holding a pool.
+    assert len(cp_client._foreign_loop_http_clients) <= 1
+
+    # Evicting is dropping, never closing: the await would have to run on a
+    # loop that no longer exists.
+    assert all(not client.is_closed for client in httpx_stub.clients)
+
+    # The primary slot is untouched by any of it.
+    assert cp_client._async_http_client_loop is agent_loop
+    assert await cp_client.get_async_http_client() is mine

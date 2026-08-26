@@ -185,8 +185,12 @@ class AgentFieldClient:
         # must never be handed to a different loop (#620).
         self._async_http_client_loop: Optional[asyncio.AbstractEventLoop] = None
         # Per-loop clients for any *other* loop that asks (e.g. a best-effort
-        # log dispatch running on the SDK background loop). Keyed weakly so a
-        # finished loop's client is collected with it.
+        # log dispatch running on the SDK background loop). Keyed weakly, but
+        # that alone frees nothing: an httpx.AsyncClient reaches back to its
+        # own loop through the anyio streams its transport holds, so the value
+        # keeps the key alive and no entry is ever collected on its own.
+        # Entries whose loop has closed are evicted explicitly instead — see
+        # ``_evict_closed_loop_http_clients``.
         self._foreign_loop_http_clients: "weakref.WeakKeyDictionary[Any, Any]" = (
             weakref.WeakKeyDictionary()
         )
@@ -499,6 +503,24 @@ class AgentFieldClient:
         with self._async_http_client_lock:
             return self._http_client_for_loop(loop, httpx_module)
 
+    def _evict_closed_loop_http_clients(self) -> None:
+        """Drop per-loop clients whose loop has closed. Caller holds the lock.
+
+        ``_foreign_loop_http_clients`` is keyed weakly, but weakness buys
+        nothing here: the value (an ``httpx.AsyncClient``) reaches its own loop
+        through the anyio streams its transport holds, so every entry keeps its
+        own key alive and the table would otherwise grow once per short-lived
+        loop for the life of the process.
+
+        The clients are dropped, not closed. ``aclose()`` awaits against the
+        pool, which only the loop that opened it can drive; that loop is gone,
+        so there is nowhere to run the close. Dropping the last reference lets
+        the sockets be reclaimed when the client is collected.
+        """
+        dead = [loop for loop in self._foreign_loop_http_clients if loop.is_closed()]
+        for loop in dead:
+            self._foreign_loop_http_clients.pop(loop, None)
+
     def _http_client_for_loop(
         self, loop: asyncio.AbstractEventLoop, httpx_module: Any
     ) -> "httpx.AsyncClient":
@@ -526,6 +548,7 @@ class AgentFieldClient:
         # Another loop is driving this client — a best-effort background
         # dispatch, or a second loop while the agent's own holds the primary.
         # Give it its own client instead of corrupting either pool.
+        self._evict_closed_loop_http_clients()
         existing = self._foreign_loop_http_clients.get(loop)
         if existing is not None and not getattr(existing, "is_closed", False):
             return existing
@@ -658,6 +681,8 @@ class AgentFieldClient:
             # The rest belong to other loops and cannot be closed from here
             # without the cross-loop await this design exists to avoid; drop
             # the references and let their loops (and the OS) reclaim them.
+            # This also subsumes ``_evict_closed_loop_http_clients``: nothing
+            # per-loop survives an aclose().
             self._foreign_loop_http_clients.clear()
 
         for client in (primary, mine):
