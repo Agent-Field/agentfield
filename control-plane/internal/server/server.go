@@ -115,6 +115,19 @@ type AgentFieldServer struct {
 	stopping     bool
 }
 
+// newRouter builds the gin engine the control plane serves from.
+//
+// It deliberately uses gin.New() + Recovery instead of gin.Default():
+// gin.Default() also installs gin's own plaintext request logger, which writes
+// a [GIN] line for every request on top of the structured http_request event
+// that middleware.GinLogger already emits. Gin's mode — and with it the
+// [GIN-debug] route table printed at startup — is left to GIN_MODE.
+func newRouter() *gin.Engine {
+	router := gin.New()
+	router.Use(gin.Recovery())
+	return router
+}
+
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
 func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	// Define agentfieldHome at the very top
@@ -151,7 +164,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		handlers.SetAgentRestartGrace(grace)
 	}
 
-	Router := gin.Default()
+	Router := newRouter()
 
 	// Sync installed.yaml to database for package visibility
 	_ = SyncPackagesFromRegistry(agentfieldHome, storageProvider)
