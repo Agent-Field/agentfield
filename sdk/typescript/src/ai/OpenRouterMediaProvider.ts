@@ -1,6 +1,7 @@
 /**
  * OpenRouter-backed MediaProvider implementation.
- * Supports video generation (async job), image generation, and audio generation via SSE.
+ * Supports video generation (async job), image generation, and audio generation
+ * (SSE for pcm16, plain JSON for every other format — see #584).
  */
 
 import type {
@@ -22,6 +23,8 @@ const API_TIMEOUT = 30_000; // 30s for API calls
 const DOWNLOAD_TIMEOUT = 120_000; // 120s for video download
 
 const MAX_CONSECUTIVE_PARSE_ERRORS = 50;
+/** Cap on a buffered non-streaming audio response body. */
+const MAX_AUDIO_RESPONSE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_IMAGE_MODEL = 'google/gemini-3.1-flash-image-preview';
 const DEFAULT_TTS_MODEL = 'hexgrad/kokoro-82m';
 
@@ -513,12 +516,17 @@ export class OpenRouterMediaProvider implements MediaProvider {
     // Chat-completions audio modality: openai/gpt-audio family. Streaming on
     // OpenAI is locked to pcm16 — wire that and re-wrap to user's format below.
     const wireFormat = requestedFormat === 'wav' ? 'pcm16' : requestedFormat;
+    // The SSE transport only carries pcm16 audio deltas: requesting any other
+    // wire format with stream=true is rejected upstream with a 400
+    // ("audio.format does not support 'mp3' when stream=true"), so those
+    // formats are fetched as a single JSON completion instead. See issue #584.
+    const useStream = wireFormat === 'pcm16';
     const messages: unknown[] = [{ role: 'user', content: request.text }];
     const body: Record<string, unknown> = {
       model,
       messages,
       modalities: ['text', 'audio'],
-      stream: true,
+      stream: useStream,
       audio: {
         voice,
         format: wireFormat,
@@ -532,6 +540,10 @@ export class OpenRouterMediaProvider implements MediaProvider {
         `Audio generation failed [model=${model}] [endpoint=${endpoint}]: ${res.status} ${await res.text()}`,
         { provider: 'openrouter', model, endpoint }
       );
+    }
+
+    if (!useStream) {
+      return this.parseNonStreamAudio(res, model, endpoint, requestedFormat);
     }
 
     // Parse SSE stream and collect audio chunks
@@ -646,6 +658,101 @@ export class OpenRouterMediaProvider implements MediaProvider {
       };
     }
     return resp;
+  }
+
+  /**
+   * Read a non-streaming chat-completions audio response.
+   *
+   * OpenRouter's SSE audio stream only emits pcm16 deltas and rejects
+   * mp3/flac/opus when `stream=true` (#584), so those formats arrive as a
+   * single JSON document carrying the audio under
+   * `choices[0].message.audio.{data, transcript}`.
+   */
+  private async parseNonStreamAudio(
+    res: Response,
+    model: string,
+    endpoint: string,
+    requestedFormat: string
+  ): Promise<MediaResponse> {
+    const raw = await this.readLimitedText(res, MAX_AUDIO_RESPONSE_BYTES, model, endpoint);
+
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(raw) as Record<string, unknown>;
+    } catch (err) {
+      throw new MediaProviderError(
+        `Audio response was not valid JSON [model=${model}] [endpoint=${endpoint}]: ${String(err)}`,
+        { provider: 'openrouter', model, endpoint }
+      );
+    }
+
+    // A completion with no audio yields an empty response rather than an
+    // error — the SSE path behaves the same way for a stream with no deltas.
+    const resp = emptyMediaResponse(null);
+    const choices = data.choices as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(choices)) {
+      for (const choice of choices) {
+        const msg = choice.message as Record<string, unknown> | undefined;
+        if (!msg) continue;
+        const audio = msg.audio as Record<string, unknown> | undefined;
+        if (!resp.audio && typeof audio?.data === 'string') {
+          resp.audio = { data: audio.data, format: requestedFormat };
+        }
+        if (!resp.text) {
+          if (typeof audio?.transcript === 'string') {
+            resp.text = audio.transcript;
+          } else if (typeof msg.content === 'string') {
+            resp.text = msg.content;
+          }
+        }
+      }
+    }
+    return resp;
+  }
+
+  /**
+   * Read a response body as text, refusing anything past `limit` bytes so an
+   * oversized audio response is never buffered without bound. Rejects on a
+   * declared `Content-Length` above the limit before reading, and stops mid
+   * body when an undeclared (chunked) body runs past it.
+   */
+  private async readLimitedText(
+    res: Response,
+    limit: number,
+    model: string,
+    endpoint: string
+  ): Promise<string> {
+    const tooLarge = () =>
+      new MediaProviderError(
+        `Audio response exceeds the ${limit} byte limit [model=${model}] [endpoint=${endpoint}]`,
+        { provider: 'openrouter', model, endpoint }
+      );
+
+    const declared = Number(res.headers?.get?.('content-length'));
+    if (Number.isFinite(declared) && declared > limit) throw tooLarge();
+
+    const reader = res.body?.getReader?.();
+    if (!reader) {
+      const text = await res.text();
+      if (text.length > limit) throw tooLarge();
+      return text;
+    }
+
+    const decoder = new TextDecoder();
+    let out = '';
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > limit) {
+        await reader.cancel?.();
+        throw tooLarge();
+      }
+      out += decoder.decode(value, { stream: true });
+    }
+    return out + decoder.decode();
   }
 
   /**

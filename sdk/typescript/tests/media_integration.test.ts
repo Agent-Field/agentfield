@@ -320,40 +320,25 @@ describe('Integration: OpenRouterMediaProvider', () => {
         text: 'say hello',
         model: 'openai/gpt-audio-mini',
         voice: 'nova',
-        format: 'mp3',
+        format: 'pcm16',
       });
 
       expect(resp.text).toBe('Hello');
       expect(resp.audio).not.toBeNull();
       expect(resp.audio!.data).toBe('AAAABBBB');
-      expect(resp.audio!.format).toBe('mp3');
+      expect(resp.audio!.format).toBe('pcm16');
     });
 
-    it('custom format is respected', async () => {
+    it('custom format is respected and requested without streaming', async () => {
       const provider = new OpenRouterMediaProvider({ apiKey: 'test-key' });
       provider.seedModelMeta('openai/gpt-audio-mini', ['text', 'audio'], ['text']);
 
-      const sseLines = [
-        'data: {"choices":[{"delta":{"audio":{"data":"X"}}}]}\n\n',
-        'data: [DONE]\n\n',
-      ];
-      const encoder = new TextEncoder();
-      let callIndex = 0;
-
-      const mockReader = {
-        read: vi.fn().mockImplementation(async () => {
-          if (callIndex < sseLines.length) {
-            const chunk = encoder.encode(sseLines[callIndex]);
-            callIndex++;
-            return { done: false, value: chunk };
-          }
-          return { done: true, value: undefined };
-        }),
-      };
-
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        body: { getReader: () => mockReader },
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { audio: { data: 'bXAz', transcript: 'hi' } } }],
+          }),
       });
 
       const resp = await provider.generateAudio({
@@ -363,10 +348,13 @@ describe('Integration: OpenRouterMediaProvider', () => {
       });
 
       expect(resp.audio!.format).toBe('mp3');
+      expect(resp.audio!.data).toBe('bXAz');
+      expect(resp.text).toBe('hi');
 
-      // Verify format was sent in payload
+      // Verify format was sent in payload, and that mp3 skipped SSE (#584).
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(body.audio.format).toBe('mp3');
+      expect(body.stream).toBe(false);
     });
 
     it('routes TTS-only models to /audio/speech and WAV-wraps PCM', async () => {
