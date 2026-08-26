@@ -5,20 +5,24 @@ Gemini image models reached through OpenRouter return their output inline as a
 URL to ``requests.get`` raises ``InvalidSchema``, so every media output that can
 carry a URL has to decode inline payloads locally instead of downloading them.
 
-Only the base64 form is decodable. A ``data:`` URL that carries no payload or
-declares a non-base64 encoding must be rejected loudly rather than decoded into
-wrong-but-plausible bytes — before these helpers existed such a URL reached
-``requests`` and raised ``InvalidSchema``, so silently yielding ``b""`` would be
-a regression in disguise.
+Only the base64 form is decodable. A ``data:`` URL that carries no payload, an
+empty payload, or declares a non-base64 encoding must be rejected loudly rather
+than decoded into wrong-but-plausible bytes — before these helpers existed such
+a URL reached ``requests`` and raised ``InvalidSchema``, so silently yielding
+``b""`` would be a regression in disguise. Strictness stops at the base64
+alphabet: whitespace inside the payload (RFC 2045 line wrapping, a trailing
+newline, a space after the comma) is layout, not corruption, and must still
+decode.
 """
 
 import base64
 import binascii
+import tracemalloc
 
 import pytest
 import requests
 
-from agentfield.data_url import decode_data_url, is_data_url
+from agentfield.data_url import data_url_mime_type, decode_data_url, is_data_url
 from agentfield.multimodal import Audio
 from agentfield.multimodal_response import FileOutput, ImageOutput, VideoOutput
 
@@ -36,10 +40,39 @@ HTTP_URL = "https://example.test/media.bin"
 # Scheme casing is not significant (RFC 3986 3.1) - this must still decode.
 UPPERCASE_DATA_URL = f"DATA:image/png;base64,{B64}"
 
-# Neither of these is decodable: the first carries no payload at all, the second
-# declares a plain-text (percent-encoded) payload rather than base64.
+# None of these is decodable: no payload at all, an empty payload, a plain-text
+# (percent-encoded) payload rather than base64, and a payload declared base64
+# that is not.
 NO_COMMA_DATA_URL = "data:image/png"
+EMPTY_PAYLOAD_DATA_URL = "data:image/png;base64,"
 NOT_BASE64_DATA_URL = "data:text/plain,hello"
+CORRUPT_DATA_URL = f"data:image/png;base64,{B64}!!"
+
+UNDECODABLE_DATA_URLS = [
+    NO_COMMA_DATA_URL,
+    EMPTY_PAYLOAD_DATA_URL,
+    NOT_BASE64_DATA_URL,
+    CORRUPT_DATA_URL,
+]
+
+# Whitespace inside a payload is layout, not corruption: RFC 2045 encoders wrap
+# at 76 columns, and a stray leading space or trailing newline is common.
+BIG_PAYLOAD = bytes(range(256)) * 4
+WRAPPED_DATA_URL = "data:image/png;base64," + base64.encodebytes(BIG_PAYLOAD).decode()
+TRAILING_NEWLINE_DATA_URL = f"data:image/png;base64,{B64}\n"
+LEADING_SPACE_DATA_URL = f"data:image/png;base64, {B64}"
+SPLIT_DATA_URL = f"data:image/png;base64,{B64[:2]}\r\n\t{B64[2:]}"
+
+# What an existing file at the save destination holds, so a truncating save is
+# visible as a length change rather than only a content change.
+EXISTING_BYTES = b"x" * 820
+
+# (label, factory) for the three outputs whose save() writes a URL payload.
+URL_OUTPUTS = [
+    ("ImageOutput", ImageOutput),
+    ("FileOutput", FileOutput),
+    ("VideoOutput", VideoOutput),
+]
 
 
 @pytest.fixture
@@ -225,3 +258,110 @@ class TestDataUrlHelper:
         with pytest.raises(ValueError, match="expected base64 payload") as excinfo:
             decode_data_url("data:text/plain,sup3r-s3cret")
         assert "sup3r-s3cret" not in str(excinfo.value)
+
+
+class TestWhitespaceInPayloads:
+    """Layout whitespace decodes; corruption still raises.
+
+    The permissive decoder these helpers replaced accepted line-wrapped
+    payloads, so rejecting them would break callers that work today.
+    """
+
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            (WRAPPED_DATA_URL, BIG_PAYLOAD),
+            (TRAILING_NEWLINE_DATA_URL, PAYLOAD),
+            (LEADING_SPACE_DATA_URL, PAYLOAD),
+            (SPLIT_DATA_URL, PAYLOAD),
+        ],
+        ids=["rfc2045-wrapped", "trailing-newline", "space-after-comma", "cr-lf-tab"],
+    )
+    def test_whitespace_is_not_corruption(self, url, expected):
+        assert decode_data_url(url) == expected
+
+    def test_the_wrapped_fixture_really_is_wrapped(self):
+        # Guards the test above from silently becoming a no-op.
+        assert "\n" in WRAPPED_DATA_URL.partition(",")[2]
+
+    @pytest.mark.parametrize(
+        "make", [cls for _, cls in URL_OUTPUTS], ids=[label for label, _ in URL_OUTPUTS]
+    )
+    def test_media_outputs_accept_wrapped_payloads(self, make, no_network):
+        assert make(url=WRAPPED_DATA_URL).get_bytes() == BIG_PAYLOAD
+
+    def test_audio_accepts_wrapped_payloads(self, no_network):
+        audio = Audio.from_url(WRAPPED_DATA_URL)
+        assert base64.b64decode(audio.input_audio["data"]) == BIG_PAYLOAD
+
+    def test_stripping_whitespace_does_not_rescue_a_corrupt_payload(self):
+        with pytest.raises(binascii.Error):
+            decode_data_url(f"data:image/png;base64,{B64} !!")
+
+    def test_a_whitespace_only_payload_is_empty_not_valid(self):
+        with pytest.raises(ValueError, match="Empty data: URL payload"):
+            decode_data_url("data:image/png;base64, \n ")
+
+
+class TestEmptyPayloadIsRejected:
+    """``data:image/png;base64,`` must not decode to ``b""``.
+
+    Yielding empty bytes is the exact silent-wrong-answer failure the helper
+    exists to prevent; it has to raise like the other undecodable forms.
+    """
+
+    def test_helper_rejects_an_empty_payload(self):
+        with pytest.raises(ValueError, match="Empty data: URL payload"):
+            decode_data_url(EMPTY_PAYLOAD_DATA_URL)
+
+    @pytest.mark.parametrize(
+        "make", [cls for _, cls in URL_OUTPUTS], ids=[label for label, _ in URL_OUTPUTS]
+    )
+    def test_media_outputs_reject_an_empty_payload(self, make, no_network):
+        with pytest.raises(ValueError, match="Empty data: URL payload"):
+            make(url=EMPTY_PAYLOAD_DATA_URL).get_bytes()
+
+    def test_audio_rejects_an_empty_payload(self, no_network):
+        with pytest.raises(ValueError, match="Empty data: URL payload"):
+            Audio.from_url(EMPTY_PAYLOAD_DATA_URL)
+
+
+class TestIsDataUrlCost:
+    def test_detection_does_not_copy_the_url(self):
+        """``is_data_url`` runs on every get_bytes()/save() call.
+
+        An inline image is routinely megabytes, so lower-casing the whole URL
+        to test a 5-character scheme allocates a full copy of the payload for
+        nothing. Measured in allocations rather than wall time so the bound is
+        deterministic.
+        """
+        big = "data:image/png;base64," + "A" * (10 * 1024 * 1024)
+        tracemalloc.start()
+        try:
+            baseline = tracemalloc.get_traced_memory()[0]
+            assert is_data_url(big) is True
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        # A whole-URL .lower() would add ~10 MB here.
+        assert peak - baseline < 1024 * 1024
+
+    def test_short_strings_do_not_trip_the_scheme_slice(self):
+        assert not is_data_url("")
+        assert not is_data_url("data")
+        assert is_data_url("data:")
+
+
+class TestDataUrlMimeType:
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            (f"data:audio/mpeg;base64,{B64}", "audio/mpeg"),
+            (f"DATA:Audio/MPEG;BASE64,{B64}", "audio/mpeg"),
+            (f"data:;base64,{B64}", ""),
+            (f"data:image/png;charset=binary;base64,{B64}", "image/png"),
+            ("data:image/png", "image/png"),
+        ],
+    )
+    def test_mime_type_is_the_head_before_the_first_parameter(self, url, expected):
+        assert data_url_mime_type(url) == expected
