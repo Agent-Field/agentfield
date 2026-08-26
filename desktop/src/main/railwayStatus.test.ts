@@ -8,12 +8,14 @@ describe('loadRailwayStatus', () => {
       engineAvailable: true,
       hasDeployment: true,
       deploymentWorkspaceId: 'workspace-from-state',
+      deploymentServiceId: 'service-from-state',
       listWorkspaces: vi.fn(async () => { throw new Error('Railway unavailable') })
     })).resolves.toEqual({
       loggedIn: true,
       engineAvailable: true,
       hasDeployment: true,
       deploymentWorkspaceId: 'workspace-from-state',
+      deploymentServiceId: 'service-from-state',
       workspaces: [],
       message: 'Signed in, but Railway workspaces could not be loaded: Railway unavailable. Check Railway and try again.'
     })

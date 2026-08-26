@@ -7,6 +7,7 @@ import { RAILWAY_TEMPLATE_URL } from '../shared/cloudLinks'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type {
   CloudAutoUpdateMode,
+  CloudDeployResult,
   DesktopSettings,
   LocalControlPlaneRestartStatus
 } from '../shared/types'
@@ -57,11 +58,15 @@ import { setupTray } from './tray'
 import { syncTrayCompanion } from './tray-companion'
 import { AppUpdater } from './updates'
 import {
+  applyCloudAutoUpdateAfterDeploy,
   applyCloudUpdateWithRailwayToken,
-  autoUpdateModeAfterDeploy,
+  cloudAutoUpdatePreferenceAfterReconcile,
+  cloudAutoUpdatePreferenceAfterSet,
   cloudUpdateApplyPath,
   cloudUpdateRailwayControlsAvailable,
   CloudUpdateChecker,
+  getCloudAutoUpdateState,
+  railwaySettingsUrl,
   setCloudAutoUpdateSchedule
 } from './cloudUpdate'
 import {
@@ -890,6 +895,28 @@ function main(): void {
       settings = settingsWithDismissedCloudUpdate(settings, version)
       await saveSettings(settingsFile(), settings)
     })
+    ipcMain.handle('agentfield:cloud-auto-update-get', async () => {
+      const state = deploymentStateInfo(deployPaths().workspaceDir)
+      return getCloudAutoUpdateState({
+        connectedServerUrl: settings.cloud.serverUrl,
+        tfstate: state
+          ? {
+              projectId: state.projectId,
+              serviceId: state.serviceId,
+              environmentId: state.environmentId,
+              url: state.url
+            }
+          : null
+      }, {
+        getAccessToken: () => getFreshAccessToken(authDeps()),
+        getVersion: () => createCpClient().getVersion(),
+        getAutoUpdates: (token, environmentId, serviceId) =>
+          createRailwayApi(token).getEnvironmentConfigAutoUpdates(
+            environmentId,
+            serviceId
+          )
+      })
+    })
     ipcMain.handle(
       'agentfield:cloud-auto-update-set',
       async (_event, mode: unknown) => {
@@ -905,6 +932,7 @@ function main(): void {
           connectedServerUrl: settings.cloud.serverUrl,
           tfstate: state
             ? {
+                projectId: state.projectId,
                 serviceId: state.serviceId,
                 environmentId: state.environmentId,
                 url: state.url
@@ -913,29 +941,50 @@ function main(): void {
         }, {
           getAccessToken: () => getFreshAccessToken(authDeps()),
           getVersion: () => createCpClient().getVersion(),
-          setSchedule: (token, serviceId, environmentId, selectedMode) =>
-            createRailwayApi(token).setAutoUpdateSchedule(
-              serviceId,
+          getAutoUpdates: (token, environmentId, serviceId) =>
+            createRailwayApi(token).getEnvironmentConfigAutoUpdates(
               environmentId,
-              selectedMode
+              serviceId
+            ),
+          setImageAutoUpdates: (
+            token,
+            environmentId,
+            serviceId,
+            selectedMode,
+            policy
+          ) =>
+            createRailwayApi(token).setImageAutoUpdates(
+              environmentId,
+              serviceId,
+              selectedMode,
+              policy
             )
         })
-        if (result.ok && result.serviceId) {
+        const preference = cloudAutoUpdatePreferenceAfterSet(
+          result,
+          mode as CloudAutoUpdateMode
+        )
+        if (preference) {
           try {
             settings = await persistCloudAutoUpdatePreference(
               settings,
-              mode as CloudAutoUpdateMode,
-              result.serviceId,
+              preference.mode,
+              preference.serviceId,
               (next) => saveSettings(settingsFile(), next)
             )
           } catch (error) {
             return {
               ok: false,
-              message: `Railway saved the schedule, but Desktop could not persist the preference: ${error instanceof Error ? error.message : String(error)}.`
+              message: `Railway saved the schedule, but Desktop could not persist the preference: ${error instanceof Error ? error.message : String(error)}.`,
+              settingsUrl: result.settingsUrl
             }
           }
         }
-        return { ok: result.ok, message: result.message }
+        return {
+          ok: result.ok,
+          message: result.message,
+          settingsUrl: result.settingsUrl
+        }
       }
     )
     cloudUpdater.startAutoCheck()
@@ -971,12 +1020,14 @@ function main(): void {
     ipcMain.handle('agentfield:railway-status', async () => {
       const deps = authDeps()
       const { workspaceDir, binaryDir } = deployPaths()
+      const deployment = deploymentStateInfo(workspaceDir)
       const token = isLoggedIn(deps) ? await getFreshAccessToken(deps) : null
       return loadRailwayStatus({
         token,
         engineAvailable: resolveTofuBinary(binaryDir) !== null,
         hasDeployment: hasDeployment(workspaceDir),
-        deploymentWorkspaceId: deploymentStateInfo(workspaceDir)?.workspaceId ?? null,
+        deploymentWorkspaceId: deployment?.workspaceId ?? null,
+        deploymentServiceId: deployment?.serviceId ?? null,
         listWorkspaces: (accessToken) => listWorkspaces(accessToken)
       })
     })
@@ -988,7 +1039,7 @@ function main(): void {
       return { ...result, workspaces: token ? await listWorkspaces(token) : [] }
     })
     ipcMain.handle('agentfield:railway-logout', () => logout(authDeps()))
-    ipcMain.handle('agentfield:cloud-deploy', async (event, workspaceId: unknown) => {
+    ipcMain.handle('agentfield:cloud-deploy', async (event, workspaceId: unknown): Promise<CloudDeployResult> => {
       if (typeof workspaceId !== 'string' || workspaceId === '') {
         return { ok: false, message: 'Choose a Railway workspace first' }
       }
@@ -1007,37 +1058,53 @@ function main(): void {
             }
           }
         })
-        let deployMessage = result.message
+        let autoUpdateOk: boolean | undefined
+        let autoUpdateMessage: string | undefined
+        let autoUpdateSettingsUrl: string | undefined
         if (result.ok && result.url && result.apiKey) {
           const serviceId = result.serviceId ?? null
-          let appliedMode =
-            serviceId && settings.cloud.autoUpdateServiceId === serviceId
+          const storedAutoUpdateMode =
+            serviceId !== null && settings.cloud.autoUpdateServiceId === serviceId
               ? settings.cloud.autoUpdate
               : null
+          let cachedAutoUpdateMode = cloudAutoUpdatePreferenceAfterReconcile(
+            null,
+            storedAutoUpdateMode
+          )
           if (result.serviceId && result.environmentId) {
-            const scheduleMode = autoUpdateModeAfterDeploy({
+            const railwayApi = createRailwayApi(token)
+            const reconciled = await applyCloudAutoUpdateAfterDeploy({
               firstDeploy: result.firstDeploy === true,
+              projectId: result.projectId ?? null,
+              environmentId: result.environmentId,
               serviceId: result.serviceId,
               storedMode: settings.cloud.autoUpdate,
               storedServiceId: settings.cloud.autoUpdateServiceId
-            })
-            if (scheduleMode) {
-              try {
-                await createRailwayApi(token).setAutoUpdateSchedule(
-                  result.serviceId,
-                  result.environmentId,
-                  scheduleMode
+            }, {
+              getAutoUpdates: (environmentId, targetServiceId) =>
+                railwayApi.getEnvironmentConfigAutoUpdates(
+                  environmentId,
+                  targetServiceId
+                ),
+              setImageAutoUpdates: (environmentId, targetServiceId, mode, policy) =>
+                railwayApi.setImageAutoUpdates(
+                  environmentId,
+                  targetServiceId,
+                  mode,
+                  policy
                 )
-                appliedMode = scheduleMode
-                deployMessage = `${deployMessage} Railway image auto-updates are set to ${scheduleMode === 'nightly' ? 'Nightly (02:00–06:00 UTC every day)' : scheduleMode}.`
-              } catch (error) {
-                deployMessage = `${deployMessage} Automatic updates could not be scheduled: ${error instanceof Error ? error.message : String(error)}. The deployment is healthy; choose a window below to retry.`
-              }
-            } else {
-              deployMessage = `${deployMessage} Railway image auto-updates are not set; choose a window below.`
-            }
+            })
+            cachedAutoUpdateMode = cloudAutoUpdatePreferenceAfterReconcile(
+              reconciled,
+              storedAutoUpdateMode
+            )
+            autoUpdateOk = reconciled.autoUpdateOk
+            autoUpdateMessage = reconciled.autoUpdateMessage
+            autoUpdateSettingsUrl = reconciled.autoUpdateSettingsUrl
           } else {
-            deployMessage = `${deployMessage} Automatic updates could not be scheduled because Railway service outputs were missing. Re-run deploy to reconcile them.`
+            autoUpdateOk = false
+            autoUpdateMessage = 'Automatic updates could not be scheduled because Railway service outputs were missing. Re-run deploy to reconcile them.'
+            autoUpdateSettingsUrl = railwaySettingsUrl(result.projectId, result.serviceId)
           }
           settings = mergeSettings(settings, {
             cloud: {
@@ -1045,7 +1112,7 @@ function main(): void {
               enabled: true,
               serverUrl: result.url,
               apiKey: result.apiKey,
-              autoUpdate: appliedMode,
+              autoUpdate: cachedAutoUpdateMode,
               autoUpdateServiceId: serviceId
             }
           })
@@ -1056,7 +1123,10 @@ function main(): void {
           ok: result.ok,
           url: result.url,
           furrowAddress: result.furrowAddress,
-          message: deployMessage
+          message: result.message,
+          autoUpdateOk,
+          autoUpdateMessage,
+          autoUpdateSettingsUrl
         }
       } finally {
         cloudDeployInFlight = false

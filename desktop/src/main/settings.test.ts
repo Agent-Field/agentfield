@@ -256,6 +256,23 @@ describe('mergeSettings', () => {
     })
   })
 
+  it('C6 — persists the chosen mode together with its Railway service identity', async () => {
+    const previous = normalizeSettings({
+      cloud: { autoUpdate: null, autoUpdateServiceId: null }
+    })
+    let persisted: typeof previous | null = null
+    const next = await persistCloudAutoUpdatePreference(
+      previous,
+      'weekends',
+      'service-a',
+      async (value) => { persisted = value }
+    )
+
+    expect(next.cloud.autoUpdate).toBe('weekends')
+    expect(next.cloud.autoUpdateServiceId).toBe('service-a')
+    expect(persisted).toBe(next)
+  })
+
   it('does not publish a Railway schedule preference when persistence fails', async () => {
     const previous = normalizeSettings({
       cloud: {

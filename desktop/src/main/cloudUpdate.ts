@@ -1,5 +1,8 @@
 import type {
+  CloudAutoUpdateLiveMode,
   CloudAutoUpdateMode,
+  CloudAutoUpdatePolicy,
+  CloudAutoUpdateStateResult,
   CloudUpdateApplyResult,
   CloudUpdateCheck,
   CloudUpdateStatus,
@@ -8,6 +11,10 @@ import type {
 } from '../shared/types'
 import { CpApiError } from './cpClient'
 import { resolveCloudImage } from './deployEngine'
+import type {
+  RailwayEnabledAutoUpdatePolicy,
+  RailwayImageAutoUpdates
+} from './railwayApi'
 import { compareAppVersions } from './updates'
 
 const APPLY_TIMEOUT_MS = 6 * 60_000
@@ -449,6 +456,7 @@ export async function applyCloudUpdateWithRailwayToken(
 }
 
 export interface CloudAutoUpdateStateIdentity {
+  projectId: string | null
   serviceId: string | null
   environmentId: string | null
   url: string | null
@@ -463,11 +471,17 @@ export interface SetCloudAutoUpdateOptions {
 export interface SetCloudAutoUpdateDeps {
   getAccessToken: () => Promise<string | null>
   getVersion: () => Promise<ControlPlaneVersion | null>
-  setSchedule: (
+  getAutoUpdates: (
     token: string,
-    serviceId: string,
     environmentId: string,
-    mode: CloudAutoUpdateMode
+    serviceId: string
+  ) => Promise<RailwayImageAutoUpdates | null>
+  setImageAutoUpdates: (
+    token: string,
+    environmentId: string,
+    serviceId: string,
+    mode: CloudAutoUpdateMode,
+    policy: RailwayEnabledAutoUpdatePolicy
   ) => Promise<void>
 }
 
@@ -475,6 +489,16 @@ export interface SetCloudAutoUpdateResult {
   ok: boolean
   message: string
   serviceId?: string
+  settingsUrl?: string
+}
+
+/** Main persists a preference only after Railway accepted it and returned the
+ * concrete service identity. */
+export function cloudAutoUpdatePreferenceAfterSet(
+  result: SetCloudAutoUpdateResult,
+  mode: CloudAutoUpdateMode
+): { mode: CloudAutoUpdateMode; serviceId: string } | null {
+  return result.ok && result.serviceId ? { mode, serviceId: result.serviceId } : null
 }
 
 const AUTO_UPDATE_LABELS: Record<CloudAutoUpdateMode, string> = {
@@ -484,70 +508,412 @@ const AUTO_UPDATE_LABELS: Record<CloudAutoUpdateMode, string> = {
   anytime: 'Anytime'
 }
 
+interface ResolvedCloudAutoUpdateIdentity {
+  projectId: string | null
+  serviceId: string
+  environmentId: string
+}
+
+async function resolveCloudAutoUpdateIdentity(
+  options: Pick<SetCloudAutoUpdateOptions, 'connectedServerUrl' | 'tfstate'>,
+  getVersion: () => Promise<ControlPlaneVersion | null>
+): Promise<ResolvedCloudAutoUpdateIdentity | null> {
+  let running: ControlPlaneVersion | null = null
+  try {
+    running = await getVersion()
+  } catch {
+    // A transient CP timeout may safely fall back to URL-matched tfstate.
+  }
+
+  if (running?.hosting.platform === 'railway') {
+    if (running.hosting.service_id && running.hosting.environment_id) {
+      const matchingState = options.tfstate?.serviceId === running.hosting.service_id
+        ? options.tfstate
+        : null
+      return {
+        projectId: running.hosting.project_id ?? matchingState?.projectId ?? null,
+        serviceId: running.hosting.service_id,
+        environmentId: running.hosting.environment_id
+      }
+    }
+    return null
+  }
+
+  if (
+    !running?.hosting.service_id &&
+    options.tfstate?.serviceId &&
+    options.tfstate.environmentId &&
+    sameUrl(options.connectedServerUrl, options.tfstate.url)
+  ) {
+    return {
+      projectId: options.tfstate.projectId,
+      serviceId: options.tfstate.serviceId,
+      environmentId: options.tfstate.environmentId
+    }
+  }
+  return null
+}
+
+export function railwaySettingsUrl(
+  projectId: string | null | undefined,
+  serviceId: string | null | undefined
+): string {
+  if (projectId && serviceId) {
+    return `https://railway.com/project/${encodeURIComponent(projectId)}/service/${encodeURIComponent(serviceId)}/settings`
+  }
+  return 'https://railway.com/dashboard'
+}
+
+function matchesSchedule(
+  schedule: RailwayImageAutoUpdates['schedule'],
+  days: number[],
+  startHour: number,
+  endHour: number
+): boolean {
+  if (!schedule || schedule.length !== days.length) return false
+  const expectedDays = new Set(days)
+  const actualDays = new Set(schedule.map((window) => window.day))
+  return actualDays.size === expectedDays.size && schedule.every((window) =>
+    typeof window.day === 'number' &&
+    expectedDays.has(window.day) &&
+    window.startHour === startHour &&
+    window.endHour === endHour
+  )
+}
+
+/** Classify only the windows Desktop owns; every other Railway configuration
+ * remains visible as custom and can be replaced explicitly by the user. */
+export function classifyAutoUpdates(
+  autoUpdates: RailwayImageAutoUpdates | null
+): { mode: CloudAutoUpdateMode | 'custom' | null; policy: CloudAutoUpdatePolicy } {
+  if (!autoUpdates) return { mode: null, policy: null }
+  const policy = autoUpdates.type === 'disabled' ||
+      autoUpdates.type === 'patch' ||
+      autoUpdates.type === 'minor'
+    ? autoUpdates.type
+    : null
+  if (policy === 'disabled') return { mode: 'off', policy }
+  if (policy === 'patch' || policy === 'minor') {
+    if (matchesSchedule(autoUpdates.schedule, [0, 1, 2, 3, 4, 5, 6], 2, 6)) {
+      return { mode: 'nightly', policy }
+    }
+    if (matchesSchedule(autoUpdates.schedule, [0, 6], 0, 24)) {
+      return { mode: 'weekends', policy }
+    }
+    if (matchesSchedule(autoUpdates.schedule, [0, 1, 2, 3, 4, 5, 6], 0, 24)) {
+      return { mode: 'anytime', policy }
+    }
+  }
+  return { mode: 'custom', policy }
+}
+
+async function readRailwayAutoUpdateState(
+  getAutoUpdates: () => Promise<RailwayImageAutoUpdates | null>,
+  settingsUrl: string
+): Promise<CloudAutoUpdateStateResult> {
+  try {
+    const autoUpdates = await getAutoUpdates()
+    return { ok: true, ...classifyAutoUpdates(autoUpdates), settingsUrl }
+  } catch (error) {
+    return {
+      ok: false,
+      mode: null,
+      policy: null,
+      message: `Railway could not read image auto-updates: ${errorText(error)}. ${settingsUrl}`,
+      settingsUrl
+    }
+  }
+}
+
+export interface GetCloudAutoUpdateOptions {
+  connectedServerUrl: string
+  tfstate: CloudAutoUpdateStateIdentity | null
+}
+
+export interface GetCloudAutoUpdateDeps {
+  getAccessToken: () => Promise<string | null>
+  getVersion: () => Promise<ControlPlaneVersion | null>
+  getAutoUpdates: (
+    token: string,
+    environmentId: string,
+    serviceId: string
+  ) => Promise<RailwayImageAutoUpdates | null>
+}
+
+/** Read only the sanitized autoUpdates subset from Railway; no environment
+ * config document is ever returned to the caller or renderer. */
+export async function getCloudAutoUpdateState(
+  options: GetCloudAutoUpdateOptions,
+  deps: GetCloudAutoUpdateDeps
+): Promise<CloudAutoUpdateStateResult> {
+  const token = await deps.getAccessToken().catch(() => null)
+  const identity = await resolveCloudAutoUpdateIdentity(options, deps.getVersion)
+  if (!token) {
+    const settingsUrl = railwaySettingsUrl(identity?.projectId, identity?.serviceId)
+    return {
+      ok: false,
+      mode: null,
+      policy: null,
+      ...(identity ? { serviceId: identity.serviceId } : {}),
+      message: `Sign in to Railway to read image auto-updates. ${settingsUrl}`,
+      settingsUrl
+    }
+  }
+  if (!identity) {
+    const settingsUrl = railwaySettingsUrl(null, null)
+    return {
+      ok: false,
+      mode: null,
+      policy: null,
+      message: `The connected control plane could not be matched to a Railway service. ${settingsUrl}`,
+      settingsUrl
+    }
+  }
+  const settingsUrl = railwaySettingsUrl(identity.projectId, identity.serviceId)
+  return {
+    ...await readRailwayAutoUpdateState(
+      () => deps.getAutoUpdates(
+        token,
+        identity.environmentId,
+        identity.serviceId
+      ),
+      settingsUrl
+    ),
+    serviceId: identity.serviceId
+  }
+}
+
 /** Apply a Railway schedule without leaking getVersion failures through IPC.
  * A transient version timeout falls back only to URL-matched tfstate. */
 export async function setCloudAutoUpdateSchedule(
   options: SetCloudAutoUpdateOptions,
   deps: SetCloudAutoUpdateDeps
 ): Promise<SetCloudAutoUpdateResult> {
+  let identity: ResolvedCloudAutoUpdateIdentity | null = null
   try {
     const token = await deps.getAccessToken()
     if (!token) {
-      return { ok: false, message: 'Sign in to Railway, then choose the schedule again.' }
-    }
-
-    let running: ControlPlaneVersion | null = null
-    try {
-      running = await deps.getVersion()
-    } catch {
-      // A transient CP timeout must not reject IPC. URL-matched tfstate below
-      // remains a safe identity fallback for Desktop-managed deployments.
-    }
-
-    let serviceId: string | null = null
-    let environmentId: string | null = null
-    if (running?.hosting.platform === 'railway') {
-      serviceId = running.hosting.service_id ?? null
-      environmentId = running.hosting.environment_id ?? null
-    } else if (
-      !running?.hosting.service_id &&
-      options.tfstate &&
-      sameUrl(options.connectedServerUrl, options.tfstate.url)
-    ) {
-      serviceId = options.tfstate.serviceId
-      environmentId = options.tfstate.environmentId
-    }
-    if (!serviceId || !environmentId) {
+      const settingsUrl = railwaySettingsUrl(null, null)
       return {
         ok: false,
-        message: 'The connected control plane could not be matched to a Railway service. Reconnect the matching Railway control plane, then choose the schedule again.'
+        message: `Sign in to Railway, then choose the schedule again. ${settingsUrl}`,
+        settingsUrl
+      }
+    }
+    identity = await resolveCloudAutoUpdateIdentity(options, deps.getVersion)
+    if (!identity) {
+      const settingsUrl = railwaySettingsUrl(null, null)
+      return {
+        ok: false,
+        message: `The connected control plane could not be matched to a Railway service. Reconnect the matching Railway control plane, then choose the schedule again. ${settingsUrl}`,
+        settingsUrl
       }
     }
 
-    await deps.setSchedule(token, serviceId, environmentId, options.mode)
+    const {
+      projectId,
+      environmentId,
+      serviceId
+    } = identity
+    const settingsUrl = railwaySettingsUrl(projectId, serviceId)
+    const live = await readRailwayAutoUpdateState(
+      () => deps.getAutoUpdates(
+        token,
+        environmentId,
+        serviceId
+      ),
+      settingsUrl
+    )
+    const readFailed = !live.ok
+    const policy: RailwayEnabledAutoUpdatePolicy = live.policy === 'minor'
+      ? 'minor'
+      : 'patch'
+
+    await deps.setImageAutoUpdates(
+      token,
+      environmentId,
+      serviceId,
+      options.mode,
+      policy
+    )
     return {
       ok: true,
       serviceId,
-      message: `Railway image auto-updates set to ${AUTO_UPDATE_LABELS[options.mode]}.`
+      settingsUrl,
+      message: `Railway image auto-updates set to ${AUTO_UPDATE_LABELS[options.mode]}.` +
+        (readFailed
+          ? options.mode === 'off'
+            ? " Railway's current policy could not be read first."
+            : " Railway's current policy could not be read first; the patch policy was written."
+          : live.policy === 'minor' && options.mode === 'off'
+            ? " Railway's minor-update policy was replaced by Off; enabling a window again uses the patch policy."
+            : '')
     }
   } catch (error) {
+    const settingsUrl = railwaySettingsUrl(identity?.projectId, identity?.serviceId)
     return {
       ok: false,
-      message: `Railway could not save that schedule: ${errorText(error)}. Check your Railway access and try again.`
+      message: `Railway could not save that schedule: ${errorText(error)}. You can also set it in Railway → Settings → Source → Configure Auto Updates. ${settingsUrl}`,
+      settingsUrl
     }
   }
 }
 
-/** First deploys get the Nightly default. Reconciles preserve only a mode
- * already applied to this same service. */
+/** First deploys and retried deploys without a usable cached preference get the
+ * Nightly default. Reconciles preserve a mode already applied to this service. */
 export function autoUpdateModeAfterDeploy(input: {
   firstDeploy: boolean
   serviceId: string
   storedMode: CloudAutoUpdateMode | null
   storedServiceId: string | null
 }): CloudAutoUpdateMode | null {
-  if (input.firstDeploy) return 'nightly'
-  return input.storedServiceId === input.serviceId ? input.storedMode : null
+  if (
+    input.firstDeploy ||
+    input.storedServiceId !== input.serviceId ||
+    input.storedMode === null
+  ) return 'nightly'
+  return input.storedMode
+}
+
+export interface CloudAutoUpdateReconcileDecision {
+  writeMode: CloudAutoUpdateMode | null
+  autoUpdateOk: boolean
+  autoUpdateMessage: string
+}
+
+function classifiedAutoUpdateLabel(mode: Exclude<CloudAutoUpdateLiveMode, null>): string {
+  if (mode === 'custom') return 'Custom (set in Railway)'
+  return AUTO_UPDATE_LABELS[mode]
+}
+
+/** Decide whether post-deploy reconciliation may write. A live Railway policy,
+ * including a custom window, is authoritative. A first deploy owns its newly
+ * created service, so it can safely write Nightly even when the read failed. */
+export function cloudAutoUpdateReconcileDecision(input: {
+  firstDeploy: boolean
+  serviceId: string
+  storedMode: CloudAutoUpdateMode | null
+  storedServiceId: string | null
+  live: CloudAutoUpdateStateResult
+}): CloudAutoUpdateReconcileDecision {
+  if (!input.live.ok) {
+    if (input.firstDeploy) {
+      return {
+        writeMode: 'nightly',
+        autoUpdateOk: true,
+        autoUpdateMessage: `Railway image auto-updates set to ${AUTO_UPDATE_LABELS.nightly}. Railway's current policy could not be read after the first deploy; the patch policy was written.`
+      }
+    }
+    return {
+      writeMode: null,
+      autoUpdateOk: false,
+      autoUpdateMessage: input.live.message ?? 'Railway could not read image auto-updates.'
+    }
+  }
+  if (input.live.mode !== null) {
+    const policy = input.live.policy === 'minor' ? ' (minor policy)' : ''
+    return {
+      writeMode: null,
+      autoUpdateOk: true,
+      autoUpdateMessage: `Railway image auto-updates: ${classifiedAutoUpdateLabel(input.live.mode)}${policy}.`
+    }
+  }
+  const writeMode = autoUpdateModeAfterDeploy(input)
+  return {
+    writeMode,
+    autoUpdateOk: true,
+    autoUpdateMessage: writeMode
+      ? `Railway image auto-updates set to ${AUTO_UPDATE_LABELS[writeMode]}.`
+      : 'Railway image auto-updates are not set; choose a window below.'
+  }
+}
+
+export interface CloudDeployAutoUpdateResult {
+  appliedMode: CloudAutoUpdateMode | null
+  liveMode: CloudAutoUpdateLiveMode
+  liveOk: boolean
+  autoUpdateOk: boolean
+  autoUpdateMessage: string
+  autoUpdateSettingsUrl: string
+}
+
+/** Convert the reconcile result into Desktop's cached fallback. A successful
+ * write wins. A failed or skipped read preserves the same-service fallback;
+ * successful custom and unknown live states deliberately clear it. */
+export function cloudAutoUpdatePreferenceAfterReconcile(
+  result: Pick<CloudDeployAutoUpdateResult, 'appliedMode' | 'liveMode' | 'liveOk'> | null,
+  storedModeForService: CloudAutoUpdateMode | null
+): CloudAutoUpdateMode | null {
+  if (!result) return storedModeForService
+  if (result.appliedMode) return result.appliedMode
+  if (!result.liveOk) return storedModeForService
+  return result.liveMode === 'custom' ? null : result.liveMode
+}
+
+export interface ApplyCloudAutoUpdateAfterDeployDeps {
+  getAutoUpdates: (
+    environmentId: string,
+    serviceId: string
+  ) => Promise<RailwayImageAutoUpdates | null>
+  setImageAutoUpdates: (
+    environmentId: string,
+    serviceId: string,
+    mode: CloudAutoUpdateMode,
+    policy: RailwayEnabledAutoUpdatePolicy
+  ) => Promise<void>
+}
+
+/** Read Railway first, then apply a default/cached policy only when the service
+ * has no policy at all. Returns fields that are sent directly to the renderer. */
+export async function applyCloudAutoUpdateAfterDeploy(input: {
+  firstDeploy: boolean
+  projectId: string | null
+  environmentId: string
+  serviceId: string
+  storedMode: CloudAutoUpdateMode | null
+  storedServiceId: string | null
+}, deps: ApplyCloudAutoUpdateAfterDeployDeps): Promise<CloudDeployAutoUpdateResult> {
+  const settingsUrl = railwaySettingsUrl(input.projectId, input.serviceId)
+  const live = await readRailwayAutoUpdateState(
+    () => deps.getAutoUpdates(input.environmentId, input.serviceId),
+    settingsUrl
+  )
+  const decision = cloudAutoUpdateReconcileDecision({ ...input, live })
+  if (!decision.writeMode) {
+    return {
+      appliedMode: null,
+      liveMode: live.mode,
+      liveOk: live.ok,
+      autoUpdateOk: decision.autoUpdateOk,
+      autoUpdateMessage: decision.autoUpdateMessage,
+      autoUpdateSettingsUrl: settingsUrl
+    }
+  }
+  try {
+    await deps.setImageAutoUpdates(
+      input.environmentId,
+      input.serviceId,
+      decision.writeMode,
+      'patch'
+    )
+    return {
+      appliedMode: decision.writeMode,
+      liveMode: live.mode,
+      liveOk: live.ok,
+      autoUpdateOk: true,
+      autoUpdateMessage: decision.autoUpdateMessage,
+      autoUpdateSettingsUrl: settingsUrl
+    }
+  } catch (error) {
+    return {
+      appliedMode: null,
+      liveMode: live.mode,
+      liveOk: live.ok,
+      autoUpdateOk: false,
+      autoUpdateMessage: `Automatic updates could not be scheduled: ${errorText(error)}. The deployment is healthy; choose a window below to retry or configure it in Railway → Settings → Source → Configure Auto Updates.`,
+      autoUpdateSettingsUrl: settingsUrl
+    }
+  }
 }
 
 export interface CloudUpdateCheckerDeps {

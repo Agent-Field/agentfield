@@ -11,7 +11,22 @@ export interface RailwayScheduleWindow {
   endHour: number
 }
 
+export type RailwayAutoUpdatePolicy = 'disabled' | 'patch' | 'minor'
+export type RailwayEnabledAutoUpdatePolicy = Exclude<RailwayAutoUpdatePolicy, 'disabled'>
+
+/** Sanitized subset of Railway's untyped environment config. No other source
+ * or service config fields are allowed to leave this module. */
+export interface RailwayImageAutoUpdates {
+  type: unknown
+  schedule?: Array<{
+    day: unknown
+    startHour: unknown
+    endHour: unknown
+  }>
+}
+
 const RAILWAY_GRAPHQL = 'https://backboard.railway.com/graphql/v2'
+const RAILWAY_REQUEST_TIMEOUT_MS = 20_000
 
 export const SERVICE_IMAGE_MUTATION = `mutation ServiceInstanceUpdate($serviceId: String!, $environmentId: String!, $image: String!) {
   serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: {source: {image: $image}})
@@ -21,12 +36,17 @@ export const REDEPLOY_MUTATION = `mutation ServiceInstanceRedeploy($serviceId: S
   serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId)
 }`
 
-export const AUTO_UPDATE_MUTATION = `mutation ServiceInstanceAutoUpdateScheduleUpdate($serviceId: String!, $environmentId: String!, $schedule: [AutoUpdateScheduleWindowInput!]!) {
-  serviceInstanceAutoUpdateScheduleUpdate(serviceId: $serviceId, environmentId: $environmentId, schedule: $schedule)
+export const ENVIRONMENT_CONFIG_QUERY = `query EnvironmentConfig($environmentId: String!) {
+  environment(id: $environmentId) { config }
 }`
 
-export function autoUpdateSchedule(mode: CloudAutoUpdateMode): RailwayScheduleWindow[] {
-  if (mode === 'off') return []
+export const ENVIRONMENT_PATCH_COMMIT_MUTATION = `mutation EnvironmentPatchCommit($environmentId: String!, $patch: EnvironmentConfig!, $commitMessage: String) {
+  environmentPatchCommit(environmentId: $environmentId, patch: $patch, commitMessage: $commitMessage)
+}`
+
+export function autoUpdateSchedule(
+  mode: Exclude<CloudAutoUpdateMode, 'off'>
+): RailwayScheduleWindow[] {
   if (mode === 'weekends') {
     // Railway uses the conventional 0=Sunday … 6=Saturday numbering.
     return [
@@ -40,6 +60,23 @@ export function autoUpdateSchedule(mode: CloudAutoUpdateMode): RailwayScheduleWi
   return Array.from({ length: 7 }, (_, day) => ({ day, ...hours }))
 }
 
+export function imageAutoUpdatesPatch(
+  serviceId: string,
+  mode: CloudAutoUpdateMode,
+  policy: RailwayEnabledAutoUpdatePolicy = 'patch'
+): Record<string, unknown> {
+  const autoUpdates = mode === 'off'
+    ? { type: 'disabled' }
+    : { type: policy, schedule: autoUpdateSchedule(mode) }
+  return {
+    services: {
+      [serviceId]: {
+        source: { autoUpdates }
+      }
+    }
+  }
+}
+
 export interface RailwayApi {
   listWorkspaces(): Promise<RailwayWorkspace[]>
   listVolumes(projectId: string): Promise<unknown[]>
@@ -51,10 +88,15 @@ export interface RailwayApi {
   ): Promise<void>
   setServiceImage(serviceId: string, environmentId: string, image: string): Promise<void>
   redeploy(serviceId: string, environmentId: string): Promise<void>
-  setAutoUpdateSchedule(
-    serviceId: string,
+  getEnvironmentConfigAutoUpdates(
     environmentId: string,
-    mode: CloudAutoUpdateMode
+    serviceId: string
+  ): Promise<RailwayImageAutoUpdates | null>
+  setImageAutoUpdates(
+    environmentId: string,
+    serviceId: string,
+    mode: CloudAutoUpdateMode,
+    policy?: RailwayEnabledAutoUpdatePolicy
   ): Promise<void>
 }
 
@@ -66,18 +108,32 @@ export function createRailwayApi(
     query: string,
     variables: Record<string, unknown> = {}
   ): Promise<Record<string, unknown>> {
-    const response = await fetchImpl(RAILWAY_GRAPHQL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'agentfield-desktop'
-      },
-      body: JSON.stringify({ query, variables })
-    })
-    const payload = await response.json().catch(() => ({})) as {
+    const signal = AbortSignal.timeout(RAILWAY_REQUEST_TIMEOUT_MS)
+    let response: Response
+    let payload: {
       data?: Record<string, unknown>
       errors?: Array<{ message?: string }>
+    }
+    try {
+      response = await fetchImpl(RAILWAY_GRAPHQL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'User-Agent': 'agentfield-desktop'
+        },
+        body: JSON.stringify({ query, variables }),
+        signal
+      })
+      payload = await response.json().catch((error) => {
+        if (signal.aborted) throw error
+        return {}
+      }) as typeof payload
+    } catch (error) {
+      if (signal.aborted) {
+        throw new Error(`Railway GraphQL request timed out after ${RAILWAY_REQUEST_TIMEOUT_MS / 1000} seconds`)
+      }
+      throw error
     }
     if (!response.ok || payload.errors?.length) {
       const detail = payload.errors
@@ -114,11 +170,53 @@ export function createRailwayApi(
     async redeploy(serviceId, environmentId) {
       await request(REDEPLOY_MUTATION, { serviceId, environmentId })
     },
-    async setAutoUpdateSchedule(serviceId, environmentId, mode) {
-      await request(AUTO_UPDATE_MUTATION, {
-        serviceId,
+    async getEnvironmentConfigAutoUpdates(environmentId, serviceId) {
+      const data = await request(ENVIRONMENT_CONFIG_QUERY, { environmentId })
+      const environment = data.environment
+      if (typeof environment !== 'object' || environment === null) {
+        throw new Error('Railway returned no configuration for this service')
+      }
+      const config = (environment as { config?: unknown }).config
+      if (typeof config !== 'object' || config === null) {
+        throw new Error('Railway returned no configuration for this service')
+      }
+      const services = (config as { services?: unknown }).services
+      if (typeof services !== 'object' || services === null) {
+        throw new Error('Railway returned no configuration for this service')
+      }
+      const service = (services as Record<string, unknown>)[serviceId]
+      if (typeof service !== 'object' || service === null) {
+        throw new Error('Railway returned no configuration for this service')
+      }
+      const source = (service as { source?: unknown }).source
+      if (typeof source !== 'object' || source === null) return null
+      const value = (source as { autoUpdates?: unknown }).autoUpdates
+      if (value === undefined || value === null) return null
+      if (typeof value !== 'object') {
+        throw new Error('Railway returned an invalid auto-update configuration')
+      }
+
+      const raw = value as { type?: unknown; schedule?: unknown }
+      const autoUpdates: RailwayImageAutoUpdates = { type: raw.type }
+      if (Array.isArray(raw.schedule)) {
+        autoUpdates.schedule = raw.schedule.map((window) => {
+          const item = typeof window === 'object' && window !== null
+            ? window as Record<string, unknown>
+            : {}
+          return {
+            day: item.day,
+            startHour: item.startHour,
+            endHour: item.endHour
+          }
+        })
+      }
+      return autoUpdates
+    },
+    async setImageAutoUpdates(environmentId, serviceId, mode, policy = 'patch') {
+      await request(ENVIRONMENT_PATCH_COMMIT_MUTATION, {
         environmentId,
-        schedule: autoUpdateSchedule(mode)
+        patch: imageAutoUpdatesPatch(serviceId, mode, policy),
+        commitMessage: `Configure AgentField image auto-updates (${mode})`
       })
     }
   }

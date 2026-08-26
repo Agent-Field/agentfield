@@ -6,6 +6,7 @@ export interface RailwayStatusInput {
   engineAvailable: boolean
   hasDeployment: boolean
   deploymentWorkspaceId: string | null
+  deploymentServiceId?: string | null
   listWorkspaces: (token: string) => Promise<RailwayWorkspace[]>
 }
 
@@ -22,6 +23,9 @@ export async function loadRailwayStatus(input: RailwayStatusInput): Promise<Rail
     hasDeployment: input.hasDeployment,
     ...(input.deploymentWorkspaceId
       ? { deploymentWorkspaceId: input.deploymentWorkspaceId }
+      : {}),
+    ...(input.deploymentServiceId
+      ? { deploymentServiceId: input.deploymentServiceId }
       : {}),
     workspaces: []
   }

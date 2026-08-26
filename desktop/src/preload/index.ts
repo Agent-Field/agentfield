@@ -36,6 +36,7 @@ const api: AgentFieldApi = {
   checkCloudUpdate: () => ipcRenderer.invoke('agentfield:cloud-update-check'),
   applyCloudUpdate: () => ipcRenderer.invoke('agentfield:cloud-update-apply'),
   dismissCloudUpdate: (version) => ipcRenderer.invoke('agentfield:cloud-update-dismiss', version),
+  getCloudAutoUpdate: () => ipcRenderer.invoke('agentfield:cloud-auto-update-get'),
   setCloudAutoUpdate: (mode) => ipcRenderer.invoke('agentfield:cloud-auto-update-set', mode),
   onCloudUpdateStatus: (listener) => {
     const wrapped = (

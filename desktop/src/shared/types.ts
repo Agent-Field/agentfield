@@ -213,6 +213,23 @@ export interface CliStatus {
  * moment Claude/Codex/anything asks.
  */
 export type CloudAutoUpdateMode = 'off' | 'nightly' | 'weekends' | 'anytime'
+export type CloudAutoUpdateLiveMode = CloudAutoUpdateMode | 'custom' | null
+export type CloudAutoUpdatePolicy = 'disabled' | 'patch' | 'minor' | null
+
+export interface CloudAutoUpdateStateResult {
+  ok: boolean
+  mode: CloudAutoUpdateLiveMode
+  policy: CloudAutoUpdatePolicy
+  serviceId?: string
+  message?: string
+  settingsUrl?: string
+}
+
+export interface CloudAutoUpdateSetResult {
+  ok: boolean
+  message: string
+  settingsUrl?: string
+}
 
 export interface DesktopSettings {
   /** Remote control-plane profile. The API key remains in main-process settings. */
@@ -360,6 +377,8 @@ export interface RailwayStatus {
   workspaces: Array<{ id: string; name: string }>
   /** Workspace recorded in the desktop deployment's tfstate, when present. */
   deploymentWorkspaceId?: string
+  /** Service recorded in the desktop deployment's tfstate, when present. */
+  deploymentServiceId?: string
   /** Non-fatal Railway lookup problem; login remains valid. */
   message?: string
 }
@@ -369,6 +388,10 @@ export interface CloudDeployResult {
   url?: string
   furrowAddress?: string
   message: string
+  /** Post-deploy Railway Image Auto Updates reconciliation feedback. */
+  autoUpdateOk?: boolean
+  autoUpdateMessage?: string
+  autoUpdateSettingsUrl?: string
 }
 
 export interface PackageUpdateCheckResponse {
@@ -544,8 +567,10 @@ export interface AgentFieldApi {
   applyCloudUpdate(): Promise<CloudUpdateApplyResult>
   /** Dismiss exactly one cloud control-plane version in the main process. */
   dismissCloudUpdate(version: string): Promise<void>
+  /** Read Railway's live Image Auto Updates policy and maintenance window. */
+  getCloudAutoUpdate(): Promise<CloudAutoUpdateStateResult>
   /** Configure Railway Image Auto Updates for the connected control plane. */
-  setCloudAutoUpdate(mode: CloudAutoUpdateMode): Promise<{ ok: boolean; message: string }>
+  setCloudAutoUpdate(mode: CloudAutoUpdateMode): Promise<CloudAutoUpdateSetResult>
   onCloudUpdateStatus(listener: (status: CloudUpdateStatus) => void): () => void
   railwayLogin(): Promise<{ ok: boolean; message: string; workspaces?: RailwayStatus['workspaces'] }>
   railwayLogout(): Promise<void>
