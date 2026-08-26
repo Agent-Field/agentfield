@@ -4,6 +4,8 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
+from agentfield.data_url import decode_data_url, is_data_url
+
 
 class Text(BaseModel):
     """Represents text content in a multimodal prompt."""
@@ -83,7 +85,14 @@ class Audio(BaseModel):
 
     @classmethod
     def from_url(cls, url: str, format: str = "wav") -> "Audio":
-        """Create Audio from URL (downloads and converts to base64)."""
+        """Create Audio from URL.
+
+        ``data:`` URLs carry their payload inline and are decoded locally;
+        http(s) URLs are downloaded and converted to base64.
+        """
+        if is_data_url(url):
+            audio_data = base64.b64encode(decode_data_url(url)).decode()
+            return cls(input_audio={"data": audio_data, "format": format})
         try:
             import requests
 

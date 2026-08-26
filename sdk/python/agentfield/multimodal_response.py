@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from agentfield.data_url import decode_data_url, is_data_url
 from agentfield.logger import log_error, log_warn
 from pydantic import BaseModel, Field
 
@@ -100,10 +101,9 @@ class ImageOutput(BaseModel):
         if self.b64_json:
             return base64.b64decode(self.b64_json)
         if self.url:
-            if self.url.startswith("data:"):
+            if is_data_url(self.url):
                 # data:image/jpeg;base64,<payload>
-                _, _, payload = self.url.partition(",")
-                return base64.b64decode(payload)
+                return decode_data_url(self.url)
             try:
                 import requests
             except ImportError:
@@ -148,6 +148,10 @@ class FileOutput(BaseModel):
             file_bytes = base64.b64decode(self.data)
             with open(path, "wb") as f:
                 f.write(file_bytes)
+        elif is_data_url(self.url):
+            # Inline payload - decode locally, never hand a data: URL to requests
+            with open(path, "wb") as f:
+                f.write(decode_data_url(self.url))
         elif self.url:
             # Download from URL
             try:
@@ -168,6 +172,8 @@ class FileOutput(BaseModel):
         """Get raw file bytes."""
         if self.data:
             return base64.b64decode(self.data)
+        elif is_data_url(self.url):
+            return decode_data_url(self.url)
         elif self.url:
             try:
                 import requests
@@ -205,6 +211,10 @@ class VideoOutput(BaseModel):
             video_bytes = base64.b64decode(self.data)
             with open(path, "wb") as f:
                 f.write(video_bytes)
+        elif is_data_url(self.url):
+            # Inline payload - decode locally, never hand a data: URL to requests
+            with open(path, "wb") as f:
+                f.write(decode_data_url(self.url))
         elif self.url:
             try:
                 import requests
@@ -224,6 +234,8 @@ class VideoOutput(BaseModel):
         """Get raw video bytes."""
         if self.data:
             return base64.b64decode(self.data)
+        elif is_data_url(self.url):
+            return decode_data_url(self.url)
         elif self.url:
             try:
                 import requests
