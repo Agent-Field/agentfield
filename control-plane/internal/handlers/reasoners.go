@@ -371,6 +371,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 					Str("agent_url", agentURL),
 				resp.Header.Get("Content-Type"),
 				body,
+				defaultRedactPayloads,
 			).Msg("failed to decode agent response")
 			// Update execution with error
 			endTime := time.Now()

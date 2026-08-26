@@ -3,6 +3,8 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -100,7 +102,7 @@ func TestUndecodableAgentResponseIsNotLoggedWhenRedacting(t *testing.T) {
 	require.Equal(t, "text/html", entry["content_type"])
 	require.Equal(t, float64(len(secretBody)), entry["body_bytes"])
 	require.Equal(t, true, entry["body_redacted"])
-	require.Len(t, entry["body_sha256"], 8, "digest prefix should be 8 hex characters")
+	require.Len(t, entry["body_digest"], bodyDigestPrefixLen, "a digest prefix must be attached")
 }
 
 // TestUndecodableAgentResponseIsLoggedWhenRedactionDisabled covers contract C8:
@@ -121,6 +123,14 @@ func TestUndecodableAgentResponseIsLoggedWhenRedactionDisabled(t *testing.T) {
 // replies with the given content type and body.
 func callServerlessAgent(t *testing.T, contentType, body string) {
 	t.Helper()
+	callServerlessAgentWith(t, contentType, body, nil)
+}
+
+// callServerlessAgentWith is callServerlessAgent with a hook that can adjust
+// the controller before the call, so a test can give it settings that differ
+// from the package defaults.
+func callServerlessAgentWith(t *testing.T, contentType, body string, tweak func(*executionController)) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -138,6 +148,9 @@ func callServerlessAgent(t *testing.T, contentType, body string) {
 	}
 
 	controller := newExecutionController(newTestExecutionStorage(agent), nil, nil, 90*time.Second, "")
+	if tweak != nil {
+		tweak(controller)
+	}
 	plan := &preparedExecution{
 		exec:        &types.Execution{ExecutionID: "test-exec", RunID: "test-run"},
 		requestBody: []byte(`{"input":{}}`),
@@ -163,7 +176,7 @@ func TestServerlessResponseIsNotLoggedWhenRedacting(t *testing.T) {
 	require.Equal(t, "application/json", entry["content_type"])
 	require.Equal(t, float64(len(`{"secret":"customer-ssn-078-05-1120"}`)), entry["body_bytes"])
 	require.Equal(t, true, entry["body_redacted"])
-	require.Len(t, entry["body_sha256"], 8)
+	require.Len(t, entry["body_digest"], bodyDigestPrefixLen)
 }
 
 // TestServerlessResponseIsLoggedWhenRedactionDisabled covers contract C9 for
@@ -182,8 +195,10 @@ func TestServerlessResponseIsLoggedWhenRedactionDisabled(t *testing.T) {
 func digestFor(t *testing.T, body string) string {
 	t.Helper()
 	buf := captureHandlerLogs(t, zerolog.DebugLevel)
-	annotateBodyForLog(logger.Logger.Debug(), "text/plain", []byte(body)).Msg("probe")
-	return findLogEntry(t, buf, "probe")["body_sha256"].(string)
+	annotateBodyForLog(logger.Logger.Debug(), "text/plain", []byte(body), true).Msg("probe")
+	digest, ok := findLogEntry(t, buf, "probe")["body_digest"].(string)
+	require.True(t, ok, "a redacted annotation must carry a digest")
+	return digest
 }
 
 // TestRedactedDigestIdentifiesTheBody covers contract C10: the digest prefix is
@@ -207,7 +222,7 @@ func TestAnnotateBodyForLogOnDisabledEvent(t *testing.T) {
 	buf := captureHandlerLogs(t, zerolog.InfoLevel)
 
 	require.NotPanics(t, func() {
-		annotateBodyForLog(logger.Logger.Debug(), "text/plain", []byte("hidden")).Msg("probe")
+		annotateBodyForLog(logger.Logger.Debug(), "text/plain", []byte("hidden"), true).Msg("probe")
 	})
 	require.Empty(t, buf.String())
 }
@@ -218,10 +233,90 @@ func TestAnnotateBodyForLogOmitsUnknownContentType(t *testing.T) {
 	withRedaction(t, true)
 	buf := captureHandlerLogs(t, zerolog.DebugLevel)
 
-	annotateBodyForLog(logger.Logger.Debug(), "", nil).Msg("probe")
+	annotateBodyForLog(logger.Logger.Debug(), "", nil, true).Msg("probe")
 
 	entry := findLogEntry(t, buf, "probe")
 	require.Nil(t, entry["content_type"])
 	require.Equal(t, float64(0), entry["body_bytes"])
-	require.Len(t, entry["body_sha256"], 8)
+	require.Len(t, entry["body_digest"], bodyDigestPrefixLen)
+}
+
+// TestRedactedDigestDoesNotCommitToTheBody covers contract C11: the digest must
+// not let someone holding the log confirm a guessed body offline. A short
+// response — a one-time code, an email address, a bare token — has a small
+// candidate set, so a plain hash of it would be recoverable by enumeration.
+func TestRedactedDigestDoesNotCommitToTheBody(t *testing.T) {
+	withRedaction(t, true)
+
+	const guessable = "482913"
+	plain := sha256.Sum256([]byte(guessable))
+
+	logged := digestFor(t, guessable)
+
+	require.NotEqual(t, hex.EncodeToString(plain[:])[:len(logged)], logged,
+		"the logged digest must not be a plain hash of the body an attacker can enumerate")
+}
+
+// TestLoggedContentTypeIsBounded covers contract C12: the response content type
+// is agent-controlled and Go accepts response headers up to megabytes, so the
+// value that reaches the log must stay small no matter what an agent sends.
+func TestLoggedContentTypeIsBounded(t *testing.T) {
+	withRedaction(t, true)
+
+	cases := []struct {
+		name        string
+		contentType string
+	}{
+		{"huge parameter list", "text/plain; charset=" + strings.Repeat("x", 8000)},
+		{"huge media type", strings.Repeat("a", 8000) + "/plain"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := captureHandlerLogs(t, zerolog.DebugLevel)
+			annotateBodyForLog(logger.Logger.Debug(), tc.contentType, nil, true).Msg("probe")
+
+			entry := findLogEntry(t, buf, "probe")
+			logged, _ := entry["content_type"].(string)
+			require.NotEmpty(t, logged, "a content type must still be reported")
+			require.LessOrEqual(t, len(logged), maxLoggedContentTypeLen+3,
+				"an agent must not be able to push an unbounded content type into the log")
+		})
+	}
+}
+
+// TestServerlessAnnotationFollowsTheControllerSwitch covers contract C13: the
+// serverless site honours the redaction setting of the controller handling the
+// request, not a package global it happens to agree with today. A controller
+// told not to redact logs the preview even while the global says redact, and
+// vice versa — so a future per-tenant or per-controller override cannot
+// silently skip the one site that handles caller payloads.
+func TestServerlessAnnotationFollowsTheControllerSwitch(t *testing.T) {
+	const payload = `{"secret":"customer-ssn-078-05-1120"}`
+
+	t.Run("controller opts out while the global redacts", func(t *testing.T) {
+		withRedaction(t, true)
+		buf := captureHandlerLogs(t, zerolog.DebugLevel)
+
+		callServerlessAgentWith(t, "application/json", payload, func(c *executionController) {
+			c.redactPayloads = false
+		})
+
+		entry := findLogEntry(t, buf, "serverless response")
+		require.Equal(t, payload, entry["body"])
+	})
+
+	t.Run("controller redacts while the global does not", func(t *testing.T) {
+		withRedaction(t, false)
+		buf := captureHandlerLogs(t, zerolog.DebugLevel)
+
+		callServerlessAgentWith(t, "application/json", payload, func(c *executionController) {
+			c.redactPayloads = true
+		})
+
+		require.NotContains(t, buf.String(), "customer-ssn")
+		entry := findLogEntry(t, buf, "serverless response")
+		require.Equal(t, true, entry["body_redacted"])
+		require.Nil(t, entry["body"])
+	})
 }

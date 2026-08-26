@@ -3,12 +3,15 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -1963,6 +1966,7 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 				Int("status", resp.StatusCode),
 			resp.Header.Get("Content-Type"),
 			body,
+			c.redactPayloads,
 		).Msg("serverless response")
 	}
 
@@ -2862,29 +2866,85 @@ func truncateForLog(body []byte) string {
 	return string(body[:limit]) + "..."
 }
 
+const (
+	// bodyDigestPrefixLen is how many hex characters of the keyed body digest
+	// reach the log. Long enough that two distinct bodies colliding is not a
+	// practical concern for correlation.
+	bodyDigestPrefixLen = 16
+
+	// maxLoggedContentTypeLen bounds the agent-supplied content type. Response
+	// headers are attacker-influenced and Go accepts them up to megabytes; the
+	// log line must stay a log line.
+	maxLoggedContentTypeLen = 128
+)
+
+// bodyDigestKey is a random key minted once per process for the redacted body
+// digests below. A bare hash of the body would be a guessable commitment to it:
+// a short, low-entropy response — a one-time code, an email address, a bare
+// token, "true" — could be recovered offline by hashing candidates and matching
+// the logged digest, with body_bytes to prune the search. Keying the digest
+// removes that while keeping the property operators actually use, namely that
+// the same body logs the same digest within one run of the control plane.
+var bodyDigestKey = sync.OnceValue(func() []byte {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		// No entropy source: fail closed and log no digest at all rather than
+		// fall back to an unkeyed one.
+		return nil
+	}
+	return key
+})
+
+// redactedBodyDigest returns the logged digest prefix for a body, or "" when no
+// key could be minted.
+func redactedBodyDigest(body []byte) string {
+	key := bodyDigestKey()
+	if key == nil {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))[:bodyDigestPrefixLen]
+}
+
+// logSafeContentType reduces an agent-supplied Content-Type header to something
+// bounded: the media type without its parameters, truncated as a last resort.
+func logSafeContentType(contentType string) string {
+	if mediaType, _, err := mime.ParseMediaType(contentType); err == nil && mediaType != "" {
+		contentType = mediaType
+	}
+	if len(contentType) > maxLoggedContentTypeLen {
+		return contentType[:maxLoggedContentTypeLen] + "..."
+	}
+	return contentType
+}
+
 // annotateBodyForLog describes an agent response body on a log event.
 //
 // Agent responses are caller data, so they follow the same redaction switch as
 // execution payloads (logging.redact_payloads / AGENTFIELD_LOG_REDACT_PAYLOADS,
-// see SetRedactPayloads). With redaction on — the default — only
-// non-reversible metadata is attached: the response content type, the body
-// length in bytes and the first 8 hex characters of its SHA-256 digest. That
+// see SetRedactPayloads); redact is the caller's view of that switch. With
+// redaction on — the default — only non-reversible metadata is attached: the
+// response media type, the body length in bytes and a keyed digest prefix. That
 // is enough to recognise "same body as before" and to find the full payload in
 // the database, without the body itself reaching stdout. With redaction
 // explicitly disabled the previous truncated preview is attached instead.
-func annotateBodyForLog(event *zerolog.Event, contentType string, body []byte) *zerolog.Event {
+func annotateBodyForLog(event *zerolog.Event, contentType string, body []byte, redact bool) *zerolog.Event {
 	if event == nil {
 		return nil
 	}
-	if contentType != "" {
-		event = event.Str("content_type", contentType)
+	if mediaType := logSafeContentType(contentType); mediaType != "" {
+		event = event.Str("content_type", mediaType)
 	}
 	event = event.Int("body_bytes", len(body))
-	if !defaultRedactPayloads {
+	if !redact {
 		return event.Str("body", truncateForLog(body))
 	}
-	digest := sha256.Sum256(body)
-	return event.Bool("body_redacted", true).Str("body_sha256", hex.EncodeToString(digest[:])[:8])
+	event = event.Bool("body_redacted", true)
+	if digest := redactedBodyDigest(body); digest != "" {
+		event = event.Str("body_digest", digest)
+	}
+	return event
 }
 
 func (c *executionController) savePayload(ctx context.Context, data []byte) *string {
