@@ -474,7 +474,15 @@ jobs:
         working-directory: sdk/typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public --tag next
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "${name}@${version} is already on npm; skipping publish"
+          else
+            npm publish --provenance --access public --tag next
+          fi
 
       - name: Publish to npm (production with @latest tag)
         if: |
@@ -483,7 +491,18 @@ jobs:
         working-directory: sdk/typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        # npm refuses to publish over an existing version, which turned a
+        # re-run of this job after a Docker failure into a guaranteed failure.
+        # PyPI already has --skip-existing above; give npm the same behaviour.
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "${name}@${version} is already on npm; skipping publish"
+          else
+            npm publish --provenance --access public
+          fi
 
       - name: Compute Docker metadata
         if: needs.prepare.outputs.publish_docker == 'true'
@@ -519,7 +538,25 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push control plane image
+        id: control_plane_image
         if: needs.prepare.outputs.publish_docker == 'true'
+        continue-on-error: true
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployments/docker/Dockerfile.control-plane
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            COMMIT=${{ needs.prepare.outputs.release_sha }}
+            BUILD_DATE=${{ needs.prepare.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push control plane image (retry)
+        if: needs.prepare.outputs.publish_docker == 'true' && steps.control_plane_image.outcome == 'failure'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -535,7 +572,25 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push control plane cloud image
+        id: control_plane_cloud_image
         if: needs.prepare.outputs.publish_docker == 'true'
+        continue-on-error: true
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployments/docker/Dockerfile.control-plane-cloud
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.docker_meta.outputs.cloud_tags }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            COMMIT=${{ needs.prepare.outputs.release_sha }}
+            BUILD_DATE=${{ needs.prepare.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push control plane cloud image (retry)
+        if: needs.prepare.outputs.publish_docker == 'true' && steps.control_plane_cloud_image.outcome == 'failure'
         uses: docker/build-push-action@v5
         with:
           context: .
