@@ -217,12 +217,12 @@ class TestOpenRouterGenerateAudio:
                 text="Say hello",
                 model="openai/gpt-audio-mini",
                 voice="alloy",
-                format="mp3",  # avoid pcm→wav rewrap so we can assert raw concat
+                format="pcm16",  # avoid pcm→wav rewrap so we can assert raw concat
             )
 
         assert result.has_audio
         assert result.audio.data == merged_b64
-        assert result.audio.format == "mp3"
+        assert result.audio.format == "pcm16"
         assert result.text == "Hello world"
 
     @pytest.mark.asyncio
@@ -249,7 +249,7 @@ class TestOpenRouterGenerateAudio:
             provider = OpenRouterProvider()
             _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
             result = await provider.generate_audio(
-                text="test", model="openai/gpt-audio-mini", format="mp3"
+                text="test", model="openai/gpt-audio-mini", format="pcm16"
             )
 
         assert result.text == "First second third."
@@ -270,7 +270,7 @@ class TestOpenRouterGenerateAudio:
             await provider.generate_audio(
                 text="test",
                 model="openrouter/openai/gpt-audio-mini",
-                format="mp3",
+                format="pcm16",
             )
 
         payload = fake_session._last_post_kwargs["json"]
@@ -290,7 +290,7 @@ class TestOpenRouterGenerateAudio:
             provider = OpenRouterProvider()
             _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
             result = await provider.generate_audio(
-                text="test", model="openai/gpt-audio-mini", format="mp3"
+                text="test", model="openai/gpt-audio-mini", format="pcm16"
             )
 
         assert not result.has_audio
@@ -309,7 +309,7 @@ class TestOpenRouterGenerateAudio:
             _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
             with pytest.raises(RuntimeError, match="failed.*400"):
                 await provider.generate_audio(
-                    text="test", model="openai/gpt-audio-mini", format="mp3"
+                    text="test", model="openai/gpt-audio-mini", format="pcm16"
                 )
 
     @pytest.mark.asyncio
@@ -340,11 +340,192 @@ class TestOpenRouterGenerateAudio:
             provider = OpenRouterProvider()
             _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
             result = await provider.generate_audio(
-                text="test", model="openai/gpt-audio-mini", format="mp3"
+                text="test", model="openai/gpt-audio-mini", format="pcm16"
             )
 
         assert result.has_audio
         assert result.audio.data == valid_b64
+
+
+
+class _FakeJsonResponse:
+    """Fake aiohttp response for non-stream JSON body."""
+
+    def __init__(self, body: bytes, status: int = 200, content_type: str = "application/json"):
+        self.status = status
+        self._body = body
+        self.headers = {"Content-Type": content_type}
+
+    async def read(self) -> bytes:
+        return self._body
+
+    async def text(self) -> str:
+        return self._body.decode("utf-8", errors="replace")
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+
+class TestOpenRouterNonStreamAudio:
+    """Tests for the non-streaming chat-completions path when format != pcm16 (#584)."""
+
+    @pytest.mark.asyncio
+    async def test_mp3_format_uses_nonstream_and_parses_json(self, monkeypatch):
+        """mp3 request must go non-stream and parse the single-JSON audio response."""
+        import base64 as _b64
+
+        audio_b64 = _b64.b64encode(b"hello-mp3-bytes").decode()
+        payload_doc = {
+            "choices": [
+                {
+                    "message": {
+                        "audio": {
+                            "data": audio_b64,
+                            "transcript": "Hi there",
+                        }
+                    }
+                }
+            ]
+        }
+        body = json.dumps(payload_doc).encode()
+        fake_resp = _FakeJsonResponse(body, status=200)
+        fake_session = _FakeSession(fake_resp)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            result = await provider.generate_audio(
+                text="Say hi",
+                model="openai/gpt-audio-mini",
+                voice="alloy",
+                format="mp3",
+            )
+
+        # Verify stream=False was sent and we hit chat/completions
+        assert fake_session._last_post_url.endswith("/chat/completions")
+        sent_payload = fake_session._last_post_kwargs["json"]
+        assert sent_payload["stream"] is False, "mp3 must disable streaming (SSE only emits pcm16)"
+        assert sent_payload["audio"]["format"] == "mp3"
+
+        assert result.has_audio
+        assert result.audio.data == audio_b64
+        assert result.audio.format == "mp3"
+        assert result.text == "Hi there"
+
+    @pytest.mark.asyncio
+    async def test_flac_format_uses_nonstream(self, monkeypatch):
+        """flac format should also use the non-stream JSON path."""
+        import base64 as _b64
+
+        audio_b64 = _b64.b64encode(b"flac-audio").decode()
+        payload_doc = {
+            "choices": [
+                {"message": {"audio": {"data": audio_b64, "transcript": "music notes"}}}
+            ]
+        }
+        body = json.dumps(payload_doc).encode()
+        fake_resp = _FakeJsonResponse(body, status=200)
+        fake_session = _FakeSession(fake_resp)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            result = await provider.generate_audio(
+                text="play", model="openai/gpt-audio-mini", format="flac"
+            )
+
+        sent_payload = fake_session._last_post_kwargs["json"]
+        assert sent_payload["stream"] is False
+        assert sent_payload["audio"]["format"] == "flac"
+        assert result.audio.format == "flac"
+        assert result.audio.data == audio_b64
+        assert result.text == "music notes"
+
+    @pytest.mark.asyncio
+    async def test_nonstream_http_error_raises(self, monkeypatch):
+        """Non-200 response on non-stream path should raise RuntimeError."""
+        body = b'{"error": {"message": "format mp3 unsupported for stream"}}'
+        fake_resp = _FakeJsonResponse(body, status=400)
+        fake_session = _FakeSession(fake_resp)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            with pytest.raises(RuntimeError, match="request failed.*400"):
+                await provider.generate_audio(
+                    text="test", model="openai/gpt-audio-mini", format="mp3"
+                )
+
+    @pytest.mark.asyncio
+    async def test_nonstream_invalid_json_raises(self, monkeypatch):
+        """Non-stream response body that is not JSON should raise RuntimeError."""
+        body = b"<html>gateway timeout</html>"
+        fake_resp = _FakeJsonResponse(body, status=200, content_type="text/html")
+        fake_session = _FakeSession(fake_resp)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            with pytest.raises(RuntimeError, match="non-stream response was not valid JSON"):
+                await provider.generate_audio(
+                    text="test", model="openai/gpt-audio-mini", format="opus"
+                )
+
+    @pytest.mark.asyncio
+    async def test_nonstream_empty_choices_returns_text_only(self, monkeypatch):
+        """Response without choices should return empty audio but preserve request text."""
+        body = json.dumps({"choices": []}).encode()
+        fake_resp = _FakeJsonResponse(body, status=200)
+        fake_session = _FakeSession(fake_resp)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            result = await provider.generate_audio(
+                text="silence", model="openai/gpt-audio-mini", format="flac"
+            )
+
+        assert not result.has_audio
+        assert result.text == "silence"  # falls back to input text
+
+    @pytest.mark.asyncio
+    async def test_pcm16_format_still_uses_sse_streaming(self, monkeypatch):
+        """Format pcm16 must keep using SSE streaming (original path)."""
+        chunk1 = base64.b64encode(b"pcm_audio").decode()
+        events = [_audio_event(b64_chunk=chunk1, transcript="SSE path")]
+        sse_lines = _make_sse_lines(events)
+        fake_resp = _FakeStreamResponse(sse_lines, status=200)
+        fake_session = _FakeSession(fake_resp)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            result = await provider.generate_audio(
+                text="SSE", model="openai/gpt-audio-mini", format="pcm16"
+            )
+
+        sent_payload = fake_session._last_post_kwargs["json"]
+        assert sent_payload["stream"] is True, "pcm16 should use SSE streaming"
+        assert sent_payload["audio"]["format"] == "pcm16"
+        assert result.has_audio
+        assert result.audio.data == chunk1
+        assert result.audio.format == "pcm16"
+        assert result.text == "SSE path"
 
 
 class TestOpenRouterAudioSpeechEndpoint:
