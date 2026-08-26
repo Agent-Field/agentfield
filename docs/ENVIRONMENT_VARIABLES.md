@@ -104,6 +104,11 @@ The telemetry payload does not include prompts, inputs, outputs, logs, secrets, 
 - `AGENTFIELD_TELEMETRY_INSTALL_ID_PATH` (optional): Path for the persisted local install ID.
 - `AGENTFIELD_TELEMETRY_TIMEOUT` (default: `800ms`): Per-event send timeout. Failures are ignored.
 
+### Logging
+
+- `AGENTFIELD_LOG_LEVEL` (default: `info`): Minimum severity written to stderr — `debug`, `info`, `warn` or `error`. Equivalent YAML: `logging.level`. The `--verbose` flag on `af` overrides both. Successful HTTP requests are logged at `debug`; 4xx responses at `warn` and 5xx at `error`, so failures stay visible at the default level.
+- `AGENTFIELD_LOG_REDACT_PAYLOADS` (default: `true`): When `true`, execution inputs/outputs and agent response bodies are kept out of log events and internal event-bus payloads; log lines carry the content type, byte length and a short SHA-256 prefix instead. Set to `false` only for local debugging. Equivalent YAML: `logging.redact_payloads`.
+
 ### CORS (HTTP API)
 
 These map to `api.cors.*` in config. When set via env, use comma-separated values.
@@ -128,13 +133,29 @@ When enabled, the control plane issues DID identities to agents and enforces tag
 
 The connector API provides token-authenticated management endpoints for external systems (CI/CD, orchestration platforms, dashboards).
 
+- `AGENTFIELD_CONNECTOR_ENABLED` (default: `false`): Set to `true` to expose the `/connector/*` endpoints.
 - `AGENTFIELD_CONNECTOR_TOKEN` (optional): Bearer token required for all `/connector/*` endpoints.
-- `AGENTFIELD_CONNECTOR_CAPABILITIES` (optional, default: all): Comma-separated list of granted capabilities. Available capabilities: `reasoners:read`, `reasoners:write`, `versions:read`, `versions:write`, `restart`.
+
+Capabilities are granted one variable at a time. Each accepts `true` (full
+access), `readonly` (GET only — writes are rejected with HTTP 403) or `false`.
+**A capability that is not set is disabled**, so grant only what the connector
+needs. These map to `features.connector.capabilities.<name>` in the YAML config.
+
+- `AGENTFIELD_CONNECTOR_CAP_POLICY_MANAGEMENT`
+- `AGENTFIELD_CONNECTOR_CAP_TAG_MANAGEMENT`
+- `AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT`
+- `AGENTFIELD_CONNECTOR_CAP_REASONER_MANAGEMENT`
+- `AGENTFIELD_CONNECTOR_CAP_STATUS_READ`
+- `AGENTFIELD_CONNECTOR_CAP_OBSERVABILITY_CONFIG`
+- `AGENTFIELD_CONNECTOR_CAP_CONFIG_MANAGEMENT`
 
 Example:
 ```
+AGENTFIELD_CONNECTOR_ENABLED=true
 AGENTFIELD_CONNECTOR_TOKEN=my-secret-token
-AGENTFIELD_CONNECTOR_CAPABILITIES=reasoners:read,versions:read,versions:write,restart
+AGENTFIELD_CONNECTOR_CAP_STATUS_READ=true
+AGENTFIELD_CONNECTOR_CAP_REASONER_MANAGEMENT=readonly
+AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT=false
 ```
 
 ## Agent Nodes

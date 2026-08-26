@@ -318,7 +318,8 @@ See `control-plane/.env.example` for comprehensive list. Key vars:
 - `AGENTFIELD_UI_MODE` - `embedded` (production) or `development` (Vite proxy)
 - `AGENTFIELD_CONFIG_FILE` - Path to config YAML
 - `GIN_MODE` - `debug` or `release`
-- `LOG_LEVEL` - `debug`, `info`, `warn`, `error`
+- `AGENTFIELD_LOG_LEVEL` - `debug`, `info`, `warn`, `error` (default: `info`; `af --verbose` overrides it)
+- `AGENTFIELD_LOG_REDACT_PAYLOADS` - `true` (default) keeps execution payloads and agent response bodies out of logs
 
 ## Code Style
 
