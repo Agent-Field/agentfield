@@ -225,3 +225,43 @@ async def test_fire_and_forget_running_loop_task_is_retained_until_done():
 
     assert finished["value"] is True
     assert task not in run_async._BACKGROUND_TASKS
+
+
+def test_fire_and_forget_without_a_running_loop_reuses_one_open_loop():
+    """Work scheduled from sync code shares one loop that is never closed.
+
+    A loop created and closed per call strands anything the coroutine bound to
+    it — notably the SDK's shared httpx.AsyncClient connection pool — so the
+    next use on the caller's own loop fails with ``Event loop is closed``.
+    """
+    loops = []
+    ran = threading.Semaphore(0)
+
+    async def record():
+        loops.append(asyncio.get_running_loop())
+        ran.release()
+
+    fire_and_forget(record())
+    fire_and_forget(record())
+
+    assert ran.acquire(timeout=5)
+    assert ran.acquire(timeout=5)
+
+    assert loops[0] is loops[1], "each call got its own event loop"
+    assert not loops[0].is_closed(), "the background loop was closed after use"
+
+
+def test_fire_and_forget_without_a_running_loop_survives_a_failure():
+    """A failing coroutine must not stop later work from running."""
+    ran = threading.Semaphore(0)
+
+    async def fail():
+        raise ValueError("boom")
+
+    async def ok():
+        ran.release()
+
+    fire_and_forget(fail())
+    fire_and_forget(ok())
+
+    assert ran.acquire(timeout=5)
