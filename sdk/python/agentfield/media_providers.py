@@ -2122,6 +2122,90 @@ def _wrap_pcm16_as_wav_b64(pcm_b64: str, *, sample_rate: int = 24000) -> str:
     return base64.b64encode(wav).decode("ascii")
 
 
+# Second byte of an MPEG audio frame header (0xFF sync + MPEG1/2/2.5 Layer III).
+_MPEG_SYNC_SECOND_BYTES = frozenset({0xFA, 0xFB, 0xF2, 0xF3})
+
+
+def _sniff_audio_container(data: bytes) -> Optional[str]:
+    """Identify an audio container from the leading magic bytes of ``data``.
+
+    Returns ``"mp3"``, ``"wav"``, ``"flac"`` or ``"ogg"`` when ``data`` starts
+    with that container's signature, and ``None`` when nothing matches — which,
+    for OpenRouter's chat-completions audio modality, means the payload is raw
+    little-endian PCM16 frames carrying no container at all.
+    """
+    if len(data) < 4:
+        return None
+    if data[:3] == b"ID3":
+        return "mp3"
+    if data[0] == 0xFF and data[1] in _MPEG_SYNC_SECOND_BYTES:
+        return "mp3"
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return "wav"
+    if data[:4] == b"fLaC":
+        return "flac"
+    if data[:4] == b"OggS":
+        return "ogg"
+    return None
+
+
+def _label_streamed_audio(
+    b64_data: str, requested_format: str, *, model: str = ""
+) -> tuple[str, str]:
+    """Label streamed OpenRouter audio by what the bytes actually are.
+
+    OpenRouter's music models ignore the requested ``audio.format`` and answer
+    with whatever container the upstream model produces (``google/lyria-3-*``
+    currently always returns MP3). Trusting the requested format therefore
+    mislabels — and, when it triggers a client-side RIFF wrap, corrupts — the
+    result, so the decoded bytes are sniffed instead:
+
+    * a recognised container wins: the payload is returned untouched and
+      labelled with the container that was found;
+    * no recognised container means raw PCM16 frames, which are wrapped in a
+      24 kHz mono RIFF/WAVE header when the caller asked for ``wav`` and passed
+      through with the requested label otherwise.
+
+    A single warning is logged whenever the container actually present differs
+    from the one the caller asked for.
+
+    Returns ``(b64_data, format)``.
+    """
+    import base64
+
+    if not b64_data:
+        return b64_data, requested_format
+
+    try:
+        raw = base64.b64decode(b64_data)
+    except ValueError:
+        # Undecodable payload — nothing to sniff, hand it back as requested.
+        return b64_data, requested_format
+
+    detected = _sniff_audio_container(raw)
+    container = detected or "pcm16"
+
+    if detected is not None:
+        result_format = detected
+    elif requested_format == "wav":
+        b64_data = _wrap_pcm16_as_wav_b64(b64_data, sample_rate=24000)
+        result_format = "wav"
+    else:
+        result_format = requested_format
+
+    wrapped_raw_pcm = detected is None and requested_format == "wav"
+    if container != requested_format and not wrapped_raw_pcm:
+        from agentfield.logger import log_warn
+
+        log_warn(
+            f"OpenRouter returned {container} audio for "
+            f"{model or 'the requested model'} but format={requested_format!r} "
+            f"was requested; labelling the result as {result_format!r}."
+        )
+
+    return b64_data, result_format
+
+
 class OpenRouterProvider(MediaProvider):
     """
     OpenRouter provider for image generation via chat completions.
@@ -2967,23 +3051,31 @@ class OpenRouterProvider(MediaProvider):
         """
         Generate music via OpenRouter using a music-capable model.
 
-        Uses chat completions with the audio modality, similar to
-        generate_audio but targeting music generation models. The transport is
-        chosen from the requested format, exactly as in generate_audio:
-        ``wav``/``pcm16`` stream over SSE (``wav`` is requested as ``pcm16`` on
-        the wire and wrapped in a RIFF container client-side), while any other
-        format (mp3 / flac / opus) uses the non-streaming JSON response,
-        because OpenRouter rejects ``stream=true`` for those (Issue #584).
+        Always uses SSE streaming chat completions with the audio modality:
+        OpenRouter's music models reject a non-streaming audio request with
+        ``Audio output requires stream: true``, so the transport does not vary
+        with the requested format.
+
+        The requested ``format`` is forwarded as ``audio.format``, but current
+        music models ignore it — ``google/lyria-3-*`` answers with MP3 whatever
+        is asked for. The returned container is therefore detected from the
+        bytes and reported on ``response.audio.format``, and a mismatch with
+        the requested format is logged once. A payload with no container header
+        is treated as raw PCM16 and wrapped in a 24 kHz mono WAV container when
+        ``wav`` was requested.
 
         Args:
             prompt: Text description of the music to generate
-            model: Music model (defaults to "google/lyria-3-pro")
+            model: Music model (defaults to "google/lyria-3-pro-preview")
             duration: Duration hint in seconds (must be >0 and <=600)
             **kwargs: Additional parameters (``format`` defaults to ``wav``;
                 ``timeout`` overrides the default 300s)
 
         Returns:
-            MultimodalResponse with generated audio (48kHz stereo)
+            MultimodalResponse with generated audio. The container and sample
+            rate are whatever the model produced — ``google/lyria-3-pro-preview``
+            currently returns MP3 at 44.1 kHz stereo — and the detected
+            container is reported on ``response.audio.format``.
         """
         import os
 
@@ -2993,7 +3085,7 @@ class OpenRouterProvider(MediaProvider):
                 "OpenRouter API key required. Set OPENROUTER_API_KEY env var or pass api_key."
             )
 
-        send_model = model or "google/lyria-3-pro"
+        send_model = model or "google/lyria-3-pro-preview"
         if send_model.startswith("openrouter/"):
             send_model = send_model[len("openrouter/") :]
 
@@ -3010,22 +3102,17 @@ class OpenRouterProvider(MediaProvider):
         audio_format = kwargs.pop("format", "wav")
         timeout = kwargs.pop("timeout", 300.0)
 
-        # SSE streaming only emits pcm16 audio deltas — ask for pcm16 over the
-        # wire when the caller wants wav and synthesize the RIFF container
-        # client-side below (same trick as generate_audio).
-        wire_format = "pcm16" if audio_format == "wav" else audio_format
-        # OpenRouter rejects stream=true for any wire format other than pcm16
-        # ("'audio.format' does not support 'wav' when stream=true"), so any
-        # other format (mp3 / flac / opus) must use the non-streaming JSON
-        # response path instead (see: Issue #584).
-        use_stream = wire_format == "pcm16"
-
+        # Music models require stream=true for *any* audio output — a
+        # non-streaming request is rejected with "Audio output requires
+        # stream: true" regardless of audio.format. The requested format is
+        # forwarded unchanged (models ignore it today); the container that
+        # actually comes back is detected from the bytes below.
         payload = {
             "model": send_model,
             "messages": [{"role": "user", "content": user_content}],
             "modalities": ["text", "audio"],
-            "audio": {"format": wire_format},
-            "stream": use_stream,
+            "audio": {"format": audio_format},
+            "stream": True,
         }
 
         headers = {
@@ -3034,22 +3121,17 @@ class OpenRouterProvider(MediaProvider):
         }
         headers = merge_attribution_headers(headers)
 
-        if use_stream:
-            b64_full, transcript = await self._stream_openrouter_audio(
-                payload, headers, timeout=timeout, label="music"
-            )
-        else:
-            b64_full, transcript = await self._nonstream_openrouter_audio(
-                payload, headers, timeout=timeout, label="music"
-            )
+        b64_full, transcript = await self._stream_openrouter_audio(
+            payload, headers, timeout=timeout, label="music"
+        )
 
-        # Re-wrap pcm16 -> wav if the caller asked for wav.
-        if audio_format == "wav" and b64_full:
-            b64_full = _wrap_pcm16_as_wav_b64(b64_full, sample_rate=24000)
+        b64_full, result_format = _label_streamed_audio(
+            b64_full, audio_format, model=send_model
+        )
 
         audio_output = AudioOutput(
             data=b64_full if b64_full else None,
-            format=audio_format,
+            format=result_format,
             url=None,
         )
 

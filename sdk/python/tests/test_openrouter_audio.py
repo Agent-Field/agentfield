@@ -6,6 +6,7 @@ Covers:
 - Audio chunk concatenation
 - Transcript extraction
 - Model prefix stripping
+- generate_music transport (always SSE) and container sniffing
 - generate_music on ABC (raises NotImplementedError by default)
 - supported_modalities includes "audio" and "music"
 - ai_generate_music convenience method on AgentAI
@@ -13,7 +14,9 @@ Covers:
 
 import base64
 import copy
+import io
 import json
+import wave
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,6 +27,8 @@ from agentfield.media_providers import (
     FalProvider,
     LiteLLMProvider,
     OpenRouterProvider,
+    _label_streamed_audio,
+    _sniff_audio_container,
 )
 from agentfield.multimodal_response import AudioOutput, MultimodalResponse
 
@@ -637,13 +642,13 @@ class TestGenerateMusic:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
-            _prime_chat_audio_cache(provider, "google/lyria-3-pro")
+            _prime_chat_audio_cache(provider, "google/lyria-3-pro-preview")
             result = await provider.generate_music(
                 prompt="jazz piano",
-                model="google/lyria-3-pro",
+                model="google/lyria-3-pro-preview",
                 duration=30,
-                # pcm16 is the only wire format OpenRouter streams (#584), and
-                # it avoids the pcm→wav re-wrap so we can compare base64.
+                # Ask for pcm16 so the payload (which carries no container
+                # header) is returned verbatim and we can compare base64.
                 format="pcm16",
             )
 
@@ -655,11 +660,11 @@ class TestGenerateMusic:
         payload = fake_session._last_post_kwargs["json"]
         assert payload["stream"] is True
         assert "30 seconds" in payload["messages"][0]["content"]
-        assert payload["model"] == "google/lyria-3-pro"
+        assert payload["model"] == "google/lyria-3-pro-preview"
 
     @pytest.mark.asyncio
     async def test_openrouter_generate_music_default_model(self, monkeypatch):
-        """generate_music should default to google/lyria-3-pro."""
+        """generate_music should default to google/lyria-3-pro-preview."""
         events = [_audio_event(b64_chunk="AAAA")]
         lines = _make_sse_lines(events)
         fake_resp = _FakeStreamResponse(lines)
@@ -669,11 +674,11 @@ class TestGenerateMusic:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
-            _prime_chat_audio_cache(provider, "google/lyria-3-pro")
+            _prime_chat_audio_cache(provider, "google/lyria-3-pro-preview")
             await provider.generate_music(prompt="test")
 
         payload = fake_session._last_post_kwargs["json"]
-        assert payload["model"] == "google/lyria-3-pro"
+        assert payload["model"] == "google/lyria-3-pro-preview"
 
     @pytest.mark.asyncio
     async def test_openrouter_generate_music_strips_prefix(self, monkeypatch):
@@ -687,77 +692,175 @@ class TestGenerateMusic:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
-            _prime_chat_audio_cache(provider, "google/lyria-3-pro")
+            _prime_chat_audio_cache(provider, "google/lyria-3-pro-preview")
             await provider.generate_music(
                 prompt="test",
-                model="openrouter/google/lyria-3-pro",
+                model="openrouter/google/lyria-3-pro-preview",
             )
 
         payload = fake_session._last_post_kwargs["json"]
-        assert payload["model"] == "google/lyria-3-pro"
+        assert payload["model"] == "google/lyria-3-pro-preview"
 
 
-class TestOpenRouterMusicFormatRouting:
-    """generate_music picks its transport from the requested format (#584).
+class TestSniffAudioContainer:
+    """_sniff_audio_container identifies a container from its magic bytes."""
 
-    OpenRouter rejects ``stream=true`` for any audio wire format other than
-    ``pcm16``, so the default ``wav`` request must be sent as ``pcm16`` and
-    re-wrapped client-side, and mp3/flac/opus must go over the non-streaming
-    JSON path.
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            (b"ID3\x03\x00\x00\x00\x00tag", "mp3"),
+            (b"\xff\xfb\x90\x64", "mp3"),
+            (b"\xff\xf3\x90\x64", "mp3"),
+            (b"\xff\xf2\x90\x64", "mp3"),
+            (b"\xff\xfa\x90\x64", "mp3"),
+            (b"RIFF\x24\x00\x00\x00WAVEfmt ", "wav"),
+            (b"fLaC\x00\x00\x00\x22", "flac"),
+            (b"OggS\x00\x02\x00\x00", "ogg"),
+            # Raw little-endian PCM16 frames carry no signature at all.
+            (b"\x00\x01\x00\x01\x00\x01", None),
+            # RIFF that is not WAVE must not be claimed as wav.
+            (b"RIFF\x24\x00\x00\x00AVI LIST", None),
+            (b"", None),
+            (b"ID", None),
+        ],
+    )
+    def test_signature_detection(self, payload, expected):
+        assert _sniff_audio_container(payload) == expected
+
+
+class TestLabelStreamedAudio:
+    """_label_streamed_audio degrades safely on inputs it cannot inspect."""
+
+    def test_empty_payload_keeps_requested_format(self):
+        assert _label_streamed_audio("", "wav") == ("", "wav")
+
+    def test_undecodable_base64_is_passed_through(self):
+        # "abcde" is not valid base64 (length % 4 == 1) — the payload must be
+        # handed back untouched rather than crashing the caller.
+        assert _label_streamed_audio("abcde", "wav") == ("abcde", "wav")
+
+
+class TestOpenRouterMusicTransportAndLabelling:
+    """generate_music always streams, and labels the result by the real bytes.
+
+    OpenRouter's music models require ``stream: true`` for any audio output
+    ("Audio output requires stream: true" otherwise) and ignore
+    ``audio.format`` — ``google/lyria-3-*`` answers with MP3 whatever was
+    asked for — so the container is sniffed from the payload instead of being
+    assumed from the request.
     """
 
     @staticmethod
-    def _sse_session(b64_chunk: str, transcript: str = ""):
+    def _sse_session(payload: bytes, transcript: str = ""):
         lines = _make_sse_lines(
-            [_audio_event(b64_chunk=b64_chunk, transcript=transcript)]
+            [
+                _audio_event(
+                    b64_chunk=base64.b64encode(payload).decode(),
+                    transcript=transcript,
+                )
+            ]
         )
         return _FakeSession(_FakeStreamResponse(lines))
 
     @staticmethod
-    def _json_session(audio_b64: str, transcript: str = "", status: int = 200):
-        body = json.dumps(
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "audio": {"data": audio_b64, "transcript": transcript}
-                        }
-                    }
-                ]
-            }
-        ).encode()
-        return _FakeSession(_FakeJsonResponse(body, status=status))
+    def _capture_warnings(monkeypatch) -> list:
+        captured: list = []
+        monkeypatch.setattr(
+            "agentfield.logger.log_warn",
+            lambda message, **kwargs: captured.append(message),
+        )
+        return captured
+
+    @pytest.mark.parametrize("fmt", [None, "wav", "pcm16", "mp3", "flac", "opus"])
+    @pytest.mark.asyncio
+    async def test_every_format_streams_with_the_requested_wire_format(
+        self, monkeypatch, fmt
+    ):
+        """M1/M2/M10: stream is always True and audio.format is untouched."""
+        self._capture_warnings(monkeypatch)
+        fake_session = self._sse_session(b"ID3\x03\x00\x00\x00\x00lyria")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        call_kwargs = {} if fmt is None else {"format": fmt}
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            await provider.generate_music(prompt="a jingle", **call_kwargs)
+
+        sent = fake_session._last_post_kwargs["json"]
+        assert fake_session._last_post_url.endswith("/chat/completions")
+        assert sent["stream"] is True, "music models reject stream=false"
+        assert sent["audio"]["format"] == (fmt or "wav")
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            (b"ID3\x03\x00\x00\x00\x00lyria-mp3-bytes", "mp3"),
+            (b"\xff\xfb\x90\x64frame-sync-mp3", "mp3"),
+            (b"RIFF\x24\x00\x00\x00WAVEfmt payload", "wav"),
+            (b"fLaC\x00\x00\x00\x22flac-bytes", "flac"),
+            (b"OggS\x00\x02\x00\x00ogg-bytes", "ogg"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_detected_container_wins_over_requested_format(
+        self, monkeypatch, payload, expected
+    ):
+        """M4/M6: the container found in the bytes is what gets reported."""
+        warnings = self._capture_warnings(monkeypatch)
+        fake_session = self._sse_session(payload, "take 1")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            # No format -> "wav" is requested; lyria ignores it.
+            result = await provider.generate_music(prompt="a jingle")
+
+        assert result.has_audio
+        assert result.audio.format == expected
+        assert base64.b64decode(result.audio.data) == payload, (
+            "a payload that already has a container must not be re-wrapped"
+        )
+        assert result.text == "take 1"
+
+        if expected == "wav":
+            assert warnings == []
+        else:
+            assert len(warnings) == 1, "exactly one mismatch warning"
+            assert expected in warnings[0]
+            assert "wav" in warnings[0]
 
     @pytest.mark.asyncio
-    async def test_default_format_streams_pcm16_and_returns_wav(self, monkeypatch):
-        """C1: no format -> stream=True, wire pcm16, returned audio is RIFF/WAVE."""
+    async def test_raw_pcm_with_wav_requested_is_wrapped_at_24khz(self, monkeypatch):
+        """M5/M6: no container + wav asked for -> 24 kHz mono RIFF, no warning."""
+        warnings = self._capture_warnings(monkeypatch)
         pcm = b"\x00\x01" * 64
-        fake_session = self._sse_session(base64.b64encode(pcm).decode(), "lyria take 1")
-
+        fake_session = self._sse_session(pcm, "pcm take")
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
             result = await provider.generate_music(prompt="ambient pads")
 
-        sent = fake_session._last_post_kwargs["json"]
-        assert sent["stream"] is True, "wav must be requested as pcm16 over a stream"
-        assert sent["audio"]["format"] == "pcm16"
-
-        assert result.has_audio
         assert result.audio.format == "wav"
         wav_bytes = base64.b64decode(result.audio.data)
         assert wav_bytes[:4] == b"RIFF"
         assert wav_bytes[8:12] == b"WAVE"
-        assert pcm in wav_bytes, "the streamed pcm payload must survive the re-wrap"
-        assert result.text == "lyria take 1"
+        with wave.open(io.BytesIO(wav_bytes)) as handle:
+            assert handle.getframerate() == 24000
+            assert handle.getnchannels() == 1
+            assert handle.getsampwidth() == 2
+        assert pcm in wav_bytes, "the streamed pcm payload must survive the wrap"
+        assert warnings == [], (
+            "wrapping raw pcm into the requested wav is not a mismatch"
+        )
 
     @pytest.mark.asyncio
-    async def test_pcm16_streams_and_returns_data_untouched(self, monkeypatch):
-        """C2: format=pcm16 -> stream=True and the base64 is returned verbatim."""
-        chunk = base64.b64encode(b"raw-pcm-frames").decode()
-        fake_session = self._sse_session(chunk, "pcm take")
-
+    async def test_raw_pcm_with_pcm16_requested_is_returned_verbatim(self, monkeypatch):
+        """M5/M6: no container + pcm16 asked for -> untouched base64, no warning."""
+        warnings = self._capture_warnings(monkeypatch)
+        pcm = b"\x00\x01" * 64
+        chunk = base64.b64encode(pcm).decode()
+        fake_session = self._sse_session(pcm, "pcm take")
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
@@ -766,96 +869,74 @@ class TestOpenRouterMusicFormatRouting:
                 prompt="ambient pads", format="pcm16"
             )
 
-        sent = fake_session._last_post_kwargs["json"]
-        assert sent["stream"] is True
-        assert sent["audio"]["format"] == "pcm16"
-
         assert result.audio.format == "pcm16"
         assert result.audio.data == chunk
-        assert result.text == "pcm take"
-
-    @pytest.mark.parametrize("fmt", ["mp3", "flac"])
-    @pytest.mark.asyncio
-    async def test_compressed_formats_use_nonstream_json(self, monkeypatch, fmt):
-        """C3: mp3/flac -> stream=False, parsed from choices[0].message.audio."""
-        audio_b64 = base64.b64encode(f"{fmt}-music-bytes".encode()).decode()
-        fake_session = self._json_session(audio_b64, transcript="a short riff")
-
-        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-        with patch("aiohttp.ClientSession", return_value=fake_session):
-            provider = OpenRouterProvider()
-            result = await provider.generate_music(prompt="a short riff", format=fmt)
-
-        assert fake_session._last_post_url.endswith("/chat/completions")
-        sent = fake_session._last_post_kwargs["json"]
-        assert sent["stream"] is False, f"{fmt} must disable streaming"
-        assert sent["audio"]["format"] == fmt
-
-        assert result.has_audio
-        assert result.audio.format == fmt
-        assert result.audio.data == audio_b64
-        assert result.text == "a short riff"
+        assert warnings == []
 
     @pytest.mark.asyncio
-    async def test_nonstream_http_error_mentions_music_and_status(self, monkeypatch):
-        """C4: an HTTP error on the non-stream music path raises RuntimeError."""
-        body = b'{"error": {"message": "no such model"}}'
-        fake_session = _FakeSession(_FakeJsonResponse(body, status=402))
-
-        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-        with patch("aiohttp.ClientSession", return_value=fake_session):
-            provider = OpenRouterProvider()
-            with pytest.raises(RuntimeError) as excinfo:
-                await provider.generate_music(prompt="a short riff", format="opus")
-
-        message = str(excinfo.value)
-        assert "music" in message
-        assert "402" in message
-        # Pin the transport: opus must have gone down the non-streaming path.
-        assert fake_session._last_post_kwargs["json"]["stream"] is False
-
-    @pytest.mark.parametrize(
-        ("fmt", "expect_stream"),
-        [("wav", True), ("pcm16", True), ("mp3", False)],
-    )
-    @pytest.mark.asyncio
-    async def test_request_shape_is_identical_across_transports(
-        self, monkeypatch, fmt, expect_stream
+    async def test_raw_pcm_with_mp3_requested_passes_through_and_warns(
+        self, monkeypatch
     ):
-        """C5: prompt/messages/model/modalities do not vary with the transport."""
-        if expect_stream:
-            fake_session = self._sse_session(
-                base64.b64encode(b"\x00\x01\x00\x01").decode()
-            )
-        else:
-            fake_session = self._json_session(base64.b64encode(b"mp3").decode())
+        """M5/M6: no container + mp3 asked for -> passthrough plus one warning."""
+        warnings = self._capture_warnings(monkeypatch)
+        pcm = b"\x00\x01" * 64
+        chunk = base64.b64encode(pcm).decode()
+        fake_session = self._sse_session(pcm)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            result = await provider.generate_music(prompt="a riff", format="mp3")
+
+        assert result.audio.data == chunk, "raw pcm must not be re-encoded"
+        assert result.audio.format == "mp3"
+        assert len(warnings) == 1
+        assert "pcm16" in warnings[0]
+        assert "mp3" in warnings[0]
+
+    @pytest.mark.asyncio
+    async def test_matching_container_logs_nothing(self, monkeypatch):
+        """M6: mp3 asked for and mp3 delivered -> silence."""
+        warnings = self._capture_warnings(monkeypatch)
+        fake_session = self._sse_session(b"ID3\x03\x00\x00\x00\x00lyria-mp3")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            result = await provider.generate_music(prompt="a riff", format="mp3")
+
+        assert result.audio.format == "mp3"
+        assert warnings == []
+
+    @pytest.mark.parametrize("fmt", ["wav", "pcm16", "mp3", "opus"])
+    @pytest.mark.asyncio
+    async def test_request_shape_is_identical_across_formats(self, monkeypatch, fmt):
+        """M7: prompt/messages/model/modalities do not vary with the format."""
+        self._capture_warnings(monkeypatch)
+        fake_session = self._sse_session(b"\x00\x01\x00\x01")
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
             await provider.generate_music(
                 prompt="lo-fi beats",
-                model="openrouter/google/lyria-3-pro",
+                model="openrouter/google/lyria-3-pro-preview",
                 duration=45,
                 format=fmt,
             )
 
         sent = fake_session._last_post_kwargs["json"]
-        assert sent["model"] == "google/lyria-3-pro"
+        assert sent["model"] == "google/lyria-3-pro-preview"
         assert sent["messages"] == [
             {"role": "user", "content": "lo-fi beats (duration: 45 seconds)"}
         ]
         assert sent["modalities"] == ["text", "audio"]
-        assert sent["stream"] is expect_stream
+        assert sent["stream"] is True
 
     @pytest.mark.asyncio
     async def test_duration_validation_runs_before_any_request(self, monkeypatch):
-        """C5: duration validation is unchanged and still precedes the HTTP call."""
-        fake_session = self._json_session(base64.b64encode(b"mp3").decode())
-
+        """M7: duration validation still precedes the HTTP call."""
+        fake_session = self._sse_session(b"\x00\x01\x00\x01")
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
@@ -864,6 +945,38 @@ class TestOpenRouterMusicFormatRouting:
                 await provider.generate_music(prompt="x", duration=601, format="mp3")
 
         assert not hasattr(fake_session, "_last_post_kwargs")
+
+    @pytest.mark.asyncio
+    async def test_empty_stream_returns_no_audio(self, monkeypatch):
+        """M8: a stream with no audio deltas yields no audio and does not crash."""
+        self._capture_warnings(monkeypatch)
+        fake_session = _FakeSession(_FakeStreamResponse(_make_sse_lines([])))
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            result = await provider.generate_music(prompt="silence please")
+
+        assert not result.has_audio
+        assert result.audio is None
+        assert result.text == "silence please"
+
+    @pytest.mark.asyncio
+    async def test_http_error_mentions_music_and_status(self, monkeypatch):
+        """M9: a non-200 raises RuntimeError naming the label and the status."""
+        fake_session = _FakeSession(_FakeStreamResponse([], status=402))
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            with pytest.raises(RuntimeError) as excinfo:
+                await provider.generate_music(prompt="a riff", format="opus")
+
+        message = str(excinfo.value)
+        assert "music" in message
+        assert "402" in message
+        # M1: even the failing request went out as a stream.
+        assert fake_session._last_post_kwargs["json"]["stream"] is True
 
 
 # =============================================================================

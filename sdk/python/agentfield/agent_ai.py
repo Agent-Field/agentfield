@@ -2043,12 +2043,14 @@ class AgentAI:
         Generate music from a text prompt.
 
         Routes to a music-capable media provider (currently OpenRouter with
-        models like google/lyria-3-pro). Returns a MultimodalResponse with
-        generated audio data (48kHz stereo).
+        models like google/lyria-3-pro-preview). Returns a MultimodalResponse
+        whose ``.audio.format`` reports the container the model actually
+        produced — today google/lyria-3-* always returns MP3 (44.1 kHz stereo)
+        whatever ``format`` is requested.
 
         Args:
             prompt: Text description of the music to generate
-            model: Music model to use (defaults to "google/lyria-3-pro")
+            model: Music model to use (defaults to "google/lyria-3-pro-preview")
             duration: Duration hint in seconds
             **kwargs: Provider-specific parameters (e.g., format="wav")
 

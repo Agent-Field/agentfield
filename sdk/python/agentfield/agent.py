@@ -4189,7 +4189,9 @@ class Agent(FastAPI):
         Generate music from a text prompt.
 
         Routes to a music-capable provider (OpenRouter with models like
-        google/lyria-3-pro). Returns a MultimodalResponse with audio data.
+        google/lyria-3-pro-preview). Returns a MultimodalResponse with audio
+        data; ``.audio.format`` reports the container the model actually
+        produced, which may differ from the requested ``format``.
 
         Args:
             prompt (str): Text description of the music to generate.
