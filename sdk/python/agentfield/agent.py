@@ -194,9 +194,9 @@ def _detect_container_ip() -> Optional[str]:
     Detect the external IP address when running in a containerized environment.
 
     Sends outbound requests to the cloud metadata services and, as a last
-    resort, to a public IP echo service. Callers are expected to skip this
-    probe whenever the callback URL is already known — see
-    ``_build_callback_candidates``.
+    resort, to a public IP echo service. Only ``_build_callback_candidates``
+    calls this, and it skips the probe whenever the callback URL is already
+    known or ``AGENTFIELD_DISABLE_IP_DETECTION`` is set.
 
     Returns:
         External IP address if detected, None otherwise
@@ -363,11 +363,14 @@ def _build_callback_candidates(
 ) -> List[str]:
     """Assemble a prioritized list of callback URL candidates.
 
-    Everything here is derived from local state except ``_detect_container_ip``,
-    which reaches out to cloud metadata endpoints and a public IP echo service.
-    That probe is skipped when the operator has already supplied a callback URL
+    ``_detect_container_ip`` is the only step here that puts a request on the
+    wire: it reaches out to the cloud metadata endpoints and a public IP echo
+    service. (``_detect_local_ip`` opens a connectionless UDP socket toward
+    8.8.8.8 to read back the kernel's chosen source address; it sends nothing.)
+    The probe is skipped when the operator has already supplied a callback URL
     (constructor argument or ``AGENT_CALLBACK_URL``), and can be turned off
-    outright with ``AGENTFIELD_DISABLE_IP_DETECTION=1``.
+    outright with ``AGENTFIELD_DISABLE_IP_DETECTION=1``. This function is the
+    probe's only call site, so that flag suppresses it everywhere.
     """
 
     candidates: List[str] = []
@@ -730,8 +733,11 @@ class Agent(FastAPI):
             callback_url (str, optional): Explicit callback URL for AgentField server to reach this agent.
                                          If not provided, will use AGENT_CALLBACK_URL environment variable,
                                          auto-detection for containers, or fallback to localhost.
-                                         Supplying it (here or via AGENT_CALLBACK_URL) also suppresses the
-                                         outbound cloud-metadata/public-IP probe used by auto-detection;
+                                         Supplying it here is also what makes the agent resolve its
+                                         callback URL at construction time, and that resolution no longer
+                                         runs the outbound cloud-metadata/public-IP probe, because the URL
+                                         is already known. AGENT_CALLBACK_URL suppresses the probe the same
+                                         way for any caller that goes through callback discovery, and
                                          AGENTFIELD_DISABLE_IP_DETECTION=1 suppresses it unconditionally.
             vc_enabled (bool | None, optional): Controls default VC generation policy for this agent node.
                                          True enables VCs for all reasoners/skills (default), False disables,
