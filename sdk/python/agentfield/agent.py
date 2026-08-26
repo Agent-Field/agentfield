@@ -3690,7 +3690,9 @@ class Agent(FastAPI):
             stream (bool, optional): Enable streaming response.
             response_format (str, optional): Desired response format ('auto', 'json', 'text').
             context (Dict, optional): Additional context data to pass to the LLM.
-            memory_scope (List[str], optional): Memory scopes to inject (e.g., ['workflow', 'session', 'reasoner']).
+            memory_scope (List[str], optional): Memory scopes to inject, drawn from the
+                four real scopes 'workflow', 'session', 'actor' and 'global'. Accepted
+                today but not yet applied to the prompt.
             **kwargs: Additional provider-specific parameters to pass to the LLM.
 
         Returns:

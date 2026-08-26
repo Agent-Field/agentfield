@@ -532,7 +532,9 @@ class AgentAI:
             stream (bool, optional): Enable streaming response.
             response_format (str, optional): Desired response format ('auto', 'json', 'text').
             context (Dict, optional): Additional context data to pass to the LLM.
-            memory_scope (List[str], optional): Memory scopes to inject (e.g., ['workflow', 'session', 'reasoner']).
+            memory_scope (List[str], optional): Memory scopes to inject, drawn from the
+                four real scopes 'workflow', 'session', 'actor' and 'global'. Accepted
+                today but not yet applied to the prompt.
             tools: Tool definitions for LLM tool calling. Accepts:
                 - "discover": auto-discover all tools from the control plane
                 - DiscoveryResponse: use pre-fetched discovery results
