@@ -225,12 +225,12 @@ func TestOpenRouterGenerateAudio(t *testing.T) {
 		Text:   "Say hello",
 		Model:  "openai/gpt-audio-mini",
 		Voice:  "nova",
-		Format: "mp3",
+		Format: "pcm16", // pcm16 is the only format OpenRouter streams (#584)
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "Hello", resp.Text)
 	require.NotNil(t, resp.Audio)
-	assert.Equal(t, "mp3", resp.Audio.Format)
+	assert.Equal(t, "pcm16", resp.Audio.Format)
 	assert.NotEmpty(t, resp.Audio.Data)
 }
 

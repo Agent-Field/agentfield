@@ -580,7 +580,9 @@ func (p *OpenRouterMediaProvider) GenerateImage(ctx context.Context, req ImageRe
 // GenerateAudio auto-routes to the right OpenRouter endpoint based on the
 // model's output_modalities:
 //   - ["speech"] (e.g. hexgrad/kokoro-82m)  → POST /audio/speech
-//   - contains "audio" (e.g. openai/gpt-audio*) → chat-completions SSE
+//   - contains "audio" (e.g. openai/gpt-audio*) → chat-completions; SSE for
+//     pcm16 (and wav, which is wired as pcm16), plain JSON for every other
+//     format because OpenRouter only streams pcm16 deltas
 //   - unknown                                → POST /audio/speech (broader compat)
 func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRequest) (*MediaResponse, error) {
 	if strings.TrimSpace(req.Text) == "" {
@@ -617,6 +619,11 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 	if requestedFormat == "wav" {
 		wireFormat = "pcm16"
 	}
+	// The SSE transport only carries pcm16 audio deltas: requesting any other
+	// wire format with stream=true is rejected upstream with a 400 ("audio.format
+	// does not support 'mp3' when stream=true"). Those formats are fetched as a
+	// single non-streaming JSON response instead. See issue #584.
+	useStream := wireFormat == "pcm16"
 	audioConfig := map[string]string{"format": wireFormat}
 	audioConfig["voice"] = voice
 	payload := map[string]any{
@@ -625,13 +632,17 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 			{"role": "user", "content": req.Text},
 		},
 		"modalities": []string{"text", "audio"},
-		"stream":     true,
+		"stream":     useStream,
 		"audio":      audioConfig,
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal audio request: %w", err)
+	}
+
+	if !useStream {
+		return p.generateAudioViaChatJSON(ctx, body, requestedFormat)
 	}
 
 	url := p.baseURL() + "/chat/completions"
@@ -726,6 +737,95 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 		Audio: &AudioData{
 			Data:   audioData,
 			Format: outputFormat,
+		},
+	}, nil
+}
+
+// maxAudioResponseBytes caps how much of a non-streaming audio response body is
+// buffered in memory. Var (not const) so tests can shrink it.
+var maxAudioResponseBytes int64 = 100 * 1024 * 1024
+
+// generateAudioViaChatJSON runs a non-streaming chat-completions audio request
+// and reads the audio out of the single JSON response body
+// (choices[0].message.audio.{data,transcript}).
+//
+// Used for every wire format other than pcm16: OpenRouter's SSE audio stream
+// only emits pcm16 deltas and rejects mp3/flac/opus when stream=true (#584).
+// body must already carry "stream": false.
+func (p *OpenRouterMediaProvider) generateAudioViaChatJSON(
+	ctx context.Context, body []byte, requestedFormat string,
+) (*MediaResponse, error) {
+	endpoint := p.baseURL() + "/chat/completions"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create audio request: %w", err)
+	}
+	p.setHeaders(httpReq)
+
+	resp, err := p.Client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("execute audio request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		return nil, fmt.Errorf("audio generation error (%d): %s", resp.StatusCode, string(errBody))
+	}
+
+	if resp.ContentLength > maxAudioResponseBytes {
+		return nil, fmt.Errorf("audio response too large: %d bytes exceeds %d byte limit",
+			resp.ContentLength, maxAudioResponseBytes)
+	}
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAudioResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read audio response: %w", err)
+	}
+	if int64(len(respBody)) > maxAudioResponseBytes {
+		return nil, fmt.Errorf("audio response too large: exceeds %d byte limit", maxAudioResponseBytes)
+	}
+
+	var chatResp struct {
+		Choices []struct {
+			Message struct {
+				Content json.RawMessage `json:"content"`
+				Audio   *struct {
+					Data       string `json:"data"`
+					Transcript string `json:"transcript"`
+				} `json:"audio"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		return nil, fmt.Errorf("parse audio response: %w", err)
+	}
+
+	// An empty response yields empty audio rather than an error — the SSE path
+	// behaves the same way for a stream that carries no audio deltas.
+	var audioData, text string
+	for _, choice := range chatResp.Choices {
+		if choice.Message.Audio != nil {
+			if audioData == "" {
+				audioData = choice.Message.Audio.Data
+			}
+			if text == "" {
+				text = choice.Message.Audio.Transcript
+			}
+		}
+		if text == "" && len(choice.Message.Content) > 0 {
+			// content may be null or a non-string; only plain strings are text.
+			var content string
+			if err := json.Unmarshal(choice.Message.Content, &content); err == nil {
+				text = content
+			}
+		}
+	}
+
+	return &MediaResponse{
+		Text: text,
+		Audio: &AudioData{
+			Data:   audioData,
+			Format: requestedFormat,
 		},
 	}, nil
 }
