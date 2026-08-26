@@ -149,7 +149,9 @@ func requestLogLevel(t *testing.T, loggerLevel zerolog.Level, status int) string
 
 // TestGinLoggerSeverityFollowsStatus covers contract C6: successful requests
 // are debug-level, client errors are warnings and server errors are errors, so
-// failures remain visible at the default info level.
+// failures remain visible at the default info level. A 404 is the exception —
+// it is logged at info, because a request for a route that does not exist is
+// routine internet noise rather than an operator signal.
 func TestGinLoggerSeverityFollowsStatus(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -158,8 +160,11 @@ func TestGinLoggerSeverityFollowsStatus(t *testing.T) {
 	}{
 		{"success is debug", http.StatusOK, "debug"},
 		{"redirect is debug", http.StatusMovedPermanently, "debug"},
-		{"client error is warn", http.StatusNotFound, "warn"},
+		{"not found is info", http.StatusNotFound, "info"},
+		{"bad request is warn", http.StatusBadRequest, "warn"},
 		{"unauthorized is warn", http.StatusUnauthorized, "warn"},
+		{"forbidden is warn", http.StatusForbidden, "warn"},
+		{"unprocessable is warn", http.StatusUnprocessableEntity, "warn"},
 		{"server error is error", http.StatusInternalServerError, "error"},
 		{"bad gateway is error", http.StatusBadGateway, "error"},
 	}
@@ -177,8 +182,19 @@ func TestGinLoggerSeverityFollowsStatus(t *testing.T) {
 func TestGinLoggerFailuresVisibleAtInfoLevel(t *testing.T) {
 	require.Equal(t, "", requestLogLevel(t, zerolog.InfoLevel, http.StatusOK),
 		"successful requests must not be logged at info level")
-	require.Equal(t, "warn", requestLogLevel(t, zerolog.InfoLevel, http.StatusNotFound),
+	require.Equal(t, "warn", requestLogLevel(t, zerolog.InfoLevel, http.StatusUnauthorized),
 		"client errors must be visible at info level")
 	require.Equal(t, "error", requestLogLevel(t, zerolog.InfoLevel, http.StatusServiceUnavailable),
 		"server errors must be visible at info level")
+}
+
+// TestGinLoggerMissingRoutesDoNotWarn covers the operator-facing half of the
+// 404 carve-out: an operator running the control plane at warn level (the
+// hosted default asked for in #559) sees nothing at all from favicon probes and
+// scanners, and nothing they see is at a level that trips alerting.
+func TestGinLoggerMissingRoutesDoNotWarn(t *testing.T) {
+	require.Equal(t, "", requestLogLevel(t, zerolog.WarnLevel, http.StatusNotFound),
+		"missing routes must be silent for an operator running at warn")
+	require.Equal(t, "info", requestLogLevel(t, zerolog.InfoLevel, http.StatusNotFound),
+		"missing routes stay visible at the default level, just not as warnings")
 }

@@ -14,10 +14,21 @@ import (
 // everything else at DEBUG. That keeps the default (info) output free of
 // per-request noise while still surfacing failures without having to lower the
 // level to debug.
+//
+// 404 is the exception among the 4xx: a request for a route that does not
+// exist is the caller's problem, not an operator signal. Favicon probes,
+// requests for /ui/ before the UI is built and internet background noise
+// against a hosted control plane would otherwise raise a warning each, which
+// is precisely the alert-level noise operators asked to be rid of. It is
+// logged at INFO so it is still visible by default but never trips alerting
+// keyed on level >= warn. The 4xx that do indicate a misconfigured client or
+// deployment — 400, 401, 403, 409, 422 — stay at WARN.
 func requestLogEvent(statusCode int) *zerolog.Event {
 	switch {
 	case statusCode >= http.StatusInternalServerError:
 		return logger.Logger.Error()
+	case statusCode == http.StatusNotFound:
+		return logger.Logger.Info()
 	case statusCode >= http.StatusBadRequest:
 		return logger.Logger.Warn()
 	default:
