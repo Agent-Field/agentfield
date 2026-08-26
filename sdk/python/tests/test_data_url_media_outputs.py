@@ -27,7 +27,7 @@ import pytest
 import requests
 
 from agentfield.data_url import data_url_mime_type, decode_data_url, is_data_url
-from agentfield.multimodal import Audio
+from agentfield.multimodal import Audio, audio_from_url
 from agentfield.multimodal_response import FileOutput, ImageOutput, VideoOutput
 
 
@@ -380,6 +380,61 @@ class TestEmptyPayloadIsRejected:
     def test_audio_rejects_an_empty_payload(self, no_network):
         with pytest.raises(ValueError, match="Empty data: URL payload"):
             Audio.from_url(EMPTY_PAYLOAD_DATA_URL)
+
+
+class TestAudioFormatFollowsTheDataUrl:
+    """``Audio.from_url`` must not label every inline payload ``wav``.
+
+    The format is handed to the model as the declared encoding of the bytes;
+    calling an MP3 a WAV is a wrong answer, not a cosmetic default.
+    """
+
+    @pytest.mark.parametrize(
+        "mime,expected",
+        [
+            ("audio/mpeg", "mp3"),
+            ("audio/mp3", "mp3"),
+            ("audio/wav", "wav"),
+            ("audio/x-wav", "wav"),
+            ("audio/wave", "wav"),
+            ("audio/flac", "flac"),
+            ("audio/ogg", "ogg"),
+            ("audio/aac", "wav"),  # unmapped -> the historical default
+            ("", "wav"),  # RFC 2397 allows an absent MIME type
+        ],
+    )
+    def test_format_is_derived_from_the_declared_mime_type(
+        self, no_network, mime, expected
+    ):
+        audio = Audio.from_url(f"data:{mime};base64,{B64}")
+        assert audio.input_audio["format"] == expected
+        assert base64.b64decode(audio.input_audio["data"]) == PAYLOAD
+
+    def test_mime_match_ignores_case_and_extra_parameters(self, no_network):
+        assert (
+            Audio.from_url(f"DATA:AUDIO/MPEG;BASE64,{B64}").input_audio["format"]
+            == "mp3"
+        )
+        assert (
+            Audio.from_url(f"data:audio/mpeg;charset=binary;base64,{B64}").input_audio[
+                "format"
+            ]
+            == "mp3"
+        )
+
+    def test_an_explicit_format_always_wins(self, no_network):
+        audio = Audio.from_url(f"data:audio/mpeg;base64,{B64}", format="flac")
+        assert audio.input_audio["format"] == "flac"
+
+    def test_http_urls_keep_the_wav_default(self, recorded_download):
+        assert Audio.from_url(HTTP_URL).input_audio["format"] == "wav"
+        assert Audio.from_url(HTTP_URL, format="mp3").input_audio["format"] == "mp3"
+
+    def test_module_level_helper_derives_the_format_too(self, no_network):
+        assert (
+            audio_from_url(f"data:audio/ogg;base64,{B64}").input_audio["format"]
+            == "ogg"
+        )
 
 
 class TestIsDataUrlCost:
