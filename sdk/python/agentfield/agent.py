@@ -4206,7 +4206,7 @@ class Agent(FastAPI):
             ```python
             result = await app.ai_generate_music("upbeat jazz piano solo")
             if result.has_audio:
-                result.audio.save("jazz.wav")
+                result.audio.save(f"jazz.{result.audio.format}")
             ```
         """
         return await self.ai_handler.ai_generate_music(

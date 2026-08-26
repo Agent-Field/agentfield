@@ -2060,7 +2060,7 @@ class AgentAI:
         Examples:
             result = await app.ai_generate_music("upbeat jazz piano solo")
             if result.has_audio:
-                result.audio.save("jazz.wav")
+                result.audio.save(f"jazz.{result.audio.format}")
 
             result = await app.ai_generate_music(
                 "calm ambient electronic music",

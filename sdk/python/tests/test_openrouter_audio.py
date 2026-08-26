@@ -803,7 +803,7 @@ class TestOpenRouterMusicTransportAndLabelling:
     async def test_raw_pcm_with_mp3_requested_passes_through_and_warns(
         self, monkeypatch
     ):
-        """M5/M6: no container + mp3 asked for -> passthrough plus one warning."""
+        """M5/M6: no container + mp3 asked for -> passthrough, labelled pcm16, one warning."""
         warnings = self._capture_warnings(monkeypatch)
         pcm = b"\x00\x01" * 64
         chunk = base64.b64encode(pcm).decode()
@@ -815,10 +815,27 @@ class TestOpenRouterMusicTransportAndLabelling:
             result = await provider.generate_music(prompt="a riff", format="mp3")
 
         assert result.audio.data == chunk, "raw pcm must not be re-encoded"
-        assert result.audio.format == "mp3"
+        assert result.audio.format == "pcm16", "raw frames are not mp3, say so"
         assert len(warnings) == 1
         assert "pcm16" in warnings[0]
         assert "mp3" in warnings[0]
+
+    @pytest.mark.asyncio
+    async def test_opus_request_satisfied_by_ogg_container_logs_nothing(
+        self, monkeypatch
+    ):
+        """M6: Opus travels in an Ogg container - OggS for format=opus is no mismatch."""
+        warnings = self._capture_warnings(monkeypatch)
+        ogg = b"OggS" + b"\x00" * 60
+        fake_session = self._sse_session(ogg)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            result = await provider.generate_music(prompt="a riff", format="opus")
+
+        assert result.audio.format == "ogg"
+        assert warnings == []
 
     @pytest.mark.asyncio
     async def test_matching_container_logs_nothing(self, monkeypatch):

@@ -2125,6 +2125,15 @@ def _wrap_pcm16_as_wav_b64(pcm_b64: str, *, sample_rate: int = 24000) -> str:
 # Second byte of an MPEG audio frame header (0xFF sync + MPEG1/2/2.5 Layer III).
 _MPEG_SYNC_SECOND_BYTES = frozenset({0xFA, 0xFB, 0xF2, 0xF3})
 
+# Containers that legitimately satisfy a requested format: Opus is carried in
+# an Ogg container, and "pcm" is the same raw frames as "pcm16". Anything not
+# listed is satisfied only by itself.
+_AUDIO_FORMAT_ALIASES = {
+    "opus": frozenset({"opus", "ogg"}),
+    "pcm": frozenset({"pcm", "pcm16"}),
+    "pcm16": frozenset({"pcm16", "pcm"}),
+}
+
 
 def _sniff_audio_container(data: bytes) -> Optional[str]:
     """Identify an audio container from the leading magic bytes of ``data``.
@@ -2164,7 +2173,7 @@ def _label_streamed_audio(
       labelled with the container that was found;
     * no recognised container means raw PCM16 frames, which are wrapped in a
       24 kHz mono RIFF/WAVE header when the caller asked for ``wav`` and passed
-      through with the requested label otherwise.
+      through labelled ``pcm16`` otherwise.
 
     A single warning is logged whenever the container actually present differs
     from the one the caller asked for.
@@ -2191,10 +2200,13 @@ def _label_streamed_audio(
         b64_data = _wrap_pcm16_as_wav_b64(b64_data, sample_rate=24000)
         result_format = "wav"
     else:
-        result_format = requested_format
+        # No container at all: these are raw PCM16 frames whatever was asked
+        # for. Say so rather than stamping them with a label that is untrue.
+        result_format = "pcm16"
 
     wrapped_raw_pcm = detected is None and requested_format == "wav"
-    if container != requested_format and not wrapped_raw_pcm:
+    satisfied = _AUDIO_FORMAT_ALIASES.get(requested_format, {requested_format})
+    if container not in satisfied and not wrapped_raw_pcm:
         from agentfield.logger import log_warn
 
         log_warn(
