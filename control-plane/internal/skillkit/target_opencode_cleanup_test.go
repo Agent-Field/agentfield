@@ -1,6 +1,7 @@
 package skillkit
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,5 +237,65 @@ func TestOpenCodeCleanupReportsAnUnreadableLegacyRulesFile(t *testing.T) {
 	}
 	if err := target.Uninstall(); err == nil {
 		t.Fatal("Uninstall should report a legacy rules file it cannot read")
+	}
+}
+
+// Contract (h): every write the cleanup performs is reported when it fails.
+// These branches are unreachable through real filesystem permissions on some
+// platforms, so they are driven through the package's reconcile* seams — the
+// same way the reconciler's own rewrite failures are covered.
+func TestOpenCodeUninstallReportsLegacyRewriteFailures(t *testing.T) {
+	ourBlock := renderPointerBlock(Catalog[0], "/gone/current")
+	for _, tc := range []struct {
+		name    string
+		content string
+		inject  func(t *testing.T)
+	}{
+		{
+			name:    "write",
+			content: "user prose\n\n" + ourBlock + "\n",
+			inject: func(t *testing.T) {
+				old := reconcileWriteFile
+				reconcileWriteFile = func(string, []byte, os.FileMode) error {
+					return errors.New("forced write failure")
+				}
+				t.Cleanup(func() { reconcileWriteFile = old })
+			},
+		},
+		{
+			name:    "rename",
+			content: "user prose\n\n" + ourBlock + "\n",
+			inject: func(t *testing.T) {
+				old := reconcileRename
+				reconcileRename = func(string, string) error { return errors.New("forced rename failure") }
+				t.Cleanup(func() { reconcileRename = old })
+			},
+		},
+		{
+			name:    "remove",
+			content: ourBlock + "\n",
+			inject: func(t *testing.T) {
+				old := reconcileRemove
+				reconcileRemove = func(string) error { return errors.New("forced remove failure") }
+				t.Cleanup(func() { reconcileRemove = old })
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, legacy := opencodeLegacyHome(t)
+			if err := os.WriteFile(legacy, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("seed legacy rules file: %v", err)
+			}
+			tc.inject(t)
+
+			err := (opencodeTarget{}).Uninstall()
+			if err == nil {
+				t.Fatalf("Uninstall should report a failed %s of the legacy rules file", tc.name)
+			}
+			if !strings.Contains(err.Error(), "AGENTS.md") ||
+				!strings.Contains(err.Error(), "forced "+tc.name+" failure") {
+				t.Fatalf("error should name the file and the cause: %v", err)
+			}
+		})
 	}
 }
