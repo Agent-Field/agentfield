@@ -517,7 +517,7 @@ describe('OpenRouterMediaProvider', () => {
 
       await expect(
         provider.generateAudio({
-          text: 'test', model: 'openai/gpt-audio-mini', format: 'mp3',
+          text: 'test', model: 'openai/gpt-audio-mini', format: 'pcm16',
         })
       ).rejects.toThrow(MediaProviderError);
       // Reset mock for second assertion
@@ -528,7 +528,7 @@ describe('OpenRouterMediaProvider', () => {
       });
       await expect(
         provider.generateAudio({
-          text: 'test', model: 'openai/gpt-audio-mini', format: 'mp3',
+          text: 'test', model: 'openai/gpt-audio-mini', format: 'pcm16',
         })
       ).rejects.toThrow('Audio generation failed');
     });
