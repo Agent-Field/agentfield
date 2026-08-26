@@ -49,49 +49,37 @@ func main() {
 	}
 }
 
-// flagChanged reports whether the named flag was explicitly set on the command
-// line. Missing flags count as unset.
-func flagChanged(cmd *cobra.Command, name string) bool {
-	if cmd == nil {
-		return false
+// loadServerConfig loads the server's configuration and brings the global
+// logger in line with it.
+//
+// Loading and logger configuration are deliberately the same call: the server
+// cannot obtain the config it runs on without the configured level having been
+// applied, so the level can never be silently left inert again (which is
+// exactly what shipped before — cmd/af read logging.level and never used it).
+func loadServerConfig(cmd *cobra.Command) (*config.Config, error) {
+	cfgFilePath, _ := cmd.Flags().GetString("config")
+	cfg, err := loadConfig(cfgFilePath)
+	if err != nil {
+		return nil, err
 	}
-	flag := cmd.Flags().Lookup(name)
-	return flag != nil && flag.Changed
-}
-
-// applyConfiguredLogLevel re-initializes the global logger from the level in
-// the loaded config, honoring the precedence flag > env > yaml. An explicit
-// --verbose keeps the debug logger the root command already installed, so the
-// configured level is ignored in that case; an empty configured level also
-// leaves the logger alone. The AGENTFIELD_LOG_LEVEL env var is already folded
-// into configuredLevel by config.ApplyEnvOverrides, which runs after the YAML
-// is read.
-func applyConfiguredLogLevel(cmd *cobra.Command, configuredLevel string) {
-	if flagChanged(cmd, "verbose") {
-		return
-	}
-	if level := strings.TrimSpace(configuredLevel); level != "" {
-		logger.InitLoggerWithLevel(level)
-	}
+	// The CLI root command only knows about --verbose; the AGENTFIELD_LOG_LEVEL
+	// env var and logging.level in agentfield.yaml are only visible once the
+	// config has been read.
+	cli.ApplyConfiguredLogLevel(cmd, cfg.Logging.Level)
+	return cfg, nil
 }
 
 // runServer contains the server startup logic for unified CLI
 func runServer(cmd *cobra.Command, args []string) {
 	logger.Logger.Debug().Msg("AgentField server starting...")
 
-	// Load configuration with better defaults
-	cfgFilePath, _ := cmd.Flags().GetString("config")
-	cfg, err := loadConfig(cfgFilePath)
+	// Load configuration with better defaults. This also applies the
+	// configured log level (see loadServerConfig).
+	cfg, err := loadServerConfig(cmd)
 	if err != nil {
 		logger.Logger.Fatal().Err(err).Msg("Failed to load configuration")
 	}
 	cfg.Telemetry.AgentFieldVersion = version
-
-	// Re-initialize the logger from the configured level now that config is
-	// loaded. The CLI root command only knows about --verbose; the
-	// AGENTFIELD_LOG_LEVEL env var and logging.level in agentfield.yaml are
-	// only visible here.
-	applyConfiguredLogLevel(cmd, cfg.Logging.Level)
 
 	// Override port from flag if provided
 	if cmd.Flags().Lookup("port").Changed {
