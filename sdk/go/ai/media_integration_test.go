@@ -304,14 +304,16 @@ func TestIntegrationAudioWithCustomFormat(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&payload)
 
 		audioConf := payload["audio"].(map[string]any)
-		assert.Equal(t, "mp3", audioConf["format"])
+		// pcm16 is the only format the chat-completions audio route serves
+		// (#584); it is passed through together with the caller's voice.
+		assert.Equal(t, "pcm16", audioConf["format"])
 		assert.Equal(t, "echo", audioConf["voice"])
-		// mp3 cannot be streamed by OpenRouter (#584) — it must be requested
-		// as a plain JSON completion.
-		assert.Equal(t, false, payload["stream"])
+		assert.Equal(t, true, payload["stream"])
 
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"audio":{"data":"bXAz","transcript":"hi"}}}]}`)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
 	}))
 	defer srv.Close()
 
@@ -326,12 +328,10 @@ func TestIntegrationAudioWithCustomFormat(t *testing.T) {
 		Text:   "test",
 		Model:  "openai/gpt-audio-mini",
 		Voice:  "echo",
-		Format: "mp3",
+		Format: "pcm16",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "mp3", resp.Audio.Format)
-	assert.Equal(t, "bXAz", resp.Audio.Data)
-	assert.Equal(t, "hi", resp.Text)
+	assert.Equal(t, "pcm16", resp.Audio.Format)
 }
 
 func TestIntegrationAudioSpeechEndpoint(t *testing.T) {

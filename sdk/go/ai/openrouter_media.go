@@ -22,14 +22,9 @@ import (
 var validJobID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const (
-	defaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
-	defaultVideoPollInterval = 30 * time.Second
-	defaultVideoTimeout      = 10 * time.Minute
-	// nonStreamAudioTimeout is the floor applied to a non-streaming audio
-	// completion. The SSE path keeps receiving deltas, but a non-streaming
-	// request returns nothing until the whole clip is synthesised, which for a
-	// paragraph of mp3 outlasts the provider's default 60s client timeout.
-	nonStreamAudioTimeout       = 5 * time.Minute
+	defaultOpenRouterBaseURL    = "https://openrouter.ai/api/v1"
+	defaultVideoPollInterval    = 30 * time.Second
+	defaultVideoTimeout         = 10 * time.Minute
 	defaultTTSSampleRate        = 24000
 	defaultOpenRouterImageModel = "google/gemini-3.1-flash-image-preview"
 	defaultOpenRouterTTSModel   = "hexgrad/kokoro-82m"
@@ -585,9 +580,9 @@ func (p *OpenRouterMediaProvider) GenerateImage(ctx context.Context, req ImageRe
 // GenerateAudio auto-routes to the right OpenRouter endpoint based on the
 // model's output_modalities:
 //   - ["speech"] (e.g. hexgrad/kokoro-82m)  → POST /audio/speech
-//   - contains "audio" (e.g. openai/gpt-audio*) → chat-completions; SSE for
-//     pcm16 (and wav, which is wired as pcm16), plain JSON for every other
-//     format because OpenRouter only streams pcm16 deltas
+//   - contains "audio" (e.g. openai/gpt-audio*) → chat-completions SSE, which
+//     only carries pcm16 audio (wav is the same samples wrapped client-side);
+//     any other format is rejected before the request is sent
 //   - unknown                                → POST /audio/speech (broader compat)
 func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRequest) (*MediaResponse, error) {
 	if strings.TrimSpace(req.Text) == "" {
@@ -618,17 +613,26 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 		return p.generateAudioViaSpeechEndpoint(ctx, model, req.Text, voice, requestedFormat, &req)
 	}
 
-	// Chat-completions audio modality (gpt-audio family). Streaming on OpenAI
-	// is locked to pcm16 — wire that, then re-wrap to caller's format below.
+	// Chat-completions audio modality (gpt-audio family) only ever delivers
+	// pcm16: OpenAI rejects any other audio.format while streaming, and
+	// OpenRouter's gateway rejects an audio completion that is not streamed at
+	// all ("Audio output requires stream: true"), so there is no route to
+	// mp3/flac/opus through this endpoint. Refuse up front instead of relaying
+	// an upstream 400 that blames a request the caller never made. See #584.
+	if requestedFormat != "pcm16" && requestedFormat != "wav" {
+		return nil, fmt.Errorf(
+			"audio format %q is not available from model %s: OpenRouter delivers "+
+				"chat-completions audio only as pcm16 — request \"pcm16\", or \"wav\" "+
+				"for those same samples wrapped in a RIFF/WAVE container client-side",
+			requestedFormat, model)
+	}
+
+	// Streaming on OpenAI is locked to pcm16 — wire that, then re-wrap to the
+	// caller's format below.
 	wireFormat := requestedFormat
 	if requestedFormat == "wav" {
 		wireFormat = "pcm16"
 	}
-	// The SSE transport only carries pcm16 audio deltas: requesting any other
-	// wire format with stream=true is rejected upstream with a 400 ("audio.format
-	// does not support 'mp3' when stream=true"). Those formats are fetched as a
-	// single non-streaming JSON response instead. See issue #584.
-	useStream := wireFormat == "pcm16"
 	audioConfig := map[string]string{"format": wireFormat}
 	audioConfig["voice"] = voice
 	payload := map[string]any{
@@ -637,17 +641,13 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 			{"role": "user", "content": req.Text},
 		},
 		"modalities": []string{"text", "audio"},
-		"stream":     useStream,
+		"stream":     true,
 		"audio":      audioConfig,
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal audio request: %w", err)
-	}
-
-	if !useStream {
-		return p.generateAudioViaChatJSON(ctx, body, requestedFormat)
 	}
 
 	url := p.baseURL() + "/chat/completions"
@@ -744,114 +744,6 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 			Format: outputFormat,
 		},
 	}, nil
-}
-
-// maxAudioResponseBytes caps how much of a non-streaming audio response body is
-// buffered in memory. Var (not const) so tests can shrink it.
-var maxAudioResponseBytes int64 = 100 * 1024 * 1024
-
-// generateAudioViaChatJSON runs a non-streaming chat-completions audio request
-// and reads the audio out of the single JSON response body
-// (choices[0].message.audio.{data,transcript}).
-//
-// Used for every wire format other than pcm16: OpenRouter's SSE audio stream
-// only emits pcm16 deltas and rejects mp3/flac/opus when stream=true (#584).
-// body must already carry "stream": false.
-func (p *OpenRouterMediaProvider) generateAudioViaChatJSON(
-	ctx context.Context, body []byte, requestedFormat string,
-) (*MediaResponse, error) {
-	endpoint := p.baseURL() + "/chat/completions"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create audio request: %w", err)
-	}
-	p.setHeaders(httpReq)
-
-	resp, err := p.longAudioClient().Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("execute audio request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
-		return nil, fmt.Errorf("audio generation error (%d): %s", resp.StatusCode, string(errBody))
-	}
-
-	if resp.ContentLength > maxAudioResponseBytes {
-		return nil, fmt.Errorf("audio response too large: %d bytes exceeds %d byte limit",
-			resp.ContentLength, maxAudioResponseBytes)
-	}
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAudioResponseBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read audio response: %w", err)
-	}
-	if int64(len(respBody)) > maxAudioResponseBytes {
-		return nil, fmt.Errorf("audio response too large: exceeds %d byte limit", maxAudioResponseBytes)
-	}
-
-	var chatResp struct {
-		Choices []struct {
-			Message struct {
-				Content json.RawMessage `json:"content"`
-				Audio   *struct {
-					Data       string `json:"data"`
-					Transcript string `json:"transcript"`
-				} `json:"audio"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("parse audio response: %w", err)
-	}
-
-	// An empty response yields empty audio rather than an error — the SSE path
-	// behaves the same way for a stream that carries no audio deltas.
-	var audioData, text string
-	for _, choice := range chatResp.Choices {
-		if choice.Message.Audio != nil {
-			if audioData == "" {
-				audioData = choice.Message.Audio.Data
-			}
-			if text == "" {
-				text = choice.Message.Audio.Transcript
-			}
-		}
-		if text == "" && len(choice.Message.Content) > 0 {
-			// content may be null or a non-string; only plain strings are text.
-			var content string
-			if err := json.Unmarshal(choice.Message.Content, &content); err == nil {
-				text = content
-			}
-		}
-	}
-
-	return &MediaResponse{
-		Text: text,
-		Audio: &AudioData{
-			Data:   audioData,
-			Format: requestedFormat,
-		},
-	}, nil
-}
-
-// longAudioClient returns a client whose whole-request timeout is at least
-// nonStreamAudioTimeout. http.Client.Timeout caps the request regardless of the
-// context deadline, so a single long synthesis needs the cap raised; the
-// returned client is a copy, leaving p.Client (and every other call site,
-// including the SSE audio path) untouched. Caller context cancellation still
-// applies, and a client configured with no timeout keeps having none.
-func (p *OpenRouterMediaProvider) longAudioClient() *http.Client {
-	client := p.Client
-	if client == nil {
-		return &http.Client{Timeout: nonStreamAudioTimeout}
-	}
-	if client.Timeout == 0 || client.Timeout >= nonStreamAudioTimeout {
-		return client
-	}
-	extended := *client
-	extended.Timeout = nonStreamAudioTimeout
-	return &extended
 }
 
 func (p *OpenRouterMediaProvider) setHeaders(req *http.Request) {
