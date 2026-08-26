@@ -385,12 +385,18 @@ class MemoryClient:
         """
         Check if a memory key exists.
 
+        Known limitation: ``get`` returns ``default`` rather than raising when the
+        key is absent, so this answers ``True`` for any key as long as the memory
+        backend is reachable. Only a transport or backend failure yields ``False``.
+        For a real existence test, compare ``get(key, sentinel)`` against a
+        sentinel of your own.
+
         Args:
             key: The memory key
             scope: Optional explicit scope override
 
         Returns:
-            True if key exists, False otherwise
+            True unless the lookup itself failed.
         """
         try:
             await self.get(key, scope=scope, scope_id=scope_id)
@@ -573,7 +579,11 @@ class ScopedMemoryClient:
         )
 
     async def exists(self, key: str) -> bool:
-        """Check if a key exists in this specific scope."""
+        """Check if a key exists in this specific scope.
+
+        Carries the same limitation as ``MemoryClient.exists``: it answers ``True``
+        whenever the backend is reachable.
+        """
         return await self.memory_client.exists(
             key, scope=self.scope, scope_id=self.scope_id
         )
@@ -667,7 +677,11 @@ class GlobalMemoryClient:
         return await self.memory_client.get(key, default=default, scope="global")
 
     async def exists(self, key: str) -> bool:
-        """Check if a key exists in global scope."""
+        """Check if a key exists in global scope.
+
+        Carries the same limitation as ``MemoryClient.exists``: it answers ``True``
+        whenever the backend is reachable.
+        """
         return await self.memory_client.exists(key, scope="global")
 
     async def delete(self, key: str) -> None:
@@ -919,11 +933,17 @@ class MemoryInterface:
         """
         Check if a memory key exists in any scope.
 
+        Known limitation: this answers ``True`` for any key as long as the memory
+        backend is reachable - a missing key is not distinguished from a stored one
+        (see ``MemoryClient.exists``). Compare
+        ``await app.memory.get(key, sentinel)`` against a sentinel of your own
+        instead.
+
         Args:
             key: The memory key
 
         Returns:
-            True if key exists in any scope, False otherwise
+            True unless the lookup itself failed.
         """
         return await self.memory_client.exists(key)
 
