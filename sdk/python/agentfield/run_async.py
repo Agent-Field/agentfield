@@ -133,6 +133,21 @@ def _background_loop() -> Optional[asyncio.AbstractEventLoop]:
         return loop
 
 
+def background_dispatch_loop() -> Optional[asyncio.AbstractEventLoop]:
+    """Return the shared background loop, but only if it is already running.
+
+    Unlike :func:`_background_loop` this never starts one. It exists so other
+    modules can *recognise* the loop that best-effort work runs on without
+    bringing a thread to life as a side effect of asking — see
+    ``AgentFieldClient.get_async_http_client``, which must not let this loop
+    take ownership of the agent's shared HTTP client.
+    """
+    loop = _BACKGROUND_LOOP
+    if loop is None or loop.is_closed():
+        return None
+    return loop
+
+
 def run_coroutine(coro: Coroutine[Any, Any, T]) -> T:
     """Run a coroutine from sync code, safe even inside a running loop.
 

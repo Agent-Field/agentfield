@@ -265,3 +265,33 @@ def test_fire_and_forget_without_a_running_loop_survives_a_failure():
     fire_and_forget(ok())
 
     assert ran.acquire(timeout=5)
+
+
+def test_background_dispatch_loop_names_the_loop_sync_work_runs_on():
+    """Callers can recognise the loop best-effort work is running on.
+
+    ``AgentFieldClient`` uses this to keep the background loop from taking
+    ownership of the agent's shared HTTP client.
+    """
+    loops = []
+    ran = threading.Semaphore(0)
+
+    async def record():
+        loops.append(asyncio.get_running_loop())
+        ran.release()
+
+    fire_and_forget(record())
+    assert ran.acquire(timeout=5)
+
+    assert run_async.background_dispatch_loop() is loops[0]
+
+
+def test_background_dispatch_loop_does_not_start_one(monkeypatch):
+    """Asking must never be what brings the background thread to life."""
+    monkeypatch.setattr(run_async, "_BACKGROUND_LOOP", None)
+
+    before = {thread.ident for thread in threading.enumerate()}
+    assert run_async.background_dispatch_loop() is None
+    after = {thread.ident for thread in threading.enumerate()}
+
+    assert after - before == set(), "asking started a thread"

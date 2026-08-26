@@ -108,6 +108,7 @@ class _LoopBoundAsyncClient:
         self.headers = dict(kwargs.get("headers") or {})
         self.is_closed = False
         self.owning_loop = None
+        self.closed_on_loop = None
         self._sink = sink
 
     async def _bind(self) -> None:
@@ -127,6 +128,10 @@ class _LoopBoundAsyncClient:
         return SimpleNamespace(status_code=200, text="", json=lambda: {})
 
     async def aclose(self) -> None:
+        # Closing is an await against the same pool, so it is loop-bound too:
+        # httpx tears down the anyio primitives the pool was opened with.
+        await self._bind()
+        self.closed_on_loop = asyncio.get_running_loop()
         self.is_closed = True
 
 
@@ -424,3 +429,125 @@ async def test_async_http_client_slot_is_reclaimed_when_its_loop_dies(httpx_stub
 
     fresh = await cp_client.get_async_http_client()
     assert fresh is not orphaned["client"]
+
+
+# ---------------------------------------------------------------------------
+# C12-C14 — the agent's loop, not the background dispatch loop, owns the client
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_agent_loop_owns_the_shared_client_after_a_sync_log(httpx_stub, capsys):
+    """A log emitted before the agent's first request must not take the slot.
+
+    The background dispatch loop lives for the whole process. If it claims
+    ownership of the shared client, the agent's own loop is stuck on the
+    per-loop path forever — nothing can hand the slot back, because the
+    reclaim path only triggers when the owning loop closes.
+    """
+    cp_client = AgentFieldClient(base_url="http://control-plane.invalid")
+    logger = AgentFieldLogger("test.dispatch.ownership")
+    logger._cp_client = cp_client
+
+    _emit_from_a_thread_without_a_loop(logger, "exec-sync-first")
+    assert await _wait_for(lambda: len(httpx_stub.requested_urls) == 1)
+    background_client = httpx_stub.clients[0]
+
+    agent_client = await cp_client.get_async_http_client()
+
+    assert agent_client is not background_client
+    assert cp_client._async_http_client is agent_client
+    assert cp_client._async_http_client_loop is asyncio.get_running_loop()
+
+    # A second sync-context log reuses the background loop's own client
+    # rather than building one per record.
+    _emit_from_a_thread_without_a_loop(logger, "exec-sync-second")
+    assert await _wait_for(lambda: len(httpx_stub.requested_urls) == 2)
+    assert len(httpx_stub.clients) == 2
+    capsys.readouterr()
+
+
+@pytest.mark.unit
+async def test_aclose_closes_the_client_the_agent_loop_was_given(httpx_stub, capsys):
+    """aclose() must close the pool the agent's loop actually opened.
+
+    Closing some other loop's client is both a cross-loop await and a leak:
+    the agent's client — the one holding the live keep-alive connections —
+    would only be dropped, never closed.
+    """
+    cp_client = AgentFieldClient(base_url="http://control-plane.invalid")
+    logger = AgentFieldLogger("test.dispatch.aclose")
+    logger._cp_client = cp_client
+
+    _emit_from_a_thread_without_a_loop(logger, "exec-sync-first")
+    assert await _wait_for(lambda: len(httpx_stub.requested_urls) == 1)
+    background_client = httpx_stub.clients[0]
+
+    await cp_client.post_execution_logs("exec-main", {"message": "from the agent"})
+    agent_client = await cp_client.get_async_http_client()
+    assert agent_client.owning_loop is asyncio.get_running_loop()
+
+    await cp_client.aclose()
+
+    assert agent_client.is_closed is True
+    assert agent_client.closed_on_loop is asyncio.get_running_loop()
+    # The background loop's client is dropped, never awaited from here.
+    assert background_client.is_closed is False
+    assert background_client.closed_on_loop is None
+    capsys.readouterr()
+
+
+@pytest.mark.unit
+async def test_client_construction_survives_two_loops_arriving_together(httpx_stub):
+    """Two loops may reach the first construction at once.
+
+    Guarding it with an ``asyncio.Lock`` binds the lock to whichever loop got
+    there first; the next loop to contend for it fails with ``... is bound to
+    a different event loop``. Both loops must come away with a client of
+    their own instead.
+    """
+    cp_client = AgentFieldClient(base_url="http://control-plane.invalid")
+
+    build = cp_client._build_async_http_client
+    in_build = threading.Event()
+    release = threading.Event()
+
+    def _blocking_build(httpx_module):
+        # Hold the construction window open so the other loop arrives while
+        # this one is still inside it.
+        in_build.set()
+        release.wait(timeout=5)
+        return build(httpx_module)
+
+    cp_client._build_async_http_client = _blocking_build
+
+    other = {}
+
+    def _worker() -> None:
+        loop = asyncio.new_event_loop()
+        try:
+            other["client"] = loop.run_until_complete(cp_client.get_async_http_client())
+        except BaseException as exc:  # noqa: BLE001 - reported by the assert
+            other["error"] = exc
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    assert in_build.wait(timeout=5)
+
+    # Released from a third thread: a guard that blocks this thread while the
+    # other loop builds must not deadlock the test.
+    threading.Timer(0.2, release.set).start()
+
+    try:
+        # Bounded: a loop parked on another loop's asyncio.Lock never wakes,
+        # so without this the regression is a hang rather than a failure.
+        mine = await asyncio.wait_for(cp_client.get_async_http_client(), timeout=5)
+    finally:
+        release.set()
+        thread.join(timeout=5)
+
+    assert "error" not in other, other.get("error")
+    assert other["client"] is not None
+    assert other["client"] is not mine

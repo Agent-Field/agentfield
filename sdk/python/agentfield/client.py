@@ -3,6 +3,7 @@ import datetime
 import importlib
 import random
 import sys
+import threading
 import time
 import weakref
 from dataclasses import dataclass
@@ -140,6 +141,17 @@ class _Submission:
     target_type: Optional[str] = None
 
 
+def _is_background_dispatch_loop(loop: asyncio.AbstractEventLoop) -> bool:
+    """True when ``loop`` is the SDK's shared background dispatch loop.
+
+    Imported lazily: ``agentfield.run_async`` pulls in this package's logger,
+    which type-hints this module.
+    """
+    from .run_async import background_dispatch_loop
+
+    return background_dispatch_loop() is loop
+
+
 class AgentFieldClient:
     # Shared session for sync requests (class-level for reuse)
     _shared_sync_session: Optional[requests.Session] = None
@@ -164,7 +176,10 @@ class AgentFieldClient:
         self.async_config = async_config or AsyncConfig.from_environment()
         self._async_execution_manager: Optional[AsyncExecutionManager] = None
         self._async_http_client: Optional["httpx.AsyncClient"] = None
-        self._async_http_client_lock: Optional[asyncio.Lock] = None
+        # Building a client never awaits, so the guard is a threading.Lock: an
+        # asyncio.Lock would bind to whichever loop reached it first and raise
+        # "bound to a different event loop" for the next one (#620).
+        self._async_http_client_lock = threading.Lock()
         # The loop that created ``_async_http_client``. An httpx.AsyncClient
         # keeps its pooled connections on the loop that opened them, so it
         # must never be handed to a different loop (#620).
@@ -465,6 +480,14 @@ class AgentFieldClient:
         alive. That is the failure behind the sync/async mixing reported in
         #620, so the cache is keyed by loop and a client is only ever reused
         on the loop that created it.
+
+        One loop holds the *primary* client — the one :meth:`aclose` closes —
+        and that loop is deliberately never the SDK's background dispatch
+        loop. A structured log emitted from sync code before the agent's first
+        request runs there; letting it claim the slot would strand the agent's
+        own client (and its live keep-alive pool) on the per-loop path, where
+        ``aclose`` merely drops it. The background loop also never closes, so
+        the reclaim path below could never undo the mistake.
         """
         current_module = sys.modules.get("httpx")
         reload_needed = httpx is None or current_module is not httpx
@@ -473,40 +496,36 @@ class AgentFieldClient:
             raise AgentFieldClientError("httpx is required for async HTTP operations")
 
         loop = asyncio.get_running_loop()
+        with self._async_http_client_lock:
+            return self._http_client_for_loop(loop, httpx_module)
 
-        owning_loop = self._async_http_client_loop
-        if owning_loop is not None and owning_loop.is_closed():
-            # The loop that owned the primary client is gone; neither the
-            # client nor its lock can ever be used again. Free the slot for
-            # the current loop rather than leaving every later caller on the
-            # per-loop path.
-            self._async_http_client = None
-            self._async_http_client_lock = None
-            self._async_http_client_loop = None
-            owning_loop = None
+    def _http_client_for_loop(
+        self, loop: asyncio.AbstractEventLoop, httpx_module: Any
+    ) -> "httpx.AsyncClient":
+        """Pick (or build) the client for ``loop``. Caller holds the lock."""
+        if not _is_background_dispatch_loop(loop):
+            owning_loop = self._async_http_client_loop
+            if owning_loop is not None and owning_loop.is_closed():
+                # The loop that owned the primary client is gone; the client
+                # can never be used again. Free the slot for the current loop
+                # rather than leaving every later caller on the per-loop path.
+                self._async_http_client = None
+                self._async_http_client_loop = None
+                owning_loop = None
 
-        if owning_loop is None or owning_loop is loop:
-            if self._async_http_client and not getattr(
-                self._async_http_client, "is_closed", False
-            ):
-                return self._async_http_client
+            if owning_loop is None or owning_loop is loop:
+                client = self._async_http_client
+                if client is not None and not getattr(client, "is_closed", False):
+                    return client
 
-            if self._async_http_client_lock is None:
-                self._async_http_client_lock = asyncio.Lock()
-
-            async with self._async_http_client_lock:
-                if self._async_http_client and not getattr(
-                    self._async_http_client, "is_closed", False
-                ):
-                    return self._async_http_client
-
-                self._async_http_client = self._build_async_http_client(httpx_module)
+                client = self._build_async_http_client(httpx_module)
+                self._async_http_client = client
                 self._async_http_client_loop = loop
-                return self._async_http_client
+                return client
 
-        # A second loop is driving this client — typically a best-effort
-        # background dispatch while the agent's own loop owns the primary
-        # client. Give it its own client instead of corrupting either pool.
+        # Another loop is driving this client — a best-effort background
+        # dispatch, or a second loop while the agent's own holds the primary.
+        # Give it its own client instead of corrupting either pool.
         existing = self._foreign_loop_http_clients.get(loop)
         if existing is not None and not getattr(existing, "is_closed", False):
             return existing
@@ -620,18 +639,30 @@ class AgentFieldClient:
             finally:
                 self._async_execution_manager = None
 
-        if self._async_http_client is not None:
-            try:
-                await self._async_http_client.aclose()
-            finally:
-                self._async_http_client = None
-                self._async_http_client_lock = None
-                self._async_http_client_loop = None
+        try:
+            loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - aclose() is a coroutine
+            loop = None
 
-        # Clients belonging to other loops cannot be closed from here without
-        # the cross-loop await this design exists to avoid; drop the
-        # references and let their loops (and the OS) reclaim them.
-        self._foreign_loop_http_clients.clear()
+        with self._async_http_client_lock:
+            primary = self._async_http_client
+            self._async_http_client = None
+            self._async_http_client_loop = None
+            # A per-loop client handed to *this* loop can be closed here too:
+            # the await stays on the loop that opened its pool.
+            mine = (
+                self._foreign_loop_http_clients.pop(loop, None)
+                if loop is not None
+                else None
+            )
+            # The rest belong to other loops and cannot be closed from here
+            # without the cross-loop await this design exists to avoid; drop
+            # the references and let their loops (and the OS) reclaim them.
+            self._foreign_loop_http_clients.clear()
+
+        for client in (primary, mine):
+            if client is not None:
+                await client.aclose()
 
     def register_node(self, node_data: Dict[str, Any]) -> Dict[str, Any]:
         """
