@@ -444,7 +444,10 @@ class TestOpenRouterAudioE2E:
 
         assert result.audio is not None
         assert result.audio.data == "AAAABBBB"
-        assert result.audio.format == "mp3"
+        assert result.audio.format == "pcm16"
+        # pcm16 is the only wire format OpenRouter streams (#584) — this test
+        # must keep exercising the SSE path.
+        assert mock_session.post.call_args.kwargs["json"]["stream"] is True
 
     @pytest.mark.asyncio
     async def test_audio_sse_includes_optional_system_message(self):
@@ -488,6 +491,7 @@ class TestOpenRouterAudioE2E:
 
         assert result.audio is not None
         payload = mock_session.post.call_args.kwargs["json"]
+        assert payload["stream"] is True
         assert payload["messages"] == [
             {
                 "role": "system",
