@@ -22,9 +22,14 @@ import (
 var validJobID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const (
-	defaultOpenRouterBaseURL    = "https://openrouter.ai/api/v1"
-	defaultVideoPollInterval    = 30 * time.Second
-	defaultVideoTimeout         = 10 * time.Minute
+	defaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
+	defaultVideoPollInterval = 30 * time.Second
+	defaultVideoTimeout      = 10 * time.Minute
+	// nonStreamAudioTimeout is the floor applied to a non-streaming audio
+	// completion. The SSE path keeps receiving deltas, but a non-streaming
+	// request returns nothing until the whole clip is synthesised, which for a
+	// paragraph of mp3 outlasts the provider's default 60s client timeout.
+	nonStreamAudioTimeout       = 5 * time.Minute
 	defaultTTSSampleRate        = 24000
 	defaultOpenRouterImageModel = "google/gemini-3.1-flash-image-preview"
 	defaultOpenRouterTTSModel   = "hexgrad/kokoro-82m"
@@ -762,7 +767,7 @@ func (p *OpenRouterMediaProvider) generateAudioViaChatJSON(
 	}
 	p.setHeaders(httpReq)
 
-	resp, err := p.Client.Do(httpReq)
+	resp, err := p.longAudioClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("execute audio request: %w", err)
 	}
@@ -828,6 +833,25 @@ func (p *OpenRouterMediaProvider) generateAudioViaChatJSON(
 			Format: requestedFormat,
 		},
 	}, nil
+}
+
+// longAudioClient returns a client whose whole-request timeout is at least
+// nonStreamAudioTimeout. http.Client.Timeout caps the request regardless of the
+// context deadline, so a single long synthesis needs the cap raised; the
+// returned client is a copy, leaving p.Client (and every other call site,
+// including the SSE audio path) untouched. Caller context cancellation still
+// applies, and a client configured with no timeout keeps having none.
+func (p *OpenRouterMediaProvider) longAudioClient() *http.Client {
+	client := p.Client
+	if client == nil {
+		return &http.Client{Timeout: nonStreamAudioTimeout}
+	}
+	if client.Timeout == 0 || client.Timeout >= nonStreamAudioTimeout {
+		return client
+	}
+	extended := *client
+	extended.Timeout = nonStreamAudioTimeout
+	return &extended
 }
 
 func (p *OpenRouterMediaProvider) setHeaders(req *http.Request) {

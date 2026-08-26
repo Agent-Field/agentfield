@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,4 +209,65 @@ func TestChatAudioNonStreamRejectsOversizedChunkedBody(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "audio response too large")
+}
+
+// A non-streaming request returns nothing until the whole clip is synthesised,
+// so it must not inherit the provider's short whole-request client timeout —
+// the 60s default aborts a paragraph of mp3 mid-synthesis.
+func TestChatAudioNonStreamOutlastsShortClientTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond) // synthesis takes longer than the client timeout
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"audio":{"data":"bXAz","transcript":"spoken"}}}]}`))
+	}))
+	defer srv.Close()
+
+	p := chatAudioProvider(srv)
+	p.Client = &http.Client{Transport: srv.Client().Transport, Timeout: 30 * time.Millisecond}
+
+	resp, err := p.GenerateAudio(context.Background(), AudioRequest{
+		Text: "hi", Model: "openai/gpt-audio-mini", Format: "mp3",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.Audio)
+	assert.Equal(t, "bXAz", resp.Audio.Data)
+	assert.Equal(t, "spoken", resp.Text)
+}
+
+// Raising the cap is scoped to the non-streaming request: the streaming path
+// still runs on the caller's configured client timeout.
+func TestChatAudioStreamKeepsShortClientTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := chatAudioProvider(srv)
+	p.Client = &http.Client{Transport: srv.Client().Transport, Timeout: 30 * time.Millisecond}
+
+	_, err := p.GenerateAudio(context.Background(), AudioRequest{
+		Text: "hi", Model: "openai/gpt-audio-mini", Format: "pcm16",
+	})
+	require.Error(t, err)
+}
+
+// The longer budget is a client-timeout floor, not an escape from the caller:
+// a cancelled context still aborts the non-streaming request.
+func TestChatAudioNonStreamHonoursContextCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	_, err := chatAudioProvider(srv).GenerateAudio(ctx, AudioRequest{
+		Text: "hi", Model: "openai/gpt-audio-mini", Format: "mp3",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
