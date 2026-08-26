@@ -91,10 +91,14 @@ class ImageOutput(BaseModel):
         """Save image to file."""
         if not self.b64_json and not self.url:
             raise ValueError("No image data or URL available to save")
+        # Resolve the bytes before touching the destination: opening with "wb"
+        # truncates, so a payload that turns out to be undecodable (or a
+        # download that fails) must not destroy an existing file at *path*.
+        image_bytes = self.get_bytes()
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
-            f.write(self.get_bytes())
+            f.write(image_bytes)
 
     def get_bytes(self) -> bytes:
         """Get raw image bytes from b64_json, a data: URL, or an http(s) URL."""
@@ -140,18 +144,15 @@ class FileOutput(BaseModel):
 
     def save(self, path: Union[str, Path]) -> None:
         """Save file to disk."""
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
+        # Resolve the bytes before touching the destination: opening with "wb"
+        # truncates, so a payload that turns out to be undecodable (or a
+        # download that fails) must not destroy an existing file at *path*.
         if self.data:
             # Save from base64 data
             file_bytes = base64.b64decode(self.data)
-            with open(path, "wb") as f:
-                f.write(file_bytes)
         elif is_data_url(self.url):
             # Inline payload - decode locally, never hand a data: URL to requests
-            with open(path, "wb") as f:
-                f.write(decode_data_url(self.url))
+            file_bytes = decode_data_url(self.url)
         elif self.url:
             # Download from URL
             try:
@@ -159,14 +160,18 @@ class FileOutput(BaseModel):
 
                 response = requests.get(self.url)
                 response.raise_for_status()
-                with open(path, "wb") as f:
-                    f.write(response.content)
+                file_bytes = response.content
             except ImportError:
                 raise ImportError(
                     "URL download requires requests: pip install requests"
                 )
         else:
             raise ValueError("No file data or URL available to save")
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(file_bytes)
 
     def get_bytes(self) -> bytes:
         """Get raw file bytes."""
@@ -204,31 +209,32 @@ class VideoOutput(BaseModel):
 
     def save(self, path: Union[str, Path]) -> None:
         """Save video to file."""
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
+        # Resolve the bytes before touching the destination: opening with "wb"
+        # truncates, so a payload that turns out to be undecodable (or a
+        # download that fails) must not destroy an existing file at *path*.
         if self.data:
             video_bytes = base64.b64decode(self.data)
-            with open(path, "wb") as f:
-                f.write(video_bytes)
         elif is_data_url(self.url):
             # Inline payload - decode locally, never hand a data: URL to requests
-            with open(path, "wb") as f:
-                f.write(decode_data_url(self.url))
+            video_bytes = decode_data_url(self.url)
         elif self.url:
             try:
                 import requests
 
                 response = requests.get(self.url, timeout=120)
                 response.raise_for_status()
-                with open(path, "wb") as f:
-                    f.write(response.content)
+                video_bytes = response.content
             except ImportError:
                 raise ImportError(
                     "URL download requires requests: pip install requests"
                 )
         else:
             raise ValueError("No video data or URL available to save")
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(video_bytes)
 
     def get_bytes(self) -> bytes:
         """Get raw video bytes."""

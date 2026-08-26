@@ -13,6 +13,10 @@ a URL reached ``requests`` and raised ``InvalidSchema``, so silently yielding
 alphabet: whitespace inside the payload (RFC 2045 line wrapping, a trailing
 newline, a space after the comma) is layout, not corruption, and must still
 decode.
+
+Rejecting a payload must also never cost the caller data: ``save()`` resolves
+the bytes before it opens the destination, so a file already at that path
+survives a failed save intact.
 """
 
 import base64
@@ -258,6 +262,58 @@ class TestDataUrlHelper:
         with pytest.raises(ValueError, match="expected base64 payload") as excinfo:
             decode_data_url("data:text/plain,sup3r-s3cret")
         assert "sup3r-s3cret" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "make", [cls for _, cls in URL_OUTPUTS], ids=[label for label, _ in URL_OUTPUTS]
+)
+class TestSaveDoesNotDestroyTheDestination:
+    """``save()`` must resolve its bytes before it truncates anything.
+
+    ``open(path, "wb")`` truncates on open, so deciding the payload is
+    undecodable *after* opening turns "this URL is broken" into "your file is
+    gone" — the caller loses data they already had.
+    """
+
+    @pytest.mark.parametrize("bad_url", UNDECODABLE_DATA_URLS)
+    def test_rejected_payload_leaves_an_existing_file_intact(
+        self, tmp_path, no_network, make, bad_url
+    ):
+        path = tmp_path / "existing.bin"
+        path.write_bytes(EXISTING_BYTES)
+        with pytest.raises(ValueError):
+            make(url=bad_url).save(path)
+        assert path.read_bytes() == EXISTING_BYTES
+
+    @pytest.mark.parametrize("bad_url", UNDECODABLE_DATA_URLS)
+    def test_rejected_payload_leaves_no_stub_file_behind(
+        self, tmp_path, no_network, make, bad_url
+    ):
+        path = tmp_path / "new.bin"
+        with pytest.raises(ValueError):
+            make(url=bad_url).save(path)
+        assert not path.exists()
+
+    def test_failed_download_leaves_an_existing_file_intact(
+        self, tmp_path, monkeypatch, make
+    ):
+        def _boom(url, **kwargs):
+            raise requests.exceptions.ConnectionError("network down")
+
+        monkeypatch.setattr(requests, "get", _boom)
+        path = tmp_path / "existing.bin"
+        path.write_bytes(EXISTING_BYTES)
+        with pytest.raises(requests.exceptions.ConnectionError):
+            make(url=HTTP_URL).save(path)
+        assert path.read_bytes() == EXISTING_BYTES
+
+    def test_a_good_payload_still_overwrites_an_existing_file(
+        self, tmp_path, no_network, make
+    ):
+        path = tmp_path / "existing.bin"
+        path.write_bytes(EXISTING_BYTES)
+        make(url=IMAGE_DATA_URL).save(path)
+        assert path.read_bytes() == PAYLOAD
 
 
 class TestWhitespaceInPayloads:
