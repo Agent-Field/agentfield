@@ -9,7 +9,15 @@ import (
 	"time"
 )
 
-// opencodeTarget installs skills where OpenCode discovers them natively.
+// opencodeTarget installs skills where OpenCode discovers them natively: a
+// directory at ~/.config/opencode/skills/<name>/, symlinked at the canonical
+// versioned store so updates flow through without rewriting anything OpenCode
+// owns.
+//
+// Older af binaries instead appended a marker block to
+// ~/.config/opencode/AGENTS.md. Every install/uninstall now strips that block
+// so upgrading users are left with the native skill instead of the native
+// skill plus stale instructions.
 type opencodeTarget struct{}
 
 func init() { RegisterTarget(opencodeTarget{}) }
@@ -28,6 +36,18 @@ func (opencodeTarget) TargetPath() (string, error) {
 		return "", errors.New("could not resolve home directory")
 	}
 	return filepath.Join(h, ".config", "opencode", "skills"), nil
+}
+
+// legacyRulesPath is the file older af binaries appended marker blocks to.
+// Unlike Codex's AGENTS.override.md — a file af created for itself — this one
+// is authored by the user and read by OpenCode, so it is only ever read, and
+// only rewritten when it still holds a block of ours.
+func (t opencodeTarget) legacyRulesPath() (string, error) {
+	root, err := t.TargetPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(root), "AGENTS.md"), nil
 }
 
 func (t opencodeTarget) skillLink(skill Skill) (string, error) {
@@ -62,6 +82,11 @@ func (t opencodeTarget) Install(skill Skill, canonicalCurrentDir string) (Instal
 	if err := os.Symlink(canonicalCurrentDir, link); err != nil {
 		return InstalledTarget{}, fmt.Errorf("symlink %s -> %s: %w", link, canonicalCurrentDir, err)
 	}
+	// The native skill is in place; finish the migration off the old
+	// AGENTS.md block so the user is not left carrying both.
+	if err := t.removeLegacyMarkerBlock(skill); err != nil {
+		return InstalledTarget{}, err
+	}
 	return InstalledTarget{TargetName: t.Name(), Method: t.Method(), Path: link, Version: skill.Version, InstalledAt: time.Now().UTC()}, nil
 }
 
@@ -81,6 +106,11 @@ func (t opencodeTarget) Uninstall() error {
 			if err := os.RemoveAll(link); err != nil {
 				return fmt.Errorf("remove %s: %w", link, err)
 			}
+		}
+		// Machines that never ran an install in between still carry the
+		// legacy block; uninstall has to clear it too.
+		if err := t.removeLegacyMarkerBlock(s); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -119,4 +149,53 @@ func (t opencodeTarget) Status() (bool, string, error) {
 		return false, "", err
 	}
 	return true, filepath.Base(resolved), nil
+}
+
+// removeLegacyMarkerBlock strips this skill's marker block from
+// ~/.config/opencode/AGENTS.md, the rules file older af binaries wrote into.
+//
+// That file belongs to the user — OpenCode reads it, and af never created it
+// on its own — so the rules are deliberately stricter than the Codex
+// equivalent: a file holding no block of ours is not opened for writing at
+// all (its bytes and mtime stay exactly as the user left them), and the file
+// is deleted only when removing our block is what emptied it. Other tools'
+// blocks and any user prose are preserved. Failures other than a missing file
+// are reported to the caller.
+func (t opencodeTarget) removeLegacyMarkerBlock(skill Skill) error {
+	path, err := t.legacyRulesPath()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read legacy OpenCode rules file %s: %w", path, err)
+	}
+	if _, ours := findMarkerBlock(string(data), skill); !ours {
+		return nil // nothing of ours in there; leave the user's file alone
+	}
+
+	cleaned := strings.TrimRight(stripMarkerBlock(string(data), skill), "\n")
+	if strings.TrimSpace(cleaned) == "" {
+		// Our block was the only thing in it, so the file was ours alone.
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
+		return nil
+	}
+
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	}
+	tmp := path + ".af-tmp"
+	if err := os.WriteFile(tmp, []byte(cleaned+"\n"), perm); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("rename into %s: %w", path, err)
+	}
+	return nil
 }
