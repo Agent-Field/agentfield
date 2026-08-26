@@ -16,34 +16,40 @@ func TestExecutionPublishers(t *testing.T) {
 		name     string
 		publish  func()
 		expected ExecutionEventType
+		status   string
+		data     interface{}
 	}{
 		{
 			name: "PublishExecutionCreated",
 			publish: func() {
-				PublishExecutionCreated("exec1", "wf1", "node1", nil)
+				PublishExecutionCreated("exec1", "wf1", "node1", "created-payload")
 			},
 			expected: ExecutionCreated,
+			status:   "created", data: "created-payload",
 		},
 		{
 			name: "PublishExecutionStarted",
 			publish: func() {
-				PublishExecutionStarted("exec1", "wf1", "node1", nil)
+				PublishExecutionStarted("exec1", "wf1", "node1", "started-payload")
 			},
 			expected: ExecutionStarted,
+			status:   "running", data: "started-payload",
 		},
 		{
 			name: "PublishExecutionUpdated",
 			publish: func() {
-				PublishExecutionUpdated("exec1", "wf1", "node1", "running", nil)
+				PublishExecutionUpdated("exec1", "wf1", "node1", "running", "updated-payload")
 			},
 			expected: ExecutionUpdated,
+			status:   "running", data: "updated-payload",
 		},
 		{
 			name: "PublishExecutionCompleted",
 			publish: func() {
-				PublishExecutionCompleted("exec1", "wf1", "node1", nil)
+				PublishExecutionCompleted("exec1", "wf1", "node1", "completed-payload")
 			},
 			expected: ExecutionCompleted,
+			status:   "succeeded", data: "completed-payload",
 		},
 		{
 			name: "PublishExecutionFailed",
@@ -51,6 +57,7 @@ func TestExecutionPublishers(t *testing.T) {
 				PublishExecutionFailed("exec1", "wf1", "node1", nil)
 			},
 			expected: ExecutionFailed,
+			status:   "failed",
 		},
 		{
 			name: "PublishExecutionWaiting",
@@ -58,6 +65,7 @@ func TestExecutionPublishers(t *testing.T) {
 				PublishExecutionWaiting("exec1", "wf1", "node1", nil)
 			},
 			expected: ExecutionWaiting,
+			status:   "waiting",
 		},
 		{
 			name: "PublishExecutionPaused",
@@ -65,6 +73,7 @@ func TestExecutionPublishers(t *testing.T) {
 				PublishExecutionPaused("exec1", "wf1", "node1", nil)
 			},
 			expected: ExecutionPaused,
+			status:   "paused",
 		},
 		{
 			name: "PublishExecutionResumed",
@@ -72,6 +81,7 @@ func TestExecutionPublishers(t *testing.T) {
 				PublishExecutionResumed("exec1", "wf1", "node1", nil)
 			},
 			expected: ExecutionResumed,
+			status:   "running",
 		},
 		{
 			name: "PublishExecutionCancelled",
@@ -79,6 +89,7 @@ func TestExecutionPublishers(t *testing.T) {
 				PublishExecutionCancelled("exec1", "wf1", "node1", nil)
 			},
 			expected: ExecutionCancelledEvent,
+			status:   "cancelled",
 		},
 		{
 			name: "PublishExecutionApprovalResolved",
@@ -86,6 +97,7 @@ func TestExecutionPublishers(t *testing.T) {
 				PublishExecutionApprovalResolved("exec1", "wf1", "node1", "approved", nil)
 			},
 			expected: ExecutionApprovalResolved,
+			status:   "approved",
 		},
 	}
 
@@ -96,6 +108,8 @@ func TestExecutionPublishers(t *testing.T) {
 			case event := <-ch:
 				require.Equal(t, tt.expected, event.Type)
 				require.Equal(t, "exec1", event.ExecutionID)
+				require.Equal(t, tt.status, event.Status)
+				require.Equal(t, tt.data, event.Data)
 			case <-time.After(5 * time.Second):
 				t.Errorf("Timeout waiting for event %s", tt.expected)
 			}
@@ -172,4 +186,15 @@ func TestReasonerPublishers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHeartbeatStartersPublishOnce(t *testing.T) {
+	nodeCh := GlobalNodeEventBus.Subscribe("node-heartbeat-starter")
+	defer GlobalNodeEventBus.Unsubscribe("node-heartbeat-starter")
+	StartNodeHeartbeat(time.Millisecond)
+	require.Equal(t, NodeHeartbeat, (<-nodeCh).Type)
+	reasonerCh := GlobalReasonerEventBus.Subscribe("reasoner-heartbeat-starter")
+	defer GlobalReasonerEventBus.Unsubscribe("reasoner-heartbeat-starter")
+	StartHeartbeat(time.Millisecond)
+	require.Equal(t, Heartbeat, (<-reasonerCh).Type)
 }

@@ -5,207 +5,366 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// resetEventCache clears the package-level dedup cache so each subtest starts
-// from a known state. lastEventCache and its mutex are shared across the bus,
-// so isolation must be explicit.
-func resetEventCache(t *testing.T) {
+func resetNodeEventTestState(t *testing.T) {
 	t.Helper()
+
 	lastEventCacheMutex.Lock()
+	originalCache := lastEventCache
 	lastEventCache = make(map[string]NodeEvent)
 	lastEventCacheMutex.Unlock()
+
+	GlobalNodeEventBus.mutex.Lock()
+	GlobalNodeEventBus.subscribers = make(map[string]chan NodeEvent)
+	GlobalNodeEventBus.mutex.Unlock()
+
+	t.Cleanup(func() {
+		lastEventCacheMutex.Lock()
+		lastEventCache = originalCache
+		lastEventCacheMutex.Unlock()
+	})
+}
+
+func receiveNodeEvent(t *testing.T, ch <-chan NodeEvent) NodeEvent {
+	t.Helper()
+
+	select {
+	case event := <-ch:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for node event")
+		return NodeEvent{}
+	}
 }
 
 func TestNodeEventBusShouldFilterEvent(t *testing.T) {
-	t.Run("heartbeat filtered when there are no subscribers", func(t *testing.T) {
-		resetEventCache(t)
-		bus := NewNodeEventBus()
-		assert.True(t, bus.shouldFilterEvent(NodeEvent{Type: NodeHeartbeat, NodeID: "n1"}))
+	resetNodeEventTestState(t)
+
+	bus := GlobalNodeEventBus
+
+	t.Run("filters heartbeat without subscribers", func(t *testing.T) {
+		event := NodeEvent{
+			Type:      NodeHeartbeat,
+			Timestamp: time.Now(),
+		}
+
+		require.True(t, bus.shouldFilterEvent(event))
 	})
 
-	t.Run("heartbeat not filtered when a subscriber exists", func(t *testing.T) {
-		resetEventCache(t)
-		bus := NewNodeEventBus()
-		_ = bus.Subscribe("sub-hb")
-		defer bus.Unsubscribe("sub-hb")
-		assert.False(t, bus.shouldFilterEvent(NodeEvent{Type: NodeHeartbeat, NodeID: "n1"}))
-	})
+	t.Run("does not filter ordinary event", func(t *testing.T) {
+		event := NodeEvent{
+			Type:      NodesRefresh,
+			Timestamp: time.Now(),
+		}
 
-	t.Run("non-status event is never treated as a duplicate", func(t *testing.T) {
-		resetEventCache(t)
-		bus := NewNodeEventBus()
-		ev := NodeEvent{Type: NodeRegistered, NodeID: "n1", Timestamp: time.Now()}
-		assert.False(t, bus.shouldFilterEvent(ev))
-		assert.False(t, bus.shouldFilterEvent(ev))
+		require.False(t, bus.shouldFilterEvent(event))
+	})
+	t.Run("heartbeat is not filtered with subscriber", func(t *testing.T) {
+		ch := bus.Subscribe("heartbeat-filter-test")
+		defer bus.Unsubscribe("heartbeat-filter-test")
+		require.False(t, bus.shouldFilterEvent(NodeEvent{Type: NodeHeartbeat, Timestamp: time.Now()}))
+		_ = ch
 	})
 }
 
-func TestNodeEventBusIsDuplicateStatusEvent(t *testing.T) {
-	t.Run("first status event is not a duplicate and is cached", func(t *testing.T) {
-		resetEventCache(t)
-		bus := NewNodeEventBus()
-		ev := NodeEvent{Type: NodeStatusUpdated, NodeID: "n1", Status: "active", Timestamp: time.Now()}
-		assert.False(t, bus.isDuplicateStatusEvent(ev))
-	})
+func TestNodeEventBusDuplicateStatusEvent(t *testing.T) {
+	t.Run("filters identical status event within one second", func(t *testing.T) {
+		resetNodeEventTestState(t)
 
-	t.Run("identical status event within 1s is a duplicate", func(t *testing.T) {
-		resetEventCache(t)
-		bus := NewNodeEventBus()
-		now := time.Now()
-		first := NodeEvent{Type: NodeStatusUpdated, NodeID: "n1", Status: "active", Timestamp: now}
+		bus := GlobalNodeEventBus
+		first := NodeEvent{
+			Type:      NodeStatusUpdated,
+			NodeID:    "node-1",
+			Status:    "online",
+			Timestamp: time.Now(),
+		}
+
 		require.False(t, bus.isDuplicateStatusEvent(first))
-		// Same status, still within the 1s window.
-		second := NodeEvent{Type: NodeStatusUpdated, NodeID: "n1", Status: "active", Timestamp: now}
-		assert.True(t, bus.isDuplicateStatusEvent(second))
+
+		second := first
+		second.Timestamp = time.Now()
+
+		require.True(t, bus.isDuplicateStatusEvent(second))
 	})
 
-	t.Run("changed status within 1s is not a duplicate", func(t *testing.T) {
-		resetEventCache(t)
-		bus := NewNodeEventBus()
-		now := time.Now()
-		require.False(t, bus.isDuplicateStatusEvent(NodeEvent{Type: NodeStatusUpdated, NodeID: "n1", Status: "active", Timestamp: now}))
-		// Different Status value: not a duplicate even inside the window.
-		assert.False(t, bus.isDuplicateStatusEvent(NodeEvent{Type: NodeStatusUpdated, NodeID: "n1", Status: "inactive", Timestamp: now}))
-	})
+	t.Run("allows changed status within one second", func(t *testing.T) {
+		resetNodeEventTestState(t)
 
-	t.Run("changed new/old status on unified event is not a duplicate", func(t *testing.T) {
-		resetEventCache(t)
-		bus := NewNodeEventBus()
-		now := time.Now()
-		first := NodeEvent{Type: NodeUnifiedStatusChanged, NodeID: "n1", Status: "s", OldStatus: "a", NewStatus: "b", Timestamp: now}
+		bus := GlobalNodeEventBus
+		first := NodeEvent{
+			Type:      NodeStatusUpdated,
+			NodeID:    "node-1",
+			Status:    "online",
+			Timestamp: time.Now(),
+		}
+
 		require.False(t, bus.isDuplicateStatusEvent(first))
-		// Same Status but different NewStatus transition.
-		second := NodeEvent{Type: NodeUnifiedStatusChanged, NodeID: "n1", Status: "s", OldStatus: "a", NewStatus: "c", Timestamp: now}
-		assert.False(t, bus.isDuplicateStatusEvent(second))
+
+		second := first
+		second.Status = "offline"
+		second.Timestamp = time.Now()
+
+		require.False(t, bus.isDuplicateStatusEvent(second))
 	})
 
-	t.Run("non-comparable status event within 1s is a duplicate", func(t *testing.T) {
-		resetEventCache(t)
-		bus := NewNodeEventBus()
-		now := time.Now()
-		// NodeOnline is a status event type but not one of the compared kinds,
-		// so a second one within the window is a flat duplicate.
-		first := NodeEvent{Type: NodeOnline, NodeID: "n1", Timestamp: now}
+	t.Run("allows changed unified new status", func(t *testing.T) {
+		resetNodeEventTestState(t)
+
+		bus := GlobalNodeEventBus
+		first := NodeEvent{
+			Type:      NodeUnifiedStatusChanged,
+			NodeID:    "node-1",
+			OldStatus: "offline",
+			NewStatus: "online",
+			Timestamp: time.Now(),
+		}
+
 		require.False(t, bus.isDuplicateStatusEvent(first))
-		assert.True(t, bus.isDuplicateStatusEvent(NodeEvent{Type: NodeOnline, NodeID: "n1", Timestamp: now}))
+
+		second := first
+		second.NewStatus = "degraded"
+		second.Timestamp = time.Now()
+
+		require.False(t, bus.isDuplicateStatusEvent(second))
 	})
 
-	t.Run("stale cached event outside 1s window is not a duplicate", func(t *testing.T) {
-		resetEventCache(t)
-		bus := NewNodeEventBus()
-		old := NodeEvent{Type: NodeStatusUpdated, NodeID: "n1", Status: "active", Timestamp: time.Now().Add(-2 * time.Second)}
-		lastEventCacheMutex.Lock()
-		lastEventCache["node_status_updated:n1"] = old
-		lastEventCacheMutex.Unlock()
+	t.Run("filters identical unified status", func(t *testing.T) {
+		resetNodeEventTestState(t)
 
-		fresh := NodeEvent{Type: NodeStatusUpdated, NodeID: "n1", Status: "active", Timestamp: time.Now()}
-		assert.False(t, bus.isDuplicateStatusEvent(fresh))
+		bus := GlobalNodeEventBus
+		first := NodeEvent{
+			Type:      NodeUnifiedStatusChanged,
+			NodeID:    "node-1",
+			OldStatus: "offline",
+			NewStatus: "online",
+			Timestamp: time.Now(),
+		}
+
+		require.False(t, bus.isDuplicateStatusEvent(first))
+
+		second := first
+		second.Timestamp = time.Now()
+
+		require.True(t, bus.isDuplicateStatusEvent(second))
+	})
+}
+
+func TestNodeEventBusCleanupEventCache(t *testing.T) {
+	resetNodeEventTestState(t)
+
+	staleKey := "node_status_changed:stale"
+	freshKey := "node_status_changed:fresh"
+
+	lastEventCacheMutex.Lock()
+	lastEventCache[staleKey] = NodeEvent{
+		Type:      NodeStatusUpdated,
+		NodeID:    "stale",
+		Timestamp: time.Now().Add(-10 * time.Minute),
+	}
+	lastEventCache[freshKey] = NodeEvent{
+		Type:      NodeStatusUpdated,
+		NodeID:    "fresh",
+		Timestamp: time.Now(),
+	}
+	lastEventCacheMutex.Unlock()
+
+	GlobalNodeEventBus.cleanupEventCache()
+
+	lastEventCacheMutex.RLock()
+	_, staleExists := lastEventCache[staleKey]
+	_, freshExists := lastEventCache[freshKey]
+	lastEventCacheMutex.RUnlock()
+
+	require.False(t, staleExists)
+	require.True(t, freshExists)
+}
+
+func TestNodeEventBusPartialDeduplicationBranches(t *testing.T) {
+	resetNodeEventTestState(t)
+	bus := GlobalNodeEventBus
+	require.False(t, bus.isDuplicateStatusEvent(NodeEvent{Type: NodesRefresh, NodeID: "node-partial-refresh", Timestamp: time.Now()}))
+	require.False(t, bus.isDuplicateStatusEvent(NodeEvent{Type: NodeOnline, NodeID: "node-partial-online", Timestamp: time.Now()}))
+	require.True(t, bus.isDuplicateStatusEvent(NodeEvent{Type: NodeOnline, NodeID: "node-partial-online", Timestamp: time.Now()}))
+
+	health := NodeEvent{Type: NodeHealthChanged, NodeID: "node-partial-health", Status: "healthy", Timestamp: time.Now()}
+	require.False(t, bus.isDuplicateStatusEvent(health))
+	health.Timestamp = time.Now()
+	health.Status = "degraded"
+	require.False(t, bus.isDuplicateStatusEvent(health))
+
+	base := NodeEvent{Type: NodeUnifiedStatusChanged, NodeID: "node-partial-unified", Status: "same", OldStatus: "a", NewStatus: "b", Timestamp: time.Now()}
+	require.False(t, bus.isDuplicateStatusEvent(base))
+	changedOld := base
+	changedOld.Timestamp = time.Now()
+	changedOld.OldStatus = "c"
+	require.False(t, bus.isDuplicateStatusEvent(changedOld))
+}
+
+func TestPublishNodeStatusUpdatedEnhanced(t *testing.T) {
+	resetNodeEventTestState(t)
+
+	ch := GlobalNodeEventBus.Subscribe("enhanced-status-test")
+	defer GlobalNodeEventBus.Unsubscribe("enhanced-status-test")
+
+	oldStatus := map[string]interface{}{
+		"state": "idle",
+	}
+	newStatus := map[string]interface{}{
+		"state":  "running",
+		"detail": "healthy",
+	}
+
+	PublishNodeStatusUpdatedEnhanced(
+		"node-1",
+		oldStatus,
+		newStatus,
+		"health-check",
+		"state changed",
+	)
+
+	unified := receiveNodeEvent(t, ch)
+	require.Equal(t, NodeUnifiedStatusChanged, unified.Type)
+	require.Equal(t, "node-1", unified.NodeID)
+	require.Equal(t, oldStatus, unified.OldStatus)
+	require.Equal(t, newStatus, unified.NewStatus)
+	require.Equal(t, "health-check", unified.Source)
+	require.Equal(t, "state changed", unified.Reason)
+
+	legacy := receiveNodeEvent(t, ch)
+	require.Equal(t, NodeStatusUpdated, legacy.Type)
+	require.Equal(t, "node-1", legacy.NodeID)
+	require.Equal(t, "running", legacy.Status)
+	require.Equal(t, newStatus, legacy.Data)
+}
+
+func TestPublishNodeStatusUpdatedEnhancedFallbacks(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		newStatus interface{}
+		want      string
+	}{
+		{"nil", nil, "unknown"},
+		{"non-map", "running", "unknown"},
+		{"map-without-state", map[string]interface{}{"detail": "ok"}, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetNodeEventTestState(t)
+			ch := GlobalNodeEventBus.Subscribe("enhanced-fallback-" + tc.name)
+			defer GlobalNodeEventBus.Unsubscribe("enhanced-fallback-" + tc.name)
+			PublishNodeStatusUpdatedEnhanced("node-fallback-"+tc.name, nil, tc.newStatus, "source", "reason")
+			_ = receiveNodeEvent(t, ch)
+			event := receiveNodeEvent(t, ch)
+			require.Equal(t, tc.want, event.Status)
+			require.Equal(t, tc.newStatus, event.Data)
+		})
+	}
+}
+
+func receiveReasonerEvent(t *testing.T, ch <-chan ReasonerEvent) ReasonerEvent {
+	t.Helper()
+	select {
+	case event := <-ch:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reasoner event")
+		return ReasonerEvent{}
+	}
+}
+
+func TestNodePublishHelperPayloads(t *testing.T) {
+	t.Run("state transition populates fields and payload", func(t *testing.T) {
+		resetNodeEventTestState(t)
+
+		ch := GlobalNodeEventBus.Subscribe("state-transition-test")
+		defer GlobalNodeEventBus.Unsubscribe("state-transition-test")
+
+		PublishNodeStateTransition(
+			"node-1",
+			"idle",
+			"running",
+			"execution started",
+		)
+
+		event := receiveNodeEvent(t, ch)
+
+		require.Equal(t, NodeStateTransition, event.Type)
+		require.Equal(t, "node-1", event.NodeID)
+		require.Equal(t, "running", event.Status)
+		require.Equal(t, "state_transition", event.Source)
+		require.Equal(t, "execution started", event.Reason)
+
+		payload, ok := event.Data.(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, "idle", payload["from_state"])
+		require.Equal(t, "running", payload["to_state"])
+		require.Equal(t, "execution started", payload["reason"])
+	})
+
+	t.Run("bulk status update populates counts", func(t *testing.T) {
+		resetNodeEventTestState(t)
+
+		ch := GlobalNodeEventBus.Subscribe("bulk-status-test")
+		defer GlobalNodeEventBus.Unsubscribe("bulk-status-test")
+
+		errors := []string{"node-3 failed"}
+		PublishBulkStatusUpdate(3, 2, 1, errors)
+
+		event := receiveNodeEvent(t, ch)
+
+		require.Equal(t, BulkStatusUpdate, event.Type)
+
+		payload, ok := event.Data.(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, 3, payload["total_nodes"])
+		require.Equal(t, 2, payload["successful"])
+		require.Equal(t, 1, payload["failed"])
+		require.Equal(t, errors, payload["errors"])
+	})
+
+	t.Run("system state snapshot preserves payload", func(t *testing.T) {
+		resetNodeEventTestState(t)
+
+		ch := GlobalNodeEventBus.Subscribe("snapshot-test")
+		defer GlobalNodeEventBus.Unsubscribe("snapshot-test")
+
+		payload := map[string]interface{}{
+			"nodes":     4,
+			"reasoners": 7,
+		}
+
+		PublishSystemStateSnapshot(payload)
+
+		event := receiveNodeEvent(t, ch)
+
+		require.Equal(t, SystemStateSnapshot, event.Type)
+		require.Equal(t, payload, event.Data)
 	})
 }
 
 func TestNodeEventBusCompareStatusEventData(t *testing.T) {
 	bus := NewNodeEventBus()
-
-	t.Run("different status is not equal", func(t *testing.T) {
-		assert.False(t, bus.compareStatusEventData(
-			NodeEvent{Status: "a"},
-			NodeEvent{Status: "b"},
-		))
-	})
-
-	t.Run("same status non-unified is equal", func(t *testing.T) {
-		assert.True(t, bus.compareStatusEventData(
-			NodeEvent{Type: NodeStatusUpdated, Status: "a"},
-			NodeEvent{Type: NodeStatusUpdated, Status: "a"},
-		))
-	})
-
-	t.Run("unified event compares old/new status", func(t *testing.T) {
-		last := NodeEvent{Type: NodeUnifiedStatusChanged, Status: "a", OldStatus: "x", NewStatus: "y"}
-		assert.True(t, bus.compareStatusEventData(last, NodeEvent{Type: NodeUnifiedStatusChanged, Status: "a", OldStatus: "x", NewStatus: "y"}))
-		assert.False(t, bus.compareStatusEventData(last, NodeEvent{Type: NodeUnifiedStatusChanged, Status: "a", OldStatus: "x", NewStatus: "z"}))
-	})
+	require.False(t, bus.compareStatusEventData(NodeEvent{Status: "a"}, NodeEvent{Status: "b"}))
+	require.True(t, bus.compareStatusEventData(
+		NodeEvent{Type: NodeStatusUpdated, Status: "a"},
+		NodeEvent{Type: NodeStatusUpdated, Status: "a"},
+	))
+	last := NodeEvent{Type: NodeUnifiedStatusChanged, Status: "a", OldStatus: "x", NewStatus: "y"}
+	require.True(t, bus.compareStatusEventData(last, NodeEvent{Type: NodeUnifiedStatusChanged, Status: "a", OldStatus: "x", NewStatus: "y"}))
+	require.False(t, bus.compareStatusEventData(last, NodeEvent{Type: NodeUnifiedStatusChanged, Status: "a", OldStatus: "x", NewStatus: "z"}))
 }
 
-func TestNodeEventBusCleanupEventCache(t *testing.T) {
-	resetEventCache(t)
-	bus := NewNodeEventBus()
-
-	lastEventCacheMutex.Lock()
-	lastEventCache["stale:n1"] = NodeEvent{Type: NodeStatusUpdated, NodeID: "n1", Timestamp: time.Now().Add(-10 * time.Minute)}
-	lastEventCache["fresh:n2"] = NodeEvent{Type: NodeStatusUpdated, NodeID: "n2", Timestamp: time.Now()}
-	lastEventCacheMutex.Unlock()
-
-	bus.cleanupEventCache()
-
-	lastEventCacheMutex.RLock()
-	_, staleExists := lastEventCache["stale:n1"]
-	_, freshExists := lastEventCache["fresh:n2"]
-	lastEventCacheMutex.RUnlock()
-
-	assert.False(t, staleExists, "entries older than 5 minutes should be dropped")
-	assert.True(t, freshExists, "recent entries should be retained")
-}
-
-func TestPublishNodeStatusUpdatedEnhancedExtractsState(t *testing.T) {
-	resetEventCache(t)
-	subID := "test-enhanced-state"
-	ch := GlobalNodeEventBus.Subscribe(subID)
-	defer GlobalNodeEventBus.Unsubscribe(subID)
-
-	// newStatus is a map carrying a "state" field: the legacy NodeStatusUpdated
-	// event should carry that extracted state string. Both the unified and the
-	// legacy event are published, so drain until the legacy one arrives.
-	PublishNodeStatusUpdatedEnhanced("node-state", nil, map[string]interface{}{"state": "ready"}, "src", "reason")
-
-	var legacy *NodeEvent
-	deadline := time.After(5 * time.Second)
-	for legacy == nil {
-		select {
-		case ev := <-ch:
-			if ev.Type == NodeStatusUpdated {
-				e := ev
-				legacy = &e
-			}
-		case <-deadline:
-			t.Fatal("timed out waiting for legacy NodeStatusUpdated event")
-		}
-	}
-	assert.Equal(t, "ready", legacy.Status)
-}
-
-func TestStartNodeHeartbeatEmitsOnlyWithSubscribers(t *testing.T) {
-	resetEventCache(t)
-	// No subscribers: PublishNodeHeartbeat filtered out by shouldFilterEvent,
-	// so nothing is delivered. With a subscriber, the ticker delivers one.
-	StartNodeHeartbeat(10 * time.Millisecond)
-
-	subID := "test-node-hb-start"
-	ch := GlobalNodeEventBus.Subscribe(subID)
-	defer GlobalNodeEventBus.Unsubscribe(subID)
-
-	select {
-	case ev := <-ch:
-		assert.Equal(t, NodeHeartbeat, ev.Type)
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected a heartbeat once a subscriber was present")
-	}
-}
-
-// Guard against a data race on the shared cache when helpers run concurrently.
 func TestIsDuplicateStatusEventConcurrent(t *testing.T) {
-	resetEventCache(t)
-	bus := NewNodeEventBus()
+	resetNodeEventTestState(t)
+	bus := GlobalNodeEventBus
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
-		go func(n int) {
+		go func() {
 			defer wg.Done()
 			_ = bus.isDuplicateStatusEvent(NodeEvent{Type: NodeStatusUpdated, NodeID: "race", Status: "active", Timestamp: time.Now()})
-		}(i)
+		}()
 	}
 	wg.Wait()
 }
