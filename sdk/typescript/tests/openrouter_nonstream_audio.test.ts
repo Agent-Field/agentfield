@@ -236,3 +236,77 @@ describe('generateAudio transport selection (#584)', () => {
     expect(reader.cancel).toHaveBeenCalled();
   });
 });
+
+describe('non-streaming audio body decoding', () => {
+  /** A real Response over a ReadableStream, so production reads res.body. */
+  function streamedJsonResponse(chunks: Uint8Array[]): Response {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200 });
+  }
+
+  it('reassembles a multi-byte character split across body chunks', async () => {
+    // A transcript whose non-ASCII characters straddle chunk boundaries: a
+    // per-chunk decode would emit U+FFFD where the byte sequence was cut.
+    const transcript = 'répétez après moi 🎧';
+    const json = JSON.stringify({
+      choices: [{ message: { audio: { data: 'bXAz', transcript } } }],
+    });
+    const bytes = new TextEncoder().encode(json);
+    // Slice into 7-byte chunks — small enough that the 2-byte é and the 4-byte
+    // emoji are guaranteed to be cut mid-sequence.
+    const chunks: Uint8Array[] = [];
+    for (let i = 0; i < bytes.length; i += 7) chunks.push(bytes.slice(i, i + 7));
+    expect(chunks.length).toBeGreaterThan(1);
+
+    mockFetch.mockResolvedValueOnce(streamedJsonResponse(chunks));
+
+    const resp = await chatAudioProvider().generateAudio({
+      text: 'hello',
+      model: 'openai/gpt-audio-mini',
+      format: 'mp3',
+    });
+
+    expect(resp.audio!.data).toBe('bXAz');
+    expect(resp.audio!.format).toBe('mp3');
+    expect(resp.text).toBe(transcript);
+    expect(resp.text).not.toContain('�');
+  });
+
+  it('gives the non-streaming request a longer timeout than the streaming one', async () => {
+    // A non-streaming request returns nothing until the whole clip is
+    // synthesised, so the 30s API timeout would abort a long paragraph.
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+
+    mockFetch.mockResolvedValueOnce(
+      streamedJsonResponse([
+        new TextEncoder().encode(
+          JSON.stringify({ choices: [{ message: { audio: { data: 'bXAz' } } }] })
+        ),
+      ])
+    );
+    await chatAudioProvider().generateAudio({
+      text: 'hello',
+      model: 'openai/gpt-audio-mini',
+      format: 'mp3',
+    });
+    const nonStreamTimeout = timeoutSpy.mock.calls.at(-1)![0];
+
+    mockFetch.mockResolvedValueOnce(streamingResponse(['data: [DONE]\n\n']));
+    await chatAudioProvider().generateAudio({
+      text: 'hello',
+      model: 'openai/gpt-audio-mini',
+      format: 'pcm16',
+    });
+    const streamTimeout = timeoutSpy.mock.calls.at(-1)![0];
+
+    expect(streamTimeout).toBe(30_000);
+    expect(nonStreamTimeout).toBe(300_000);
+
+    timeoutSpy.mockRestore();
+  });
+});

@@ -21,6 +21,13 @@ const DEFAULT_TIMEOUT = 600_000; // 10min
 
 const API_TIMEOUT = 30_000; // 30s for API calls
 const DOWNLOAD_TIMEOUT = 120_000; // 120s for video download
+/**
+ * Timeout for a non-streaming audio completion. The SSE path streams deltas so
+ * bytes keep arriving inside API_TIMEOUT, but a non-streaming request returns
+ * nothing until the whole clip is synthesised — a paragraph of mp3 takes far
+ * longer than 30s. Matches the Python SDK's non-streaming audio budget.
+ */
+const NONSTREAM_AUDIO_TIMEOUT = 300_000; // 5min for a whole synthesised clip
 
 const MAX_CONSECUTIVE_PARSE_ERRORS = 50;
 /** Cap on a buffered non-streaming audio response body. */
@@ -534,7 +541,9 @@ export class OpenRouterMediaProvider implements MediaProvider {
     };
 
     const endpoint = `${this.baseUrl}/chat/completions`;
-    const res = await this.post(endpoint, body);
+    // A non-streaming request holds the connection open for the entire
+    // synthesis, so it gets the longer budget; the SSE path keeps API_TIMEOUT.
+    const res = await this.post(endpoint, body, useStream ? API_TIMEOUT : NONSTREAM_AUDIO_TIMEOUT);
     if (!res.ok) {
       throw new MediaProviderError(
         `Audio generation failed [model=${model}] [endpoint=${endpoint}]: ${res.status} ${await res.text()}`,
@@ -806,7 +815,7 @@ export class OpenRouterMediaProvider implements MediaProvider {
 
   // ── Helpers ────────────────────────────────────────────────────────
 
-  private post(url: string, body: unknown): Promise<Response> {
+  private post(url: string, body: unknown, timeoutMs: number = API_TIMEOUT): Promise<Response> {
     const key = apiKeyStore.get(this);
     return fetch(url, {
       method: 'POST',
@@ -816,7 +825,7 @@ export class OpenRouterMediaProvider implements MediaProvider {
         Authorization: `Bearer ${key}`,
       }),
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(API_TIMEOUT),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   }
 
