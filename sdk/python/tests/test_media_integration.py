@@ -439,7 +439,7 @@ class TestOpenRouterAudioE2E:
                 text="Say hello",
                 model="openai/gpt-audio-mini",
                 voice="nova",
-                format="mp3",  # avoid pcm→wav re-wrap so we can compare base64
+                format="pcm16",  # SSE streaming emits pcm16 audio deltas
             )
 
         assert result.audio is not None
@@ -482,7 +482,7 @@ class TestOpenRouterAudioE2E:
                 text="Read this dramatically",
                 model="openai/gpt-audio-mini",
                 voice="nova",
-                format="mp3",
+                format="pcm16",
                 system="You are a narrator. Use a calm documentary style.",
             )
 
