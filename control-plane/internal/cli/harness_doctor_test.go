@@ -134,7 +134,7 @@ func TestHarnessDoctorReportsPiWithOpenRouterAuth(t *testing.T) {
 	require.True(t, reports[0].Usable)
 }
 
-func TestHarnessDoctorReportsOMPDefaultWithOfficialInstallCommand(t *testing.T) {
+func TestHarnessDoctorReportsOMPWithOfficialInstallCommand(t *testing.T) {
 	binDir := t.TempDir()
 	writeHarnessTestBinary(t, binDir, "omp", "17.2.15")
 	t.Setenv("PATH", binDir)
