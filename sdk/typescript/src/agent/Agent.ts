@@ -715,7 +715,7 @@ export class Agent {
   private installSignalHandlers(): void {
     if (this.signalHandlers) return;
     const handle = (signal: 'SIGTERM' | 'SIGINT') => () => {
-      void this.shutdown().finally(() => { process.exitCode = signal === 'SIGTERM' ? 143 : 130; });
+      void this.shutdown().finally(() => { process.exit(signal === 'SIGTERM' ? 143 : 130); });
     };
     this.signalHandlers = { SIGTERM: handle('SIGTERM'), SIGINT: handle('SIGINT') };
     process.on('SIGTERM', this.signalHandlers.SIGTERM);
