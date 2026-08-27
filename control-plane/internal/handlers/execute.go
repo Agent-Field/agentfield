@@ -436,6 +436,8 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 func (c *executionController) handleAsync(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
 	pool := getAsyncWorkerPool()
+	// A reservation covers both preparation and time waiting in the queue. The
+	// worker releases it on dequeue so only not-yet-started work consumes capacity.
 	if !pool.reserve() {
 		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue is full; retry later")
 		return
