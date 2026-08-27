@@ -1767,7 +1767,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 // sqliteWorkflowExecutionInsertQuery captures the column order for workflow execution inserts.
 const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
 	workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
-	agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
+	agent_node_id, instance_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
 	reasoner_id, input_data, output_data, input_size, output_size,
 	status, started_at, completed_at, duration_ms,
 	state_version, last_event_sequence, active_children, pending_children,
@@ -1777,7 +1777,7 @@ const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
 	approval_requested_at, approval_responded_at, approval_callback_url, approval_expires_at,
 	workflow_name, workflow_tags, notes, created_at, updated_at
 ) VALUES (
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?
@@ -1867,7 +1867,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 	// Execute INSERT query using the DBTX interface
 	_, err = q.ExecContext(ctx, insertQuery,
 		execution.WorkflowID, execution.ExecutionID, execution.AgentFieldRequestID, execution.RunID,
-		execution.SessionID, execution.ActorID, execution.AgentNodeID,
+		execution.SessionID, execution.ActorID, execution.AgentNodeID, execution.InstanceID,
 		execution.ParentWorkflowID, execution.ParentExecutionID, execution.RootWorkflowID, execution.WorkflowDepth,
 		execution.ReasonerID, execution.InputData, execution.OutputData,
 		execution.InputSize, execution.OutputSize,

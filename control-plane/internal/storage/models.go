@@ -7,7 +7,8 @@ type ExecutionRecordModel struct {
 	ExecutionID       string     `gorm:"column:execution_id;not null;uniqueIndex"`
 	RunID             string     `gorm:"column:run_id;not null;index"`
 	ParentExecutionID *string    `gorm:"column:parent_execution_id;index"`
-	AgentNodeID       string     `gorm:"column:agent_node_id;not null;index"`
+	AgentNodeID       string     `gorm:"column:agent_node_id;not null;index;index:idx_executions_agent_instance,priority:1"`
+	InstanceID        string     `gorm:"column:instance_id;index:idx_executions_agent_instance,priority:2"`
 	ReasonerID        string     `gorm:"column:reasoner_id;not null;index"`
 	NodeID            string     `gorm:"column:node_id;not null;index"`
 	Status            string     `gorm:"column:status;not null;index"`
@@ -120,7 +121,8 @@ type WorkflowExecutionModel struct {
 	RunID                 *string    `gorm:"column:run_id;index"`
 	SessionID             *string    `gorm:"column:session_id;index;index:idx_workflow_executions_session_status,priority:1;index:idx_workflow_executions_session_status_time,priority:1;index:idx_workflow_executions_session_time,priority:1"`
 	ActorID               *string    `gorm:"column:actor_id;index;index:idx_workflow_executions_actor_status,priority:1;index:idx_workflow_executions_actor_status_time,priority:1;index:idx_workflow_executions_actor_time,priority:1"`
-	AgentNodeID           string     `gorm:"column:agent_node_id;not null;index;index:idx_workflow_executions_agent_node_status,priority:1;index:idx_workflow_executions_agent_status_time,priority:1"`
+	AgentNodeID           string     `gorm:"column:agent_node_id;not null;index;index:idx_workflow_executions_agent_node_status,priority:1;index:idx_workflow_executions_agent_status_time,priority:1;index:idx_workflow_executions_agent_instance,priority:1"`
+	InstanceID            string     `gorm:"column:instance_id;index:idx_workflow_executions_agent_instance,priority:2"`
 	ParentWorkflowID      *string    `gorm:"column:parent_workflow_id;index"`
 	ParentExecutionID     *string    `gorm:"column:parent_execution_id;index"`
 	RootWorkflowID        *string    `gorm:"column:root_workflow_id;index"`

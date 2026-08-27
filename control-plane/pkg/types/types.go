@@ -699,6 +699,7 @@ type WorkflowExecution struct {
 	SessionID           *string `json:"session_id,omitempty" db:"session_id"`
 	ActorID             *string `json:"actor_id,omitempty" db:"actor_id"`
 	AgentNodeID         string  `json:"agent_node_id" db:"agent_node_id"`
+	InstanceID          string  `json:"instance_id,omitempty" db:"instance_id"`
 
 	// DAG Relationship Fields
 	ParentWorkflowID  *string `json:"parent_workflow_id,omitempty" db:"parent_workflow_id"`
