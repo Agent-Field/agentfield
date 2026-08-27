@@ -13,7 +13,6 @@ import logging
 import os
 import sys
 import threading
-from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -233,10 +232,15 @@ class AgentFieldLogger:
         if len(line.encode("utf-8")) <= budget:
             return line
 
-        view = deepcopy(record)
+        # Shallow copies are enough: attribute values are replaced, never
+        # mutated, and a deepcopy of a multi-megabyte (or non-copyable)
+        # payload is exactly the cost this view exists to avoid.
+        view = dict(record)
         attributes = view.get("attributes")
         if not isinstance(attributes, dict):
             return line
+        attributes = dict(attributes)
+        view["attributes"] = attributes
         attributes_size = len(self._json_line(attributes).encode("utf-8"))
 
         sizes = sorted(
