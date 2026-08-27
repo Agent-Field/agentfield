@@ -45,4 +45,10 @@ func TestMaxExecuteBodyHandlerDoesNotCapOtherRoutes(t *testing.T) {
 	handler.ServeHTTP(resp, req)
 	require.Equal(t, http.StatusOK, resp.Code)
 	require.Equal(t, "12345", resp.Body.String())
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/executions/abc/status", strings.NewReader("12345"))
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, "12345", resp.Body.String())
 }

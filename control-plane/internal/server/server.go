@@ -754,7 +754,8 @@ func (s *AgentFieldServer) newHTTPServer(addr string) *http.Server {
 
 func maxExecuteBodyHandler(next http.Handler, limit int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/execute") {
+		isExecuteRoute := r.URL.Path == "/api/v1/execute" || strings.HasPrefix(r.URL.Path, "/api/v1/execute/")
+		if r.Method == http.MethodPost && isExecuteRoute {
 			if r.ContentLength > limit {
 				http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 				return
