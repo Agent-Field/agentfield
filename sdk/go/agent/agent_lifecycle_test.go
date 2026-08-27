@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +185,28 @@ func TestShutdown_HandlesNilClientAndNilServer(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, a.shutdown(context.Background()))
+}
+
+func TestResolveShutdownTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 30 * time.Second}, {"30", 30 * time.Second}, {"30s", 30 * time.Second},
+		{"5m", 5 * time.Minute}, {"invalid", 30 * time.Second},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			assert.Equal(t, tc.want, resolveShutdownTimeout(tc.value, log.New(io.Discard, "", 0)))
+		})
+	}
+}
+
+func TestShutdownRouteAccepted(t *testing.T) {
+	a, err := New(Config{NodeID: "node-1", Version: "1", Logger: log.New(io.Discard, "", 0)})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	a.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/shutdown", strings.NewReader(`{"graceful":false,"timeout_seconds":1}`)))
+	assert.Equal(t, http.StatusAccepted, recorder.Code)
 }
 
 func TestRegisteredHeartbeatInterval(t *testing.T) {
