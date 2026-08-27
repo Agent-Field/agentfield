@@ -86,7 +86,7 @@ class AgentServer:
                 )
             if tail_lines <= 0 and since_seq <= 0 and not follow:
                 tail_lines = 200
-            gen = node_logs.iter_tail_ndjson(tail_lines, since_seq, follow)
+            gen = node_logs.async_iter_tail_ndjson(tail_lines, since_seq, follow)
             return StreamingResponse(
                 gen,
                 media_type="application/x-ndjson",

@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 import threading
+from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -47,6 +48,20 @@ class LogLevel(Enum):
     WARN = "WARN"
     WARNING = "WARNING"
     ERROR = "ERROR"
+
+
+class _DynamicStdoutHandler(logging.Handler):
+    """A handler that resolves stdout at emit time so a later tee sees logs."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            sys.stdout.write(self.format(record) + self.terminator)
+            sys.stdout.flush()
+        except Exception:
+            # Logging is always best-effort and must not fail SDK callers.
+            self.handleError(record)
+
+    terminator = "\n"
 
 
 class AgentFieldLogger:
@@ -91,7 +106,7 @@ class AgentFieldLogger:
         """Setup logger with console handler if not already configured"""
 
         if not self.logger.handlers:
-            handler = logging.StreamHandler(stream=sys.stdout)
+            handler = _DynamicStdoutHandler()
             formatter = logging.Formatter("%(message)s")
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
@@ -185,13 +200,58 @@ class AgentFieldLogger:
         }
 
     def _emit_structured_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        if self.emit_structured_stdout:
-            line = json.dumps(
-                record, ensure_ascii=False, separators=(",", ":"), default=str
-            )
-            print(line, file=sys.stdout, flush=True)
-        self._dispatch_to_cp(record)
+        try:
+            if self._stdout_mirror_enabled():
+                line = self._bounded_mirror_line(record)
+                print(line, file=sys.stdout, flush=True)
+        except Exception:
+            # Broken stdout and capture-ring contention must never affect execution.
+            pass
+        try:
+            self._dispatch_to_cp(record)
+        except Exception:
+            pass
         return record
+
+    @staticmethod
+    def _stdout_mirror_enabled() -> bool:
+        value = os.getenv("AGENTFIELD_LOG_STDOUT", "true").strip().lower()
+        return value not in ("0", "false", "no", "off")
+
+    @staticmethod
+    def _json_line(record: Dict[str, Any]) -> str:
+        return json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str)
+
+    def _bounded_mirror_line(self, record: Dict[str, Any]) -> str:
+        """Serialize a valid JSON view while leaving the dispatched record untouched."""
+        from .node_logs import max_line_bytes
+
+        budget = max_line_bytes()
+        line = self._json_line(record)
+        if len(line.encode("utf-8")) <= budget:
+            return line
+
+        view = deepcopy(record)
+        attributes = view.get("attributes")
+        if not isinstance(attributes, dict):
+            return line
+        attributes_size = len(self._json_line(attributes).encode("utf-8"))
+
+        sizes = sorted(
+            (
+                (len(self._json_line(value).encode("utf-8")), key)
+                for key, value in attributes.items()
+            ),
+            reverse=True,
+        )
+        for size, key in sizes:
+            attributes[key] = f"<{size} bytes elided>"
+            line = self._json_line(view)
+            if len(line.encode("utf-8")) <= budget:
+                return line
+        view["attributes"] = {"_elided": f"<{attributes_size} bytes elided>"}
+        line = self._json_line(view)
+        return line
 
     def _dispatch_to_cp(self, record: Dict[str, Any]) -> None:
         """Send the structured log record to the control plane (best-effort, non-blocking).
