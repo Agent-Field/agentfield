@@ -2550,6 +2550,8 @@ func (ls *LocalStorage) ListExpiredExecutionPayloadURIs(ctx context.Context, ret
 }
 
 // ListPayloadURIs returns all live file references without loading payload data.
+// The orphan sweep materializes every referenced URI in memory once per pass;
+// keep its call frequency bounded because this cost grows with executions.
 func (ls *LocalStorage) ListPayloadURIs(ctx context.Context) (map[string]struct{}, error) {
 	rows, err := ls.db.QueryContext(ctx, `SELECT input_uri, result_uri FROM executions WHERE input_uri IS NOT NULL OR result_uri IS NOT NULL`)
 	if err != nil {
