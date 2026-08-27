@@ -96,6 +96,39 @@ func TestPiFamilyCommandAndMetrics(t *testing.T) {
 	}
 }
 
+func TestPiConfiguredModelOverridesReportedModel(t *testing.T) {
+	provider := NewPiProvider("pi")
+	provider.runCLI = func(context.Context, []string, map[string]string, string, int, []byte) (*CLIResult, error) {
+		return &CLIResult{Stdout: piEventStream}, nil
+	}
+
+	raw, err := provider.Execute(context.Background(), "inspect", Options{Model: "openrouter/x/y"})
+	require.NoError(t, err)
+	assert.Equal(t, "openrouter/x/y", raw.Metrics.Model)
+}
+
+func TestPiUsesReportedModelWithoutConfiguredModel(t *testing.T) {
+	provider := NewPiProvider("pi")
+	provider.runCLI = func(context.Context, []string, map[string]string, string, int, []byte) (*CLIResult, error) {
+		return &CLIResult{Stdout: piEventStream}, nil
+	}
+
+	raw, err := provider.Execute(context.Background(), "inspect", Options{})
+	require.NoError(t, err)
+	assert.Equal(t, "google/gemini-2.5-flash", raw.Metrics.Model)
+}
+
+func TestPiModelIsEmptyWhenNotConfiguredOrReported(t *testing.T) {
+	provider := NewPiProvider("pi")
+	provider.runCLI = func(context.Context, []string, map[string]string, string, int, []byte) (*CLIResult, error) {
+		return &CLIResult{Stdout: `{"type":"message_end","message":{"role":"assistant","content":"done"}}`}, nil
+	}
+
+	raw, err := provider.Execute(context.Background(), "inspect", Options{})
+	require.NoError(t, err)
+	assert.Empty(t, raw.Metrics.Model)
+}
+
 func TestPiFamilyPlanModeIsReadOnlyAndResumes(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -267,9 +300,13 @@ func TestBuildProviderPiFamily(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "*harness.PiProvider", fmt.Sprintf("%T", pi))
 	assert.Equal(t, "*harness.OMPProvider", fmt.Sprintf("%T", omp))
+
+	// Pi and OMP are additional providers: an empty name still resolves to the
+	// SDK default, aforge.
+	t.Setenv(ProviderEnvVar, "")
 	defaultProvider, err := BuildProvider("", "")
 	require.NoError(t, err)
-	assert.Equal(t, "*harness.OMPProvider", fmt.Sprintf("%T", defaultProvider))
+	assert.Equal(t, "*harness.AforgeProvider", fmt.Sprintf("%T", defaultProvider))
 }
 
 func TestPiFamilyMissingBinaryIncludesInstallGuidance(t *testing.T) {

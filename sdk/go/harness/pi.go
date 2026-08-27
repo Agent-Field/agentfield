@@ -160,6 +160,9 @@ func (p *piFamilyProvider) execute(ctx context.Context, prompt string, options O
 	}
 
 	raw := parsePiJSONL(cliResult.Stdout)
+	if model != "" {
+		raw.Metrics.Model = model
+	}
 	raw.Metrics.DurationAPIMS = apiMS
 	raw.ReturnCode = cliResult.ReturnCode
 	stderr := StripANSI(strings.TrimSpace(cliResult.Stderr))
@@ -236,6 +239,9 @@ func parsePiJSONL(stdout string) *RawResult {
 		message, ok := event["message"].(map[string]any)
 		if !ok || message["role"] != "assistant" {
 			continue
+		}
+		if model, ok := message["model"].(string); ok {
+			raw.Metrics.Model = model
 		}
 		if text := piMessageText(message); text != "" {
 			raw.Result = text

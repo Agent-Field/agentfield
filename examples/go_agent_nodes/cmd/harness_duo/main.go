@@ -57,9 +57,9 @@ func main() {
 	}
 
 	registerWorker(duo, "pi_worker", harness.ProviderPi, "PI_BIN")
-	// Omit Provider intentionally: this branch demonstrates that OMP is the
-	// cross-SDK default while still allowing OMP_BIN to select the executable.
-	registerWorker(duo, "omp_worker", "", "OMP_BIN")
+	// Both branches name their provider explicitly. Omitting Provider would
+	// select the SDK default, aforge — not OMP.
+	registerWorker(duo, "omp_worker", harness.ProviderOMP, "OMP_BIN")
 
 	duo.RegisterReasoner("compare", func(ctx context.Context, input map[string]any) (any, error) {
 		branchInput := map[string]any{
@@ -105,9 +105,6 @@ func main() {
 
 func registerWorker(duo *agent.Agent, reasoner, provider, binEnv string) {
 	providerName := provider
-	if providerName == "" {
-		providerName = harness.DefaultProvider
-	}
 	duo.RegisterReasoner(reasoner, func(ctx context.Context, input map[string]any) (any, error) {
 		model := inputString(input, "model", envOr("HARNESS_MODEL", defaultModel))
 		root := inputString(input, "project_dir", projectDir())

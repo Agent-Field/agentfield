@@ -68,7 +68,7 @@ Everything else is a variation.
 
 Less-used but real:
 - **`@app.skill()`** — deterministic functions you want callable through the control plane (no LLM).
-- **`app.harness(prompt, provider="claude-code"|"codex"|"gemini"|"opencode"|"pi"|"omp")`** — delegates to an external coding-agent CLI. OMP is the SDK default when `provider` is omitted. Heavy. **Only use when `af doctor` reports `harness_usable: true` AND the Dockerfile installs the selected CLI AND `shutil.which()` guards startup.** Otherwise use `app.ai(tools=[...])`.
+- **`app.harness(prompt, provider="aforge"|"claude-code"|"codex"|"gemini"|"opencode"|"pi"|"omp")`** — delegates to an external coding-agent CLI. `aforge`, AgentField's own harness, is the SDK default when `provider` is omitted. Heavy. **Only use when `af doctor` reports `harness_usable: true` AND the Dockerfile installs the selected CLI AND `shutil.which()` guards startup.** Otherwise use `app.ai(tools=[...])`.
 
 Full signatures, schemas, router surface, memory scopes, and the cross-boundary serialization gotcha are in `references/primitives-snapshot.md` (offline-frozen). **Prefer the live `agentfield.ai/llms-full.txt`** when you have a network — it is the source of truth and it does not drift.
 

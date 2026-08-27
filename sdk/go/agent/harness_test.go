@@ -40,12 +40,13 @@ func TestHarnessRunner_LazyInitialization(t *testing.T) {
 }
 
 func TestHarnessRunner_DefaultOptions(t *testing.T) {
-	// Agent with no HarnessConfig — runner resolves the SDK default to OMP.
+	// Agent with no HarnessConfig — runner gets zero-value Options; the
+	// provider is resolved at dispatch time (explicit > env > "aforge").
 	a := newTestAgentForHarness(t)
 
 	runner := a.HarnessRunner()
 	assert.NotNil(t, runner)
-	assert.Equal(t, harness.ProviderOMP, runner.DefaultOptions.Provider)
+	assert.Equal(t, "", runner.DefaultOptions.Provider)
 	assert.Equal(t, "", runner.DefaultOptions.Model)
 }
 
@@ -165,11 +166,12 @@ func TestHarnessConfig_PartialOverride(t *testing.T) {
 }
 
 func TestHarness_NilHarnessConfig(t *testing.T) {
-	// Agent with nil HarnessConfig should still create a runner with OMP selected.
+	// Agent with nil HarnessConfig should still create a runner with default (empty) options
 	a := newTestAgentForHarness(t)
 	assert.Nil(t, a.cfg.HarnessConfig)
 
 	runner := a.HarnessRunner()
 	assert.NotNil(t, runner)
-	assert.Equal(t, harness.Options{Provider: harness.ProviderOMP}, runner.DefaultOptions)
+	// Default options should be zero
+	assert.Equal(t, harness.Options{}, runner.DefaultOptions)
 }

@@ -284,7 +284,7 @@ describe('harness usage capture', () => {
       cost_usd: 0.25,
       cost_source: 'provider',
       total_tokens: 0,
-      harness: 'omp'
+      harness: 'aforge'
     });
 
     // Neither tokens nor cost -> no entry.

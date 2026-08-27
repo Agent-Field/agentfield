@@ -1,6 +1,6 @@
 # `.harness()` — First-Class Coding Agent Integration for AgentField
 
-> **Status**: Implemented; updated for Pi/OMP parity and OMP default
+> **Status**: Implemented; updated for Pi/OMP parity (aforge remains the default)
 > **Author**: Architecture brainstorm
 > **Scope**: Python, TypeScript, and Go SDKs
 > **Date**: 2026-03-02
@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-Add `.harness()` as a first-class method on the Agent class — matching the DX of `.ai()` — enabling developers to dispatch multi-turn coding tasks to external coding agents (OMP, Pi, Claude Code, Codex, Gemini CLI, and OpenCode). OMP is the zero-configuration provider default in every SDK.
+Add `.harness()` as a first-class method on the Agent class — matching the DX of `.ai()` — enabling developers to dispatch multi-turn coding tasks to coding agents (AForge, Claude Code, Codex, Gemini CLI, OpenCode, Pi, and OMP). AForge, AgentField's own harness, is the provider default in every SDK; Pi and OMP are additional providers selected explicitly.
 
 **Key principle**: `.ai()` is for single-turn LLM calls. `.harness()` is for multi-turn agentic coding tasks that browse files, edit code, run tests, and iterate.
 
@@ -214,7 +214,7 @@ class Agent(FastAPI):
 | **gemini** | CLI subprocess `gemini --output-format stream-json` | CLI subprocess | CLI subprocess | File-write (universal) |
 | **opencode** | CLI subprocess | CLI subprocess | CLI subprocess | File-write (universal) |
 | **pi** | CLI subprocess | CLI subprocess | CLI subprocess | File-write (universal) |
-| **omp** (default) | CLI subprocess | CLI subprocess | CLI subprocess | File-write (universal) |
+| **omp** | CLI subprocess | CLI subprocess | CLI subprocess | File-write (universal) |
 
 ### 4.2 Why SDK-First Where Available
 
