@@ -105,6 +105,7 @@ vi.mock('@ai-sdk/cohere', () => ({
 }));
 
 import { AIClient } from '../src/ai/AIClient.js';
+import { Audio, Image } from '../src/ai/multimodal.js';
 
 describe('AIClient extra coverage', () => {
   beforeEach(() => {
@@ -160,6 +161,35 @@ describe('AIClient extra coverage', () => {
       maxOutputTokens: 22
     }));
     expect(chunks).toEqual(['one', 'two']);
+  });
+
+  it('passes multimodal content through generate and stream requests', async () => {
+    const client = new AIClient({ apiKey: 'test-key' });
+    const image = Image.fromUrl('https://example.com/image.png');
+    const audio = await Audio.fromBase64('YQ==', 'wav');
+
+    await client.generate('describe these inputs', { content: [image, audio] });
+    await client.stream('summarize these inputs', { content: [image] });
+
+    expect(generateTextMock).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'describe these inputs' },
+          { type: 'image', image: 'https://example.com/image.png' },
+          { type: 'file', data: 'YQ==', mimeType: 'audio/wav' }
+        ]
+      }]
+    }));
+    expect(streamTextMock).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'summarize these inputs' },
+          { type: 'image', image: 'https://example.com/image.png' }
+        ]
+      }]
+    }));
   });
 
   it('uses generateObject with JSON repair for structured output', async () => {
