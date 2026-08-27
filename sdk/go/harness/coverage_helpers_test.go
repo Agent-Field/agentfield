@@ -72,6 +72,28 @@ printf '%s\n' "KEEP_ME=$KEEP_ME"
 		assert.Contains(t, result.Stdout, "KEEP_ME=set")
 	})
 
+	t.Run("sets and increments harness depth while caller env wins", func(t *testing.T) {
+		dir := t.TempDir()
+		script := writeTestScript(t, dir, "print-depth", "#!/bin/sh\nprintf '%s' \"$AGENTFIELD_HARNESS_DEPTH\"\n")
+
+		for _, test := range []struct {
+			name, parent string
+			env          map[string]string
+			want         string
+		}{
+			{name: "first level", want: "1"},
+			{name: "nested", parent: "4", want: "5"},
+			{name: "caller override", parent: "4", env: map[string]string{"AGENTFIELD_HARNESS_DEPTH": "99"}, want: "99"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				t.Setenv("AGENTFIELD_HARNESS_DEPTH", test.parent)
+				result, err := RunCLI(context.Background(), []string{script}, test.env, "", 0)
+				require.NoError(t, err)
+				assert.Equal(t, test.want, result.Stdout)
+			})
+		}
+	})
+
 	t.Run("context cancellation returns a killed-process result with partial stdout", func(t *testing.T) {
 		dir := t.TempDir()
 		// Flush the line, give the reader a beat, then stall so the kill lands

@@ -68,6 +68,28 @@ describe('harness cli utilities', () => {
     });
   });
 
+  it.each([
+    [undefined, undefined, '1'],
+    ['4', undefined, '5'],
+    ['4', '99', '99']
+  ])('sets harness depth from parent %s and caller %s', async (parent, caller, expected) => {
+    if (parent === undefined) delete process.env.AGENTFIELD_HARNESS_DEPTH;
+    else process.env.AGENTFIELD_HARNESS_DEPTH = parent;
+    const proc = createProcess();
+    spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);
+
+    const pending = runCli(['node'], caller === undefined
+      ? undefined
+      : { env: { AGENTFIELD_HARNESS_DEPTH: caller } });
+
+    expect(spawnMock).toHaveBeenCalledWith('node', [], expect.objectContaining({
+      env: expect.objectContaining({ AGENTFIELD_HARNESS_DEPTH: expected })
+    }));
+    proc.emit('close', 0);
+    await pending;
+    delete process.env.AGENTFIELD_HARNESS_DEPTH;
+  });
+
   it('reports a signal death as a negative exit code', async () => {
     const proc = createProcess();
     spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);
