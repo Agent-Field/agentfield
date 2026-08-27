@@ -59,6 +59,16 @@ type payloadCleanupStore struct {
 	refs    map[string]struct{}
 }
 
+type blockingOrphanStore struct {
+	*cleanupStoreMock
+	release <-chan struct{}
+}
+
+func (s *blockingOrphanStore) ListPayloadURIs(context.Context) (map[string]struct{}, error) {
+	<-s.release
+	return nil, nil
+}
+
 func (s *payloadCleanupStore) ListExpiredExecutionPayloadURIs(context.Context, time.Duration, int) ([]string, error) {
 	return s.expired, nil
 }
@@ -327,6 +337,31 @@ func TestExecutionCleanupService_StartClampsInvalidTickerInterval(t *testing.T) 
 	if service.config.CleanupInterval != config.DefaultExecutionCleanupInterval {
 		t.Fatalf("interval was not clamped: %s", service.config.CleanupInterval)
 	}
+	if err := service.Stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionCleanupService_StartDoesNotWaitForOrphanSweep(t *testing.T) {
+	setupExecutionCleanupTestLogger(t)
+	release := make(chan struct{})
+	store := &blockingOrphanStore{cleanupStoreMock: &cleanupStoreMock{}, release: release}
+	service := NewExecutionCleanupService(store, testExecutionCleanupConfig(10), &cleanupPayloadStore{})
+	service.initialDelay = time.Hour
+
+	started := make(chan error, 1)
+	go func() { started <- service.Start(context.Background()) }()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		close(release)
+		t.Fatal("Start blocked on orphan sweep")
+	}
+
+	close(release)
 	if err := service.Stop(); err != nil {
 		t.Fatal(err)
 	}

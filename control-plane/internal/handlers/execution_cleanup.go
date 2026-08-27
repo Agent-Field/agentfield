@@ -76,7 +76,6 @@ func (ecs *ExecutionCleanupService) Start(ctx context.Context) error {
 		Dur("stale_timeout", ecs.config.StaleExecutionTimeout).
 		Int("batch_size", ecs.config.BatchSize).
 		Msg("execution cleanup configuration")
-	ecs.sweepOrphans(ctx)
 
 	ecs.isRunning = true
 	ecs.wg.Add(1)
