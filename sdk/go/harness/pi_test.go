@@ -294,6 +294,55 @@ func TestPiFamilyExecutionFailures(t *testing.T) {
 	}
 }
 
+func TestPiFamilyRecoveredTurnIsNotAnError(t *testing.T) {
+	tests := []struct {
+		name            string
+		stdout          string
+		wantResult      string
+		wantIsError     bool
+		wantFailureType FailureType
+		wantError       string
+	}{
+		{
+			name: "error then recovery",
+			stdout: `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"partial"}],"stopReason":"error","errorMessage":"upstream 503"}}
+{"type":"turn_end"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"FINAL ANSWER"}],"stopReason":"stop"}}
+{"type":"turn_end"}`,
+			wantResult:      "FINAL ANSWER",
+			wantFailureType: FailureNone,
+		},
+		{
+			name: "last message is an error",
+			stdout: `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"partial"}],"stopReason":"stop"}}
+{"type":"turn_end"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"FINAL ANSWER"}],"stopReason":"error","errorMessage":"upstream 503"}}
+{"type":"turn_end"}`,
+			wantResult:      "FINAL ANSWER",
+			wantIsError:     true,
+			wantFailureType: FailureAPIError,
+			wantError:       "upstream 503",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := NewPiProvider("pi").piFamilyProvider
+			provider.runCLI = func(context.Context, []string, map[string]string, string, int, []byte) (*CLIResult, error) {
+				return &CLIResult{Stdout: tc.stdout, ReturnCode: 0}, nil
+			}
+
+			raw, err := provider.execute(context.Background(), "inspect", Options{})
+			require.NoError(t, err)
+			require.NotNil(t, raw)
+			assert.Equal(t, tc.wantResult, raw.Result)
+			assert.Equal(t, tc.wantIsError, raw.IsError)
+			assert.Equal(t, tc.wantFailureType, raw.FailureType)
+			assert.Equal(t, tc.wantError, raw.ErrorMessage)
+		})
+	}
+}
+
 func TestPiFamilyNonzeroExitIsError(t *testing.T) {
 	p := NewPiProvider("pi")
 	p.runCLI = func(context.Context, []string, map[string]string, string, int, []byte) (*CLIResult, error) {

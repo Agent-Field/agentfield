@@ -118,6 +118,8 @@ def _parse_pi_events(
         if stop_reason in {"error", "aborted"}:
             detail = message.get("errorMessage") or message.get("error")
             provider_error = str(detail or f"Pi stopped with reason {stop_reason!r}.")
+        else:
+            provider_error = None
 
     if num_turns == 0 and result_text:
         num_turns = 1

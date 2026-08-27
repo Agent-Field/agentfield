@@ -113,6 +113,41 @@ it.each(providers)('$name classifies a provider event error', async ({ provider 
   });
 });
 
+it.each(providers)('$name clears a recovered provider event error', async ({ provider }) => {
+  const stdout = [
+    {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'partial' }],
+        stopReason: 'error',
+        errorMessage: 'upstream 503',
+      },
+    },
+    { type: 'turn_end' },
+    {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'FINAL ANSWER' }],
+        stopReason: 'stop',
+      },
+    },
+    { type: 'turn_end' },
+  ].map((event) => JSON.stringify(event)).join('\n');
+  vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+
+  const result = await provider.execute('hello', {});
+
+  expect(result).toMatchObject({
+    result: 'FINAL ANSWER',
+    isError: false,
+    failureType: 'none',
+    returnCode: 0,
+  });
+  expect(result.errorMessage).toBeUndefined();
+});
+
 it.each(providers)('$name classifies a successful exit without output', async ({ provider }) => {
   vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 

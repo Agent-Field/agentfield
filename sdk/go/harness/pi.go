@@ -264,6 +264,10 @@ func parsePiJSONL(stdout string) *RawResult {
 			if detail, ok := message["errorMessage"].(string); ok && detail != "" {
 				raw.ErrorMessage = detail
 			}
+		} else {
+			// Only the final message_end's stop reason decides: a turn that
+			// errored and then recovered must not be reported as a failure.
+			raw.ErrorMessage = ""
 		}
 	}
 

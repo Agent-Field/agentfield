@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from agentfield.harness._result import FailureType
 from agentfield.harness.providers._factory import build_provider
 from agentfield.harness.providers.pi import OMPProvider, PiProvider
 from agentfield.types import HarnessConfig
@@ -170,6 +171,45 @@ async def test_pi_family_nonzero_exit_is_error(monkeypatch: pytest.MonkeyPatch) 
 
     assert raw.is_error is True
     assert raw.error_message == "authentication failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [PiProvider, OMPProvider])
+async def test_pi_family_recovered_turn_is_not_an_error(
+    monkeypatch: pytest.MonkeyPatch, provider
+) -> None:
+    events = [
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "partial"}],
+                "stopReason": "error",
+                "errorMessage": "upstream 503",
+            },
+        },
+        {"type": "turn_end"},
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "FINAL ANSWER"}],
+                "stopReason": "stop",
+            },
+        },
+        {"type": "turn_end"},
+    ]
+
+    async def fake_run_cli(*_args, **_kwargs):
+        return "\n".join(json.dumps(event) for event in events), "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.pi.run_cli", fake_run_cli)
+    raw = await provider().execute("hello", {})
+
+    assert raw.result == "FINAL ANSWER"
+    assert raw.is_error is False
+    assert raw.failure_type == FailureType.NONE
+    assert raw.error_message is None
 
 
 def test_factory_builds_pi_and_omp_with_configured_binaries() -> None:

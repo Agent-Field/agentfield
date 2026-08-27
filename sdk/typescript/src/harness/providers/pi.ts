@@ -96,6 +96,8 @@ function parsePiEvents(events: Array<Record<string, unknown>>, configuredModel?:
       providerError = String(
         message.errorMessage ?? message.error ?? `Pi stopped with reason ${String(message.stopReason)}.`
       );
+    } else {
+      providerError = undefined;
     }
   }
 
