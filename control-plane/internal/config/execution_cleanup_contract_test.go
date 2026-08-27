@@ -1,11 +1,22 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestLoadConfigHonorsExplicitExecutionCleanupDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentfield.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("agentfield:\n  execution_cleanup:\n    enabled: false\n"), 0o600))
+
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+	require.False(t, cfg.AgentField.ExecutionCleanup.Enabled)
+}
 
 func TestExecutionCleanupDefaultsWithoutConfiguration(t *testing.T) {
 	cfg := Config{}

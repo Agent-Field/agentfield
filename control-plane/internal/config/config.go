@@ -215,6 +215,7 @@ type NodeHealthConfig struct {
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
 type ExecutionCleanupConfig struct {
 	Enabled                bool          `yaml:"enabled" mapstructure:"enabled" default:"true"`
+	enabledSet             bool          `yaml:"-" mapstructure:"-"`
 	RetentionPeriod        time.Duration `yaml:"retention_period" mapstructure:"retention_period" default:"24h"`
 	CleanupInterval        time.Duration `yaml:"cleanup_interval" mapstructure:"cleanup_interval" default:"1h"`
 	BatchSize              int           `yaml:"batch_size" mapstructure:"batch_size" default:"100"`
@@ -223,6 +224,30 @@ type ExecutionCleanupConfig struct {
 	MaxRetries             int           `yaml:"max_retries" mapstructure:"max_retries" default:"0"`
 	RetryBackoff           time.Duration `yaml:"retry_backoff" mapstructure:"retry_backoff" default:"30s"`
 	PayloadOrphanGrace     time.Duration `yaml:"payload_orphan_grace" mapstructure:"payload_orphan_grace"`
+}
+
+// UnmarshalYAML records whether enabled was explicitly configured, including
+// the otherwise indistinguishable enabled: false value.
+func (c *ExecutionCleanupConfig) UnmarshalYAML(node *yaml.Node) error {
+	type plain ExecutionCleanupConfig
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*c = ExecutionCleanupConfig(decoded)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == "enabled" {
+			c.enabledSet = true
+			break
+		}
+	}
+	return nil
+}
+
+// MarkExecutionCleanupEnabledConfigured preserves presence information for
+// loaders such as Viper whose struct unmarshalling cannot retain it.
+func MarkExecutionCleanupEnabledConfigured(cfg *Config) {
+	cfg.AgentField.ExecutionCleanup.enabledSet = true
 }
 
 const (
@@ -527,9 +552,7 @@ func ApplyDefaults(cfg *Config) {
 	// Cleanup is enabled by default so stale executions are still swept even
 	// when retention is disabled. A zero retention period intentionally means
 	// that finished rows are kept forever.
-	if !cleanup.Enabled && cleanup.RetentionPeriod == 0 && cleanup.CleanupInterval == 0 &&
-		cleanup.BatchSize == 0 && cleanup.PreserveRecentDuration == 0 &&
-		cleanup.StaleExecutionTimeout == 0 && cleanup.MaxRetries == 0 && cleanup.RetryBackoff == 0 {
+	if !cleanup.enabledSet && !cleanup.Enabled {
 		cleanup.Enabled = true
 	}
 	if cleanup.CleanupInterval <= 0 {
@@ -755,7 +778,9 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 
 	// Execution retry overrides
-	applyBoolEnv("AGENTFIELD_EXECUTION_CLEANUP_ENABLED", &cfg.AgentField.ExecutionCleanup.Enabled)
+	if applyBoolEnv("AGENTFIELD_EXECUTION_CLEANUP_ENABLED", &cfg.AgentField.ExecutionCleanup.Enabled) {
+		cfg.AgentField.ExecutionCleanup.enabledSet = true
+	}
 	applyDurationEnv("AGENTFIELD_EXECUTION_RETENTION_PERIOD", &cfg.AgentField.ExecutionCleanup.RetentionPeriod)
 	applyDurationEnv("AGENTFIELD_EXECUTION_CLEANUP_INTERVAL", &cfg.AgentField.ExecutionCleanup.CleanupInterval)
 	if cfg.AgentField.ExecutionCleanup.CleanupInterval <= 0 {
@@ -957,15 +982,17 @@ func applyIntEnv(name string, target *int) {
 	}
 }
 
-func applyBoolEnv(name string, target *bool) {
+func applyBoolEnv(name string, target *bool) bool {
 	if value := os.Getenv(name); value != "" {
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
 			log.Printf("warning: invalid %s=%q: %v; keeping %t", name, value, err, *target)
-			return
+			return true
 		}
 		*target = parsed
+		return true
 	}
+	return false
 }
 
 func parseEnvBool(value string) bool {
