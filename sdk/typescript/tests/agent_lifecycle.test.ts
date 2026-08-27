@@ -53,6 +53,7 @@ describe('Agent lifecycle', () => {
   });
 
   afterEach(() => {
+    delete process.env.AGENTFIELD_SHUTDOWN_TIMEOUT;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -193,5 +194,101 @@ describe('Agent lifecycle', () => {
     expect(register).toHaveBeenCalledTimes(1);
     expect(listen).not.toHaveBeenCalled();
     expect(heartbeat).not.toHaveBeenCalled();
+  });
+
+  it('notifies before closing the server and waits for in-flight executions to settle', async () => {
+    const order: string[] = [];
+    let settleExecution!: () => void;
+    const execution = new Promise<void>(resolve => { settleExecution = resolve; })
+      .then(() => { order.push('settled'); });
+    vi.spyOn(AgentFieldClient.prototype, 'shutdown').mockImplementation(async () => {
+      order.push('notified');
+      return {};
+    });
+    const agent = new Agent({
+      nodeId: 'agent-1', agentFieldUrl: 'http://control-plane.local', didEnabled: false
+    });
+    const fakeServer = createFakeServer();
+    fakeServer.close.mockImplementation((callback?: (err?: Error) => void) => {
+      order.push('closed');
+      callback?.();
+      return fakeServer;
+    });
+    const internals = agent as any;
+    internals.server = fakeServer;
+    internals.inFlightExecutions.set('exec-1', execution);
+
+    const shutdown = agent.shutdown();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual(['notified', 'closed']);
+    settleExecution();
+    await shutdown;
+    expect(order).toEqual(['notified', 'closed', 'settled']);
+  });
+
+  it('serve signal handling is opt-out and shutdown removes default listeners', async () => {
+    vi.spyOn(AgentFieldClient.prototype, 'register').mockResolvedValue({});
+    vi.spyOn(AgentFieldClient.prototype, 'heartbeat').mockResolvedValue({ status: 'running', node_id: 'agent-1' });
+    vi.spyOn(MemoryEventClient.prototype, 'start').mockImplementation(() => {});
+    vi.spyOn(MemoryEventClient.prototype, 'stop').mockImplementation(() => {});
+    const baselineTerm = process.listenerCount('SIGTERM');
+    const baselineInt = process.listenerCount('SIGINT');
+
+    const optOut = new Agent({
+      nodeId: 'opt-out', agentFieldUrl: 'http://control-plane.local', didEnabled: false, port: 4123
+    });
+    attachFakeListener(optOut, createFakeServer());
+    await optOut.serve({ handleSignals: false });
+    expect(process.listenerCount('SIGTERM')).toBe(baselineTerm);
+    expect(process.listenerCount('SIGINT')).toBe(baselineInt);
+    await optOut.shutdown();
+
+    const defaultAgent = new Agent({
+      nodeId: 'default', agentFieldUrl: 'http://control-plane.local', didEnabled: false, port: 4123
+    });
+    attachFakeListener(defaultAgent, createFakeServer());
+    await defaultAgent.serve();
+    expect(process.listenerCount('SIGTERM')).toBe(baselineTerm + 1);
+    expect(process.listenerCount('SIGINT')).toBe(baselineInt + 1);
+    await defaultAgent.shutdown();
+    expect(process.listenerCount('SIGTERM')).toBe(baselineTerm);
+    expect(process.listenerCount('SIGINT')).toBe(baselineInt);
+  });
+
+  it('timeout cancels a non-paused in-flight execution and awaits settlement', async () => {
+    process.env.AGENTFIELD_SHUTDOWN_TIMEOUT = '0.01s';
+    let settleExecution!: () => void;
+    let settled = false;
+    const execution = new Promise<void>(resolve => { settleExecution = resolve; })
+      .then(() => { settled = true; });
+    const agent = new Agent({
+      nodeId: 'agent-1', agentFieldUrl: 'http://control-plane.local', didEnabled: false
+    });
+    const internals = agent as any;
+    internals.server = createFakeServer();
+    internals.inFlightExecutions.set('exec-active', execution);
+    const cancel = vi.spyOn(internals.cancelRegistry, 'cancel').mockImplementation((id: string) => {
+      expect(id).toBe('exec-active');
+      settleExecution();
+      return true;
+    });
+
+    const shutdown = agent.shutdown();
+    await vi.advanceTimersByTimeAsync(10);
+    await shutdown;
+
+    expect(cancel).toHaveBeenCalledWith('exec-active', 'shutdown_timeout');
+    expect(internals.pauseClocks.has('exec-active')).toBe(false);
+    expect(settled).toBe(true);
+    delete process.env.AGENTFIELD_SHUTDOWN_TIMEOUT;
+  });
+
+  it('returns the same promise when shutdown is called twice', () => {
+    const agent = new Agent({
+      nodeId: 'agent-1', agentFieldUrl: 'http://control-plane.local', didEnabled: false
+    });
+    const first = agent.shutdown();
+    expect(agent.shutdown()).toBe(first);
+    return first;
   });
 });
