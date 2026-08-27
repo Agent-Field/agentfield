@@ -2,12 +2,14 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -332,6 +334,48 @@ func (a *Agent) startLeaseLoop() {
 }
 
 func (a *Agent) shutdown(ctx context.Context) error {
+	return a.shutdownWithOptions(ctx, true, a.cfg.ShutdownTimeout)
+}
+
+func resolveShutdownTimeout(value string, logger interface{ Printf(string, ...any) }) time.Duration {
+	const fallback = 30 * time.Second
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if duration, err := time.ParseDuration(value); err == nil && duration >= 0 {
+		return duration
+	}
+	logger.Printf("invalid AGENTFIELD_SHUTDOWN_TIMEOUT %q; using %s", value, fallback)
+	return fallback
+}
+
+type shutdownRequest struct {
+	Graceful       bool `json:"graceful"`
+	TimeoutSeconds int  `json:"timeout_seconds"`
+}
+
+func (a *Agent) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	req := shutdownRequest{Graceful: true}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	timeout := a.cfg.ShutdownTimeout
+	if req.TimeoutSeconds > 0 {
+		timeout = time.Duration(req.TimeoutSeconds) * time.Second
+	}
+	w.WriteHeader(http.StatusAccepted)
+	go func() { _ = a.shutdownWithOptions(context.Background(), req.Graceful, timeout) }()
+}
+
+func (a *Agent) shutdownWithOptions(ctx context.Context, graceful bool, timeout time.Duration) error {
 	a.logExecutionInfo(ctx, "agent.shutdown.start", "shutting down agent", map[string]any{
 		"node_id": a.cfg.NodeID,
 	})
@@ -339,12 +383,6 @@ func (a *Agent) shutdown(ctx context.Context) error {
 	case <-a.stopLease:
 	default:
 		close(a.stopLease)
-	}
-
-	// Unblock any reasoner still parked in Agent.Pause() so shutdown does not
-	// hang waiting on an approval callback that will never arrive.
-	if a.pauseManager != nil {
-		a.pauseManager.CancelAll()
 	}
 
 	if a.client != nil {
@@ -356,17 +394,41 @@ func (a *Agent) shutdown(ctx context.Context) error {
 			})
 		}
 	}
+	a.shutdownMu.Lock()
+	a.shuttingDown = true
+	a.shutdownMu.Unlock()
 
 	a.serverMu.RLock()
 	server := a.server
 	a.serverMu.RUnlock()
 
 	if server != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			return err
+		_ = server.Shutdown(shutdownCtx)
+	}
+	if graceful {
+		done := make(chan struct{})
+		go func() { a.executionWG.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(timeout):
+			a.cancelMu.Lock()
+			for _, cancel := range a.cancelFuncs {
+				cancel()
+			}
+			a.cancelMu.Unlock()
+			if a.pauseManager != nil {
+				a.pauseManager.CancelAll()
+			}
+			<-done
 		}
+	} else {
+		a.cancelMu.Lock()
+		for _, cancel := range a.cancelFuncs {
+			cancel()
+		}
+		a.cancelMu.Unlock()
 	}
 	a.logExecutionInfo(ctx, "agent.shutdown.complete", "agent shutdown complete", map[string]any{
 		"node_id": a.cfg.NodeID,
