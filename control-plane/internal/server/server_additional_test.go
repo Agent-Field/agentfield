@@ -37,6 +37,18 @@ func TestInitCatalogAndKnowledgeBase(t *testing.T) {
 	require.NotNil(t, kb.Get("observability/metrics"))
 }
 
+func TestNewPayloadStore(t *testing.T) {
+	t.Run("postgres keeps payloads in the database", func(t *testing.T) {
+		require.Nil(t, newPayloadStore("postgres", t.TempDir()))
+		require.Nil(t, newPayloadStore(" POSTGRES ", t.TempDir()))
+	})
+
+	t.Run("local storage retains file payloads", func(t *testing.T) {
+		store := newPayloadStore("local", t.TempDir())
+		require.IsType(t, &services.FilePayloadStore{}, store)
+	})
+}
+
 func TestConfigReloadFn(t *testing.T) {
 	t.Run("disabled when config source is not db", func(t *testing.T) {
 		t.Setenv("AGENTFIELD_CONFIG_SOURCE", "")

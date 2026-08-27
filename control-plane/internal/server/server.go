@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -429,7 +430,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		})
 	}
 
-	payloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
+	payloadStore := newPayloadStore(cfg.Storage.Mode, dirs.PayloadsDir)
 
 	// Configure SSRF-safe webhook client allowlist. Hosts/CIDRs listed here
 	// bypass the private-IP check (e.g. for internal Docker/K8s service names).
@@ -582,6 +583,13 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		kb:                     initKnowledgeBase(),
 		knowledgeService:       knowledgeService,
 	}, nil
+}
+
+func newPayloadStore(storageMode, payloadsDir string) services.PayloadStore {
+	if strings.EqualFold(strings.TrimSpace(storageMode), "postgres") {
+		return nil
+	}
+	return services.NewFilePayloadStore(payloadsDir)
 }
 
 // configReloadFn returns a function that reloads config from the database,
