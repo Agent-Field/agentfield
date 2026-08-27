@@ -307,12 +307,13 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 | Feature | How |
 |---|---|
-| Sync execution (REST) | `POST /api/v1/execute/{agent}.{func}` |
-| Async (fire-and-forget) | `POST /api/v1/execute/async/{agent}.{func}` |
+| Sync execution (REST) | [`POST /api/v1/execute/{agent}.{func}`](docs/api/EXECUTE.md) |
+| Async (fire-and-forget) | [`POST /api/v1/execute/async/{agent}.{func}`](docs/api/EXECUTE.md) |
 | Webhooks + HMAC-SHA256 signing | `AsyncConfig(webhook_url="...", secret="...")` |
 | SSE streaming (real-time) | `/api/v1/execute/stream/{id}` |
 | No timeout limits (hours/days) | Control plane allows unlimited duration |
 | Execution polling | `GET /api/v1/executions/{id}` |
+| Restart/replay | [`POST /api/v1/executions/{id}/restart`](docs/api/EXECUTION_RESTART.md) |
 | Batch status checks | `POST /api/v1/executions/batch-status` |
 | Progress updates mid-execution | Intermediate payloads during long tasks |
 | Auto retries + exponential backoff | Transparent - control plane handles |
