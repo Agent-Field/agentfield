@@ -1,7 +1,8 @@
 package config
 
 import (
-	"fmt"           // Added for fmt.Errorf
+	"fmt" // Added for fmt.Errorf
+	"log"
 	"os"            // Added for os.Stat, os.ReadFile
 	"path/filepath" // Added for filepath.Join
 	"strconv"
@@ -221,7 +222,13 @@ type ExecutionCleanupConfig struct {
 	StaleExecutionTimeout  time.Duration `yaml:"stale_execution_timeout" mapstructure:"stale_execution_timeout" default:"30m"`
 	MaxRetries             int           `yaml:"max_retries" mapstructure:"max_retries" default:"0"`
 	RetryBackoff           time.Duration `yaml:"retry_backoff" mapstructure:"retry_backoff" default:"30s"`
+	PayloadOrphanGrace     time.Duration `yaml:"payload_orphan_grace" mapstructure:"payload_orphan_grace"`
 }
+
+const (
+	DefaultExecutionCleanupInterval = 5 * time.Minute
+	DefaultAgentCallTimeout         = 90 * time.Second
+)
 
 // ExecutionQueueConfig configures execution and webhook settings.
 type ExecutionQueueConfig struct {
@@ -516,6 +523,39 @@ func LoadConfig(configPath string) (*Config, error) {
 
 // ApplyDefaults fills values that should be stable across config loaders.
 func ApplyDefaults(cfg *Config) {
+	cleanup := &cfg.AgentField.ExecutionCleanup
+	// Cleanup is enabled by default so stale executions are still swept even
+	// when retention is disabled. A zero retention period intentionally means
+	// that finished rows are kept forever.
+	if !cleanup.Enabled && cleanup.RetentionPeriod == 0 && cleanup.CleanupInterval == 0 &&
+		cleanup.BatchSize == 0 && cleanup.PreserveRecentDuration == 0 &&
+		cleanup.StaleExecutionTimeout == 0 && cleanup.MaxRetries == 0 && cleanup.RetryBackoff == 0 {
+		cleanup.Enabled = true
+	}
+	if cleanup.CleanupInterval <= 0 {
+		if cleanup.CleanupInterval < 0 {
+			log.Printf("warning: execution cleanup interval %s is invalid; using %s", cleanup.CleanupInterval, DefaultExecutionCleanupInterval)
+		}
+		cleanup.CleanupInterval = DefaultExecutionCleanupInterval
+	}
+	if cleanup.StaleExecutionTimeout == 0 {
+		cleanup.StaleExecutionTimeout = 30 * time.Minute
+	}
+	if cleanup.BatchSize <= 0 {
+		cleanup.BatchSize = 200
+	}
+	if cleanup.PreserveRecentDuration == 0 {
+		cleanup.PreserveRecentDuration = time.Hour
+	}
+	if cleanup.RetryBackoff == 0 {
+		cleanup.RetryBackoff = 30 * time.Second
+	}
+	if cleanup.PayloadOrphanGrace <= 0 {
+		cleanup.PayloadOrphanGrace = time.Hour
+	}
+	if cfg.AgentField.ExecutionQueue.AgentCallTimeout <= 0 {
+		cfg.AgentField.ExecutionQueue.AgentCallTimeout = DefaultAgentCallTimeout
+	}
 	if cfg.AgentField.ARD.Publish.DefaultType == "" {
 		cfg.AgentField.ARD.Publish.DefaultType = "application/openapi+json"
 	}
@@ -715,6 +755,18 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 
 	// Execution retry overrides
+	applyBoolEnv("AGENTFIELD_EXECUTION_CLEANUP_ENABLED", &cfg.AgentField.ExecutionCleanup.Enabled)
+	applyDurationEnv("AGENTFIELD_EXECUTION_RETENTION_PERIOD", &cfg.AgentField.ExecutionCleanup.RetentionPeriod)
+	applyDurationEnv("AGENTFIELD_EXECUTION_CLEANUP_INTERVAL", &cfg.AgentField.ExecutionCleanup.CleanupInterval)
+	if cfg.AgentField.ExecutionCleanup.CleanupInterval <= 0 {
+		log.Printf("warning: execution cleanup interval %s is invalid; using %s", cfg.AgentField.ExecutionCleanup.CleanupInterval, DefaultExecutionCleanupInterval)
+		cfg.AgentField.ExecutionCleanup.CleanupInterval = DefaultExecutionCleanupInterval
+	}
+	applyDurationEnv("AGENTFIELD_EXECUTION_STALE_TIMEOUT", &cfg.AgentField.ExecutionCleanup.StaleExecutionTimeout)
+	applyIntEnv("AGENTFIELD_EXECUTION_CLEANUP_BATCH_SIZE", &cfg.AgentField.ExecutionCleanup.BatchSize)
+	applyDurationEnv("AGENTFIELD_EXECUTION_PRESERVE_RECENT", &cfg.AgentField.ExecutionCleanup.PreserveRecentDuration)
+	applyDurationEnv("AGENTFIELD_PAYLOAD_ORPHAN_GRACE", &cfg.AgentField.ExecutionCleanup.PayloadOrphanGrace)
+	applyDurationEnv("AGENTFIELD_AGENT_CALL_TIMEOUT", &cfg.AgentField.ExecutionQueue.AgentCallTimeout)
 	if val := os.Getenv("AGENTFIELD_EXECUTION_MAX_RETRIES"); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.AgentField.ExecutionCleanup.MaxRetries = i
@@ -880,6 +932,39 @@ func ApplyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("AGENTFIELD_LOG_REDACT_PAYLOADS"); val != "" {
 		b := parseEnvBool(val)
 		cfg.Logging.RedactPayloads = &b
+	}
+}
+
+func applyDurationEnv(name string, target *time.Duration) {
+	if value := os.Getenv(name); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			log.Printf("warning: invalid %s=%q: %v; keeping %s", name, value, err, *target)
+			return
+		}
+		*target = parsed
+	}
+}
+
+func applyIntEnv(name string, target *int) {
+	if value := os.Getenv(name); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			log.Printf("warning: invalid %s=%q: %v; keeping %d", name, value, err, *target)
+			return
+		}
+		*target = parsed
+	}
+}
+
+func applyBoolEnv(name string, target *bool) {
+	if value := os.Getenv(name); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			log.Printf("warning: invalid %s=%q: %v; keeping %t", name, value, err, *target)
+			return
+		}
+		*target = parsed
 	}
 }
 

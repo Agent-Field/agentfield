@@ -1,0 +1,60 @@
+package config
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestExecutionCleanupDefaultsWithoutConfiguration(t *testing.T) {
+	cfg := Config{}
+	ApplyDefaults(&cfg)
+	require.True(t, cfg.AgentField.ExecutionCleanup.Enabled)
+	require.Zero(t, cfg.AgentField.ExecutionCleanup.RetentionPeriod)
+	require.Equal(t, 5*time.Minute, cfg.AgentField.ExecutionCleanup.CleanupInterval)
+	require.Equal(t, 30*time.Minute, cfg.AgentField.ExecutionCleanup.StaleExecutionTimeout)
+	require.Equal(t, 200, cfg.AgentField.ExecutionCleanup.BatchSize)
+	require.Equal(t, time.Hour, cfg.AgentField.ExecutionCleanup.PayloadOrphanGrace)
+	require.Equal(t, 90*time.Second, cfg.AgentField.ExecutionQueue.AgentCallTimeout)
+}
+
+func TestExecutionCleanupEnvironmentOverridesAndMalformedValues(t *testing.T) {
+	cfg := Config{}
+	ApplyDefaults(&cfg)
+	values := map[string]string{
+		"AGENTFIELD_EXECUTION_CLEANUP_ENABLED": "false", "AGENTFIELD_EXECUTION_RETENTION_PERIOD": "72h",
+		"AGENTFIELD_EXECUTION_CLEANUP_INTERVAL": "30s", "AGENTFIELD_EXECUTION_STALE_TIMEOUT": "45m",
+		"AGENTFIELD_EXECUTION_CLEANUP_BATCH_SIZE": "321", "AGENTFIELD_EXECUTION_PRESERVE_RECENT": "2h",
+		"AGENTFIELD_PAYLOAD_ORPHAN_GRACE": "3h", "AGENTFIELD_AGENT_CALL_TIMEOUT": "4m",
+	}
+	for name, value := range values {
+		t.Setenv(name, value)
+	}
+	ApplyEnvOverrides(&cfg)
+	require.False(t, cfg.AgentField.ExecutionCleanup.Enabled)
+	require.Equal(t, 72*time.Hour, cfg.AgentField.ExecutionCleanup.RetentionPeriod)
+	require.Equal(t, 30*time.Second, cfg.AgentField.ExecutionCleanup.CleanupInterval)
+	require.Equal(t, 45*time.Minute, cfg.AgentField.ExecutionCleanup.StaleExecutionTimeout)
+	require.Equal(t, 321, cfg.AgentField.ExecutionCleanup.BatchSize)
+	require.Equal(t, 2*time.Hour, cfg.AgentField.ExecutionCleanup.PreserveRecentDuration)
+	require.Equal(t, 3*time.Hour, cfg.AgentField.ExecutionCleanup.PayloadOrphanGrace)
+	require.Equal(t, 4*time.Minute, cfg.AgentField.ExecutionQueue.AgentCallTimeout)
+	t.Setenv("AGENTFIELD_EXECUTION_RETENTION_PERIOD", "invalid")
+	t.Setenv("AGENTFIELD_EXECUTION_CLEANUP_BATCH_SIZE", "invalid")
+	ApplyEnvOverrides(&cfg)
+	require.Equal(t, 72*time.Hour, cfg.AgentField.ExecutionCleanup.RetentionPeriod)
+	require.Equal(t, 321, cfg.AgentField.ExecutionCleanup.BatchSize)
+}
+
+func TestExecutionCleanupNonPositiveIntervalIsClamped(t *testing.T) {
+	for _, value := range []string{"0s", "-1s"} {
+		t.Run(value, func(t *testing.T) {
+			cfg := Config{}
+			ApplyDefaults(&cfg)
+			t.Setenv("AGENTFIELD_EXECUTION_CLEANUP_INTERVAL", value)
+			ApplyEnvOverrides(&cfg)
+			require.Equal(t, DefaultExecutionCleanupInterval, cfg.AgentField.ExecutionCleanup.CleanupInterval)
+		})
+	}
+}

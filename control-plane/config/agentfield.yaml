@@ -5,7 +5,7 @@ agentfield:
     serverless_discovery_allowed_hosts: [] # Optional extra hosts allowed for server-side /discover fetches; localhost/loopback are always allowed.
   execution_cleanup:
     enabled: true
-    retention_period: 72h
+    retention_period: 0 # 0 = keep forever; set e.g. 72h to prune finished executions
     cleanup_interval: 5m
     batch_size: 200
     preserve_recent_duration: 1h
