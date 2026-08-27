@@ -303,14 +303,18 @@ func TestExecutionCleanupService_PerformCleanup_CleansStaleExecutionsInBatches(t
 func TestExecutionCleanupService_RemovesDeletedPayloadsAndSweepsOrphans(t *testing.T) {
 	setupExecutionCleanupTestLogger(t)
 	store := &payloadCleanupStore{cleanupStoreMock: &cleanupStoreMock{cleanupResponses: []cleanupResponse{{count: 1}}}, expired: []string{"payload://input", "payload://result"}, refs: map[string]struct{}{"payload://live": {}}}
-	payloads := &cleanupPayloadStore{}
-	service := NewExecutionCleanupService(store, testExecutionCleanupConfig(10), payloads)
+	var writePayloads services.PayloadStore
+	gcPayloads := &cleanupPayloadStore{}
+	service := NewExecutionCleanupService(store, testExecutionCleanupConfig(10), gcPayloads)
 	service.performCleanup(context.Background())
-	if !payloads.swept {
+	if writePayloads != nil {
+		t.Fatal("test requires a nil execution write store")
+	}
+	if !gcPayloads.swept {
 		t.Fatal("expected orphan sweep on cleanup pass")
 	}
-	if strings.Join(payloads.removed, ",") != "payload://input,payload://result" {
-		t.Fatalf("unexpected removed payloads: %v", payloads.removed)
+	if strings.Join(gcPayloads.removed, ",") != "payload://input,payload://result" {
+		t.Fatalf("unexpected removed payloads: %v", gcPayloads.removed)
 	}
 }
 
