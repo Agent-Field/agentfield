@@ -794,7 +794,15 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 
 	// Enrich with approval fields from workflow execution (if available)
 	if h.storage != nil {
-		if wfExec, err := h.storage.GetWorkflowExecution(ctx, exec.ExecutionID); err == nil && wfExec != nil {
+		workflowExecutions, _ := h.storage.QueryWorkflowExecutions(ctx, types.WorkflowExecutionFilters{Search: &exec.ExecutionID, Limit: 20})
+		var wfExec *types.WorkflowExecution
+		for _, candidate := range workflowExecutions {
+			if candidate != nil && candidate.ExecutionID == exec.ExecutionID {
+				wfExec = candidate
+				break
+			}
+		}
+		if wfExec != nil {
 			resp.ID = wfExec.ID
 			resp.RetryCount = wfExec.RetryCount
 			resp.ApprovalRequestID = wfExec.ApprovalRequestID
