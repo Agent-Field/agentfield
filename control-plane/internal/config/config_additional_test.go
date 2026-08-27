@@ -309,7 +309,9 @@ func TestApplyEnvOverrides(t *testing.T) {
 		"AGENTFIELD_APPROVAL_WEBHOOK_SECRET":                         "webhook-secret",
 		"AGENTFIELD_APPROVAL_DEFAULT_EXPIRY_HOURS":                   "30",
 		"AGENTFIELD_TRACING_ENABLED":                                 "1",
+		"AGENTFIELD_TRACING_EXPORTER":                                "otlp-grpc",
 		"OTEL_EXPORTER_OTLP_ENDPOINT":                                "http://otel.local:4318",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT":                         "http://traces.local:4318/v1/traces",
 		"OTEL_SERVICE_NAME":                                          "control-plane",
 		"AGENTFIELD_TRACING_INSECURE":                                "true",
 		"AGENTFIELD_CONNECTOR_ENABLED":                               "1",
@@ -400,7 +402,8 @@ func TestApplyEnvOverrides(t *testing.T) {
 		t.Fatalf("unexpected approval overrides: %+v", cfg.AgentField.Approval)
 	}
 	if !cfg.Features.Tracing.Enabled ||
-		cfg.Features.Tracing.Endpoint != "http://otel.local:4318" ||
+		cfg.Features.Tracing.Endpoint != "http://traces.local:4318/v1/traces" ||
+		cfg.Features.Tracing.Exporter != "otlp-grpc" ||
 		cfg.Features.Tracing.ServiceName != "control-plane" ||
 		!cfg.Features.Tracing.Insecure {
 		t.Fatalf("unexpected tracing overrides: %+v", cfg.Features.Tracing)

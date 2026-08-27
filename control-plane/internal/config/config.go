@@ -809,7 +809,18 @@ func ApplyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("AGENTFIELD_TRACING_ENABLED"); val != "" {
 		cfg.Features.Tracing.Enabled = val == "true" || val == "1"
 	}
+	if val := os.Getenv("AGENTFIELD_TRACING_EXPORTER"); val != "" {
+		cfg.Features.Tracing.Exporter = val
+	}
+	if val := os.Getenv("AGENTFIELD_TRACING_ENDPOINT"); val != "" {
+		cfg.Features.Tracing.Endpoint = val
+		cfg.Features.Tracing.Enabled = true
+	}
 	if val := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); val != "" {
+		cfg.Features.Tracing.Endpoint = val
+		cfg.Features.Tracing.Enabled = true
+	}
+	if val := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"); val != "" {
 		cfg.Features.Tracing.Endpoint = val
 		cfg.Features.Tracing.Enabled = true
 	}
