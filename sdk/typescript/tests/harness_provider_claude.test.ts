@@ -116,6 +116,52 @@ describe('ClaudeCodeProvider', () => {
     expect(captured.options).toEqual({});
   });
 
+  it('prefers projectDir over a nested cwd', async () => {
+    const captured: { options?: Record<string, unknown> } = {};
+
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: ({ options }: { prompt: string; options: Record<string, unknown> }) => {
+          captured.options = options;
+          return (async function* stream() {
+            yield { type: 'result', result: 'final' };
+          })();
+        },
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const provider = new ClaudeCodeProvider();
+    await provider.execute('hello', { projectDir: '/proj', cwd: '/proj/nested' });
+
+    expect(captured.options?.cwd).toBe('/proj');
+  });
+
+  it('omits cwd when it is an empty string', async () => {
+    const captured: { options?: Record<string, unknown> } = {};
+
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: ({ options }: { prompt: string; options: Record<string, unknown> }) => {
+          captured.options = options;
+          return (async function* stream() {
+            yield { type: 'result', result: 'final' };
+          })();
+        },
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const provider = new ClaudeCodeProvider();
+    await provider.execute('hello', { cwd: '' });
+
+    expect(captured.options).not.toHaveProperty('cwd');
+  });
+
   it('strips a #variant model suffix before handing the model to the SDK', async () => {
     const captured: { options?: Record<string, unknown> } = {};
 
