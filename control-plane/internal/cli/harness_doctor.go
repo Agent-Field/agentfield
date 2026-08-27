@@ -97,7 +97,7 @@ func newHarnessDoctorCommand() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: aforge (default), claude-code, codex, gemini, opencode, grok, pi, omp")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check, default all: aforge, claude-code, codex, gemini, opencode, grok, pi, omp")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output structured JSON")
 	return cmd
 }
