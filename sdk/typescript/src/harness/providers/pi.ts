@@ -1,4 +1,5 @@
 import type { HarnessProvider } from './base.js';
+import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createMetrics, createRawResult } from '../types.js';
 import { parseJsonl, runCli } from '../cli.js';
@@ -127,11 +128,7 @@ class PiFamilyProvider implements HarnessProvider {
 
   public async execute(prompt: string, options: Record<string, unknown>): Promise<RawResult> {
     const cmd = [this.bin, '--print', '--mode', 'json'];
-    const root = typeof options.projectDir === 'string'
-      ? options.projectDir
-      : typeof options.cwd === 'string'
-        ? options.cwd
-        : undefined;
+    const root = resolveRoot(options);
 
     if (this.flavor === 'omp' && root) {
       cmd.push('--cwd', root);

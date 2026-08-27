@@ -1,4 +1,5 @@
 import type { HarnessProvider } from './base.js';
+import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
 import { runCli } from '../cli.js';
@@ -31,7 +32,7 @@ export class GeminiProvider implements HarnessProvider {
     try {
       const { stdout, stderr, exitCode } = await runCli(cmd, {
         env: options.env as Record<string, string> | undefined,
-        cwd: options.cwd as string | undefined,
+        cwd: resolveRoot(options),
       });
 
       const resultText = stdout.trim() || undefined;

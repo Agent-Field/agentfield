@@ -9,6 +9,7 @@ import type { HarnessProvider } from '../src/harness/providers/base.js';
 import { createMetrics, createRawResult } from '../src/harness/types.js';
 import { getOutputPath } from '../src/harness/schema.js';
 import { HarnessRunner } from '../src/harness/runner.js';
+import * as cli from '../src/harness/cli.js';
 import * as factory from '../src/harness/providers/factory.js';
 
 const tempDirs: string[] = [];
@@ -64,6 +65,41 @@ class FileWritingProvider extends MockProvider {
 }
 
 describe('harness runner', () => {
+  it.each(['codex', 'gemini', 'opencode', 'pi'] as const)(
+    '%s uses projectDir for schema instructions and provider execution',
+    async (provider) => {
+      const projectDir = makeTempDir();
+      const cwd = makeTempDir();
+      vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const runner = new HarnessRunner();
+      await runner.run('do it', {
+        schema: z.object({ answer: z.string() }),
+        provider,
+        projectDir,
+        cwd,
+      });
+
+      const [cmd, runOptions] = vi.mocked(cli.runCli).mock.calls[0];
+      const prompt = provider === 'pi'
+        ? runOptions?.inputText
+        : cmd[cmd.length - 1];
+      const outputPath = prompt?.match(/(\S*\.agentfield_output\.json)/)?.[1];
+
+      expect(outputPath).toBeDefined();
+      expect(path.relative(projectDir, outputPath as string)).not.toMatch(/^\.\.(?:[/\\]|$)/);
+      if (provider === 'opencode') {
+        expect(cmd.slice(cmd.indexOf('--dir'), cmd.indexOf('--dir') + 2)).toEqual(['--dir', projectDir]);
+      } else {
+        expect(runOptions?.cwd).toBe(projectDir);
+      }
+      if (provider === 'codex') {
+        expect(cmd.slice(cmd.indexOf('-C'), cmd.indexOf('-C') + 2)).toEqual(['-C', projectDir]);
+      }
+      expect(projectDir).not.toBe(cwd);
+    }
+  );
+
   it('resolveOptions merges config with per-call overrides', () => {
     const cfg: HarnessConfig = {
       provider: 'codex',

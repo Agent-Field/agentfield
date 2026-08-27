@@ -1,4 +1,5 @@
 import type { HarnessProvider } from './base.js';
+import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createMetrics, createRawResult } from '../types.js';
 import { runCli } from '../cli.js';
@@ -148,13 +149,7 @@ export class AforgeProvider implements HarnessProvider {
   }
 
   private async executeImpl(prompt: string, options: Record<string, unknown>): Promise<RawResult> {
-    const projectDir = typeof options.projectDir === 'string'
-      ? options.projectDir
-      : typeof options.project_dir === 'string'
-        ? options.project_dir
-        : undefined;
-    const cwd = typeof options.cwd === 'string' ? options.cwd : undefined;
-    const root = projectDir ?? cwd ?? '.';
+    const root = resolveRoot(options) ?? '.';
     const outerTimeout = timeoutSeconds();
     const command = (process.env.AGENTFIELD_AFORGE_COMMAND ?? 'exec').trim().toLowerCase();
     if (command !== 'do' && command !== 'exec') {

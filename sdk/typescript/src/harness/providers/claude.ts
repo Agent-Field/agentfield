@@ -1,4 +1,5 @@
 import type { HarnessProvider } from './base.js';
+import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createMetrics, createRawResult } from '../types.js';
 import { resolveModelAndVariant } from '../modelVariant.js';
@@ -44,7 +45,8 @@ export class ClaudeCodeProvider implements HarnessProvider {
     // suffix so the SDK receives a valid model id, and drop the variant.
     const { model: modelValue } = resolveModelAndVariant(options);
     if (modelValue !== undefined) agentOptions.model = modelValue;
-    if (options.cwd !== undefined) agentOptions.cwd = options.cwd;
+    const root = resolveRoot(options);
+    if (root !== undefined) agentOptions.cwd = root;
     if (options.maxTurns !== undefined) agentOptions.maxTurns = options.maxTurns;
     if (options.tools !== undefined) agentOptions.allowedTools = options.tools;
     if (options.systemPrompt !== undefined) agentOptions.systemPrompt = options.systemPrompt;
