@@ -44,9 +44,12 @@ def test_supported_providers_contains_expected_names():
     assert "grok" in SUPPORTED_PROVIDERS
 
 
-def test_default_provider_is_aforge():
+def test_default_provider_is_aforge(monkeypatch):
     from agentfield.harness.providers.aforge import AforgeProvider
 
+    # HarnessConfig.provider resolves through AGENTFIELD_HARNESS_PROVIDER, so the
+    # ambient value has to be cleared for this to assert the built-in default.
+    monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
     assert HarnessConfig().provider == "aforge"
     assert isinstance(build_provider(HarnessConfig()), AforgeProvider)
 
