@@ -109,6 +109,18 @@ The telemetry payload does not include prompts, inputs, outputs, logs, secrets, 
 - `AGENTFIELD_LOG_LEVEL` (default: `info`): Minimum severity written to stderr — `debug`, `info`, `warn` or `error`. Equivalent YAML: `logging.level`. The `--verbose` flag on `af` overrides both. A value that is not one of those four is reported once at `warn` on startup (`unrecognized log level, falling back to info`) and the server runs at `info`. Successful HTTP requests are logged at `debug`; a `404` at `info` (a request for a route that does not exist is routine noise, not an operator signal); the other 4xx responses at `warn` and 5xx at `error`, so failures stay visible at the default level and alerting keyed on `warn` is not tripped by scanners. Every request is logged, including the ones rejected before they reach a route: a disallowed `Origin` is answered with `403` by the CORS middleware and still produces one `warn` line.
 - `AGENTFIELD_LOG_REDACT_PAYLOADS` (default: `true`): When `true`, execution inputs/outputs and agent response bodies are kept out of log events and internal event-bus payloads; log lines carry the media type, byte length and a short keyed digest (an HMAC under a key minted at process start, so the digest correlates repeats within a run without committing to the plaintext) instead. Set to `false` only for local debugging. Equivalent YAML: `logging.redact_payloads`.
 
+### Miscellaneous control-plane knobs
+
+- `AGENTFIELD_MAX_CONCURRENT_PER_AGENT` (default: `0`): Maximum concurrent executions dispatched to one agent; `0` means unlimited.
+- `AGENTFIELD_EXEC_ASYNC_WORKERS` (default: number of CPUs): Worker count for asynchronous execution and restart jobs; non-positive values use the default.
+- `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): In-memory asynchronous execution queue capacity; non-positive values use the default.
+- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control plane HTTP server during shutdown.
+- `AGENTFIELD_AGENT_RESTART_GRACE` (default: `15s`): How long an execution waits for an agent process to return during a coordinated restart; a negative duration disables the wait.
+
+Rate limiting is off by default and has no dedicated environment-variable overrides. Configure the YAML-only `agentfield.rate_limit` block with `enabled`, `execute_rps`, `execute_burst`, `discovery_rps`, `discovery_burst`, `bulk_status_rps`, `bulk_status_burst`, `global_rps`, and `global_burst`.
+
+Execution cleanup also has YAML keys `agentfield.execution_cleanup.max_retries` (default `0`) and `retry_backoff` (default `30s`), with environment overrides `AGENTFIELD_EXECUTION_MAX_RETRIES` and `AGENTFIELD_EXECUTION_RETRY_BACKOFF`. Despite its name, `max_retries` only rewinds stale workflow rows to `pending`; nothing re-dispatches those rows, so do not rely on it for execution retries.
+
 ### CORS (HTTP API)
 
 These map to `api.cors.*` in config. When set via env, use comma-separated values.

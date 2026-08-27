@@ -10,6 +10,9 @@ agentfield:
     batch_size: 200
     preserve_recent_duration: 1h
     stale_execution_timeout: 10m
+    # max_retries only rewinds stale workflow rows to pending; no dispatcher
+    # re-enqueues them, so do not rely on it for execution retries.
+    max_retries: 0
   execution_queue:
     agent_call_timeout: 1800s  # Timeout for agent HTTP calls (0s or -1s to disable)
     webhook_timeout: 10s          # Per-attempt timeout for webhook deliveries
