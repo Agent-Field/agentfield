@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -207,6 +208,121 @@ func TestShutdownRouteAccepted(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	a.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/shutdown", strings.NewReader(`{"graceful":false,"timeout_seconds":1}`)))
 	assert.Equal(t, http.StatusAccepted, recorder.Code)
+}
+
+func TestShutdownWaitsForAcceptedAsyncExecutionTerminalStatus(t *testing.T) {
+	statusPosted := make(chan map[string]any, 1)
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/nodes/node-1/shutdown":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{}`)
+		case r.URL.Path == "/api/v1/executions/exec-1/status":
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			statusPosted <- payload
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cp.Close()
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	a, err := New(Config{
+		NodeID:          "node-1",
+		Version:         "1.0.0",
+		AgentFieldURL:   cp.URL,
+		ShutdownTimeout: time.Second,
+		Logger:          log.New(io.Discard, "", 0),
+	})
+	require.NoError(t, err)
+	a.httpClient = cp.Client()
+	a.RegisterReasoner("slow", func(context.Context, map[string]any) (any, error) {
+		close(started)
+		<-release
+		return map[string]any{"ok": true}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/reasoners/slow", strings.NewReader(`{}`))
+	req.Header.Set("X-Execution-ID", "exec-1")
+	recorder := httptest.NewRecorder()
+	a.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusAccepted, recorder.Code)
+	<-started
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- a.shutdown(context.Background()) }()
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("shutdown returned before the execution completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-shutdownDone)
+	select {
+	case payload := <-statusPosted:
+		assert.Equal(t, "succeeded", payload["status"])
+	default:
+		t.Fatal("terminal status was not posted before shutdown returned")
+	}
+}
+
+func TestShutdownTimeoutCancelsAcceptedAsyncExecutionAndReportsTerminalStatus(t *testing.T) {
+	statusPosted := make(chan map[string]any, 1)
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/nodes/node-1/shutdown":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{}`)
+		case r.URL.Path == "/api/v1/executions/exec-timeout/status":
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			statusPosted <- payload
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cp.Close()
+
+	started := make(chan struct{})
+	a, err := New(Config{
+		NodeID:          "node-1",
+		Version:         "1.0.0",
+		AgentFieldURL:   cp.URL,
+		ShutdownTimeout: 200 * time.Millisecond,
+		Logger:          log.New(io.Discard, "", 0),
+	})
+	require.NoError(t, err)
+	a.httpClient = cp.Client()
+	a.RegisterReasoner("cancel-aware", func(ctx context.Context, _ map[string]any) (any, error) {
+		close(started)
+		select {
+		case <-time.After(2 * time.Second):
+			return nil, errors.New("reasoner was not cancelled")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/reasoners/cancel-aware", strings.NewReader(`{}`))
+	req.Header.Set("X-Execution-ID", "exec-timeout")
+	recorder := httptest.NewRecorder()
+	a.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusAccepted, recorder.Code)
+	<-started
+
+	begin := time.Now()
+	require.NoError(t, a.shutdown(context.Background()))
+	assert.Less(t, time.Since(begin), time.Second)
+	select {
+	case payload := <-statusPosted:
+		assert.Contains(t, []any{"failed", "cancelled"}, payload["status"])
+	default:
+		t.Fatal("terminal status was not posted before shutdown returned")
+	}
 }
 
 func TestRegisteredHeartbeatInterval(t *testing.T) {
