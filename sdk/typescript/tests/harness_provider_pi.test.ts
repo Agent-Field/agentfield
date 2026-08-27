@@ -36,6 +36,102 @@ function eventStream(text: string): string {
   ].map((event) => JSON.stringify(event)).join('\n');
 }
 
+const providers = [
+  { name: 'pi', provider: new PiProvider() },
+  { name: 'omp', provider: new OMPProvider() },
+];
+
+it.each(providers)('$name classifies a successful assistant response', async ({ provider }) => {
+  vi.spyOn(cli, 'runCli').mockResolvedValue({
+    stdout: eventStream('done'),
+    stderr: '',
+    exitCode: 0,
+  });
+
+  const result = await provider.execute('hello', {});
+
+  expect(result).toMatchObject({ isError: false, failureType: 'none', returnCode: 0 });
+});
+
+it.each(providers)('$name classifies a signal death as a crash', async ({ provider }) => {
+  vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: -9 });
+
+  const result = await provider.execute('hello', {});
+
+  expect(result).toMatchObject({
+    isError: true,
+    failureType: 'crash',
+    returnCode: -9,
+    errorMessage: 'Process killed by signal 9.',
+  });
+});
+
+it.each(providers)('$name uses cleaned stderr for a non-zero exit', async ({ provider }) => {
+  vi.spyOn(cli, 'runCli').mockResolvedValue({
+    stdout: '',
+    stderr: '  \u001b[31mprovider failed\u001b[0m  ',
+    exitCode: 2,
+  });
+
+  const result = await provider.execute('hello', {});
+
+  expect(result).toMatchObject({
+    isError: true,
+    failureType: 'crash',
+    returnCode: 2,
+    errorMessage: 'provider failed',
+  });
+});
+
+it.each(providers)('$name falls back to the exit code for an empty error', async ({ provider }) => {
+  vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 2 });
+
+  const result = await provider.execute('hello', {});
+
+  expect(result.errorMessage).toBe('Process exited with code 2.');
+});
+
+it.each(providers)('$name classifies a provider event error', async ({ provider }) => {
+  const stdout = JSON.stringify({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'provider detail',
+    },
+  });
+  vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+
+  const result = await provider.execute('hello', {});
+
+  expect(result).toMatchObject({
+    isError: true,
+    failureType: 'api_error',
+    returnCode: 0,
+    errorMessage: 'provider detail',
+  });
+});
+
+it.each(providers)('$name classifies a successful exit without output', async ({ provider }) => {
+  vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+  const result = await provider.execute('hello', {});
+
+  expect(result).toMatchObject({ isError: true, failureType: 'no_output', returnCode: 0 });
+});
+
+it.each([
+  { message: 'spawn ENOENT', failureType: 'crash' },
+  { message: 'CLI timed out after 1000ms', failureType: 'timeout' },
+])('classifies a rejected CLI as $failureType', async ({ message, failureType }) => {
+  vi.spyOn(cli, 'runCli').mockRejectedValue(new Error(message));
+
+  const result = await new PiProvider().execute('hello', {});
+
+  expect(result).toMatchObject({ isError: true, failureType });
+});
+
 describe.each([
   {
     name: 'pi',

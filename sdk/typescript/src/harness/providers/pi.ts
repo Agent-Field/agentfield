@@ -7,6 +7,7 @@ import { resolveModelAndVariant } from '../modelVariant.js';
 type PiFlavor = 'pi' | 'omp';
 
 const READ_ONLY_TOOLS = new Set(['read', 'grep', 'find', 'glob', 'ls', 'lsp']);
+const ANSI_PATTERN = /\x1B\[[0-?]*[ -/]*[@-~]/g;
 
 function normalizeTools(tools: unknown[], flavor: PiFlavor): string[] {
   const normalized: string[] = [];
@@ -185,21 +186,33 @@ class PiFamilyProvider implements HarnessProvider {
       const parsed = parsePiEvents(events, model);
       parsed.metrics.durationApiMs = Date.now() - startApi;
 
+      const cleanStderr = stderr.trim().replace(ANSI_PATTERN, '').slice(0, 1000);
       let errorMessage: string | undefined;
-      if (exitCode !== 0) {
-        errorMessage = stderr.trim() || parsed.providerError || `Process exited with code ${exitCode}.`;
+      let failureType: NonNullable<RawResult['failureType']>;
+      if (exitCode < 0) {
+        errorMessage = `Process killed by signal ${-exitCode}.`;
+        failureType = 'crash';
+      } else if (exitCode !== 0) {
+        errorMessage = cleanStderr || parsed.providerError || `Process exited with code ${exitCode}.`;
+        failureType = 'crash';
       } else if (parsed.providerError) {
         errorMessage = parsed.providerError;
+        failureType = 'api_error';
       } else if (!parsed.result) {
-        errorMessage = stderr.trim() || `${this.flavor} exited successfully without an assistant response.`;
+        errorMessage = cleanStderr || `${this.flavor} exited successfully without an assistant response.`;
+        failureType = 'no_output';
+      } else {
+        failureType = 'none';
       }
 
       return createRawResult({
         result: parsed.result,
         messages: events,
         metrics: parsed.metrics,
-        isError: errorMessage !== undefined,
+        isError: failureType !== 'none',
         errorMessage,
+        failureType,
+        returnCode: exitCode,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -213,6 +226,9 @@ class PiFamilyProvider implements HarnessProvider {
                 : 'Install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
             }`
           : message,
+        failureType: /timed out|deadline exceeded|no progress/i.test(message)
+          ? 'timeout'
+          : 'crash',
         metrics: createMetrics({ durationApiMs: Date.now() - startApi }),
       });
     }

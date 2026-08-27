@@ -68,6 +68,16 @@ describe('harness cli utilities', () => {
     });
   });
 
+  it('reports a signal death as a negative exit code', async () => {
+    const proc = createProcess();
+    spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);
+
+    const pending = runCli(['killed']);
+    proc.emit('close', null, 'SIGKILL');
+
+    await expect(pending).resolves.toMatchObject({ exitCode: -9 });
+  });
+
   it('adds OpenRouter attribution env defaults and preserves caller overrides', async () => {
     const proc = createProcess();
     spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);

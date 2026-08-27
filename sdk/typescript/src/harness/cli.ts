@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { constants } from 'node:os';
 import { applyOpenRouterAttributionEnv } from '../ai/openrouterAttribution.js';
 
 export interface CliResult {
@@ -113,13 +114,18 @@ export function runCli(
       }
     }
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (settled) {
         return;
       }
       settled = true;
       cleanup();
-      resolve({ stdout, stderr, exitCode: code ?? 0 });
+      const signalNumber = signal ? constants.signals[signal] : undefined;
+      resolve({
+        stdout,
+        stderr,
+        exitCode: code ?? (signalNumber === undefined ? 0 : -signalNumber),
+      });
     });
 
     proc.on('error', (err) => {
