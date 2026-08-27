@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_SHUTDOWN_TIMEOUT_MS, parseShutdownTimeout } from '../signals.js';
+import { DEFAULT_SHUTDOWN_TIMEOUT_MS, parseShutdownTimeout } from '../src/agent/signals.js';
 
 describe('parseShutdownTimeout', () => {
   it.each([
