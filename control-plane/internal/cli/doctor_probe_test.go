@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -144,6 +146,58 @@ func TestHarnessProviders_AforgeIsSurveyedButNotProbed(t *testing.T) {
 	if len(harnessProviders[0].ProbeArgs) != 0 || harnessProviders[0].ProbeStdin != "" {
 		t.Errorf("aforge must declare no probe input, got %+v", harnessProviders[0])
 	}
+}
+
+// Contract: buildDoctorReport detects aforge through its harness specification,
+// including its managed install location and aforge-specific version argument.
+func TestBuildDoctorReport_AforgeDetectionUsesHarnessSpec(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	t.Run("found in AGENTFIELD_HOME/bin when not on PATH", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		home := t.TempDir()
+		t.Setenv("AGENTFIELD_HOME", home)
+		managedBin := filepath.Join(home, "bin")
+		if err := os.MkdirAll(managedBin, 0o755); err != nil {
+			t.Fatalf("create managed bin: %v", err)
+		}
+		writeHarnessTestScript(t, managedBin, "aforge", "printf 'aforge 1.2.3\\n'")
+
+		report := buildDoctorReport(srv.URL)
+		status := report.HarnessProviders["aforge"]
+		if !status.Available {
+			t.Errorf("aforge should be available, got %+v", status)
+		}
+		if status.Version != "aforge 1.2.3" {
+			t.Errorf("aforge version = %q, want %q", status.Version, "aforge 1.2.3")
+		}
+		if want := filepath.Join(home, "bin", "aforge"); status.Path != want {
+			t.Errorf("aforge path = %q, want %q", status.Path, want)
+		}
+	})
+
+	t.Run("version comes from the aforge-specific version argument", func(t *testing.T) {
+		binDir := t.TempDir()
+		t.Setenv("PATH", binDir)
+		t.Setenv("AGENTFIELD_HOME", t.TempDir())
+		writeHarnessTestScript(t, binDir, "aforge", "[ \"$1\" = version ] && { printf 'aforge 9.9.9\\n'; exit 0; }; exit 1")
+
+		report := buildDoctorReport(srv.URL)
+		status := report.HarnessProviders["aforge"]
+		if !status.Available {
+			t.Errorf("aforge should be available, got %+v", status)
+		}
+		if status.Version != "aforge 9.9.9" {
+			t.Errorf("aforge version = %q, want %q", status.Version, "aforge 9.9.9")
+		}
+	})
 }
 
 // Contract: a provider with no ProbeArgs is skipped by --probe even when
