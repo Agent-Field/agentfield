@@ -123,13 +123,14 @@ func ReleaseExecutionSlot(agentNodeID string) {
 type ErrorCategory string
 
 const (
-	ErrorCategoryLLMUnavailable   ErrorCategory = "llm_unavailable"
-	ErrorCategoryConcurrencyLimit ErrorCategory = "concurrency_limit"
-	ErrorCategoryAgentTimeout     ErrorCategory = "agent_timeout"
-	ErrorCategoryAgentError       ErrorCategory = "agent_error"
-	ErrorCategoryAgentUnreachable ErrorCategory = "agent_unreachable"
-	ErrorCategoryBadResponse      ErrorCategory = "bad_response"
-	ErrorCategoryInternal         ErrorCategory = "internal_error"
+	ErrorCategoryLLMUnavailable       ErrorCategory = "llm_unavailable"
+	ErrorCategoryConcurrencyLimit     ErrorCategory = "concurrency_limit"
+	ErrorCategoryAgentTimeout         ErrorCategory = "agent_timeout"
+	ErrorCategoryAgentError           ErrorCategory = "agent_error"
+	ErrorCategoryAgentUnreachable     ErrorCategory = "agent_unreachable"
+	ErrorCategoryBadResponse          ErrorCategory = "bad_response"
+	ErrorCategoryInternal             ErrorCategory = "internal_error"
+	ErrorCategoryControlPlaneShutdown ErrorCategory = "control_plane_shutdown"
 	// ErrorCategoryTargetNotFound marks a call aimed at a node or reasoner
 	// that does not exist. It is the caller's mistake, not an internal fault,
 	// and it is the single most common first-run error: the user runs the

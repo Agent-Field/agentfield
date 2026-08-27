@@ -1013,35 +1013,23 @@ func (j asyncExecutionJob) failForControlPlaneShutdown() {
 	if j.plan.target != nil {
 		ReleaseExecutionSlot(j.plan.target.NodeID)
 	}
-	now := time.Now().UTC()
-	reason := "control_plane_shutdown"
-	message := "execution was not started before the control plane shut down"
-	_, err := j.controller.store.UpdateExecutionRecord(context.Background(), j.plan.exec.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
-		if current == nil {
-			return nil, fmt.Errorf("execution %s not found", j.plan.exec.ExecutionID)
-		}
-		current.Status = types.ExecutionStatusFailed
-		current.StatusReason = &reason
-		current.ErrorMessage = &message
-		current.CompletedAt = &now
-		current.UpdatedAt = now
-		return current, nil
-	})
-	if err != nil {
-		logger.Logger.Error().Err(err).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to terminate queued execution during shutdown")
+	shutdownErr := &executionPreconditionError{
+		message:  "execution was not started before the control plane shut down",
+		category: ErrorCategoryControlPlaneShutdown,
 	}
+	if err := j.controller.failExecution(context.Background(), &j.plan, shutdownErr, 0, nil); err != nil {
+		logger.Logger.Error().Err(err).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to terminate queued execution during shutdown")
+		return
+	}
+	reason := string(ErrorCategoryControlPlaneShutdown)
 	if err := j.controller.store.UpdateWorkflowExecution(context.Background(), j.plan.exec.ExecutionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
 		if current == nil {
 			return nil, fmt.Errorf("workflow execution %s not found", j.plan.exec.ExecutionID)
 		}
-		current.Status = types.ExecutionStatusFailed
 		current.StatusReason = &reason
-		current.ErrorMessage = &message
-		current.CompletedAt = &now
-		current.UpdatedAt = now
 		return current, nil
 	}); err != nil {
-		logger.Logger.Error().Err(err).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to terminate queued workflow execution during shutdown")
+		logger.Logger.Error().Err(err).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to record shutdown reason on queued workflow execution")
 	}
 }
 

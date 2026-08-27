@@ -198,8 +198,16 @@ func TestAsyncWorkerPoolStopFailsQueuedJobsAndRejectsSubmissions(t *testing.T) {
 	require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{ExecutionID: exec.ExecutionID, WorkflowID: exec.RunID, RunID: &exec.RunID, AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, StartedAt: now, CreatedAt: now, UpdatedAt: now}))
 	target, err := parseTarget("node-1.reasoner-a")
 	require.NoError(t, err)
+	webhookCalled := false
+	webhooks := &mockWebhookDispatcher{notifyFunc: func(_ context.Context, executionID string) error {
+		require.Equal(t, exec.ExecutionID, executionID)
+		webhookCalled = true
+		return nil
+	}}
+	eventCh := store.GetExecutionEventBus().Subscribe("async-pool-shutdown-test")
+	defer store.GetExecutionEventBus().Unsubscribe("async-pool-shutdown-test")
 	pool := newAsyncWorkerPool(0, 2)
-	require.True(t, pool.submit(asyncExecutionJob{controller: newExecutionController(store, nil, nil, time.Second, ""), plan: preparedExecution{exec: exec, target: target}}))
+	require.True(t, pool.submit(asyncExecutionJob{controller: newExecutionController(store, nil, webhooks, time.Second, ""), plan: preparedExecution{exec: exec, target: target, webhookRegistered: true}}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -213,6 +221,14 @@ func TestAsyncWorkerPoolStopFailsQueuedJobsAndRejectsSubmissions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.ExecutionStatusFailed, workflow.Status)
 	require.Equal(t, "control_plane_shutdown", *workflow.StatusReason)
+	require.True(t, webhookCalled)
+	select {
+	case event := <-eventCh:
+		require.Equal(t, exec.ExecutionID, event.ExecutionID)
+		require.Equal(t, string(types.ExecutionStatusFailed), event.Status)
+	case <-time.After(time.Second):
+		t.Fatal("expected execution failed event")
+	}
 }
 
 func TestExecuteAsyncHandler_WithWebhook(t *testing.T) {
