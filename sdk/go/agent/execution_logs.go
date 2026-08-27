@@ -184,11 +184,23 @@ func (l *ExecutionLogger) dispatch(entry ExecutionLogEntry) {
 }
 
 func writeStructuredExecutionLog(entry ExecutionLogEntry) {
+	if !executionLogStdoutEnabled() {
+		return
+	}
 	executionLogStdoutMu.Lock()
 	defer executionLogStdoutMu.Unlock()
 
 	enc := json.NewEncoder(os.Stdout)
 	_ = enc.Encode(entry)
+}
+
+func executionLogStdoutEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFIELD_LOG_STDOUT"))) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func (a *Agent) logExecution(ctx context.Context, level, eventType, message string, attributes map[string]any, systemGenerated bool) {
