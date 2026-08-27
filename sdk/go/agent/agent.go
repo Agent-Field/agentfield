@@ -552,8 +552,10 @@ type Agent struct {
 	serverMu sync.RWMutex
 	server   *http.Server
 
-	stopLease chan struct{}
-	logger    *log.Logger
+	stopLease    chan struct{}
+	shutdownDone chan struct{}
+	shutdownOnce sync.Once
+	logger       *log.Logger
 
 	router      http.Handler
 	handlerOnce sync.Once
@@ -663,6 +665,7 @@ func New(cfg Config) (*Agent, error) {
 		aiClient:                    aiClient,
 		memory:                      NewMemory(cfg.MemoryBackend),
 		stopLease:                   make(chan struct{}),
+		shutdownDone:                make(chan struct{}),
 		logger:                      cfg.Logger,
 		realtimeValidationFunctions: make(map[string]struct{}),
 		cancelFuncs:                 make(map[string]context.CancelFunc),

@@ -122,6 +122,8 @@ func (a *Agent) Serve(ctx context.Context) error {
 			"signal":  sig.String(),
 		})
 		return a.shutdown(context.Background())
+	case <-a.shutdownDone:
+		return nil
 	}
 }
 
@@ -433,6 +435,7 @@ func (a *Agent) shutdownWithOptions(ctx context.Context, graceful bool, timeout 
 	a.logExecutionInfo(ctx, "agent.shutdown.complete", "agent shutdown complete", map[string]any{
 		"node_id": a.cfg.NodeID,
 	})
+	a.shutdownOnce.Do(func() { close(a.shutdownDone) })
 	return nil
 }
 
