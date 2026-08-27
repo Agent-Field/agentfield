@@ -33,6 +33,7 @@ def test_resolve_callback_url_handles_container_overrides(monkeypatch):
 
 def test_resolve_callback_url_fallback_to_detected_ips(monkeypatch):
     monkeypatch.delenv("AGENT_CALLBACK_URL", raising=False)
+    monkeypatch.delenv("AGENTFIELD_DISABLE_IP_DETECTION", raising=False)
     monkeypatch.delenv("RAILWAY_SERVICE_NAME", raising=False)
     monkeypatch.delenv("RAILWAY_ENVIRONMENT", raising=False)
 

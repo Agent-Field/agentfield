@@ -16,17 +16,30 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// buildVersion is the control plane's release version, surfaced by the embedded
-// MCP server's serverInfo. Set once at startup by the server binaries via
-// SetBuildVersion; defaults to "dev".
-var buildVersion = "dev"
+// Build metadata is set once at startup by the server binaries via
+// SetBuildVersion. The defaults describe an unversioned development build.
+var (
+	buildVersion = "dev"
+	buildCommit  = "none"
+	buildDate    = "unknown"
+)
 
-// SetBuildVersion records the control plane's build version for surfaces that
-// report it (currently the embedded MCP server's serverInfo). Call once at
-// startup, before NewAgentFieldServer.
-func SetBuildVersion(v string) {
+// SetBuildVersion records the control plane's build metadata for runtime
+// introspection surfaces. Call once at startup, before NewAgentFieldServer.
+// The optional values are commit and build date, in that order.
+func SetBuildVersion(v string, metadata ...string) {
 	if v = strings.TrimSpace(v); v != "" {
 		buildVersion = v
+	}
+	if len(metadata) > 0 {
+		if commit := strings.TrimSpace(metadata[0]); commit != "" {
+			buildCommit = commit
+		}
+	}
+	if len(metadata) > 1 {
+		if date := strings.TrimSpace(metadata[1]); date != "" {
+			buildDate = date
+		}
 	}
 }
 

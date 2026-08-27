@@ -26,6 +26,15 @@ func TestListCommand(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestLsStillResolvesToReasonerListRatherThanInstalledPackages(t *testing.T) {
+	root := NewRootCommand(func(*cobra.Command, []string) {}, VersionInfo{})
+	command, _, err := root.Find([]string{"ls"})
+	require.NoError(t, err)
+	require.Equal(t, "ls", command.Name())
+	require.Equal(t, "List reasoners", command.Short)
+	require.Empty(t, NewListCommand().Aliases, "ls is reserved for the reasoner-list command")
+}
+
 // TestStopCommand tests the stop command argument validation
 func TestStopCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

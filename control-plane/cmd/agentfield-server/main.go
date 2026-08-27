@@ -16,7 +16,6 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
-	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/web/client"
@@ -76,11 +75,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	cfg.Telemetry.AgentFieldVersion = version
 
 	// Re-initialize logger with configured level now that config is loaded.
-	// The CLI root command sets a default (info/debug based on --verbose),
-	// but the YAML/env-based level takes precedence once available.
-	if cfg.Logging.Level != "" {
-		logger.InitLoggerWithLevel(cfg.Logging.Level)
-	}
+	// The CLI root command sets a default (info/debug based on --verbose);
+	// the YAML/env-based level takes over once available, except when
+	// --verbose was passed explicitly. Shared with cmd/af so the two server
+	// binaries cannot disagree about precedence.
+	cli.ApplyConfiguredLogLevel(cmd, cfg.Logging.Level)
 
 	// Override port from flag if provided
 	if cmd.Flags().Lookup("port").Changed {
@@ -208,9 +207,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	// healthy AgentField already answers on our port, exit 0 instead of dying,
 	// so a launchd-managed second instance stops cleanly rather than
 	// relaunch-looping on the lock timeout.
-	// Surface the build version on runtime introspection surfaces (e.g. the
-	// embedded MCP server's serverInfo).
-	server.SetBuildVersion(version)
+	// Surface build metadata on runtime introspection endpoints.
+	server.SetBuildVersion(version, commit, date)
 	agentfieldServer, err := newAgentFieldServerFunc(cfg)
 	if err != nil {
 		if server.ExitCleanIfAlreadyRunning(err, cfg.AgentField.Port) {

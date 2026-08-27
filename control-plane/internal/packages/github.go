@@ -2,7 +2,6 @@ package packages
 
 import (
 	"archive/zip"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
-	"gopkg.in/yaml.v3"
 )
 
 // GitHubPackageInfo represents parsed GitHub package information
@@ -362,50 +360,15 @@ func (gi *GitHubInstaller) parsePackageMetadata(packagePath string) (*PackageMet
 // updateRegistryWithGitHub updates the installation registry with GitHub source info
 func (gi *GitHubInstaller) updateRegistryWithGitHub(metadata *PackageMetadata, info *GitHubPackageInfo, sourcePath, destPath string) error {
 	registryPath := filepath.Join(gi.AgentFieldHome, "installed.yaml")
-
-	// Load existing registry or create new one
-	registry := &InstallationRegistry{
-		Installed: make(map[string]InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return fmt.Errorf("failed to parse registry %s: %w", registryPath, err)
+	if err := UpdateInstallationRegistry(registryPath, func(registry *InstallationRegistry) error {
+		registry.Installed[metadata.Name] = InstalledPackage{
+			Name: metadata.Name, Version: metadata.Version, Description: metadata.Description,
+			Path: destPath, Source: "github", SourcePath: fmt.Sprintf("%s/%s@%s", info.Owner, info.Repo, info.Ref),
+			InstalledAt: time.Now().Format(time.RFC3339), Status: "stopped", DesiredState: DesiredStateStopped,
+			Runtime: RuntimeInfo{LogFile: filepath.Join(gi.AgentFieldHome, "logs", metadata.Name+".log")},
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("failed to read registry %s: %w", registryPath, err)
-	}
-
-	// Add/update package entry with GitHub information
-	registry.Installed[metadata.Name] = InstalledPackage{
-		Name:        metadata.Name,
-		Version:     metadata.Version,
-		Description: metadata.Description,
-		Path:        destPath,
-		Source:      "github",
-		SourcePath:  fmt.Sprintf("%s/%s@%s", info.Owner, info.Repo, info.Ref),
-		InstalledAt: time.Now().Format(time.RFC3339),
-		Status:      "stopped",
-		Runtime: RuntimeInfo{
-			Port:      nil,
-			PID:       nil,
-			StartedAt: nil,
-			LogFile:   filepath.Join(gi.AgentFieldHome, "logs", metadata.Name+".log"),
-		},
-	}
-
-	// Save registry
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(registryPath), 0755); err != nil {
-		return fmt.Errorf("failed to create registry directory: %w", err)
-	}
-
-	if err := os.WriteFile(registryPath, data, 0644); err != nil {
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to write registry: %w", err)
 	}
 

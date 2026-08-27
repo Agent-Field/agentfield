@@ -146,9 +146,9 @@ func TestVCServiceSignatureHelperErrorBranches(t *testing.T) {
 	shortPublicKey := base64.RawURLEncoding.EncodeToString([]byte("short-public-key"))
 
 	signTests := []struct {
-		name      string
-		identity   *types.DIDIdentity
-		wantErr   string
+		name     string
+		identity *types.DIDIdentity
+		wantErr  string
 	}{
 		{name: "invalid private jwk json", identity: &types.DIDIdentity{PrivateKeyJWK: "{not-json}"}, wantErr: "failed to parse private key JWK"},
 		{name: "missing private key d", identity: &types.DIDIdentity{PrivateKeyJWK: `{"kty":"OKP"}`}, wantErr: "missing 'd' parameter"},
@@ -342,13 +342,13 @@ func TestHealthMonitorUnifiedAndFallbackBranches(t *testing.T) {
 		hm := NewHealthMonitor(storageStub, HealthMonitorConfig{}, nil, nil, statusManager, presence)
 
 		hm.markAgentActive("node-1")
-		require.Equal(t, types.HealthStatusActive, storageStub.updatedHealth["node-1"])
-		require.Equal(t, types.AgentStatusReady, storageStub.updatedLifecycle["node-1"])
+		require.Equal(t, types.HealthStatusActive, storageStub.healthFor("node-1"))
+		require.Equal(t, types.AgentStatusReady, storageStub.lifecycleFor("node-1"))
 		require.True(t, presence.HasLease("node-1"))
 
 		hm.markAgentInactive("node-1", 2)
-		require.Equal(t, types.HealthStatusInactive, storageStub.updatedHealth["node-1"])
-		require.Equal(t, types.AgentStatusOffline, storageStub.updatedLifecycle["node-1"])
+		require.Equal(t, types.HealthStatusInactive, storageStub.healthFor("node-1"))
+		require.Equal(t, types.AgentStatusOffline, storageStub.lifecycleFor("node-1"))
 	})
 
 	t.Run("status manager failure falls back to direct health update", func(t *testing.T) {
@@ -362,9 +362,9 @@ func TestHealthMonitorUnifiedAndFallbackBranches(t *testing.T) {
 		hm := NewHealthMonitor(storageStub, HealthMonitorConfig{}, nil, nil, statusManager, nil)
 
 		hm.markAgentActive("node-2")
-		require.Equal(t, types.HealthStatusActive, storageStub.updatedHealth["node-2"])
+		require.Equal(t, types.HealthStatusActive, storageStub.healthFor("node-2"))
 
 		hm.markAgentInactive("node-2", 3)
-		require.Equal(t, types.HealthStatusInactive, storageStub.updatedHealth["node-2"])
+		require.Equal(t, types.HealthStatusInactive, storageStub.healthFor("node-2"))
 	})
 }

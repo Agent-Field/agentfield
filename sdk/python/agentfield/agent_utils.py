@@ -249,6 +249,15 @@ class AgentUtils:
         """
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                # Match the server's own bind semantics: on POSIX uvicorn binds
+                # with SO_REUSEADDR, so a port whose previous connections are
+                # still in TIME_WAIT (every restart within ~60 s of a graceful
+                # stop) is available to it; without the option the check rejects
+                # exactly the port the control plane assigned and polls. On
+                # Windows SO_REUSEADDR means "bind over an active listener", so
+                # the probe stays strict there (the server does not set it).
+                if os.name != "nt":
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind(("localhost", port))
                 return True
         except OSError:

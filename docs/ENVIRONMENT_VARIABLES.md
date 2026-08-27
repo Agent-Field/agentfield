@@ -108,6 +108,11 @@ An execution's terminal outcome is reported once. If a lifecycle event is republ
 - `AGENTFIELD_TELEMETRY_INSTALL_ID_PATH` (optional): Path for the persisted local install ID.
 - `AGENTFIELD_TELEMETRY_TIMEOUT` (default: `800ms`): Per-event send timeout. Failures are ignored.
 
+### Logging
+
+- `AGENTFIELD_LOG_LEVEL` (default: `info`): Minimum severity written to stderr — `debug`, `info`, `warn` or `error`. Equivalent YAML: `logging.level`. The `--verbose` flag on `af` overrides both. A value that is not one of those four is reported once at `warn` on startup (`unrecognized log level, falling back to info`) and the server runs at `info`. Successful HTTP requests are logged at `debug`; a `404` at `info` (a request for a route that does not exist is routine noise, not an operator signal); the other 4xx responses at `warn` and 5xx at `error`, so failures stay visible at the default level and alerting keyed on `warn` is not tripped by scanners. Every request is logged, including the ones rejected before they reach a route: a disallowed `Origin` is answered with `403` by the CORS middleware and still produces one `warn` line.
+- `AGENTFIELD_LOG_REDACT_PAYLOADS` (default: `true`): When `true`, execution inputs/outputs and agent response bodies are kept out of log events and internal event-bus payloads; log lines carry the media type, byte length and a short keyed digest (an HMAC under a key minted at process start, so the digest correlates repeats within a run without committing to the plaintext) instead. Set to `false` only for local debugging. Equivalent YAML: `logging.redact_payloads`.
+
 ### CORS (HTTP API)
 
 These map to `api.cors.*` in config. When set via env, use comma-separated values.
@@ -132,13 +137,29 @@ When enabled, the control plane issues DID identities to agents and enforces tag
 
 The connector API provides token-authenticated management endpoints for external systems (CI/CD, orchestration platforms, dashboards).
 
+- `AGENTFIELD_CONNECTOR_ENABLED` (default: `false`): Set to `true` to expose the `/connector/*` endpoints.
 - `AGENTFIELD_CONNECTOR_TOKEN` (optional): Bearer token required for all `/connector/*` endpoints.
-- `AGENTFIELD_CONNECTOR_CAPABILITIES` (optional, default: all): Comma-separated list of granted capabilities. Available capabilities: `reasoners:read`, `reasoners:write`, `versions:read`, `versions:write`, `restart`.
+
+Capabilities are granted one variable at a time. Each accepts `true` (full
+access), `readonly` (GET only — writes are rejected with HTTP 403) or `false`.
+**A capability that is not set is disabled**, so grant only what the connector
+needs. These map to `features.connector.capabilities.<name>` in the YAML config.
+
+- `AGENTFIELD_CONNECTOR_CAP_POLICY_MANAGEMENT`
+- `AGENTFIELD_CONNECTOR_CAP_TAG_MANAGEMENT`
+- `AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT`
+- `AGENTFIELD_CONNECTOR_CAP_REASONER_MANAGEMENT`
+- `AGENTFIELD_CONNECTOR_CAP_STATUS_READ`
+- `AGENTFIELD_CONNECTOR_CAP_OBSERVABILITY_CONFIG`
+- `AGENTFIELD_CONNECTOR_CAP_CONFIG_MANAGEMENT`
 
 Example:
 ```
+AGENTFIELD_CONNECTOR_ENABLED=true
 AGENTFIELD_CONNECTOR_TOKEN=my-secret-token
-AGENTFIELD_CONNECTOR_CAPABILITIES=reasoners:read,versions:read,versions:write,restart
+AGENTFIELD_CONNECTOR_CAP_STATUS_READ=true
+AGENTFIELD_CONNECTOR_CAP_REASONER_MANAGEMENT=readonly
+AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT=false
 ```
 
 ## Agent Nodes
@@ -166,6 +187,11 @@ The same concept applies to **Docker**:
 - `AGENTFIELD_URL` (recommended): Control plane base URL.
 - `AGENT_NODE_ID` (optional): Node id.
 - `AGENT_CALLBACK_URL` (recommended in Docker/Kubernetes): URL the control plane will call back to (examples: `http://my-agent:8001`, or for host-run agents with Dockerized control plane: `http://host.docker.internal:8001`).
+- `AGENTFIELD_DISABLE_IP_DETECTION` (optional, default off): Set to `1`, `true` or `yes` (case-insensitive, surrounding whitespace ignored) to stop the Python SDK from probing the cloud metadata services (`169.254.169.254` for AWS/Azure, `metadata.google.internal` for GCP) and `https://api.ipify.org` for the node's public address. On Kubernetes those requests are typically denied by a `NetworkPolicy` and show up as deny-log noise. In detail:
+  - **What it disables.** The probe is one step of callback-URL discovery (`_detect_container_ip()`, whose only caller is `_build_callback_candidates()`), and it only runs when the SDK believes it is inside a container — `/.dockerenv` exists, `/proc/1/cgroup` mentions docker/containerd/kubepods, any `KUBERNETES_*` variable is set, or `CONTAINER` / `DOCKER_CONTAINER` / `RAILWAY_ENVIRONMENT` is set. This variable gates that single call site, so with it on the SDK makes no metadata or `api.ipify.org` request on any code path.
+  - **When you would set it.** Discovery already skips the probe on its own as soon as it has a callback URL to start from — the `callback_url=` constructor argument or `AGENT_CALLBACK_URL` — so most deployments need nothing. Note also that in the current SDK an agent started with `app.serve()` only enters callback discovery when it was constructed with `callback_url=...`; given `AGENT_CALLBACK_URL`, or neither, `serve()` derives `base_url` itself and never calls the discovery helpers. Set this variable when you want the no-egress guarantee to hold regardless of how the agent is constructed, or when your code calls `_build_callback_candidates()` / `_resolve_callback_url()` / `AgentFieldHandler.register_with_agentfield_server()` directly.
+  - **What it does not disable.** It is not a network kill switch. The SDK still determines its local address with a UDP `socket.connect()` toward `8.8.8.8:80`, which only asks the kernel which interface would be used — no packets are sent and no DNS lookup happens — and the agent still registers and heartbeats against the control plane as usual.
+  - **What it costs.** Only the public-IP entry disappears from the callback candidate list. The Railway internal hostname, the node's local-network address, the container hostname, `host.docker.internal` and the localhost fallbacks are all still offered.
 
 Many Python examples also require model provider credentials (for example `OPENAI_API_KEY`), depending on the `AIConfig` you choose.
 

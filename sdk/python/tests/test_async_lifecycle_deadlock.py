@@ -22,6 +22,7 @@ component is left in a clean, closed state.
 import asyncio
 import threading
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -29,6 +30,7 @@ from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.async_lifecycle import cancel_and_await_if_same_loop
 from agentfield.http_connection_manager import ConnectionManager
+from agentfield.result_cache import ResultCache
 
 
 def _run_loop_in_thread():
@@ -162,6 +164,72 @@ async def test_cancel_and_await_same_loop_propagates_cleanup_runtime_error():
 
     with pytest.raises(RuntimeError, match="cleanup failed"):
         await cancel_and_await_if_same_loop(task, asyncio.get_running_loop())
+
+
+async def _task_with_cleanup_error():
+    """Raise an unrelated error when cancellation reaches task cleanup."""
+    try:
+        await asyncio.Future()
+    except asyncio.CancelledError:
+        raise RuntimeError("cleanup failed")
+
+
+@pytest.mark.asyncio
+async def test_connection_manager_closes_resources_after_task_cleanup_error():
+    manager = ConnectionManager()
+    session = AsyncMock()
+    connector = AsyncMock()
+    manager._session = session
+    manager._connector = connector
+    manager._health_check_task = asyncio.create_task(_task_with_cleanup_error())
+    manager._loop = asyncio.get_running_loop()
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await manager._close_on_owner_loop(manager._loop)
+
+    assert session.close.await_count == 1
+    assert connector.close.await_count == 1
+    assert manager._session is None
+    assert manager._connector is None
+    assert manager._health_check_task is None
+    assert manager._loop is None
+
+
+@pytest.mark.asyncio
+async def test_async_execution_manager_stops_components_after_task_cleanup_error():
+    manager = AsyncExecutionManager(base_url="http://localhost:8080")
+    connection_manager = AsyncMock()
+    result_cache = AsyncMock()
+    manager.connection_manager = connection_manager
+    manager.result_cache = result_cache
+    manager._polling_task = asyncio.create_task(_task_with_cleanup_error())
+    manager._loop = asyncio.get_running_loop()
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await manager.stop()
+
+    assert manager._polling_task is None
+    assert manager._loop is None
+    connection_manager.close.assert_awaited_once()
+    result_cache.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_result_cache_clears_state_after_task_cleanup_error():
+    cache = ResultCache()
+    cache._cache["execution"] = object()
+    cache._cleanup_task = asyncio.create_task(_task_with_cleanup_error())
+    cache._loop = asyncio.get_running_loop()
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await cache.stop()
+
+    assert cache._cleanup_task is None
+    assert cache._loop is None
+    assert not cache._cache
 
 
 @pytest.mark.asyncio

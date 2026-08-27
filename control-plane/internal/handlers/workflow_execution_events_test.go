@@ -90,6 +90,15 @@ func TestWorkflowExecutionEventHandler_CreateAndUpdate(t *testing.T) {
 	assert.Contains(t, string(exec.ResultPayload), "result")
 	require.NotNil(t, exec.DurationMS)
 	assert.Equal(t, duration, *exec.DurationMS)
+
+	wfExec, err := storage.GetWorkflowExecution(context.Background(), "exec_child")
+	require.NoError(t, err)
+	require.NotNil(t, wfExec)
+	assert.Equal(t, string(types.ExecutionStatusSucceeded), wfExec.Status)
+	assert.Contains(t, string(wfExec.OutputData), `"result":"ok"`)
+	require.NotNil(t, wfExec.CompletedAt)
+	require.NotNil(t, wfExec.DurationMS)
+	assert.Equal(t, duration, *wfExec.DurationMS)
 }
 
 // TestWorkflowExecutionEventHandler_TerminalRegression covers the case where

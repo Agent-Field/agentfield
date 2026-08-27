@@ -121,9 +121,9 @@ func TestMemory_UserScopeVectorAndTypedHelpers(t *testing.T) {
 		Age  int    `json:"age"`
 	}
 
-	require.NoError(t, backend.Set(ScopeSession, "typed", "bytes", []byte(`{"name":"bytes","age":1}`)))
-	require.NoError(t, backend.Set(ScopeSession, "typed", "string", `{"name":"string","age":2}`))
-	require.NoError(t, backend.Set(ScopeSession, "typed", "map", map[string]any{"name": "map", "age": 3}))
+	require.NoError(t, backend.Set(context.Background(), ScopeSession, "typed", "bytes", []byte(`{"name":"bytes","age":1}`)))
+	require.NoError(t, backend.Set(context.Background(), ScopeSession, "typed", "string", `{"name":"string","age":2}`))
+	require.NoError(t, backend.Set(context.Background(), ScopeSession, "typed", "map", map[string]any{"name": "map", "age": 3}))
 
 	scoped := memory.Scoped(ScopeSession, "typed")
 	var got payload
@@ -135,7 +135,7 @@ func TestMemory_UserScopeVectorAndTypedHelpers(t *testing.T) {
 	assert.Equal(t, payload{Name: "map", Age: 3}, got)
 	require.NoError(t, scoped.GetTyped(context.Background(), "missing", &got))
 
-	require.NoError(t, backend.Set(ScopeSession, "typed", "invalid", make(chan int)))
+	require.NoError(t, backend.Set(context.Background(), ScopeSession, "typed", "invalid", make(chan int)))
 	err = scoped.GetTyped(context.Background(), "invalid", &got)
 	require.Error(t, err)
 }

@@ -2269,6 +2269,12 @@ code {
   min-width: 0;
 }
 
+.market-provenance {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .market-source {
   min-width: 0;
   overflow: hidden;
@@ -2284,6 +2290,10 @@ a.market-source:hover,
 a.market-source:focus-visible {
   color: var(--text-secondary);
   text-decoration: underline;
+}
+
+.market-installed-source {
+  color: var(--text-secondary);
 }
 
 /* Text + glyph, not color-only (the ✓ carries the label with it). */

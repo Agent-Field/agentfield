@@ -53,23 +53,23 @@ func testPlan(agent *types.AgentNode) *preparedExecution {
 
 func TestEnsureAgentDispatchable(t *testing.T) {
 	t.Run("nil agent is allowed", func(t *testing.T) {
-		require.NoError(t, ensureAgentDispatchable(nil))
+		require.NoError(t, ensureAgentDispatchable(nil, ""))
 	})
 
 	t.Run("unknown health is allowed so the first call of a session works", func(t *testing.T) {
 		require.NoError(t, ensureAgentDispatchable(&types.AgentNode{
 			ID:           "demoproj",
 			HealthStatus: types.HealthStatusUnknown,
-		}))
+		}, "demoproj"))
 	})
 
 	t.Run("active and degraded are allowed", func(t *testing.T) {
-		require.NoError(t, ensureAgentDispatchable(&types.AgentNode{ID: "a", HealthStatus: types.HealthStatusActive}))
-		require.NoError(t, ensureAgentDispatchable(&types.AgentNode{ID: "a", HealthStatus: types.HealthStatusDegraded}))
+		require.NoError(t, ensureAgentDispatchable(&types.AgentNode{ID: "a", HealthStatus: types.HealthStatusActive}, "a"))
+		require.NoError(t, ensureAgentDispatchable(&types.AgentNode{ID: "a", HealthStatus: types.HealthStatusDegraded}, "a"))
 	})
 
 	t.Run("inactive health is rejected as node_unavailable", func(t *testing.T) {
-		err := ensureAgentDispatchable(&types.AgentNode{ID: "demoproj", HealthStatus: types.HealthStatusInactive})
+		err := ensureAgentDispatchable(&types.AgentNode{ID: "demoproj", HealthStatus: types.HealthStatusInactive}, "demoproj")
 		var pe *executionPreconditionError
 		require.ErrorAs(t, err, &pe)
 		assert.Equal(t, http.StatusServiceUnavailable, pe.HTTPStatusCode())
@@ -79,7 +79,7 @@ func TestEnsureAgentDispatchable(t *testing.T) {
 	})
 
 	t.Run("offline lifecycle is rejected as node_unavailable", func(t *testing.T) {
-		err := ensureAgentDispatchable(&types.AgentNode{ID: "demoproj", LifecycleStatus: types.AgentStatusOffline})
+		err := ensureAgentDispatchable(&types.AgentNode{ID: "demoproj", LifecycleStatus: types.AgentStatusOffline}, "demoproj")
 		var pe *executionPreconditionError
 		require.ErrorAs(t, err, &pe)
 		assert.Equal(t, http.StatusServiceUnavailable, pe.HTTPStatusCode())
@@ -100,6 +100,118 @@ func TestIsDialFailure(t *testing.T) {
 func TestAgentRestartGraceIsConfigurable(t *testing.T) {
 	withRestartGrace(t, 42*time.Second)
 	assert.Equal(t, 42*time.Second, agentRestartGrace())
+}
+
+func TestE10PackageUpdateGraceIsReferenceCounted(t *testing.T) {
+	previous := agentRestartGrace()
+	SetAgentRestartGrace(15 * time.Second)
+	t.Cleanup(func() { SetAgentRestartGrace(previous) })
+	SetAgentUpdateInProgress("swe-planner", true)
+	SetAgentUpdateInProgress("swe-planner", true)
+	t.Cleanup(func() { SetAgentUpdateInProgress("swe-planner", false) })
+
+	if got, extended := agentRestartGraceFor("swe_planner"); got != 10*time.Minute || !extended {
+		t.Fatalf("updating node grace = %s, want 10m", got)
+	}
+	if got, extended := agentRestartGraceFor("other-node"); got != 15*time.Second || extended {
+		t.Fatalf("unrelated node grace = %s, want configured default", got)
+	}
+	SetAgentUpdateInProgress("swe-planner", false)
+	if got, extended := agentRestartGraceFor("swe-planner"); got != 10*time.Minute || !extended {
+		t.Fatalf("one remaining owner grace = %s extended=%v, want 10m true", got, extended)
+	}
+	SetAgentUpdateInProgress("swe-planner", false)
+	if got, extended := agentRestartGraceFor("swe-planner"); got != 15*time.Second || extended {
+		t.Fatalf("completed update grace = %s, want configured default", got)
+	}
+}
+
+func TestPackageUpdateDoesNotOverrideExplicitlyDisabledRestartGrace(t *testing.T) {
+	previous := agentRestartGrace()
+	SetAgentRestartGrace(0)
+	t.Cleanup(func() { SetAgentRestartGrace(previous) })
+	SetAgentUpdateInProgress("swe-planner", true)
+	t.Cleanup(func() { SetAgentUpdateInProgress("swe-planner", false) })
+
+	if got, extended := agentRestartGraceFor("swe_planner"); got != 0 || extended {
+		t.Fatalf("updating node grace=%s, want explicitly disabled", got)
+	}
+}
+
+func TestC16InactiveNodeUnderUpdateWaitsAndDispatchesAfterReregistration(t *testing.T) {
+	withRestartGrace(t, 15*time.Second)
+	SetAgentUpdateInProgress("demo-node", true)
+	t.Cleanup(func() { SetAgentUpdateInProgress("demo-node", false) })
+	dead := &types.AgentNode{
+		ID: "demo-node", BaseURL: "http://" + deadAddress(t), DeploymentType: "long_running",
+		InstanceID: "old", LastHeartbeat: time.Now().Add(-time.Minute),
+		HealthStatus: types.HealthStatusInactive, LifecycleStatus: types.AgentStatusOffline,
+	}
+	require.NoError(t, ensureAgentDispatchable(dead, "demo-node"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	revived := *dead
+	revived.BaseURL = server.URL
+	revived.InstanceID = "new"
+	revived.HealthStatus = types.HealthStatusActive
+	revived.LifecycleStatus = types.AgentStatusReady
+	store := &restartingStore{
+		testExecutionStorage: newTestExecutionStorage(dead), after: &revived, readsAt: 2,
+	}
+	controller := newExecutionController(store, nil, nil, 0, "")
+	response, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
+	require.NoError(t, err)
+	defer response.Body.Close()
+	assert.Equal(t, http.StatusOK, response.StatusCode)
+}
+
+func TestC17InactiveNodeWithoutUpdateIsRejectedAsUnavailable(t *testing.T) {
+	agent := &types.AgentNode{ID: "demo-node", HealthStatus: types.HealthStatusInactive, LifecycleStatus: types.AgentStatusOffline}
+	err := ensureAgentDispatchable(agent, "demo-node")
+	var precondition *executionPreconditionError
+	require.ErrorAs(t, err, &precondition)
+	assert.Equal(t, http.StatusServiceUnavailable, precondition.HTTPStatusCode())
+	assert.Equal(t, "node_unavailable", precondition.ErrorCode())
+}
+
+func TestE11ConfiguredTenMinuteGraceDoesNotImplyAnUpdate(t *testing.T) {
+	withRestartGrace(t, 10*time.Minute)
+	agent := &types.AgentNode{ID: "demo-node", HealthStatus: types.HealthStatusInactive, LifecycleStatus: types.AgentStatusOffline}
+	err := ensureAgentDispatchable(agent, "demo-node")
+	var precondition *executionPreconditionError
+	require.ErrorAs(t, err, &precondition)
+	assert.Equal(t, http.StatusServiceUnavailable, precondition.HTTPStatusCode())
+	assert.Equal(t, "node_unavailable", precondition.ErrorCode())
+}
+
+func TestE12RestartWaitFallsBackWithinOnePollAfterExtendedGraceEnds(t *testing.T) {
+	withRestartGrace(t, time.Millisecond)
+	SetAgentUpdateInProgress("demo-node", true)
+	t.Cleanup(func() { SetAgentUpdateInProgress("demo-node", false) })
+	dead := &types.AgentNode{
+		ID: "demo-node", BaseURL: "http://" + deadAddress(t), DeploymentType: "long_running",
+		InstanceID: "old", LastHeartbeat: time.Now().Add(-time.Minute),
+		HealthStatus: types.HealthStatusInactive, LifecycleStatus: types.AgentStatusOffline,
+	}
+	store := &restartingStore{testExecutionStorage: newTestExecutionStorage(dead), after: dead, readsAt: 1 << 20}
+	controller := newExecutionController(store, nil, nil, 0, "")
+	done := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		_, err := controller.retryAfterAgentRestart(context.Background(), testPlan(dead), &net.OpError{Op: "dial", Err: errors.New("refused")})
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	SetAgentUpdateInProgress("demo-node", false)
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Less(t, time.Since(started), 2*agentRestartPoll)
+	case <-time.After(time.Second):
+		t.Fatal("restart wait did not notice the disarmed extended grace")
+	}
 }
 
 func TestAgentCameBack(t *testing.T) {
@@ -320,6 +432,9 @@ func TestDispatchAgentRequestGivesUpAndDemotesTheNode(t *testing.T) {
 		restartingStore: &restartingStore{testExecutionStorage: newTestExecutionStorage(dead)},
 	}
 	controller := newExecutionController(store, nil, nil, 0, "")
+	controller.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	})
 
 	resp, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
 	require.Error(t, err)
@@ -612,10 +727,13 @@ func TestDispatchAgentRequestToleratesFailingNodeReads(t *testing.T) {
 		InstanceID:     "instance-old",
 	}
 	controller := newExecutionController(&errAgentReadStore{newTestExecutionStorage(dead)}, nil, nil, 0, "")
+	controller.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	})
 
 	_, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
 	require.Error(t, err)
-	assert.True(t, isDialFailure(err))
+	assert.True(t, isDialFailure(err), "error type %T: %v", err, err)
 }
 
 func TestDispatchAgentRequestKeepsWaitingWhenTheNodeIsNotServingYet(t *testing.T) {
@@ -640,6 +758,9 @@ func TestDispatchAgentRequestKeepsWaitingWhenTheNodeIsNotServingYet(t *testing.T
 		},
 	}
 	controller := newExecutionController(store, nil, nil, 0, "")
+	controller.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	})
 
 	_, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
 	require.Error(t, err)

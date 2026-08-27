@@ -788,7 +788,7 @@ func TestTargetSpecificEdgeCases(t *testing.T) {
 			// holding nothing but the user's own text.
 			{name: "codex", target: codexTarget{}, dir: filepath.Join(home, ".codex"), path: filepath.Join(home, ".codex", "AGENTS.override.md")},
 			{name: "gemini", target: geminiTarget{}, dir: filepath.Join(home, ".gemini"), path: filepath.Join(home, ".gemini", "GEMINI.md")},
-			{name: "opencode", target: opencodeTarget{}, dir: filepath.Join(home, ".config", "opencode"), path: filepath.Join(home, ".config", "opencode", "AGENTS.md")},
+			{name: "opencode", target: opencodeTarget{}, dir: filepath.Join(home, ".config", "opencode", "skills"), path: filepath.Join(home, ".config", "opencode", "skills", "agentfield")},
 			{name: "windsurf", target: windsurfTarget{}, dir: filepath.Join(home, ".codeium", "windsurf", "memories"), path: filepath.Join(home, ".codeium", "windsurf", "memories", "global_rules.md")},
 		}
 

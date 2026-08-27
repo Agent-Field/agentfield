@@ -4,7 +4,7 @@ import { type View, isView } from '../../shared/deeplink'
 import type { AgentFieldSnapshot } from '../../shared/types'
 import { Sidebar } from './components/Sidebar'
 import { DashboardView } from './components/DashboardView'
-import { AgentsPanel } from './components/AgentsPanel'
+import { AgentsPanel, LocalControlPlaneRestartBanner } from './components/AgentsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
 import { InstallPanel } from './components/InstallPanel'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -12,6 +12,7 @@ import { CloudPanel } from './components/CloudPanel'
 import { KeysBanner } from './components/KeysBanner'
 import { StarBanner } from './components/StarBanner'
 import { UpdateBanner } from './components/UpdateBanner'
+import { CloudUpdateBanner } from './components/CloudUpdateBanner'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -230,7 +231,6 @@ export default function App() {
 
   const cp = controlPlaneStatus(snapshot)
   const agents = snapshot?.registry.agents ?? []
-  const installedNames = agents.map((a) => a.name)
   const provisioningNames = bundled
     .filter((node) => node.phase === 'pending' || node.phase === 'installing')
     .map((node) => node.name)
@@ -322,7 +322,11 @@ export default function App() {
             </div>
           )}
         </header>
+        <LocalControlPlaneRestartBanner
+          status={snapshot?.localControlPlaneRestart ?? null}
+        />
         <UpdateBanner />
+        <CloudUpdateBanner />
         {/* Blocked-agents warning sits above the star ask: one reports the
             product cannot work, the other is a favour. */}
         <KeysBanner
@@ -370,7 +374,7 @@ export default function App() {
               {agentsSelected &&
                 (agentsAddMode ? (
                   <InstallPanel
-                    installedNames={installedNames}
+                    installedAgents={agents}
                     provisioningNames={provisioningNames}
                     onInstalled={() => void refresh()}
                     libraryCount={agents.length}

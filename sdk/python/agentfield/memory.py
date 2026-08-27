@@ -4,63 +4,85 @@ Cross-Agent Persistent Memory Client for AgentField SDK.
 Memory Scope Hierarchy
 ======================
 
-AgentField provides four memory scopes for storing agent data:
+AgentField provides four memory scopes for storing agent data. A scope
+controls *where a value is looked up and who can see it* — it does not control
+how long the value lives. Values in every scope persist until they are
+explicitly deleted (see "Lifecycle and Data Retention" below).
 
 Global Scope
 ------------
 - Shared across all agents and sessions.
-- Persists until explicitly deleted.
+- Addressed by the fixed scope id ``"global"``.
 - Use for: configuration, shared knowledge bases, cross-agent state.
 
 Session Scope
 -------------
-- Scoped to a single user session (conversation).
-- Cleared when the session ends.
+- Scoped to a single user session (conversation), keyed by ``X-Session-ID``.
+- Isolated from other sessions; invisible to actor- and workflow-scoped reads.
 - Use for: conversation context, user preferences within a session.
 
 Actor Scope
 -----------
-- Scoped to a single actor across all sessions.
-- Persists across sessions.
+- Scoped to a single actor across all sessions, keyed by ``X-Actor-ID``.
+- Independent of the session dimension, not nested inside it.
 - Use for: actor-specific learned data, actor configuration.
 
 Workflow Scope (Run Scope)
 --------------------------
-- Scoped to a single workflow execution.
-- Cleared when the workflow run completes.
+- Scoped to a single workflow execution, keyed by ``X-Workflow-ID``.
+- Isolated from other runs.
 - Use for: intermediate results, execution-specific state.
 
 Scope Relationship
 ------------------
-Conceptually, scope moves from widest to narrowest:
+``session``, ``actor`` and ``workflow`` are **sibling** dimensions, not a
+nested chain. Each is keyed by its own request header, so a value written under
+one is invisible to the other two. ``global`` is the shared fallback for
+all three:
 
 ::
 
-    Global (widest)
-        |
-    Session
-        |
-    Actor
-        |
-    Workflow/Run (narrowest)
+                             global
+                        (scope id "global",
+                       shared by every agent)
+                                |
+          +---------------------+---------------------+
+          |                     |                     |
+       session                actor                workflow
+    X-Session-ID           X-Actor-ID           X-Workflow-ID
+    one conversation     one actor, across        one run
+                           all sessions
 
 Lookup Behavior
 ---------------
-When calling ``memory.get(...)`` without an explicit scope, AgentField resolves
-values from most specific to least specific and returns the first match:
+A read with an explicit ``scope`` looks in that one dimension only. A read
+without a scope — ``memory.get(...)`` — walks the dimensions in this fixed
+order and returns the first match:
 
 ::
 
     workflow -> session -> actor -> global
 
-In other words, values in narrower scopes override broader scopes for reads.
+Only dimensions whose header is present on the request are consulted; ``global``
+is always tried last. Because the order is fixed, a workflow value shadows a
+session value of the same key, a session value shadows an actor value, and any
+of them shadows ``global``.
 
 Lifecycle and Data Retention
 ----------------------------
-- ``global``: retained until explicitly removed (for example via ``delete``).
-- ``session``: removed when the conversation/session ends.
-- ``actor``: retained across sessions for that actor until explicitly removed.
-- ``workflow``: removed automatically when that run completes.
+**All four scopes persist until the value is explicitly deleted.** AgentField
+does not expire, purge or garbage-collect memory:
+
+- There is no TTL or expiry on stored values in any storage backend.
+- Ending a conversation does **not** remove ``session``-scoped values.
+- Completing a workflow run does **not** remove ``workflow``-scoped values.
+  (The workflow-cleanup API deletes run, execution, webhook and
+  verifiable-credential records; it does not touch memory.)
+- The only removal path is an explicit ``delete`` from the SDK or the
+  corresponding control-plane endpoint.
+
+Pick a scope for isolation and lookup, not for cleanup: if a key should not
+outlive a session or a run, delete it yourself when you are done with it.
 
 Example Usage
 -------------
@@ -72,7 +94,7 @@ Example Usage
     # Store per-session context.
     await agent.memory.session(session_id).set("context", {"topic": "billing"})
 
-    # Store actor preferences that survive across sessions.
+    # Store actor preferences that are independent of any session.
     await agent.memory.actor(actor_id).set("preferences", {"tone": "concise"})
 
     # Store workflow-local intermediate results.
@@ -90,12 +112,19 @@ Example Usage
         scope_id=session_id,
     )
 
+    # Nothing reclaims this automatically — delete it when the run is done.
+    await memory_client.delete(
+        "step1_output",
+        scope="workflow",
+        scope_id=workflow_id,
+    )
+
 Use Scope Selection as a Design Tool
 ------------------------------------
 - Use ``global`` for organization-wide or system-wide defaults.
-- Use ``session`` for temporary conversation state.
+- Use ``session`` for state that must not leak between conversations.
 - Use ``actor`` for long-lived persona or agent specialization.
-- Use ``workflow`` for transient, per-run computation artifacts.
+- Use ``workflow`` for per-run computation artifacts.
 """
 
 import asyncio
@@ -356,12 +385,18 @@ class MemoryClient:
         """
         Check if a memory key exists.
 
+        Known limitation: ``get`` returns ``default`` rather than raising when the
+        key is absent, so this answers ``True`` for any key as long as the memory
+        backend is reachable. Only a transport or backend failure yields ``False``.
+        For a real existence test, compare ``get(key, sentinel)`` against a
+        sentinel of your own.
+
         Args:
             key: The memory key
             scope: Optional explicit scope override
 
         Returns:
-            True if key exists, False otherwise
+            True unless the lookup itself failed.
         """
         try:
             await self.get(key, scope=scope, scope_id=scope_id)
@@ -544,7 +579,11 @@ class ScopedMemoryClient:
         )
 
     async def exists(self, key: str) -> bool:
-        """Check if a key exists in this specific scope."""
+        """Check if a key exists in this specific scope.
+
+        Carries the same limitation as ``MemoryClient.exists``: it answers ``True``
+        whenever the backend is reachable.
+        """
         return await self.memory_client.exists(
             key, scope=self.scope, scope_id=self.scope_id
         )
@@ -638,7 +677,11 @@ class GlobalMemoryClient:
         return await self.memory_client.get(key, default=default, scope="global")
 
     async def exists(self, key: str) -> bool:
-        """Check if a key exists in global scope."""
+        """Check if a key exists in global scope.
+
+        Carries the same limitation as ``MemoryClient.exists``: it answers ``True``
+        whenever the backend is reachable.
+        """
         return await self.memory_client.exists(key, scope="global")
 
     async def delete(self, key: str) -> None:
@@ -890,11 +933,17 @@ class MemoryInterface:
         """
         Check if a memory key exists in any scope.
 
+        Known limitation: this answers ``True`` for any key as long as the memory
+        backend is reachable - a missing key is not distinguished from a stored one
+        (see ``MemoryClient.exists``). Compare
+        ``await app.memory.get(key, sentinel)`` against a sentinel of your own
+        instead.
+
         Args:
             key: The memory key
 
         Returns:
-            True if key exists in any scope, False otherwise
+            True unless the lookup itself failed.
         """
         return await self.memory_client.exists(key)
 

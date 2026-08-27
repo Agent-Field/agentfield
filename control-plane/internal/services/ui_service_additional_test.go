@@ -15,20 +15,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// uiStorageStub is shared by tests that drive StatusManager and UIService, both of
+// which fan out across goroutines (see UIService.RefreshAllNodeStatus). Every map in
+// the stub is therefore guarded by mu; production storage backends are already safe.
 type uiStorageStub struct {
 	storage.StorageProvider
-	listAgentsResp []*types.AgentNode
-	listAgentsErr  error
-	agentsByID     map[string]*types.AgentNode
-	getAgentErr    error
-	packages       []*types.AgentPackage
-	queryPkgsErr   error
-	updatedHealth  map[string]types.HealthStatus
+
+	mu               sync.Mutex
+	listAgentsResp   []*types.AgentNode
+	listAgentsErr    error
+	agentsByID       map[string]*types.AgentNode
+	getAgentErr      error
+	packages         []*types.AgentPackage
+	queryPkgsErr     error
+	updatedHealth    map[string]types.HealthStatus
 	updatedLifecycle map[string]types.AgentLifecycleStatus
 	updatedHeartbeat map[string]time.Time
 }
 
 func (s *uiStorageStub) ListAgents(_ context.Context, _ types.AgentFilters) ([]*types.AgentNode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.listAgentsErr != nil {
 		return nil, s.listAgentsErr
 	}
@@ -36,6 +43,8 @@ func (s *uiStorageStub) ListAgents(_ context.Context, _ types.AgentFilters) ([]*
 }
 
 func (s *uiStorageStub) GetAgent(_ context.Context, nodeID string) (*types.AgentNode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.getAgentErr != nil {
 		return nil, s.getAgentErr
 	}
@@ -46,6 +55,8 @@ func (s *uiStorageStub) GetAgent(_ context.Context, nodeID string) (*types.Agent
 }
 
 func (s *uiStorageStub) QueryAgentPackages(_ context.Context, _ types.PackageFilters) ([]*types.AgentPackage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.queryPkgsErr != nil {
 		return nil, s.queryPkgsErr
 	}
@@ -53,6 +64,8 @@ func (s *uiStorageStub) QueryAgentPackages(_ context.Context, _ types.PackageFil
 }
 
 func (s *uiStorageStub) UpdateAgentHealth(_ context.Context, nodeID string, health types.HealthStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.updatedHealth == nil {
 		s.updatedHealth = make(map[string]types.HealthStatus)
 	}
@@ -64,6 +77,8 @@ func (s *uiStorageStub) UpdateAgentHealth(_ context.Context, nodeID string, heal
 }
 
 func (s *uiStorageStub) UpdateAgentLifecycleStatus(_ context.Context, nodeID string, lifecycle types.AgentLifecycleStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.updatedLifecycle == nil {
 		s.updatedLifecycle = make(map[string]types.AgentLifecycleStatus)
 	}
@@ -75,6 +90,8 @@ func (s *uiStorageStub) UpdateAgentLifecycleStatus(_ context.Context, nodeID str
 }
 
 func (s *uiStorageStub) UpdateAgentHeartbeat(_ context.Context, nodeID, _ string, heartbeat time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.updatedHeartbeat == nil {
 		s.updatedHeartbeat = make(map[string]time.Time)
 	}
@@ -83,6 +100,26 @@ func (s *uiStorageStub) UpdateAgentHeartbeat(_ context.Context, nodeID, _ string
 		agent.LastHeartbeat = heartbeat
 	}
 	return nil
+}
+
+// healthFor, lifecycleFor and heartbeatFor let assertions read what the stub
+// recorded without racing against in-flight StatusManager goroutines.
+func (s *uiStorageStub) healthFor(nodeID string) types.HealthStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updatedHealth[nodeID]
+}
+
+func (s *uiStorageStub) lifecycleFor(nodeID string) types.AgentLifecycleStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updatedLifecycle[nodeID]
+}
+
+func (s *uiStorageStub) heartbeatFor(nodeID string) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updatedHeartbeat[nodeID]
 }
 
 type uiAgentServiceStub struct {
@@ -372,7 +409,7 @@ func TestUIServiceUnifiedStatusAndRefreshFlows(t *testing.T) {
 	require.Contains(t, statuses, "node-2")
 
 	require.NoError(t, service.RefreshNodeStatus(context.Background(), "node-1"))
-	require.Equal(t, types.HealthStatusInactive, storageStub.updatedHealth["node-1"])
+	require.Equal(t, types.HealthStatusInactive, storageStub.healthFor("node-1"))
 
 	allStatuses, err := service.RefreshAllNodeStatus(context.Background())
 	require.NoError(t, err)
@@ -448,7 +485,7 @@ func TestStatusManagerCheckTransitionTimeoutsCompletesAndPersists(t *testing.T) 
 	statusManager.checkTransitionTimeouts()
 
 	require.Empty(t, statusManager.activeTransitions)
-	require.Equal(t, types.AgentStatusReady, storageStub.updatedLifecycle["node-2"])
+	require.Equal(t, types.AgentStatusReady, storageStub.lifecycleFor("node-2"))
 }
 
 func TestStatusManagerPersistStatus(t *testing.T) {
@@ -463,9 +500,9 @@ func TestStatusManagerPersistStatus(t *testing.T) {
 		Source:          types.StatusSourceHeartbeat,
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.HealthStatusActive, storageStub.updatedHealth["node-1"])
-	require.Equal(t, types.AgentStatusReady, storageStub.updatedLifecycle["node-1"])
-	require.False(t, storageStub.updatedHeartbeat["node-1"].IsZero())
+	require.Equal(t, types.HealthStatusActive, storageStub.healthFor("node-1"))
+	require.Equal(t, types.AgentStatusReady, storageStub.lifecycleFor("node-1"))
+	require.False(t, storageStub.heartbeatFor("node-1").IsZero())
 
 	err = statusManager.persistStatus(context.Background(), "node-1", "v1", &types.AgentStatus{
 		State:           types.AgentStateStarting,
@@ -475,7 +512,7 @@ func TestStatusManagerPersistStatus(t *testing.T) {
 		Source:          types.StatusSourceManual,
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.AgentStatusStarting, storageStub.updatedLifecycle["node-1"])
+	require.Equal(t, types.AgentStatusStarting, storageStub.lifecycleFor("node-1"))
 
 	err = statusManager.persistStatus(context.Background(), "node-1", "v1", &types.AgentStatus{
 		State:           types.AgentStateInactive,
@@ -485,7 +522,7 @@ func TestStatusManagerPersistStatus(t *testing.T) {
 		Source:          types.StatusSourceManual,
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.AgentStatusOffline, storageStub.updatedLifecycle["node-1"])
+	require.Equal(t, types.AgentStatusOffline, storageStub.lifecycleFor("node-1"))
 }
 
 func syncMap() sync.Map {

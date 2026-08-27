@@ -5,6 +5,7 @@ import {
   generateText,
   streamText
 } from 'ai';
+import type { ModelMessage, UserContent } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -22,6 +23,11 @@ import {
 } from './openrouterAttribution.js';
 import { withOpenRouterUsageInclude } from './openrouterUsage.js';
 import { recordAiSdkUsage } from '../usage/aiUsage.js';
+import {
+  audioMediaType,
+  guessUrlMimeType,
+  type MultimodalContent,
+} from './multimodal.js';
 
 export type ZodSchema<T> = z.Schema<T, z.ZodTypeDef, any>;
 
@@ -70,6 +76,8 @@ export interface AIRequestOptions {
    * - 'tool': Force tool calling mode
    */
   mode?: 'auto' | 'json' | 'tool';
+  /** Additional image, audio, video, or file parts for the user message. */
+  content?: MultimodalContent[];
 }
 
 export type AIStream = AsyncIterable<string>;
@@ -101,13 +109,14 @@ export class AIClient {
   async generate<T = any>(prompt: string, options: AIRequestOptions = {}): Promise<T | string> {
     const { provider, modelName } = this.resolveModelChoice(options);
     const model = this.buildModel(options);
+    const requestPrompt = this.buildPrompt(prompt, options.content);
 
     if (options.schema) {
       const schema = options.schema;
       const call = async () =>
         generateObject({
           model: model,
-          prompt,
+          prompt: requestPrompt,
           output: 'object',
           system: options.system,
           temperature: options.temperature ?? this.config.temperature,
@@ -124,7 +133,7 @@ export class AIClient {
     const call = async () =>
       generateText({
         model: model,
-        prompt,
+        prompt: requestPrompt,
         system: options.system,
         temperature: options.temperature ?? this.config.temperature,
         maxOutputTokens: options.maxTokens ?? this.config.maxTokens
@@ -143,7 +152,7 @@ export class AIClient {
     const model = this.buildModel(options);
     const streamResult = streamText({
       model: model,
-      prompt,
+      prompt: this.buildPrompt(prompt, options.content),
       system: options.system,
       temperature: options.temperature ?? this.config.temperature,
       maxOutputTokens: options.maxTokens ?? this.config.maxTokens
@@ -295,6 +304,42 @@ export class AIClient {
         return openai(modelName);
       }
     }
+  }
+
+  private buildPrompt(prompt: string, content?: MultimodalContent[]): string | ModelMessage[] {
+    if (!content?.length) return prompt;
+
+    const messageContent: Exclude<UserContent, string> = [
+      { type: 'text', text: prompt },
+      ...content.map((part) => {
+        if (part.type === 'text') return { type: 'text' as const, text: part.text };
+        if (part.type === 'image_url') return { type: 'image' as const, image: part.imageUrl.url };
+        if (part.type === 'video_url') {
+          return {
+            type: 'file' as const,
+            data: part.videoUrl.url,
+            mediaType: guessUrlMimeType(part.videoUrl.url) ?? 'video/mp4',
+          };
+        }
+        if (part.type === 'input_audio') {
+          return {
+            type: 'file' as const,
+            data: part.audio.data,
+            mediaType: audioMediaType(part.audio.format),
+          };
+        }
+        return {
+          type: 'file' as const,
+          data: part.file.url,
+          mediaType: part.file.mimeType ?? guessUrlMimeType(part.file.url) ?? 'application/octet-stream',
+        };
+      })
+    ];
+    const messages: ModelMessage[] = [{
+      role: 'user' as const,
+      content: messageContent
+    }];
+    return messages;
   }
 
   private buildEmbeddingModel(options: AIEmbeddingOptions) {

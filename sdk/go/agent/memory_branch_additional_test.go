@@ -19,49 +19,49 @@ type memoryErrorBackend struct {
 	searchErr   error
 }
 
-func (b *memoryErrorBackend) Set(scope MemoryScope, scopeID, key string, value any) error {
+func (b *memoryErrorBackend) Set(_ context.Context, scope MemoryScope, scopeID, key string, value any) error {
 	b.lastScope = scope
 	b.lastScopeID = scopeID
 	return nil
 }
 
-func (b *memoryErrorBackend) Get(scope MemoryScope, scopeID, key string) (any, bool, error) {
+func (b *memoryErrorBackend) Get(_ context.Context, scope MemoryScope, scopeID, key string) (any, bool, error) {
 	b.lastScope = scope
 	b.lastScopeID = scopeID
 	return nil, false, b.getErr
 }
 
-func (b *memoryErrorBackend) Delete(scope MemoryScope, scopeID, key string) error {
+func (b *memoryErrorBackend) Delete(_ context.Context, scope MemoryScope, scopeID, key string) error {
 	b.lastScope = scope
 	b.lastScopeID = scopeID
 	return b.deleteErr
 }
 
-func (b *memoryErrorBackend) List(scope MemoryScope, scopeID string) ([]string, error) {
+func (b *memoryErrorBackend) List(_ context.Context, scope MemoryScope, scopeID string) ([]string, error) {
 	b.lastScope = scope
 	b.lastScopeID = scopeID
 	return nil, b.listErr
 }
 
-func (b *memoryErrorBackend) SetVector(scope MemoryScope, scopeID, key string, embedding []float64, metadata map[string]any) error {
+func (b *memoryErrorBackend) SetVector(_ context.Context, scope MemoryScope, scopeID, key string, embedding []float64, metadata map[string]any) error {
 	b.lastScope = scope
 	b.lastScopeID = scopeID
 	return nil
 }
 
-func (b *memoryErrorBackend) GetVector(scope MemoryScope, scopeID, key string) ([]float64, map[string]any, bool, error) {
+func (b *memoryErrorBackend) GetVector(_ context.Context, scope MemoryScope, scopeID, key string) ([]float64, map[string]any, bool, error) {
 	b.lastScope = scope
 	b.lastScopeID = scopeID
 	return nil, nil, false, b.vectorErr
 }
 
-func (b *memoryErrorBackend) SearchVector(scope MemoryScope, scopeID string, embedding []float64, opts SearchOptions) ([]VectorSearchResult, error) {
+func (b *memoryErrorBackend) SearchVector(_ context.Context, scope MemoryScope, scopeID string, embedding []float64, opts SearchOptions) ([]VectorSearchResult, error) {
 	b.lastScope = scope
 	b.lastScopeID = scopeID
 	return nil, b.searchErr
 }
 
-func (b *memoryErrorBackend) DeleteVector(scope MemoryScope, scopeID, key string) error {
+func (b *memoryErrorBackend) DeleteVector(_ context.Context, scope MemoryScope, scopeID, key string) error {
 	b.lastScope = scope
 	b.lastScopeID = scopeID
 	return b.deleteErr

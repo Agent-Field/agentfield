@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -59,7 +60,7 @@ func TestControlPlaneMemoryBackend_SetAppliesScopeHeaders(t *testing.T) {
 			defer server.Close()
 
 			backend := NewControlPlaneMemoryBackend(server.URL, "token-1", "agent-1")
-			err := backend.Set(tt.scope, tt.scopeID, "key", map[string]any{"ok": true})
+			err := backend.Set(context.Background(), tt.scope, tt.scopeID, "key", map[string]any{"ok": true})
 			require.NoError(t, err)
 
 			assert.Equal(t, http.MethodPost, gotMethod)
@@ -87,7 +88,7 @@ func TestControlPlaneMemoryBackend_GetHandlesNotFoundAndServerErrors(t *testing.
 		defer server.Close()
 
 		backend := NewControlPlaneMemoryBackend(server.URL, "", "")
-		value, found, err := backend.Get(ScopeSession, "s-1", "missing")
+		value, found, err := backend.Get(context.Background(), ScopeSession, "s-1", "missing")
 		require.NoError(t, err)
 		assert.Nil(t, value)
 		assert.False(t, found)
@@ -100,7 +101,7 @@ func TestControlPlaneMemoryBackend_GetHandlesNotFoundAndServerErrors(t *testing.
 		defer server.Close()
 
 		backend := NewControlPlaneMemoryBackend(server.URL, "", "")
-		value, found, err := backend.Get(ScopeSession, "s-1", "key")
+		value, found, err := backend.Get(context.Background(), ScopeSession, "s-1", "key")
 		require.Error(t, err)
 		assert.Nil(t, value)
 		assert.False(t, found)
@@ -129,7 +130,7 @@ func TestControlPlaneMemoryBackend_DeleteUsesPostEndpointAndScopeHeaders(t *test
 	backend := NewControlPlaneMemoryBackend(server.URL, "", "")
 
 	// Current behavior is POST /api/v1/memory/delete rather than HTTP DELETE.
-	err := backend.Delete(ScopeSession, "s-1", "key")
+	err := backend.Delete(context.Background(), ScopeSession, "s-1", "key")
 	require.NoError(t, err)
 
 	assert.Equal(t, http.MethodPost, gotMethod)
@@ -158,7 +159,7 @@ func TestControlPlaneMemoryBackend_ListUsesScopeQueryAndHeaders(t *testing.T) {
 	defer server.Close()
 
 	backend := NewControlPlaneMemoryBackend(server.URL, "", "")
-	keys, err := backend.List(ScopeSession, "s-1")
+	keys, err := backend.List(context.Background(), ScopeSession, "s-1")
 	require.NoError(t, err)
 
 	assert.Equal(t, "session", gotQuery.Get("scope"))
@@ -176,7 +177,7 @@ func TestControlPlaneMemoryBackend_EmptyScopeIDDoesNotErrorForNonGlobalScope(t *
 	defer server.Close()
 
 	backend := NewControlPlaneMemoryBackend(server.URL, "", "")
-	err := backend.Set(ScopeSession, "", "key", "value")
+	err := backend.Set(context.Background(), ScopeSession, "", "key", "value")
 	require.NoError(t, err)
 
 	// The backend does not resolve missing scope IDs from execution context.

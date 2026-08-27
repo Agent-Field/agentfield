@@ -439,12 +439,15 @@ class TestOpenRouterAudioE2E:
                 text="Say hello",
                 model="openai/gpt-audio-mini",
                 voice="nova",
-                format="mp3",  # avoid pcm→wav re-wrap so we can compare base64
+                format="pcm16",  # SSE streaming emits pcm16 audio deltas
             )
 
         assert result.audio is not None
         assert result.audio.data == "AAAABBBB"
-        assert result.audio.format == "mp3"
+        assert result.audio.format == "pcm16"
+        # pcm16 is the only wire format OpenRouter streams (#584) — this test
+        # must keep exercising the SSE path.
+        assert mock_session.post.call_args.kwargs["json"]["stream"] is True
 
     @pytest.mark.asyncio
     async def test_audio_sse_includes_optional_system_message(self):
@@ -482,12 +485,13 @@ class TestOpenRouterAudioE2E:
                 text="Read this dramatically",
                 model="openai/gpt-audio-mini",
                 voice="nova",
-                format="mp3",
+                format="pcm16",
                 system="You are a narrator. Use a calm documentary style.",
             )
 
         assert result.audio is not None
         payload = mock_session.post.call_args.kwargs["json"]
+        assert payload["stream"] is True
         assert payload["messages"] == [
             {
                 "role": "system",
@@ -517,8 +521,9 @@ class TestOpenRouterMusicE2E:
         """Music generation routes through SSE stream -> AudioOutput."""
         provider = OpenRouterProvider(api_key="test-key")
 
+        # base64 for b"MUSIC" — no container signature, i.e. raw pcm frames.
         sse_lines = [
-            b'data: {"choices":[{"delta":{"audio":{"data":"MUSIC"}}}]}\n',
+            b'data: {"choices":[{"delta":{"audio":{"data":"TVVTSUM="}}}]}\n',
             b"data: [DONE]\n",
         ]
 
@@ -545,12 +550,20 @@ class TestOpenRouterMusicE2E:
         with patch("aiohttp.ClientSession", return_value=session_cm):
             result = await provider.generate_music(
                 prompt="upbeat jazz piano solo",
-                model="google/lyria-3-pro",
+                model="google/lyria-3-pro-preview",
                 duration=30,
+                format="pcm16",  # ask for pcm16 so nothing is re-wrapped
             )
 
         assert result.audio is not None
-        assert result.audio.data == "MUSIC"
+        assert result.audio.data == "TVVTSUM="
+        assert result.audio.format == "pcm16"
+        # Music models reject stream=false for any audio output, so every
+        # generate_music request must go out as an SSE stream.
+        assert mock_session.post.call_args.kwargs["json"]["stream"] is True
+        assert mock_session.post.call_args.kwargs["json"]["audio"] == {
+            "format": "pcm16"
+        }
 
     @pytest.mark.asyncio
     async def test_music_invalid_duration_rejected(self):

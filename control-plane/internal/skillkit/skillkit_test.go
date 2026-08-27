@@ -463,13 +463,13 @@ func TestHelpersAndTargets(t *testing.T) {
 		t.Fatalf("mkdir opencode dir: %v", err)
 	}
 	opencode := opencodeTarget{}
-	if opencode.DisplayName() != "OpenCode" || opencode.Method() != "marker-block" {
+	if opencode.DisplayName() != "OpenCode" || opencode.Method() != "symlink" {
 		t.Fatalf("unexpected opencode metadata: %q %q", opencode.DisplayName(), opencode.Method())
 	}
 	if !opencode.Detected() {
 		t.Fatal("opencode target should be detected")
 	}
-	if _, err := opencode.Install(skill, filepath.Join(home, "canonical", "current")); err != nil {
+	if _, err := opencode.Install(skill, filepath.Join(home, "canonical", skill.Version)); err != nil {
 		t.Fatalf("opencode install: %v", err)
 	}
 	if installed, version, err := opencode.Status(); err != nil || !installed || version != skill.Version {

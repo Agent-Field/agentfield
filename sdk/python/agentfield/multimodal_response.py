@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from agentfield.data_url import decode_data_url, is_data_url
 from agentfield.logger import log_error, log_warn
 from pydantic import BaseModel, Field
 
@@ -90,20 +91,23 @@ class ImageOutput(BaseModel):
         """Save image to file."""
         if not self.b64_json and not self.url:
             raise ValueError("No image data or URL available to save")
+        # Resolve the bytes before touching the destination: opening with "wb"
+        # truncates, so a payload that turns out to be undecodable (or a
+        # download that fails) must not destroy an existing file at *path*.
+        image_bytes = self.get_bytes()
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
-            f.write(self.get_bytes())
+            f.write(image_bytes)
 
     def get_bytes(self) -> bytes:
         """Get raw image bytes from b64_json, a data: URL, or an http(s) URL."""
         if self.b64_json:
             return base64.b64decode(self.b64_json)
         if self.url:
-            if self.url.startswith("data:"):
+            if is_data_url(self.url):
                 # data:image/jpeg;base64,<payload>
-                _, _, payload = self.url.partition(",")
-                return base64.b64decode(payload)
+                return decode_data_url(self.url)
             try:
                 import requests
             except ImportError:
@@ -140,14 +144,15 @@ class FileOutput(BaseModel):
 
     def save(self, path: Union[str, Path]) -> None:
         """Save file to disk."""
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
+        # Resolve the bytes before touching the destination: opening with "wb"
+        # truncates, so a payload that turns out to be undecodable (or a
+        # download that fails) must not destroy an existing file at *path*.
         if self.data:
             # Save from base64 data
             file_bytes = base64.b64decode(self.data)
-            with open(path, "wb") as f:
-                f.write(file_bytes)
+        elif is_data_url(self.url):
+            # Inline payload - decode locally, never hand a data: URL to requests
+            file_bytes = decode_data_url(self.url)
         elif self.url:
             # Download from URL
             try:
@@ -155,8 +160,7 @@ class FileOutput(BaseModel):
 
                 response = requests.get(self.url)
                 response.raise_for_status()
-                with open(path, "wb") as f:
-                    f.write(response.content)
+                file_bytes = response.content
             except ImportError:
                 raise ImportError(
                     "URL download requires requests: pip install requests"
@@ -164,10 +168,17 @@ class FileOutput(BaseModel):
         else:
             raise ValueError("No file data or URL available to save")
 
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(file_bytes)
+
     def get_bytes(self) -> bytes:
         """Get raw file bytes."""
         if self.data:
             return base64.b64decode(self.data)
+        elif is_data_url(self.url):
+            return decode_data_url(self.url)
         elif self.url:
             try:
                 import requests
@@ -198,21 +209,21 @@ class VideoOutput(BaseModel):
 
     def save(self, path: Union[str, Path]) -> None:
         """Save video to file."""
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
+        # Resolve the bytes before touching the destination: opening with "wb"
+        # truncates, so a payload that turns out to be undecodable (or a
+        # download that fails) must not destroy an existing file at *path*.
         if self.data:
             video_bytes = base64.b64decode(self.data)
-            with open(path, "wb") as f:
-                f.write(video_bytes)
+        elif is_data_url(self.url):
+            # Inline payload - decode locally, never hand a data: URL to requests
+            video_bytes = decode_data_url(self.url)
         elif self.url:
             try:
                 import requests
 
                 response = requests.get(self.url, timeout=120)
                 response.raise_for_status()
-                with open(path, "wb") as f:
-                    f.write(response.content)
+                video_bytes = response.content
             except ImportError:
                 raise ImportError(
                     "URL download requires requests: pip install requests"
@@ -220,10 +231,17 @@ class VideoOutput(BaseModel):
         else:
             raise ValueError("No video data or URL available to save")
 
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(video_bytes)
+
     def get_bytes(self) -> bytes:
         """Get raw video bytes."""
         if self.data:
             return base64.b64decode(self.data)
+        elif is_data_url(self.url):
+            return decode_data_url(self.url)
         elif self.url:
             try:
                 import requests

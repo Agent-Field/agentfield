@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,14 +30,14 @@ func TestControlPlaneMemoryBackend_AdditionalHTTPBranches(t *testing.T) {
 		defer srv.Close()
 
 		b := NewControlPlaneMemoryBackend(srv.URL, "", "agent-1")
-		val, found, err := b.Get(ScopeSession, "sess-1", "k")
+		val, found, err := b.Get(context.Background(), ScopeSession, "sess-1", "k")
 		require.NoError(t, err)
 		require.True(t, found)
 		assert.Equal(t, map[string]any{"ok": true}, val)
 
-		require.NoError(t, b.Delete(ScopeSession, "sess-1", "k"))
+		require.NoError(t, b.Delete(context.Background(), ScopeSession, "sess-1", "k"))
 
-		keys, err := b.List(ScopeSession, "sess-1")
+		keys, err := b.List(context.Background(), ScopeSession, "sess-1")
 		require.NoError(t, err)
 		assert.Equal(t, []string{"kept"}, keys)
 	})
@@ -60,19 +61,19 @@ func TestControlPlaneMemoryBackend_AdditionalHTTPBranches(t *testing.T) {
 
 		b := NewControlPlaneMemoryBackend(srv.URL, "", "agent-1")
 
-		err := b.Set(ScopeSession, "sess-1", "k", "v")
+		err := b.Set(context.Background(), ScopeSession, "sess-1", "k", "v")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "memory set failed")
 
-		_, _, err = b.Get(ScopeSession, "sess-1", "k")
+		_, _, err = b.Get(context.Background(), ScopeSession, "sess-1", "k")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "memory get failed")
 
-		err = b.Delete(ScopeSession, "sess-1", "k")
+		err = b.Delete(context.Background(), ScopeSession, "sess-1", "k")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "memory delete failed")
 
-		_, err = b.List(ScopeSession, "sess-1")
+		_, err = b.List(context.Background(), ScopeSession, "sess-1")
 		require.Error(t, err)
 	})
 
@@ -97,21 +98,21 @@ func TestControlPlaneMemoryBackend_AdditionalHTTPBranches(t *testing.T) {
 
 		b := NewControlPlaneMemoryBackend(srv.URL, "", "agent-1")
 
-		err := b.SetVector(ScopeSession, "sess-1", "bad", []float64{1, 2}, nil)
+		err := b.SetVector(context.Background(), ScopeSession, "sess-1", "bad", []float64{1, 2}, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "vector memory set failed")
 
-		_, _, _, err = b.GetVector(ScopeSession, "sess-1", "bad")
+		_, _, _, err = b.GetVector(context.Background(), ScopeSession, "sess-1", "bad")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "vector memory get failed")
 
-		_, _, _, err = b.GetVector(ScopeSession, "sess-1", "decode")
+		_, _, _, err = b.GetVector(context.Background(), ScopeSession, "sess-1", "decode")
 		require.Error(t, err)
 
-		_, err = b.SearchVector(ScopeSession, "sess-1", []float64{1}, SearchOptions{})
+		_, err = b.SearchVector(context.Background(), ScopeSession, "sess-1", []float64{1}, SearchOptions{})
 		require.Error(t, err)
 
-		err = b.DeleteVector(ScopeSession, "sess-1", "bad")
+		err = b.DeleteVector(context.Background(), ScopeSession, "sess-1", "bad")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "vector memory delete failed")
 	})

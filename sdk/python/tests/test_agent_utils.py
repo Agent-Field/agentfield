@@ -1,3 +1,6 @@
+import os
+import socket
+
 import pytest
 from pydantic import BaseModel
 
@@ -84,6 +87,9 @@ def test_is_port_available(monkeypatch, available):
         def __init__(self, *args, **kwargs):
             calls["created"] = True
 
+        def setsockopt(self, level, option, value):
+            calls["reuseaddr"] = (level, option, value)
+
         def bind(self, addr):
             if not available:
                 raise OSError("in use")
@@ -100,6 +106,30 @@ def test_is_port_available(monkeypatch, available):
     result = AgentUtils.is_port_available(4321)
     assert result is available
     assert calls.get("created") is True
+    if os.name != "nt":
+        assert calls.get("reuseaddr") == (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    else:
+        assert "reuseaddr" not in calls
+
+
+@pytest.mark.skipif(os.name == "nt", reason="TIME_WAIT reuse is POSIX bind semantics")
+def test_is_port_available_agrees_with_a_reuseaddr_server_after_time_wait():
+    """A port whose last connection is in TIME_WAIT is one uvicorn can bind
+    (it sets SO_REUSEADDR), so the availability check must say so — otherwise a
+    node restarted within a minute of a graceful stop moves to a different port
+    than the one the control plane assigned and polls."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        with socket.create_connection(("127.0.0.1", port)) as client:
+            accepted, _ = server.accept()
+            # The server side closes first, so TIME_WAIT lands on the server's
+            # port — exactly what a node shutting down leaves behind.
+            accepted.close()
+            client.recv(1)
+    assert AgentUtils.is_port_available(port) is True
 
 
 def test_detect_input_type_additional_branches(tmp_path):

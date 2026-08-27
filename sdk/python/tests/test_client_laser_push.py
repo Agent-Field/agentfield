@@ -260,7 +260,8 @@ async def test_get_async_http_client_typeerror_fallback_and_aclose(monkeypatch, 
 
     assert created.is_closed is True
     assert client._async_http_client is None
-    assert client._async_http_client_lock is None
+    # The slot is free again: the next loop to ask can own it.
+    assert client._async_http_client_loop is None
 
 
 @pytest.mark.asyncio

@@ -24,24 +24,25 @@ const (
 
 // MemoryBackend is the pluggable storage interface for memory operations.
 // Implementations can use in-memory storage, Redis, databases, or external APIs.
+// All methods accept a context.Context to support cancellation and timeouts.
 type MemoryBackend interface {
 	// Set stores a value at the given scope and key.
-	Set(scope MemoryScope, scopeID, key string, value any) error
+	Set(ctx context.Context, scope MemoryScope, scopeID, key string, value any) error
 	// Get retrieves a value; returns (value, found, error).
-	Get(scope MemoryScope, scopeID, key string) (any, bool, error)
+	Get(ctx context.Context, scope MemoryScope, scopeID, key string) (any, bool, error)
 	// Delete removes a key from storage.
-	Delete(scope MemoryScope, scopeID, key string) error
+	Delete(ctx context.Context, scope MemoryScope, scopeID, key string) error
 	// List returns all keys in a scope.
-	List(scope MemoryScope, scopeID string) ([]string, error)
+	List(ctx context.Context, scope MemoryScope, scopeID string) ([]string, error)
 
 	// SetVector stores a vector embedding with optional metadata.
-	SetVector(scope MemoryScope, scopeID, key string, embedding []float64, metadata map[string]any) error
+	SetVector(ctx context.Context, scope MemoryScope, scopeID, key string, embedding []float64, metadata map[string]any) error
 	// GetVector retrieves a vector and its metadata.
-	GetVector(scope MemoryScope, scopeID, key string) (embedding []float64, metadata map[string]any, found bool, err error)
+	GetVector(ctx context.Context, scope MemoryScope, scopeID, key string) (embedding []float64, metadata map[string]any, found bool, err error)
 	// SearchVector performs a similarity search.
-	SearchVector(scope MemoryScope, scopeID string, embedding []float64, opts SearchOptions) ([]VectorSearchResult, error)
+	SearchVector(ctx context.Context, scope MemoryScope, scopeID string, embedding []float64, opts SearchOptions) ([]VectorSearchResult, error)
 	// DeleteVector removes a vector from storage.
-	DeleteVector(scope MemoryScope, scopeID, key string) error
+	DeleteVector(ctx context.Context, scope MemoryScope, scopeID, key string) error
 }
 
 // SearchOptions defines parameters for similarity search.
@@ -84,7 +85,7 @@ func (m *Memory) Set(ctx context.Context, key string, value any) error {
 	if scopeID == "" {
 		scopeID = execCtx.RunID
 	}
-	return m.backend.Set(ScopeSession, scopeID, key, value)
+	return m.backend.Set(ctx, ScopeSession, scopeID, key, value)
 }
 
 // Get retrieves a value from the session scope (default scope).
@@ -95,7 +96,7 @@ func (m *Memory) Get(ctx context.Context, key string) (any, error) {
 	if scopeID == "" {
 		scopeID = execCtx.RunID
 	}
-	val, _, err := m.backend.Get(ScopeSession, scopeID, key)
+	val, _, err := m.backend.Get(ctx, ScopeSession, scopeID, key)
 	return val, err
 }
 
@@ -116,7 +117,7 @@ func (m *Memory) GetWithDefault(ctx context.Context, key string, defaultVal any)
 	if scopeID == "" {
 		scopeID = execCtx.RunID
 	}
-	val, found, err := m.backend.Get(ScopeSession, scopeID, key)
+	val, found, err := m.backend.Get(ctx, ScopeSession, scopeID, key)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +134,7 @@ func (m *Memory) Delete(ctx context.Context, key string) error {
 	if scopeID == "" {
 		scopeID = execCtx.RunID
 	}
-	return m.backend.Delete(ScopeSession, scopeID, key)
+	return m.backend.Delete(ctx, ScopeSession, scopeID, key)
 }
 
 // List returns all keys in the session scope.
@@ -143,7 +144,7 @@ func (m *Memory) List(ctx context.Context) ([]string, error) {
 	if scopeID == "" {
 		scopeID = execCtx.RunID
 	}
-	return m.backend.List(ScopeSession, scopeID)
+	return m.backend.List(ctx, ScopeSession, scopeID)
 }
 
 // SetVector stores a vector in the session scope (default scope).
@@ -153,7 +154,7 @@ func (m *Memory) SetVector(ctx context.Context, key string, embedding []float64,
 	if scopeID == "" {
 		scopeID = execCtx.RunID
 	}
-	return m.backend.SetVector(ScopeSession, scopeID, key, embedding, metadata)
+	return m.backend.SetVector(ctx, ScopeSession, scopeID, key, embedding, metadata)
 }
 
 // GetVector retrieves a vector from the session scope (default scope).
@@ -163,7 +164,7 @@ func (m *Memory) GetVector(ctx context.Context, key string) (embedding []float64
 	if scopeID == "" {
 		scopeID = execCtx.RunID
 	}
-	embedding, metadata, found, err := m.backend.GetVector(ScopeSession, scopeID, key)
+	embedding, metadata, found, err := m.backend.GetVector(ctx, ScopeSession, scopeID, key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -180,7 +181,7 @@ func (m *Memory) SearchVector(ctx context.Context, embedding []float64, opts Sea
 	if scopeID == "" {
 		scopeID = execCtx.RunID
 	}
-	return m.backend.SearchVector(ScopeSession, scopeID, embedding, opts)
+	return m.backend.SearchVector(ctx, ScopeSession, scopeID, embedding, opts)
 }
 
 // DeleteVector removes a vector from the session scope (default scope).
@@ -190,7 +191,7 @@ func (m *Memory) DeleteVector(ctx context.Context, key string) error {
 	if scopeID == "" {
 		scopeID = execCtx.RunID
 	}
-	return m.backend.DeleteVector(ScopeSession, scopeID, key)
+	return m.backend.DeleteVector(ctx, ScopeSession, scopeID, key)
 }
 
 // WorkflowScope returns a ScopedMemory for workflow-level storage.
@@ -266,20 +267,20 @@ type ScopedMemory struct {
 
 // Set stores a value in this scope.
 func (s *ScopedMemory) Set(ctx context.Context, key string, value any) error {
-	return s.backend.Set(s.scope, s.getID(ctx), key, value)
+	return s.backend.Set(ctx, s.scope, s.getID(ctx), key, value)
 }
 
 // Get retrieves a value from this scope.
 // Returns nil if the key does not exist.
 func (s *ScopedMemory) Get(ctx context.Context, key string) (any, error) {
-	val, _, err := s.backend.Get(s.scope, s.getID(ctx), key)
+	val, _, err := s.backend.Get(ctx, s.scope, s.getID(ctx), key)
 	return val, err
 }
 
 // GetWithDefault retrieves a value from this scope,
 // returning the default if the key does not exist.
 func (s *ScopedMemory) GetWithDefault(ctx context.Context, key string, defaultVal any) (any, error) {
-	val, found, err := s.backend.Get(s.scope, s.getID(ctx), key)
+	val, found, err := s.backend.Get(ctx, s.scope, s.getID(ctx), key)
 	if err != nil {
 		return nil, err
 	}
@@ -291,22 +292,22 @@ func (s *ScopedMemory) GetWithDefault(ctx context.Context, key string, defaultVa
 
 // Delete removes a key from this scope.
 func (s *ScopedMemory) Delete(ctx context.Context, key string) error {
-	return s.backend.Delete(s.scope, s.getID(ctx), key)
+	return s.backend.Delete(ctx, s.scope, s.getID(ctx), key)
 }
 
 // List returns all keys in this scope.
 func (s *ScopedMemory) List(ctx context.Context) ([]string, error) {
-	return s.backend.List(s.scope, s.getID(ctx))
+	return s.backend.List(ctx, s.scope, s.getID(ctx))
 }
 
 // SetVector stores a vector in this scope.
 func (s *ScopedMemory) SetVector(ctx context.Context, key string, embedding []float64, metadata map[string]any) error {
-	return s.backend.SetVector(s.scope, s.getID(ctx), key, embedding, metadata)
+	return s.backend.SetVector(ctx, s.scope, s.getID(ctx), key, embedding, metadata)
 }
 
 // GetVector retrieves a vector from this scope.
 func (s *ScopedMemory) GetVector(ctx context.Context, key string) (embedding []float64, metadata map[string]any, err error) {
-	embedding, metadata, found, err := s.backend.GetVector(s.scope, s.getID(ctx), key)
+	embedding, metadata, found, err := s.backend.GetVector(ctx, s.scope, s.getID(ctx), key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -318,18 +319,18 @@ func (s *ScopedMemory) GetVector(ctx context.Context, key string) (embedding []f
 
 // SearchVector performs a similarity search in this scope.
 func (s *ScopedMemory) SearchVector(ctx context.Context, embedding []float64, opts SearchOptions) ([]VectorSearchResult, error) {
-	return s.backend.SearchVector(s.scope, s.getID(ctx), embedding, opts)
+	return s.backend.SearchVector(ctx, s.scope, s.getID(ctx), embedding, opts)
 }
 
 // DeleteVector removes a vector from this scope.
 func (s *ScopedMemory) DeleteVector(ctx context.Context, key string) error {
-	return s.backend.DeleteVector(s.scope, s.getID(ctx), key)
+	return s.backend.DeleteVector(ctx, s.scope, s.getID(ctx), key)
 }
 
 // GetTyped retrieves a value and unmarshals it into the provided type.
 // This is useful when storing complex objects as JSON.
 func (s *ScopedMemory) GetTyped(ctx context.Context, key string, dest any) error {
-	val, found, err := s.backend.Get(s.scope, s.getID(ctx), key)
+	val, found, err := s.backend.Get(ctx, s.scope, s.getID(ctx), key)
 	if err != nil {
 		return err
 	}
@@ -450,7 +451,7 @@ func (b *InMemoryBackend) compositeKey(scope MemoryScope, scopeID string) string
 }
 
 // Set stores a value.
-func (b *InMemoryBackend) Set(scope MemoryScope, scopeID, key string, value any) error {
+func (b *InMemoryBackend) Set(_ context.Context, scope MemoryScope, scopeID, key string, value any) error {
 	copied, err := deepCopyAny(value)
 	if err != nil {
 		return err
@@ -468,7 +469,7 @@ func (b *InMemoryBackend) Set(scope MemoryScope, scopeID, key string, value any)
 }
 
 // Get retrieves a value.
-func (b *InMemoryBackend) Get(scope MemoryScope, scopeID, key string) (any, bool, error) {
+func (b *InMemoryBackend) Get(_ context.Context, scope MemoryScope, scopeID, key string) (any, bool, error) {
 	b.mu.RLock()
 
 	ck := b.compositeKey(scope, scopeID)
@@ -489,7 +490,7 @@ func (b *InMemoryBackend) Get(scope MemoryScope, scopeID, key string) (any, bool
 }
 
 // Delete removes a key.
-func (b *InMemoryBackend) Delete(scope MemoryScope, scopeID, key string) error {
+func (b *InMemoryBackend) Delete(_ context.Context, scope MemoryScope, scopeID, key string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -501,7 +502,7 @@ func (b *InMemoryBackend) Delete(scope MemoryScope, scopeID, key string) error {
 }
 
 // List returns all keys in a scope.
-func (b *InMemoryBackend) List(scope MemoryScope, scopeID string) ([]string, error) {
+func (b *InMemoryBackend) List(_ context.Context, scope MemoryScope, scopeID string) ([]string, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -517,7 +518,7 @@ func (b *InMemoryBackend) List(scope MemoryScope, scopeID string) ([]string, err
 }
 
 // SetVector stores a vector.
-func (b *InMemoryBackend) SetVector(scope MemoryScope, scopeID, key string, embedding []float64, metadata map[string]any) error {
+func (b *InMemoryBackend) SetVector(_ context.Context, scope MemoryScope, scopeID, key string, embedding []float64, metadata map[string]any) error {
 	copiedMetadata, err := deepCopyAny(metadata)
 	if err != nil {
 		return err
@@ -538,7 +539,7 @@ func (b *InMemoryBackend) SetVector(scope MemoryScope, scopeID, key string, embe
 }
 
 // GetVector retrieves a vector.
-func (b *InMemoryBackend) GetVector(scope MemoryScope, scopeID, key string) ([]float64, map[string]any, bool, error) {
+func (b *InMemoryBackend) GetVector(_ context.Context, scope MemoryScope, scopeID, key string) ([]float64, map[string]any, bool, error) {
 	b.mu.RLock()
 
 	ck := b.compositeKey(scope, scopeID)
@@ -559,13 +560,13 @@ func (b *InMemoryBackend) GetVector(scope MemoryScope, scopeID, key string) ([]f
 }
 
 // SearchVector performs similarity search (stubbed - returns empty list for in-memory).
-func (b *InMemoryBackend) SearchVector(scope MemoryScope, scopeID string, embedding []float64, opts SearchOptions) ([]VectorSearchResult, error) {
+func (b *InMemoryBackend) SearchVector(_ context.Context, scope MemoryScope, scopeID string, embedding []float64, opts SearchOptions) ([]VectorSearchResult, error) {
 	// In-memory similarity search is not implemented in this mock; it requires vector math.
 	return []VectorSearchResult{}, nil
 }
 
 // DeleteVector removes a vector.
-func (b *InMemoryBackend) DeleteVector(scope MemoryScope, scopeID, key string) error {
+func (b *InMemoryBackend) DeleteVector(_ context.Context, scope MemoryScope, scopeID, key string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

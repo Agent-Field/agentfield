@@ -580,7 +580,9 @@ func (p *OpenRouterMediaProvider) GenerateImage(ctx context.Context, req ImageRe
 // GenerateAudio auto-routes to the right OpenRouter endpoint based on the
 // model's output_modalities:
 //   - ["speech"] (e.g. hexgrad/kokoro-82m)  → POST /audio/speech
-//   - contains "audio" (e.g. openai/gpt-audio*) → chat-completions SSE
+//   - contains "audio" (e.g. openai/gpt-audio*) → chat-completions SSE, which
+//     only carries pcm16 audio (wav is the same samples wrapped client-side);
+//     any other format is rejected before the request is sent
 //   - unknown                                → POST /audio/speech (broader compat)
 func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRequest) (*MediaResponse, error) {
 	if strings.TrimSpace(req.Text) == "" {
@@ -611,8 +613,22 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 		return p.generateAudioViaSpeechEndpoint(ctx, model, req.Text, voice, requestedFormat, &req)
 	}
 
-	// Chat-completions audio modality (gpt-audio family). Streaming on OpenAI
-	// is locked to pcm16 — wire that, then re-wrap to caller's format below.
+	// Chat-completions audio modality (gpt-audio family) only ever delivers
+	// pcm16: OpenAI rejects any other audio.format while streaming, and
+	// OpenRouter's gateway rejects an audio completion that is not streamed at
+	// all ("Audio output requires stream: true"), so there is no route to
+	// mp3/flac/opus through this endpoint. Refuse up front instead of relaying
+	// an upstream 400 that blames a request the caller never made. See #584.
+	if requestedFormat != "pcm16" && requestedFormat != "wav" {
+		return nil, fmt.Errorf(
+			"audio format %q is not available from model %s: OpenRouter delivers "+
+				"chat-completions audio only as pcm16 — request \"pcm16\", or \"wav\" "+
+				"for those same samples wrapped in a RIFF/WAVE container client-side",
+			requestedFormat, model)
+	}
+
+	// Streaming on OpenAI is locked to pcm16 — wire that, then re-wrap to the
+	// caller's format below.
 	wireFormat := requestedFormat
 	if requestedFormat == "wav" {
 		wireFormat = "pcm16"

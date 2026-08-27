@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"strings"
@@ -71,7 +72,7 @@ func TestInMemoryBackendMemoryPerformance(t *testing.T) {
 				key := fmt.Sprintf("key_%06d", i)
 				// Create ~1KB payload per entry
 				value := strings.Repeat("x", 1000)
-				_ = backend.Set(ScopeSession, "test-session", key, value)
+				_ = backend.Set(context.Background(), ScopeSession, "test-session", key, value)
 			}
 		})
 
@@ -98,7 +99,7 @@ func TestInMemoryBackendMemoryPerformance(t *testing.T) {
 					key := fmt.Sprintf("key_%06d", i)
 					value := strings.Repeat("y", 500)
 					scopeID := fmt.Sprintf("scope_%d", i%10)
-					_ = backend.Set(scope, scopeID, key, value)
+					_ = backend.Set(context.Background(), scope, scopeID, key, value)
 				}
 			}
 		})
@@ -117,7 +118,7 @@ func TestInMemoryBackendMemoryPerformance(t *testing.T) {
 		for i := 0; i < 5000; i++ {
 			key := fmt.Sprintf("key_%06d", i)
 			value := strings.Repeat("z", 2000)
-			_ = backend.Set(ScopeSession, "test-session", key, value)
+			_ = backend.Set(context.Background(), ScopeSession, "test-session", key, value)
 		}
 
 		// Force GC and measure before clear
@@ -160,7 +161,7 @@ func BenchmarkInMemoryBackendSet(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key_%d", i)
-		_ = backend.Set(ScopeSession, "bench-session", key, value)
+		_ = backend.Set(context.Background(), ScopeSession, "bench-session", key, value)
 	}
 }
 
@@ -172,7 +173,7 @@ func BenchmarkInMemoryBackendGet(b *testing.B) {
 	for i := 0; i < 10000; i++ {
 		key := fmt.Sprintf("key_%d", i)
 		value := strings.Repeat("x", 1000)
-		_ = backend.Set(ScopeSession, "bench-session", key, value)
+		_ = backend.Set(context.Background(), ScopeSession, "bench-session", key, value)
 	}
 
 	b.ResetTimer()
@@ -180,7 +181,7 @@ func BenchmarkInMemoryBackendGet(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key_%d", i%10000)
-		_, _, _ = backend.Get(ScopeSession, "bench-session", key)
+		_, _, _ = backend.Get(context.Background(), ScopeSession, "bench-session", key)
 	}
 }
 
@@ -192,14 +193,14 @@ func BenchmarkInMemoryBackendList(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key_%d", i)
 		value := strings.Repeat("x", 100)
-		_ = backend.Set(ScopeSession, "bench-session", key, value)
+		_ = backend.Set(context.Background(), ScopeSession, "bench-session", key, value)
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_, _ = backend.List(ScopeSession, "bench-session")
+		_, _ = backend.List(context.Background(), ScopeSession, "bench-session")
 	}
 }
 
@@ -212,7 +213,7 @@ func TestMemoryPerformanceReport(t *testing.T) {
 		backend := NewInMemoryBackend()
 		for i := 0; i < n; i++ {
 			key := fmt.Sprintf("k_%d", i)
-			_ = backend.Set(ScopeSession, "s", key, strings.Repeat("x", 10000))
+			_ = backend.Set(context.Background(), ScopeSession, "s", key, strings.Repeat("x", 10000))
 		}
 	}))
 
@@ -223,7 +224,7 @@ func TestMemoryPerformanceReport(t *testing.T) {
 		for i := 0; i < n; i++ {
 			for _, scope := range scopes {
 				key := fmt.Sprintf("k_%d", i)
-				_ = backend.Set(scope, fmt.Sprintf("id_%d", i%10), key, strings.Repeat("y", 1000))
+				_ = backend.Set(context.Background(), scope, fmt.Sprintf("id_%d", i%10), key, strings.Repeat("y", 1000))
 			}
 		}
 	}))
@@ -233,8 +234,8 @@ func TestMemoryPerformanceReport(t *testing.T) {
 		backend := NewInMemoryBackend()
 		for i := 0; i < n; i++ {
 			key := fmt.Sprintf("k_%d", i%100)
-			_ = backend.Set(ScopeSession, "s", key, i)
-			_, _, _ = backend.Get(ScopeSession, "s", key)
+			_ = backend.Set(context.Background(), ScopeSession, "s", key, i)
+			_, _, _ = backend.Get(context.Background(), ScopeSession, "s", key)
 		}
 	}))
 

@@ -99,3 +99,45 @@ func TestFormattedHelpers(t *testing.T) {
 	require.Equal(t, "info", messages[4]["level"])
 	require.Equal(t, "✅ done 2", messages[4]["message"])
 }
+
+// TestParseLevelStrictReportsUnknownValues covers contract V7: the strict
+// parser tells a caller whether the string was a level at all, while still
+// yielding info for anything it does not know, and ParseLevel keeps behaving
+// exactly as it did for every other caller.
+func TestParseLevelStrictReportsUnknownValues(t *testing.T) {
+	recognized := map[string]zerolog.Level{
+		"debug":   zerolog.DebugLevel,
+		"verbose": zerolog.DebugLevel,
+		"trace":   zerolog.DebugLevel,
+		"info":    zerolog.InfoLevel,
+		"INFO":    zerolog.InfoLevel,
+		" warn ":  zerolog.WarnLevel,
+		"warning": zerolog.WarnLevel,
+		"error":   zerolog.ErrorLevel,
+		"err":     zerolog.ErrorLevel,
+	}
+	for in, want := range recognized {
+		level, ok := ParseLevelStrict(in)
+		require.True(t, ok, "%q must be recognized", in)
+		require.Equal(t, want, level, "%q", in)
+		require.Equal(t, want, ParseLevel(in), "ParseLevel must agree for %q", in)
+	}
+
+	for _, in := range []string{"", "   ", "warm", "infoo", "silent", "5"} {
+		level, ok := ParseLevelStrict(in)
+		require.False(t, ok, "%q must be reported as unrecognized", in)
+		require.Equal(t, zerolog.InfoLevel, level, "%q must still fall back to info", in)
+		require.Equal(t, zerolog.InfoLevel, ParseLevel(in), "ParseLevel must be unchanged for %q", in)
+	}
+}
+
+// TestAcceptedLevelsListsTheCanonicalNames covers the operator-facing half of
+// V5: the names offered in the "unrecognized log level" report are exactly the
+// canonical ones, in increasing severity, and each one actually parses.
+func TestAcceptedLevelsListsTheCanonicalNames(t *testing.T) {
+	require.Equal(t, []string{"debug", "info", "warn", "error"}, AcceptedLevels())
+	for _, name := range AcceptedLevels() {
+		_, ok := ParseLevelStrict(name)
+		require.True(t, ok, "advertised level %q must parse", name)
+	}
+}

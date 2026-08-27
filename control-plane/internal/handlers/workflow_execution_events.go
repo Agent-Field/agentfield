@@ -100,11 +100,64 @@ func WorkflowExecutionEventHandler(store ExecutionStore) gin.HandlerFunc {
 				continue
 			}
 
+			// Keep the workflow projection in sync for events received after the
+			// execution row was created. The normal execution path creates the
+			// workflow row before the agent can emit events, but event delivery is
+			// asynchronous and the status callback is not a reliable replacement
+			// for this projection update.
+			if err := store.UpdateWorkflowExecution(ctx, req.ExecutionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+				if current == nil {
+					return nil, fmt.Errorf("workflow execution %s not found", req.ExecutionID)
+				}
+				applyEventToWorkflowExecution(current, &req, now)
+				return current, nil
+			}); err != nil {
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					if storeErr := store.StoreWorkflowExecution(ctx, buildWorkflowExecutionFromEvent(&req, now)); storeErr != nil {
+						lastErr = storeErr
+						continue
+					}
+				} else {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update workflow execution: %v", err)})
+					return
+				}
+			}
+
 			c.JSON(http.StatusOK, gin.H{"success": true, "updated": true})
 			return
 		}
 
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to persist execution event after retries: %v", lastErr)})
+	}
+}
+
+func applyEventToWorkflowExecution(current *types.WorkflowExecution, req *WorkflowExecutionEventRequest, now time.Time) {
+	if types.IsTerminalExecutionStatus(current.Status) {
+		current.UpdatedAt = now
+		return
+	}
+
+	current.Status = types.NormalizeExecutionStatus(req.Status)
+	current.UpdatedAt = now
+	if current.StartedAt.IsZero() {
+		current.StartedAt = now
+	}
+	if req.DurationMS != nil {
+		current.DurationMS = req.DurationMS
+	}
+	if result := marshalJSON(req.Result); len(result) > 0 {
+		current.OutputData = result
+		current.OutputSize = len(result)
+	}
+	if req.Error != "" {
+		errCopy := req.Error
+		current.ErrorMessage = &errCopy
+	} else if types.IsTerminalExecutionStatus(current.Status) {
+		current.ErrorMessage = nil
+	}
+	if types.IsTerminalExecutionStatus(current.Status) {
+		completed := now
+		current.CompletedAt = &completed
 	}
 }
 

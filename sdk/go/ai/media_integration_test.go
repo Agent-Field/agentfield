@@ -283,13 +283,13 @@ func TestIntegrationAudioSSEStream(t *testing.T) {
 		Text:   "Say hello",
 		Model:  "openrouter/openai/gpt-audio-mini",
 		Voice:  "nova",
-		Format: "mp3", // avoid pcm→wav rewrap so we can compare raw bytes
+		Format: "pcm16", // streamed format; avoids the pcm→wav rewrap
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, "Hello world", resp.Text)
 	require.NotNil(t, resp.Audio)
-	assert.Equal(t, "mp3", resp.Audio.Format)
+	assert.Equal(t, "pcm16", resp.Audio.Format)
 	assert.NotEmpty(t, resp.Audio.Data)
 
 	// Decode and verify audio bytes
@@ -304,12 +304,15 @@ func TestIntegrationAudioWithCustomFormat(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&payload)
 
 		audioConf := payload["audio"].(map[string]any)
-		assert.Equal(t, "mp3", audioConf["format"])
+		// pcm16 is the only format the chat-completions audio route serves
+		// (#584); it is passed through together with the caller's voice.
+		assert.Equal(t, "pcm16", audioConf["format"])
 		assert.Equal(t, "echo", audioConf["voice"])
+		assert.Equal(t, true, payload["stream"])
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, _ := w.(http.Flusher)
-		fmt.Fprintf(w, "data: [DONE]\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}))
 	defer srv.Close()
@@ -325,10 +328,10 @@ func TestIntegrationAudioWithCustomFormat(t *testing.T) {
 		Text:   "test",
 		Model:  "openai/gpt-audio-mini",
 		Voice:  "echo",
-		Format: "mp3",
+		Format: "pcm16",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "mp3", resp.Audio.Format)
+	assert.Equal(t, "pcm16", resp.Audio.Format)
 }
 
 func TestIntegrationAudioSpeechEndpoint(t *testing.T) {

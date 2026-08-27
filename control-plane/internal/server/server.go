@@ -32,6 +32,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagejobs"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagemaint"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/all" // register first-party trigger Sources
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
@@ -47,20 +48,24 @@ import (
 // AgentFieldServer represents the core AgentField orchestration service.
 type AgentFieldServer struct {
 	adminpb.UnimplementedAdminReasonerServiceServer
-	storage               storage.StorageProvider
-	cache                 storage.CacheProvider
-	Router                *gin.Engine
-	uiService             *services.UIService           // Add UIService
-	executionsUIService   *services.ExecutionsUIService // Add ExecutionsUIService
-	healthMonitor         *services.HealthMonitor
-	presenceManager       *services.PresenceManager
-	statusManager         *services.StatusManager // Add StatusManager for unified status management
-	agentService          interfaces.AgentService // Add AgentService for lifecycle management
-	agentClient           interfaces.AgentClient  // Add AgentClient for agent communication
-	packageJobs           *packagejobs.Manager    // Async package install/update jobs
-	config                *config.Config
-	storageHealthOverride func(context.Context) gin.H
-	cacheHealthOverride   func(context.Context) gin.H
+	storage                  storage.StorageProvider
+	cache                    storage.CacheProvider
+	Router                   *gin.Engine
+	uiService                *services.UIService           // Add UIService
+	executionsUIService      *services.ExecutionsUIService // Add ExecutionsUIService
+	healthMonitor            *services.HealthMonitor
+	presenceManager          *services.PresenceManager
+	statusManager            *services.StatusManager // Add StatusManager for unified status management
+	agentService             interfaces.AgentService // Add AgentService for lifecycle management
+	agentClient              interfaces.AgentClient  // Add AgentClient for agent communication
+	packageJobs              *packagejobs.Manager    // Async package install/update jobs
+	packageMaintenance       *packagemaint.Service   // Package restore/check/update loop
+	packageMaintenanceCancel context.CancelFunc
+	maintenanceReady         chan struct{}
+	maintenanceReadyOnce     sync.Once
+	config                   *config.Config
+	storageHealthOverride    func(context.Context) gin.H
+	cacheHealthOverride      func(context.Context) gin.H
 	// DID Services
 	keystoreService     *services.KeystoreService
 	didService          *services.DIDService
@@ -86,6 +91,11 @@ type AgentFieldServer struct {
 	tracerShutdown         func(context.Context) error
 	telemetryService       *observability.TelemetryService
 	configMu               sync.RWMutex
+	// Rate limiting stores for hot endpoints
+	rateLimitExecute    *middleware.RateLimiterStore
+	rateLimitDiscovery  *middleware.RateLimiterStore
+	rateLimitBulkStatus *middleware.RateLimiterStore
+	rateLimitGlobal     *middleware.RateLimiterStore
 	// Trigger / webhook plugin system
 	triggerDispatcher *services.TriggerDispatcher
 	sourceManager     *services.SourceManager
@@ -103,6 +113,24 @@ type AgentFieldServer struct {
 	httpServerMu sync.RWMutex
 	httpServer   *http.Server
 	stopping     bool
+}
+
+// newRouter builds the gin engine the control plane serves from, with the
+// structured request logger already installed as its outermost middleware.
+//
+// gin.New() avoids gin.Default()'s plaintext logger. The logging pair is
+// attached here rather than alongside the rest of the global middleware so
+// that nothing can be registered ahead of it: gin runs middleware in
+// registration order, and a middleware that aborts (CORS rejecting a
+// disallowed Origin, for instance) never reaches the handlers behind it — so
+// any request handled before the logger would be invisible at every level.
+// Recovery is installed after GinLogger so a panicking handler still produces
+// a structured http_request at error/500. GIN_MODE still governs the
+// [GIN-debug] route table.
+func newRouter() *gin.Engine {
+	router := gin.New()
+	useStructuredRequestLogging(router)
+	return router
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
@@ -141,7 +169,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		handlers.SetAgentRestartGrace(grace)
 	}
 
-	Router := gin.Default()
+	Router := newRouter()
 
 	// Sync installed.yaml to database for package visibility
 	_ = SyncPackagesFromRegistry(agentfieldHome, storageProvider)
@@ -166,6 +194,8 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	packageJobs.SetOnRegistryChange(func() {
 		_ = SyncPackagesFromRegistry(agentfieldHome, storageProvider)
 	})
+	packageMaintenanceReady := make(chan struct{})
+	packageMaintenance := newPackageMaintenance(agentfieldHome, storageProvider, agentService, packageJobs, packageMaintenanceReady)
 
 	// Initialize StatusManager for unified status management
 	statusManagerConfig := services.StatusManagerConfig{
@@ -522,6 +552,8 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		agentService:           agentService,
 		agentClient:            agentClient,
 		packageJobs:            packageJobs,
+		packageMaintenance:     packageMaintenance,
+		maintenanceReady:       packageMaintenanceReady,
 		config:                 cfg,
 		keystoreService:        keystoreService,
 		didService:             didService,
@@ -648,6 +680,12 @@ func (s *AgentFieldServer) Start() error {
 			}
 		}()
 	}
+	if s.packageMaintenance != nil {
+		maintenanceCtx, cancel := context.WithCancel(context.Background())
+		s.packageMaintenanceCancel = cancel
+		s.packageMaintenance.SetLifecycleContext(maintenanceCtx)
+		go s.packageMaintenance.Run(maintenanceCtx)
+	}
 
 	// Start reasoner event heartbeat (30 second intervals)
 	events.StartHeartbeat(30 * time.Second)
@@ -677,7 +715,16 @@ func (s *AgentFieldServer) Start() error {
 	if !s.setHTTPServer(httpServer) {
 		return nil
 	}
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
+	}
+	s.maintenanceReadyOnce.Do(func() {
+		if s.maintenanceReady != nil {
+			close(s.maintenanceReady)
+		}
+	})
+	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
 	}
 	return nil
@@ -822,9 +869,35 @@ func (s *AgentFieldServer) Stop() error {
 		s.cancelDispatcher.Stop()
 	}
 
+	// Stop rate limiter eviction goroutines
+	if s.rateLimitExecute != nil {
+		s.rateLimitExecute.Stop()
+	}
+	if s.rateLimitDiscovery != nil {
+		s.rateLimitDiscovery.Stop()
+	}
+	if s.rateLimitBulkStatus != nil {
+		s.rateLimitBulkStatus.Stop()
+	}
+	if s.rateLimitGlobal != nil {
+		s.rateLimitGlobal.Stop()
+	}
+
 	if s.registryWatcherCancel != nil {
 		s.registryWatcherCancel()
 		s.registryWatcherCancel = nil
+	}
+
+	if s.packageMaintenanceCancel != nil {
+		s.packageMaintenanceCancel()
+		s.packageMaintenanceCancel = nil
+	}
+	if s.packageMaintenance != nil {
+		waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.packageMaintenance.Stop(waitCtx); err != nil {
+			logger.Logger.Warn().Err(err).Msg("timed out waiting for package maintenance to stop")
+		}
+		cancel()
 	}
 
 	// Stop UI service heartbeat
@@ -876,6 +949,7 @@ func (s *AgentFieldServer) Stop() error {
 // contains no handler logic.
 func (s *AgentFieldServer) setupRoutes() {
 	s.applyGlobalMiddleware()
+	s.initRateLimiters()
 
 	s.registerPublicRoutes()
 	s.registerDIDWellKnownRoutes()
@@ -902,6 +976,67 @@ func (s *AgentFieldServer) setupRoutes() {
 	s.registerMCPRoutes()
 	s.registerPprofRoutes()
 	s.register404()
+}
+
+// initRateLimiters creates per-endpoint rate limiter stores based on config.
+// Keys idle for more than 10 minutes are evicted to avoid unbounded growth.
+func (s *AgentFieldServer) initRateLimiters() {
+	cfg := s.config.AgentField.RateLimit
+	if !cfg.Enabled {
+		return
+	}
+
+	const evictionTTL = 10 * time.Minute
+
+	// Apply defaults for unconfigured values.
+	executeRPS := cfg.ExecuteRPS
+	if executeRPS <= 0 {
+		executeRPS = 50
+	}
+	executeBurst := cfg.ExecuteBurst
+	if executeBurst <= 0 {
+		executeBurst = 100
+	}
+
+	discoveryRPS := cfg.DiscoveryRPS
+	if discoveryRPS <= 0 {
+		discoveryRPS = 20
+	}
+	discoveryBurst := cfg.DiscoveryBurst
+	if discoveryBurst <= 0 {
+		discoveryBurst = 40
+	}
+
+	bulkStatusRPS := cfg.BulkStatusRPS
+	if bulkStatusRPS <= 0 {
+		bulkStatusRPS = 30
+	}
+	bulkStatusBurst := cfg.BulkStatusBurst
+	if bulkStatusBurst <= 0 {
+		bulkStatusBurst = 60
+	}
+
+	globalRPS := cfg.GlobalRPS
+	if globalRPS <= 0 {
+		globalRPS = 200
+	}
+	globalBurst := cfg.GlobalBurst
+	if globalBurst <= 0 {
+		globalBurst = 400
+	}
+
+	s.rateLimitExecute = middleware.NewRateLimiterStore(executeRPS, executeBurst, evictionTTL)
+	s.rateLimitDiscovery = middleware.NewRateLimiterStore(discoveryRPS, discoveryBurst, evictionTTL)
+	s.rateLimitBulkStatus = middleware.NewRateLimiterStore(bulkStatusRPS, bulkStatusBurst, evictionTTL)
+	s.rateLimitGlobal = middleware.NewRateLimiterStore(globalRPS, globalBurst, evictionTTL)
+
+	logger.Logger.Info().
+		Float64("execute_rps", executeRPS).
+		Int("execute_burst", executeBurst).
+		Float64("discovery_rps", discoveryRPS).
+		Float64("bulk_status_rps", bulkStatusRPS).
+		Float64("global_rps", globalRPS).
+		Msg("⚡ Rate limiting enabled")
 }
 
 var absPathForServerID = filepath.Abs

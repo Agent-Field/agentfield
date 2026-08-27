@@ -532,7 +532,9 @@ class AgentAI:
             stream (bool, optional): Enable streaming response.
             response_format (str, optional): Desired response format ('auto', 'json', 'text').
             context (Dict, optional): Additional context data to pass to the LLM.
-            memory_scope (List[str], optional): Memory scopes to inject (e.g., ['workflow', 'session', 'reasoner']).
+            memory_scope (List[str], optional): Memory scopes to inject, drawn from the
+                four real scopes 'workflow', 'session', 'actor' and 'global'. Accepted
+                today but not yet applied to the prompt.
             tools: Tool definitions for LLM tool calling. Accepts:
                 - "discover": auto-discover all tools from the control plane
                 - DiscoveryResponse: use pre-fetched discovery results
@@ -2043,12 +2045,14 @@ class AgentAI:
         Generate music from a text prompt.
 
         Routes to a music-capable media provider (currently OpenRouter with
-        models like google/lyria-3-pro). Returns a MultimodalResponse with
-        generated audio data (48kHz stereo).
+        models like google/lyria-3-pro-preview). Returns a MultimodalResponse
+        whose ``.audio.format`` reports the container the model actually
+        produced — today google/lyria-3-* always returns MP3 (44.1 kHz stereo)
+        whatever ``format`` is requested.
 
         Args:
             prompt: Text description of the music to generate
-            model: Music model to use (defaults to "google/lyria-3-pro")
+            model: Music model to use (defaults to "google/lyria-3-pro-preview")
             duration: Duration hint in seconds
             **kwargs: Provider-specific parameters (e.g., format="wav")
 
@@ -2058,7 +2062,7 @@ class AgentAI:
         Examples:
             result = await app.ai_generate_music("upbeat jazz piano solo")
             if result.has_audio:
-                result.audio.save("jazz.wav")
+                result.audio.save(f"jazz.{result.audio.format}")
 
             result = await app.ai_generate_music(
                 "calm ambient electronic music",

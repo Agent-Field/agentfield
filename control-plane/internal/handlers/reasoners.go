@@ -364,11 +364,15 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		// Parse agent response
 		var result interface{}
 		if err := json.Unmarshal(body, &result); err != nil {
-			logger.Logger.Error().
-				Err(err).
-				Str("agent", nodeID).
-				Str("agent_url", agentURL).
-				Msgf("failed to decode agent response: %s", truncateForLog(body))
+			annotateBodyForLog(
+				logger.Logger.Error().
+					Err(err).
+					Str("agent", nodeID).
+					Str("agent_url", agentURL),
+				resp.Header.Get("Content-Type"),
+				body,
+				defaultRedactPayloads,
+			).Msg("failed to decode agent response")
 			// Update execution with error
 			endTime := time.Now()
 			workflowExecution.Status = types.ExecutionStatusFailed

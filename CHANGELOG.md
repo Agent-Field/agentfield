@@ -6,6 +6,2117 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.1] - 2026-08-27
+
+
+### Added
+
+- Feat(ts-sdk): support multimodal AI request content (#980)
+
+* feat(ts-sdk): support multimodal AI request content
+
+* fix(ts-sdk): use mediaType for multimodal file parts and derive real MIME types
+
+The AI SDK pinned here (ai@6.0.149) requires `mediaType` on file parts;
+`mimeType` is the v4 name and is not accepted. Every Audio, Video and File
+part therefore failed prompt validation with AI_InvalidPromptError before a
+request was ever sent. Image parts were unaffected.
+
+- Emit `mediaType` instead of `mimeType` on all file parts.
+- Derive real IANA types instead of the `video/*` wildcard: from the data-URL
+  prefix when present, else the URL extension, else `video/mp4`.
+- Audio now uses the canonical table already in multimodal.ts, so mp3 maps to
+  `audio/mpeg` rather than `audio/mp3`.
+- `File.fromUrl()` without an explicit mime derives from the URL extension and
+  falls back to `application/octet-stream`, so mediaType is never undefined.
+- Drop the `as any` on the messages array and type it as `ModelMessage[]`, so
+  tsc catches a future key rename instead of silently shipping it.
+
+Verified against a stub LanguageModelV3 on the pinned SDK: image, audio, video
+and file parts all reach the model, in both URL-backed and data-URL variants.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e5ee192)
+
+
+
+### Changed
+
+- Refactor(handlers): split execute.go into focused files (3048 -> 807 LOC) (#975)
+
+* refactor(handlers): split execute.go into focused files (3169 -> 807 LOC) (#412)
+
+Split the execute handler god file into logical units. Pure code
+movement, no behavior change, no renames, no new interfaces.
+
+Before: execute.go = 3169 lines, 74 functions
+After:
+  execute.go          =  807 lines (types, interfaces, controller, sync/async/status handlers)
+  execute_ard.go      =  278 lines (external ARD call handling)
+  execute_events.go   =  295 lines (event publishing, workflow status updates)
+  execute_prepare.go  =  412 lines (execution preparation, replay, target parsing)
+  execute_lifecycle.go=  460 lines (wait, callAgent, complete, fail, triggerWebhook)
+  execute_helpers.go  =  999 lines (headers, resolution, webhook normalization, error classification, async pool)
+
+All methods remain on *executionController. No import path changes
+for callers. Tests pass unchanged.
+
+* refactor(handlers): gofmt split files and reattach completionPollInterval doc comment
+
+Follow-up on the execute.go split. Two cosmetic leftovers from the move:
+
+- gofmt: execute.go picked up a double blank line where the moved
+  functions were cut out, and execute.go / execute_lifecycle.go /
+  execute_prepare.go each ended with a trailing blank line. The
+  merge-base execute.go was gofmt-clean, so this was new. Nothing in
+  CI catches it: the control-plane Lint step is continue-on-error and
+  golangci-lint's default linter set has no gofmt linter.
+
+- The completionPollInterval doc comment was left dangling at the end
+  of execute_events.go while the var it documents moved to
+  execute_lifecycle.go, losing its godoc. Reattached above the var.
+
+No behaviour change: a go/ast comparison of every top-level declaration
+against the merge-base execute.go is 108 decls before and after, zero
+missing, added or duplicated, all bodies byte-identical and now all doc
+comments identical too.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f10854a)
+
+
+
+### Fixed
+
+- Fix(control-plane): mirror workflow execution events (#979)
+
+* fix(control-plane): mirror workflow execution events
+
+* test(control-plane): cover workflow event projection branches (3c9b862)
+
+- Fix(python-sdk): include PEP 561 type marker (#992)
+
+Signed-off-by: ump45nose <52391318+ump45nose@users.noreply.github.com> (be2b123)
+
+
+
+### Testing
+
+- Test(ts-sdk): cover restart execution client paths (#977) (05912b6)
+
+- Test(go-sdk): cover Gemini harness provider (#981) (9c88fe5)
+
+## [0.1.136] - 2026-08-27
+
+## [0.1.135] - 2026-08-27
+
+## [0.1.135-rc.7] - 2026-08-27
+
+
+### Fixed
+
+- Fix(control-plane): complete a synchronous execute from the stored record when no terminal event arrives (#976)
+
+POST /api/v1/execute/<node>.<reasoner> could block for the full 90 s and
+then fail with "execution timeout" while the execution had already
+succeeded and its result was stored.
+
+When the agent acknowledges with 202, the sync handler waits on the
+execution event bus. Two SDK callbacks then race: the reasoner.completed
+workflow event, which WorkflowExecutionEventHandler persists as the
+terminal status without publishing a lifecycle event, and the /status
+callback, which does publish one. If the workflow event lands first, the
+/status callback becomes an idempotent terminal->terminal update and the
+event the waiter is listening for is never published. The pre-subscribe
+store check cannot help: the record is still running at that instant.
+
+Poll the store as a fallback (completionPollInterval, 500 ms) so the wait
+is bounded by the interval rather than by callback ordering. The event
+bus remains the fast path; no new events are published, so nothing
+double-fires.
+
+The waiter is byte-identical back to v0.1.134 and the hang reproduces
+with that SDK against today's control plane; found during the
+post-merge regression sweep, unrelated to the merged changes.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a485abd)
+
+## [0.1.135-rc.6] - 2026-08-26
+
+
+### Fixed
+
+- Fix(control-plane): honor AGENTFIELD_LOG_LEVEL in the af binary, stop double request logging, keep agent response bodies out of logs (#965)
+
+* fix(control-plane): honor the configured log level in the af binary and stop double request logging
+
+Every released binary and the cloud image are built from cmd/af, whose
+server path never applied cfg.Logging.Level — only cmd/agentfield-server
+did. AGENTFIELD_LOG_LEVEL and logging.level in agentfield.yaml were
+therefore inert in every shipped build and the control plane was pinned
+to info. cmd/af now re-initializes the logger from the configured level
+right after config load, with --verbose still taking precedence over env
+and YAML.
+
+The router was also built with gin.Default(), so gin's own plaintext
+logger ran alongside the structured GinLogger middleware and every
+request was logged twice. The router is now gin.New() + Recovery; gin's
+mode — and with it the [GIN-debug] route table — is still left to
+GIN_MODE.
+
+With gin's logger gone, GinLogger picks its severity from the response
+status — under 400 at debug, 4xx at warn, 5xx at error — so operators
+still see failing requests at the default info level while successful
+traffic stays quiet.
+
+Fixes #557
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): keep agent response bodies out of logs when redaction is on
+
+logging.redact_payloads (default true) already keeps execution inputs and
+outputs out of structured log events, but two sites logged a raw agent
+response body regardless: the reasoner handler printed up to 1KB of an
+undecodable response at ERROR, and the serverless call path printed the
+same preview at DEBUG. On a hosted control plane that put customer data
+on stdout even with redaction enabled.
+
+Both now go through annotateBodyForLog, which follows the same switch:
+with redaction on it records the response content type, the body length
+and the first 8 hex characters of the body's SHA-256 — enough to spot a
+repeat failure and to find the payload in the database — and with
+redaction explicitly off it keeps the previous truncated preview.
+
+Fixes #559
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(env): document the logging variables and correct the connector capability names
+
+docs/ENVIRONMENT_VARIABLES.md had no logging section at all, so
+AGENTFIELD_LOG_LEVEL and AGENTFIELD_LOG_REDACT_PAYLOADS were undiscoverable.
+Both are now documented alongside their YAML equivalents and the severity
+each request status is logged at.
+
+.env.example and CLAUDE.md advertised a bare LOG_LEVEL, which nothing in the
+control plane reads; they now name AGENTFIELD_LOG_LEVEL.
+
+The connector section documented AGENTFIELD_CONNECTOR_CAPABILITIES as a
+comma-separated list defaulting to "all", with capability names
+(reasoners:read, versions:write, restart) that do not exist. The real
+interface is one AGENTFIELD_CONNECTOR_CAP_* variable per capability taking
+true/readonly/false, and an unset capability is disabled, not granted.
+
+Refs #557
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): bind the af log-level wiring to a test and share it with agentfield-server
+
+Review found the #557 fix untested: the contract tests drove
+applyConfiguredLogLevel against a cobra tree the test built itself, so
+deleting the call from runServer — or moving --verbose off the root's
+persistent flags — left ./cmd/af green.
+
+The precedence helper now lives in internal/cli next to NewRootCommand and
+is exercised against the *real* command tree, so de-persisting --verbose
+fails the suite. The af server's use of it is bound by construction:
+loadServerConfig returns the config and applies its level in the same call,
+so runServer cannot obtain a config without the level having taken effect.
+Both mutations were verified to fail before this commit landed.
+
+cmd/agentfield-server now calls the same helper. It previously applied
+cfg.Logging.Level unconditionally, so env/YAML beat --verbose there while
+--verbose won in cmd/af; the two shipped binaries now agree.
+
+Refs #557
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): log missing routes at info instead of warn
+
+Mapping every 4xx to warn turned routine noise into operator alarms: on a
+live run at AGENTFIELD_LOG_LEVEL=warn, GET /ui/ before the UI is built and
+GET /favicon.ico each emitted a warning, and so would every scanner probe
+against a hosted control plane. That works against the "clean cloud logs at
+>= WARNING" ask in #559.
+
+A request for a route that does not exist is the caller's problem, so 404 is
+now logged at info: still visible at the default level, never at a level
+alerting is keyed on. The 4xx that do indicate a misconfigured client or
+deployment — 400, 401, 403, 422 — stay at warn.
+
+Refs #557
+Refs #559
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): key the redacted body digest and bound the logged content type
+
+Review raised three things about the redacted body annotation:
+
+An 8-hex-character SHA-256 prefix is an unsalted 32-bit commitment to the
+plaintext. That is fine for a large HTML error page, but this switch exists
+to protect caller data: a short, low-entropy body — a one-time code, an
+email address, a bare token — could be recovered offline by hashing
+candidates and matching, with body_bytes to prune the search. The digest is
+now an HMAC-SHA256 under a 32-byte key minted once per process, and the
+prefix is 16 hex characters, so repeats still correlate within a run of the
+control plane but nothing can be confirmed from the log alone. The field is
+renamed body_sha256 -> body_digest, since it is no longer a plain hash.
+
+annotateBodyForLog read the package-level redaction global even at the
+callAgent site, where the controller has its own redactPayloads field that
+every other site in execute.go uses. It now takes the setting as an
+argument, so a future per-controller override cannot silently skip the one
+site handling caller payloads.
+
+The response Content-Type is agent-controlled and Go accepts response
+headers up to megabytes, making it the only unbounded field in the new path.
+It is now reduced to its media type and truncated at 128 characters.
+
+Refs #559
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): log panics after Recovery by keeping GinLogger outer
+
+gin.Default() installs Logger then Recovery so a 500 still gets a request
+line. newRouter() had registered Recovery first, which swallowed the
+panic before GinLogger could emit http_request. Install Recovery
+immediately after GinLogger via a shared helper and assert a panicking
+handler produces one error-level http_request with status 500.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(control-plane): log requests CORS rejects before they reach a route
+
+Review found a hole opened by dropping gin.Default(): the structured request
+logger was installed in applyGlobalMiddleware *after* cors.New(), and gin runs
+middleware in registration order. gin-contrib/cors answers a disallowed Origin
+with c.AbortWithStatus(403) and an OPTIONS preflight with an abort too, so
+neither ever reached GinLogger — a rejected cross-origin request was invisible
+at every log level, including debug. On main, gin.Default() attached its own
+logger at engine creation, so those 403s were at least printed.
+
+Move the logging pair onto the bare engine in newRouter(). The logger is then
+outermost by construction rather than by the position of one line inside
+applyGlobalMiddleware, so no middleware added later — CORS, auth, timeouts —
+can abort a request out from under it. Recovery stays inner to GinLogger, so a
+panicking handler still emits http_request at error/500.
+
+Four tests drive the production construction (newRouter + applyGlobalMiddleware
+with CORS narrowed to one origin): a disallowed Origin gets 403 and exactly one
+warn line, a rejected preflight likewise, a CORS-answered preflight gets 204 and
+one debug line, and an allowed cross-origin request is unchanged. All four fail
+when the pre-fix ordering is restored.
+
+docs/ENVIRONMENT_VARIABLES.md said failures stay visible at the default level;
+that is now true for CORS rejections as well, and says so.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): report an unrecognized log level instead of silently using info
+
+Review found the other half of "the level is ignored": now that the af binary
+honours AGENTFIELD_LOG_LEVEL / logging.level, a typo in it is worse than before,
+because the operator has every reason to believe the setting works. ParseLevel
+maps anything it does not recognize to info, so `AGENTFIELD_LOG_LEVEL=warm`
+started a server at info with no indication that the value was rejected —
+indistinguishable from a correctly-honoured `info`.
+
+logger gains ParseLevelStrict, which returns the same level plus whether the
+string was recognized, and AcceptedLevels for operator-facing messages.
+ParseLevel now delegates to it and is behaviourally identical, so no other
+caller changes. ApplyConfiguredLogLevel uses the strict form to emit one warn
+line naming the offending value and the accepted set before falling back to
+info; a bad value still never stops the server from starting.
+
+--verbose keeps short-circuiting ahead of the config level, so nothing falls
+back there and nothing is reported — covered by a test that says so.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (02416e6)
+
+- Fix(sdk/python): dispatch execution logs without a throwaway loop, and finish AsyncExecutionManager teardown when a cancel raises (#972)
+
+* fix(sdk/python): dispatch execution logs without a throwaway event loop
+
+AgentFieldLogger._dispatch_to_cp hand-rolled both halves of
+run_async.fire_and_forget, and got both wrong.
+
+On a running loop it used a bare loop.create_task() with no reference kept.
+asyncio holds only a weak reference to a task, so the dispatch could be
+collected mid-flight and silently never complete — the bug #902 fixed
+everywhere else.
+
+With no running loop it spawned a daemon thread that built a *fresh* event
+loop per log record, drove the client's shared httpx.AsyncClient on it, and
+closed it. An httpx.AsyncClient keeps its pooled connections (and the anyio
+primitives guarding them) on the loop that opened them, so this left the
+shared pool attached to a dead loop. Verified against httpx 0.28.1 /
+httpcore 1.0.9:
+
+  * log first, then the agent's own loop -> the agent's next request raises
+    RuntimeError: Event loop is closed;
+  * agent's loop first, then a log -> the dispatch raises "... is bound to a
+    different event loop" and post_execution_logs swallows it, dropping the
+    record.
+
+Three changes, one root cause:
+
+  * logger: route the dispatch through fire_and_forget and delete
+    _dispatch_sync. Nothing propagates to the caller; a failure is logged at
+    debug.
+  * run_async: fire_and_forget's no-running-loop branch now hands work to a
+    single long-lived background loop instead of creating and closing one per
+    call, so nothing the coroutine binds is ever stranded on a dead loop. A
+    one-shot loop remains as a fallback if that loop cannot be started.
+  * client: get_async_http_client() is loop-affine. A client is only reused on
+    the loop that created it; another loop gets its own, and a client whose
+    loop has closed is never handed out again. This is what actually stops the
+    two failures above — a shared background loop alone would only swap
+    "Event loop is closed" for "bound to a different event loop".
+
+Refs #620, #902
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): finish AsyncExecutionManager teardown when a cancel raises
+
+stop() runs two cancel sweeps — the four background tasks, then the active
+executions — and each sat inside a single try. The first cancel that raised
+therefore abandoned the rest of its sweep, while the surrounding finally went
+on to null out the task references. The tasks behind the failure were left
+pending *and* unreachable, and the executions behind it stayed QUEUED with
+their capacity slots held.
+
+Each iteration now has its own guard. The first failure is remembered and
+re-raised once both sweeps and the downstream teardown (connection_manager,
+result_cache) have been attempted, so a caller still sees the error but
+nothing is stranded. The guard catches BaseException rather than Exception on
+purpose: narrowing it would let a CancelledError skip the cleanup below,
+which is the regression the finally-based structure from #909 exists to
+prevent.
+
+The cross-loop cancel path gets the same per-execution guard. It runs
+detached on the owning loop with no caller to raise to, so its first failure
+is logged at debug instead.
+
+Refs #620, #909
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(sdk/python): drop the one per-file-ignore ASYNC240 no longer suppresses
+
+tests/test_harness_runner.py has no os.path/pathlib call left in an async
+function, so its ASYNC240 entry suppresses nothing. Its ASYNC230 entry still
+does (five blocking open() calls), and so do the ASYNC240 entries on the other
+six files, which remain untouched.
+
+Worth recording why they stay: ASYNC240 left preview in ruff 0.15.0, and CI
+pins ruff==0.15.22, so under the pinned linter those entries are live rather
+than dead weight. Removing them all reintroduces 12 errors:
+
+  agentfield/agent_ai.py 2, agentfield/harness/_runner.py 3,
+  agentfield/harness/providers/opencode.py 1, agentfield/media_providers.py 1,
+  tests/debug_complex_json.py 4, tests/test_harness_functional.py 1
+
+Refs #620
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): keep the agent loop as the primary httpx client owner and make client construction loop-safe
+
+Making get_async_http_client() loop-affine fixed the crash but left ownership
+to a race, and the race had a predictable loser.
+
+The first loop to ask claimed the primary slot. In this branch's own scenario
+-- a structured log emitted from sync code before the agent's first async
+request -- that loop is the SDK's background dispatch loop. From then on the
+agent's real loop was permanently on the per-loop path: aclose() was a
+cross-loop aclose() against the background loop's client, the agent's own
+client (holding the live keep-alive pool) was never closed but merely dropped
+by .clear(), and the reclaim branch keyed on owning_loop.is_closed() could
+never fire because the background loop lives for the whole process.
+
+Ownership is now deliberate. run_async grows background_dispatch_loop(),
+which reports the shared loop only if it is already running and never starts
+one, and get_async_http_client() skips the primary branch when the caller is
+that loop, so background dispatch always lands in the per-loop table.
+aclose() additionally closes the per-loop client belonging to the loop it is
+called on -- a same-loop await -- before dropping the rest.
+
+The construction guard was an asyncio.Lock created on demand in the branch
+where nobody owns the slot yet, so it could be created by one loop and
+awaited by another ("... is bound to a different event loop"). Building a
+client never awaits, so the guard is now a plain threading.Lock held across
+the whole pick-or-build. In the pre-fix run the new test for this did not
+even reach that error: the two loops were handed the same AsyncClient, which
+is exactly the corruption the loop-affinity work exists to prevent.
+
+_async_http_client_lock is therefore created in __init__ and never replaced,
+so the two pre-existing "assert ... _async_http_client_lock is None" checks
+after aclose() no longer describe anything. They become
+"assert client._async_http_client_loop is None" -- the slot is free again for
+the next loop to own, which is what those assertions were reaching for.
+
+All three new tests fail against the branch as it stood before this commit.
+
+Refs #620
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): evict per-loop httpx clients whose event loop has closed
+
+The per-loop client table added in this PR is a WeakKeyDictionary keyed by
+event loop, with a comment claiming "a finished loop's client is collected
+with it". That is not true. An httpx.AsyncClient reaches back to the loop it
+opened its pool on through the anyio streams its transport holds, so every
+value keeps its own weak key alive and no entry is ever collected. Each
+short-lived loop that touches the client therefore adds one client — and its
+keep-alive sockets — for the life of the process.
+
+Measured against a live control plane with real httpx, 50 throwaway loops:
+50 entries retained and 60 open fds, versus 1 entry and 11 fds after this
+change.
+
+Entries whose loop has closed are now dropped on the ordinary path — the next
+foreign-loop caller sweeps them — and the comment says what the table actually
+does. They are dropped, not closed: aclose() awaits against a pool only the
+loop that opened it can drive, and that loop is gone. Dropping the last
+reference is what lets the sockets be reclaimed at all.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): treat the last-resort dispatch loop as a dispatch loop too
+
+get_async_http_client() keeps the SDK's shared background loop out of the
+primary client slot by asking background_dispatch_loop() whether the caller is
+that loop. But _submit_to_background_loop has a second path: when the shared
+loop cannot be started at all it runs the work on a one-shot loop of its own,
+and that loop was not recognised. It could therefore claim the primary slot on
+its way past and then close — leaving the agent's own loop permanently on the
+per-loop path against a client whose loop is dead. That is #620 again, in the
+branch added to fix it.
+
+run_async now keeps a WeakSet of every loop it dispatches best-effort work on
+— the shared loop and any fallback loop, the fallback registered before its
+first await — and exposes is_background_dispatch_loop(loop). Asking still
+never starts a loop. client.py asks that instead, so both kinds of dispatch
+loop land in the per-loop table where they belong.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): stop a background loop that never signalled it had started
+
+_background_loop() publishes _BACKGROUND_LOOP only after the loop reports
+ready. When that wait timed out it returned None and walked away from a loop
+and thread nobody held a reference to any more — and the next call created
+another one beside it, and the one after that a third, none of them ever
+reachable or stoppable.
+
+On timeout the loop is now stopped (best effort), which makes run_forever
+return — immediately, if it has not started yet — and run_forever's new
+finally closes the loop, so the thread ends. Callers still get None and fall
+back exactly as before.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): close every client in aclose() even when one of them raises
+
+aclose() ends with `for client in (primary, mine): await client.aclose()`.
+Both slots are already cleared under the lock by then, so a client the loop
+never reaches is one nothing will ever close — if the primary's aclose()
+raised, the per-loop client belonging to the very loop calling aclose() was
+abandoned with its pool open.
+
+Each close is now attempted on its own, and the first failure is re-raised
+once both have been tried, so the caller still sees the error that happened
+first.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (357aae7)
+
+- Fix(sdk/go,sdk/typescript): refuse OpenRouter audio formats that cannot work (#968)
+
+* fix(sdk/go): request non-pcm16 OpenRouter audio without streaming
+
+OpenRouter's chat-completions audio stream only emits pcm16 deltas.
+Asking for mp3/flac/opus with stream=true is rejected upstream with a
+400 ("'audio.format' does not support 'mp3' when stream=true"), so
+GenerateAudio could never return those formats from a gpt-audio model.
+
+Select the transport from the wire format: pcm16 (and wav, which is
+wired as pcm16 and re-wrapped into RIFF/WAVE client-side) keeps the SSE
+path; every other format is sent with stream=false and read out of the
+single JSON body at choices[0].message.audio.{data,transcript}. The
+non-stream read is bounded by maxAudioResponseBytes, refusing both an
+oversized declared Content-Length and a chunked body that runs past the
+cap, so a large response is never buffered without bound.
+
+Existing chat-audio tests that stood in for the SSE path now request
+pcm16; the custom-format integration test asserts the new stream=false
+payload.
+
+Refs #584
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): request non-pcm16 OpenRouter audio without streaming
+
+OpenRouter's chat-completions audio stream only emits pcm16 deltas.
+Asking for mp3/flac/opus with stream=true is rejected upstream with a
+400 ("'audio.format' does not support 'mp3' when stream=true"), so
+generateAudio could never return those formats from a gpt-audio model.
+
+Select the transport from the wire format, mirroring the Go SDK: pcm16
+(and wav, which is wired as pcm16 and re-wrapped into RIFF/WAVE
+client-side) keeps the SSE path; every other format is sent with
+stream=false and read out of the single JSON body at
+choices[0].message.audio.{data,transcript}. The non-stream body is read
+through a byte limit that refuses both an oversized declared
+Content-Length and a chunked body that runs past the cap, so a large
+response is never buffered without bound.
+
+Existing chat-audio tests that stood in for the SSE path now request
+pcm16; the custom-format integration test asserts the new stream:false
+payload.
+
+Refs #584
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): give non-streaming audio its own timeout and test the streamed-body decode path
+
+The non-streaming chat-completions audio request inherited API_TIMEOUT
+(30s) from post(). The SSE path streams deltas so bytes keep arriving
+inside that window, but a non-streaming request returns nothing until
+the whole clip is synthesised — a paragraph of mp3 aborted at 30s with
+an opaque TimeoutError, exactly the case this path exists to serve.
+
+Give it NONSTREAM_AUDIO_TIMEOUT (300s, matching the Python SDK's
+non-streaming audio budget) via an optional post() parameter; the SSE
+path and every other caller keep API_TIMEOUT.
+
+Also cover the two gaps the existing tests left: every green
+non-streaming test mocked fetch with text() and no body, so
+readLimitedText's incremental res.body.getReader() decode was never
+exercised. Adds a test driving a real Response(ReadableStream) whose
+7-byte chunks cut a 2-byte "é" and a 4-byte emoji mid-sequence, and a
+test asserting the non-streaming request gets 300s while the streaming
+one still gets 30s.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): lift the client timeout for non-streaming audio synthesis
+
+generateAudioViaChatJSON ran on p.Client, whose constructor default is a
+60s whole-request timeout. http.Client.Timeout caps the request
+regardless of the caller's context, so a non-streaming synthesis — which
+returns nothing until the entire clip is rendered — was aborted at 60s
+on any clip longer than a sentence or two.
+
+Run that one request on a copy of the client whose timeout floor is
+nonStreamAudioTimeout (5min), matching the TypeScript and Python SDKs.
+p.Client is left untouched, so the SSE audio path, video polling and the
+speech endpoint keep their configured timeout; a client with no timeout
+still has none, and caller context cancellation still applies.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): fall back from empty audio transcripts and cancel oversized bodies
+
+Treat an empty transcript as absent so message content is still used,
+matching the Go SDK. Cancel the response body when a declared
+Content-Length exceeds the cap, as the chunked path already does.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(sdk/go): refuse chat-completions audio formats OpenRouter cannot deliver
+
+OpenRouter's chat-completions audio modality only ever returns pcm16.
+OpenAI rejects any other audio.format while streaming ("'audio.format'
+does not support 'mp3' when stream=true"), and the OpenRouter gateway
+rejects an audio completion that is not streamed at all ("Audio output
+requires stream: true") — reproduced live against openai/gpt-audio and
+openai/gpt-audio-mini with mp3, pcm16 and wav, and with
+modalities:["audio"] alone. There is no request shape that returns
+mp3/flac/opus from this route.
+
+GenerateAudio now fails before the HTTP call when the requested format
+is neither pcm16 nor wav, naming the requested format and the one the
+provider actually delivers, instead of relaying a 400 that blames a
+"stream" flag the caller never set. pcm16 and wav (the same samples
+wrapped into a RIFF/WAVE container client-side) keep the streaming path
+unchanged, and /audio/speech models such as hexgrad/kokoro-82m are
+untouched — they still serve mp3.
+
+This replaces the non-streaming JSON transport added earlier on this
+branch (generateAudioViaChatJSON, longAudioClient, nonStreamAudioTimeout,
+maxAudioResponseBytes and their tests): it turned one upstream 400 into a
+different one and could never succeed against the real gateway.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): refuse chat-completions audio formats OpenRouter cannot deliver
+
+Mirrors the Go SDK change. OpenRouter's chat-completions audio modality
+only ever returns pcm16: OpenAI rejects a non-pcm16 audio.format while
+streaming, and the OpenRouter gateway rejects an audio completion that is
+not streamed at all ("Audio output requires stream: true"). generateAudio
+now throws a MediaProviderError before the fetch when the requested
+format is neither pcm16 nor wav, naming the requested format and the one
+the provider actually delivers.
+
+pcm16 and wav (the same samples wrapped into a RIFF/WAVE container
+client-side) keep the SSE path unchanged, and TTS models on /audio/speech
+still serve mp3.
+
+This replaces the non-streaming JSON transport added earlier on this
+branch (parseNonStreamAudio, readLimitedText, NONSTREAM_AUDIO_TIMEOUT,
+MAX_AUDIO_RESPONSE_BYTES, post()'s timeout parameter and their tests): it
+turned one upstream 400 into a different one and could never succeed
+against the real gateway. The chunk-boundary decode coverage it added is
+kept, re-pointed at the SSE reader that is still on the live path — a
+multi-byte character cut across body chunks must not decode to U+FFFD.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (88793e8)
+
+- Fix(sdk/python): stream all OpenRouter music requests and label audio by its real container (#963)
+
+* fix(sdk/python): route non-pcm16 music generation through the non-streaming OpenRouter path (#584)
+
+OpenRouterProvider.generate_music hardcoded "stream": True with a default
+format of "wav", so the default call reproduced #584's 400:
+
+    'audio.format' does not support 'wav' when stream=true.
+    Supported values are: 'pcm16'
+
+PR #962 fixed exactly this for generate_audio but left generate_music
+untouched. Apply the same routing here, reusing the helpers #962 added
+rather than duplicating them:
+
+- wav  -> request pcm16 over the wire, stream over SSE, then re-wrap the
+  pcm16 payload as a RIFF/WAVE container via _wrap_pcm16_as_wav_b64
+- pcm16 -> stream over SSE, returned base64 untouched
+- mp3 / flac / opus -> stream=False via _nonstream_openrouter_audio with
+  label="music"
+
+Everything else about generate_music is unchanged: prompt/duration-hint
+message shape, model resolution and openrouter/ prefix stripping,
+duration validation, and the returned MultimodalResponse fields.
+
+Two existing SSE tests requested the default wav format while asserting
+the raw streamed base64 — only the pcm16 wire path can return that, so
+they are pinned to format="pcm16" and now assert stream is True, the same
+treatment #962 gave the generate_audio tests.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): always stream generate_music and label it by the real container
+
+OpenRouter's music models reject a non-streaming audio request outright
+("Audio output requires stream: true"), so routing mp3/flac/opus through the
+non-streaming JSON path turned a working generate_music(format="mp3") into a
+hard 400. They also ignore audio.format entirely — google/lyria-3-* answers
+with MP3 whatever is asked for — so requesting pcm16 on behalf of a "wav"
+caller and then wrapping the reply in a RIFF/PCM16 header produced a WAV file
+with an MP3 inside it.
+
+generate_music now always streams, forwards the caller's format untouched, and
+derives the label from the bytes that come back: ID3 / MPEG frame sync -> mp3,
+RIFF+WAVE -> wav, fLaC -> flac, OggS -> ogg. A payload with no container
+signature is raw PCM16 and is wrapped as 24 kHz mono WAV only when wav was
+requested; otherwise it passes through. A single warning naming both the
+detected container and the requested format is logged on a mismatch.
+
+Also fixes the default model id: google/lyria-3-pro is not a valid OpenRouter
+model, the live id is google/lyria-3-pro-preview — generate_music() with no
+model 400s today. Drops the docstrings' "48kHz stereo" claim (lyria returns
+44.1 kHz stereo MP3).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): reject audio formats OpenRouter cannot deliver instead of 400ing
+
+The OpenRouter gateway rejects `stream: false` for *any* audio-output chat
+request — the response is a 400 with provider_name null, so it is the gateway
+and not the model — while the streaming transport only ever emits pcm16
+deltas. There is therefore no combination that returns mp3/flac/opus from a
+chat-audio model, and the non-streaming JSON path #962 added could never
+succeed.
+
+generate_audio now raises ValueError for any chat-audio format other than
+pcm16/wav before the request is sent, naming the requested format and saying
+that pcm16 is all that route delivers (wav being wrapped client-side). The
+/audio/speech route is untouched and still serves mp3/flac/opus/aac natively,
+and the wav-via-pcm16 behaviour is unchanged. `_nonstream_openrouter_audio`
+and its tests are removed — nothing calls it any more.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): label container-less music audio as pcm16, and treat opus/ogg as one answer
+
+Raw PCM16 frames that the caller asked for as mp3 were being handed back
+labelled "mp3" - the one place where the requested format still won over the
+bytes, contrary to the rule this change introduces. Label them "pcm16" and
+keep the single mismatch warning.
+
+Opus travels in an Ogg container, and "pcm" is the same frames as "pcm16", so
+an OggS answer to format="opus" (or raw PCM to format="pcm") is not a mismatch
+and no longer warns.
+
+The generate_music docstring examples still saved to "jazz.wav" two lines
+under the text explaining that Lyria always returns MP3; save under the
+detected format instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2c0766d)
+
+- Fix(sdk/python): retry OpenRouter image 404s on the provider path and guard data: URLs in all media outputs (#967)
+
+* fix(sdk/python): retry OpenRouter "no endpoints" 404s on the provider path
+
+PR #600 added a bounded retry for OpenRouter's "No endpoints found that
+support the requested output modalities" 404 inside
+vision.generate_image_openrouter. PR #619 then rewrote
+OpenRouterProvider.generate_image as a direct aiohttp POST and dropped the
+delegation to that function, so the retry became dead code on the path users
+actually hit: app.ai_generate_image -> MediaRouter -> OpenRouterProvider.
+generate_image, which raised RuntimeError on the very first 404.
+
+Port the behaviour to the provider. The marker is now matched against the 404
+response body (this path raises RuntimeError, not litellm.NotFoundError): up to
+3 attempts with a 1s/2s backoff, then — only when the caller passed a non-empty
+image_config — one final attempt with image_config stripped plus a warning. Any
+other status, or a 404 without the marker, still raises on the first response
+with no retry.
+
+The marker, attempt count and backoff schedule move to a new neutral module,
+agentfield/openrouter_retry.py, shared by both paths; its sleep() indirection
+keeps the backoff patchable so tests do not wait real seconds.
+vision.generate_image_openrouter behaviour is unchanged.
+
+Fixes #586
+Fixes #588
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/python): cover ImageOutput data: URL decoding
+
+Issue #587 (ImageOutput.save() crashing on the data: URLs Gemini image models
+return) was fixed without a regression test — deleting the data: branch from
+ImageOutput.get_bytes left the suite green.
+
+Pin the behaviour: a data: URL decodes to its inline bytes through get_bytes()
+and save(), with requests.get() rigged to fail if it is reached, and http(s)
+URLs still download.
+
+Refs #587
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): decode data: URLs in FileOutput, VideoOutput and Audio.from_url
+
+ImageOutput learned to decode inline data: URLs when #587 was fixed, but its
+siblings kept handing the URL straight to requests.get, which raises
+InvalidSchema for a data: URL. FileOutput.save/get_bytes,
+VideoOutput.save/get_bytes and multimodal.Audio.from_url all hit that path
+whenever a model returns its output inline — the same failure #587 describes,
+just on a different output type.
+
+Give all of them the same guard: decode the inline payload locally, leave the
+http(s) branch (including VideoOutput's 120s download timeout) untouched. The
+decode itself moves to a new dependency-free helper, agentfield/data_url.py,
+so the four call sites share one definition of what a data: URL is.
+
+Refs #587
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): reject non-base64 data: URLs instead of decoding them silently
+
+`is_data_url` matched any `data:` URL while `decode_data_url` assumed a base64
+payload, so a malformed or non-base64 `data:` URL decoded to the wrong bytes
+without complaint: `FileOutput(url="data:image/png").get_bytes()` returned `b""`
+and `"data:text/plain,hello"` returned garbage. Before the media outputs learned
+to handle `data:` URLs at all, both of those reached `requests` and raised a
+loud `InvalidSchema` — trading that for silently-empty bytes is a worse failure
+mode than the bug it was fixing.
+
+`decode_data_url` now partitions on the first `,` and raises `ValueError` unless
+a separator is present and the metadata head declares `;base64`; only that head
+is echoed in the message, never the payload. Decoding uses `validate=True` so a
+corrupt payload raises `binascii.Error` rather than dropping the stray
+characters and returning short bytes. `is_data_url` matches the scheme
+case-insensitively per RFC 3986 3.1, so `DATA:image/png;base64,...` decodes
+instead of being handed to `requests`.
+
+Well-formed base64 `data:` URLs are unaffected. Tests cover both rejections and
+the case-insensitive scheme once per consumer — `ImageOutput`, `FileOutput`,
+`VideoOutput` and `Audio.from_url` — so none of them can regress alone.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): route vision image retries through openrouter_retry helpers
+
+Use is_no_endpoints_error and openrouter_retry.sleep on the LiteLLM
+path so the marker and backoff cannot drift from the provider path.
+Pin the strip-attempt sleep at 4s in the provider tests.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(sdk/python): decode data: URLs strictly without rejecting layout whitespace
+
+The first cut of `decode_data_url` traded one silent-wrong-answer for two
+loud-wrong-answers:
+
+- `base64.b64decode(payload, validate=True)` rejects every character outside
+  the base64 alphabet, and that includes ASCII whitespace. RFC 2045 encoders
+  wrap payloads at 76 columns, producers add a trailing newline or a space
+  after the comma, and the permissive decode this replaced accepted all of
+  them. The LiteLLM/vision path and the FAL and MiniMax providers build
+  url-only `ImageOutput`s straight from provider responses, so a wrapped
+  payload that worked before this branch would now raise. ASCII whitespace is
+  deleted from the payload before validation; a payload that is corrupt for
+  any other reason still raises `binascii.Error`.
+
+- `data:image/png;base64,` (declared base64, empty payload) decoded to `b""` —
+  precisely the silent empty-bytes failure the module docstring says it
+  prevents. An empty payload now raises `ValueError`, like the other
+  undecodable forms.
+
+Also stop lower-casing the whole URL to test a five-character scheme.
+`is_data_url` runs on every `get_bytes()` / `save()` call and an inline image
+is routinely megabytes: `url.lower()` copied ~10 MB (~29 ms) per call for a
+10 MB payload. `url[:5].lower()` is O(1) and matches the same scheme casings.
+
+`data_url_mime_type` is added for callers that need the declared type.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): resolve media bytes before save() truncates the destination
+
+`ImageOutput.save`, `FileOutput.save` and `VideoOutput.save` all opened the
+destination with "wb" — which truncates on open — and only then decoded the
+`data:` URL or downloaded the http(s) one. So a payload that turns out to be
+undecodable, or a download that fails, destroys whatever the caller already
+had at that path: saving over an existing 820-byte file left it at 0 bytes.
+
+Losing the user's file is a worse outcome than the bad payload that caused it,
+and it is entirely avoidable: each save() now resolves its bytes first and
+opens the destination only once it has them. A failed save leaves an existing
+file byte-for-byte intact and creates no empty stub where there was no file.
+The success path is unchanged; the parent directory is now created after the
+bytes are in hand, so a failure no longer leaves an empty directory tree
+behind either.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): label inline audio with the format its data: URL declares
+
+`Audio.from_url` defaulted `format` to "wav" and passed it through untouched,
+so every inline payload was announced to the model as a WAV regardless of what
+the URL said it was: `Audio.from_url("data:audio/mpeg;base64,...")` produced
+`{"format": "wav"}` around MP3 bytes. The format is the declared encoding of
+those bytes, not a cosmetic label — a caller that decodes a `data:` URL has the
+MIME type right there and should not have to restate it.
+
+`format` is now `Optional[str] = None`. For a `data:` URL it is derived from
+the declared MIME type (audio/mpeg and audio/mp3 -> mp3; audio/wav, audio/x-wav
+and audio/wave -> wav; audio/flac -> flac; audio/ogg -> ogg), falling back to
+"wav" for an unmapped or absent type. http(s) URLs keep today's "wav" default,
+since the URL alone carries no reliable type. An explicit `format` always wins,
+so existing callers are unaffected. The module-level `audio_from_url` wrapper
+follows.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (d7b4fc3)
+
+- Fix(sdk/python): stop probing cloud metadata / ipify when a callback URL is configured, add AGENTFIELD_DISABLE_IP_DETECTION (#969)
+
+* fix(sdk/python): stop probing cloud metadata when a callback URL is set
+
+Constructing an Agent() inside a container made _build_callback_candidates()
+call _detect_container_ip(), which fires HTTP requests at 169.254.169.254,
+metadata.google.internal and https://api.ipify.org. It did so even when the
+operator had already told the SDK where the control plane should call back,
+so on Kubernetes every agent start produced a burst of NetworkPolicy deny
+entries for egress nobody had asked for.
+
+The probe now only runs when it can still contribute something:
+
+- A callback URL configured through the `callback_url` constructor argument
+  or AGENT_CALLBACK_URL suppresses it. Such a URL always normalizes to the
+  first candidate and the control plane keeps the remaining candidates as
+  fallbacks, so the detected public IP could never have been selected. A
+  value that fails to normalize is not treated as configured, so malformed
+  input still falls back to full auto-detection.
+- AGENTFIELD_DISABLE_IP_DETECTION=1 (also `true`/`yes`, case-insensitive,
+  surrounding whitespace tolerated) suppresses it unconditionally, for
+  clusters that want the guarantee without pinning a URL.
+
+Everything else is untouched: the Railway internal hostname, the local
+network address, the container hostname, host.docker.internal and the
+localhost fallbacks are still offered, the probe still never runs outside a
+container, and with neither knob set the candidate list is what it was.
+
+Fixes #624
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(env): document AGENTFIELD_DISABLE_IP_DETECTION
+
+Records the new opt-out under the Python SDK agents section, along with the
+fact that configuring a callback URL already suppresses the probe and which
+callback candidates remain when it is off.
+
+Refs #624
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/python): prove no metadata/ipify HTTP request is made when a callback URL is configured
+
+The existing opt-out tests stub `_detect_container_ip` itself, so they assert
+that the helper is not called. The symptom reported in #624 is one level
+lower: no HTTP request should leave the process. Those tests would still pass
+if the probe grew a second outbound call outside the helper.
+
+Add a test that leaves `_detect_container_ip` in place and puts a tripwire on
+`requests.get` — the helper's only outbound entry point, since it imports
+`requests` lazily and makes no other network call. It runs with
+`_is_running_in_container` forced True and covers all three configured forms:
+the `callback_url` argument, `AGENT_CALLBACK_URL`, and
+`AGENTFIELD_DISABLE_IP_DETECTION`.
+
+The tripwire records each attempt as well as raising `AssertionError`, because
+`_detect_container_ip` wraps every request in `except Exception: pass` and
+would swallow the raise. Verified against a locally reverted fix: all three
+parameters fail, and the recorded list shows all four probe targets attempted
+with the raise absorbed — so the recorded list, not the raise, is what gives
+the test teeth.
+
+A control test patches `requests.get` with a fake 200 response and asserts the
+probe does reach it when nothing is configured, pinning down that the tripwire
+would fire if the skip regressed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(env): describe AGENTFIELD_DISABLE_IP_DETECTION exactly
+
+The entry said the variable "is for clusters that want the guarantee
+without pinning a URL", which overstates what it changes today. Reading
+the SDK: _detect_container_ip() has exactly one caller
+(_build_callback_candidates), and in a running agent that function is
+only reached when the Agent was constructed with callback_url=... —
+Agent.__init__ resolves the callback URL eagerly only in that case, and
+AgentServer.serve() derives base_url itself (honouring AGENT_CALLBACK_URL
+directly) without touching callback discovery. So a stock agent with no
+callback URL never reaches the probe with or without the flag.
+
+Rewrite the entry so every sentence holds: what it disables (the probe at
+its single call site, container-only), when someone would actually set it
+(a guarantee that survives however the agent is wired, or code calling
+the discovery helpers directly), what it does NOT disable (the UDP
+socket.connect() toward 8.8.8.8 used to read the local source address,
+which sends no packets and does no DNS; registration and heartbeats are
+unaffected), and what it costs (only the public-IP candidate).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/python): make the callback-discovery docstrings precise
+
+Three wording fixes, no behaviour change:
+
+- _build_callback_candidates: say that _detect_container_ip is the only
+  step that puts a request on the wire (the local-IP lookup opens a
+  connectionless UDP socket and sends nothing), and that this function is
+  the probe's only call site, which is why AGENTFIELD_DISABLE_IP_DETECTION
+  suppresses it everywhere.
+- _detect_container_ip: name the single caller instead of "callers are
+  expected to", and mention the opt-out.
+- Agent.__init__: the previous wording implied AGENT_CALLBACK_URL takes
+  part in the constructor's resolution. It does not — __init__ resolves
+  only when the callback_url argument is supplied. Say that, and describe
+  AGENT_CALLBACK_URL's effect where it actually applies (any caller that
+  goes through callback discovery).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (fe64d54)
+
+## [0.1.135-rc.5] - 2026-08-26
+
+
+### Documentation
+
+- Docs: correct memory scope docs, the app.memory API list, and the exists() promise (#966)
+
+* docs(sdk/python): correct memory scope diagram, retention wording, and CLAUDE.md scope names
+
+The `agentfield.memory` module docstring drew global -> session -> actor ->
+workflow as one nested chain. They are not nested: session, actor and workflow
+are sibling dimensions keyed by X-Session-ID, X-Actor-ID and X-Workflow-ID
+respectively, and an unscoped read walks them in the fixed order
+workflow -> session -> actor -> global (GetMemoryHandler,
+control-plane/internal/handlers/memory.go). Redraw the diagram as a tree with
+global as the shared fallback and state the precedence explicitly.
+
+The same docstring claimed session values are "removed when the
+conversation/session ends" and workflow values "removed automatically when that
+run completes". Neither happens. There is no TTL or expiry column in either
+backend (BoltDB buckets locally, kv_store in postgres), and CleanupWorkflow
+deletes VC, webhook, execution, run and workflow-definition rows without
+touching memory. The only removal path is the explicit DeleteMemory endpoint.
+Document the actual behaviour: scope controls lookup and isolation, not
+lifetime.
+
+CLAUDE.md described the scopes as Global / Agent / Session / Run. There is no
+"agent" or "run" scope anywhere; that wording is what seeded issue #93. Correct
+the names to global / session / actor / workflow, and record that the Go SDK
+spells the actor scope agent.ScopeUser ("user") locally and translates it to
+"actor" on the wire.
+
+Also document OPENCODE_MAX_CONCURRENT in docs/harness-providers.md with the
+real per-SDK defaults (Go 4, Python 10), which were previously undocumented.
+
+Refs #121
+Refs #93
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: correct leftover Agent/Run memory scope wording
+
+Fix Agent.memory, the in-product knowledge-base article, and the
+CLAUDE.md call signature so they match the real global/session/actor/
+workflow scopes and the Python get/set API.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* docs(sdk/python): record that memory exists() cannot detect a missing key
+
+`MemoryClient.exists` is implemented as "call get() and return False if it
+raised". `MemoryClient.get` returns the caller's default on a 404 instead of
+raising, so exists() answers True for every key the control plane can be
+reached for — a stored key and an absent one are indistinguishable. Verified
+live against an isolated control plane: exists() on a key that was never
+written returns True, while get(key, sentinel) correctly returns the sentinel.
+
+The four exists() docstrings promised the opposite ("True if key exists, False
+otherwise"). They now state the real behaviour and point at the get()+sentinel
+workaround. The unit tests do not catch this because they monkeypatch get() to
+raise on a miss, which the real get() never does.
+
+Docs only — no behaviour change. The implementation fix belongs in its own PR.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/python): list the real app.memory API on the Agent.memory property
+
+The "Memory Operations" block advertised `app.memory.keys(pattern="*")` and
+`app.memory.clear(pattern="*")`. Neither exists: the property returns a
+`MemoryInterface`, whose methods are get/set/delete/exists/set_vector/
+delete_vector/similarity_search plus the session/actor/workflow/global_scope
+accessors and on_change. `list_keys` lives on the scoped clients, not on
+`app.memory`, so it is now shown through an accessor.
+
+Every value operation is a coroutine, so the list and the runnable Example
+block now await them (and the example skill is `async def`). `set`'s second
+parameter is `data`, not `value`, and get/set/delete all take `scope` and
+`scope_id`; the cited signatures now match `inspect.signature`.
+
+The preamble claimed memory is "automatically scoped by ... Agent node ID",
+which contradicted the same docstring's "There is no Agent or Run scope".
+X-Agent-Node-ID is attribution on the emitted memory change event; `getScopeID`
+in the control-plane handler never reads it. Replaced with what actually
+selects a scope: the X-Workflow-ID / X-Session-ID / X-Actor-ID headers, and the
+workflow -> session -> actor -> global walk for an unscoped read.
+
+Docs only — no behaviour change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/python): drop the non-existent 'reasoner' memory scope from ai() docs
+
+`Agent.ai` and `AgentAI.ai` both documented `memory_scope` as
+"e.g., ['workflow', 'session', 'reasoner']". There is no reasoner scope in the
+request contract: the Python SDK's `_VALID_SCOPES` is
+('global', 'session', 'actor', 'workflow') and the control plane's `getScopeID`
+only keys off X-Workflow-ID / X-Session-ID / X-Actor-ID plus the fixed "global"
+id. (Local storage does pre-create a vestigial `reasoner` BoltDB bucket, but it
+has no header case, is never walked by a hierarchical read, and is rejected by
+the SDK.)
+
+Both docstrings now name the four real scopes. They also note that
+`memory_scope` is accepted but not yet applied — `agent_ai.py` still carries
+the "TODO: Integrate memory injection based on memory_scope" placeholder and
+never reads the argument.
+
+Docs only — no behaviour change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: say where an unscoped memory write lands, and fix the primitives snapshot's memory section
+
+The Agent.memory preamble described a write-scope fallback chain
+(workflow -> session -> actor -> global) whose last three branches cannot be
+reached from this SDK: ExecutionContext.to_headers() always sends
+X-Workflow-ID, falling back to the run id, so an unscoped write from a
+reasoner lands in the workflow scope of that run. State that, and what to do
+when a value must outlive one run.
+
+The shipped primitives snapshot (skills/ and its byte-identical mirror embedded
+in the server binary) still taught the same wrong material this PR corrects
+elsewhere: a `reasoner` memory_scope example, invented `agent`/`run` scopes,
+and app.memory calls that raise (`exists(key, scope=...)`,
+`list_keys(scope=...)`, `search_vectors`). Replace the section with the four
+real scopes, their headers, and calls that exist.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (1a3cc1f)
+
+
+
+### Other
+
+- Desktop: make Railway image auto-updates real — set the policy through the environment config and show Railway's live state (#974)
+
+* desktop: set Railway image auto-updates through the environment config, and read them back
+
+The desktop set the maintenance window with serviceInstanceAutoUpdateScheduleUpdate,
+which Railway documents as leaving the update policy untouched. On a service where the
+policy was never enabled Railway answers "Auto updates are not enabled for this service",
+and the empty schedule sent for "Off" is rejected outright. The policy is not a typed
+field of the public schema; Railway's dashboard and `railway config apply` write it
+through the environment config document.
+
+- setImageAutoUpdates commits a patch containing only services.<id>.source.autoUpdates:
+  Off -> { type: "disabled" } (no schedule); other modes -> { type: "patch" | "minor",
+  schedule } using the existing window tables. Verified against a live service: the
+  config reads back as written and no redeploy is triggered.
+- getEnvironmentConfigAutoUpdates reads environment(id).config and keeps only the
+  autoUpdates object; the document (which carries service variables) never leaves main.
+  A missing environment or service is a read failure, not "not set".
+- getCloudAutoUpdateState classifies the live policy (not set / off / nightly /
+  weekends / anytime / custom, with the policy) and returns the resolved service id;
+  new IPC agentfield:cloud-auto-update-get.
+- Deploys read before they write: first deploy (or nothing usable stored) -> Nightly;
+  re-run deploy writes the stored mode only when Railway has no policy, otherwise leaves
+  the Railway-side policy alone, reports it and caches it as the offline fallback. A failed
+  read never blocks an explicit user write and never erases the cached preference.
+- Every Railway failure carries a deep link to the service's Railway settings; the deploy
+  IPC result carries the auto-update outcome explicitly and is typed.
+- Railway GraphQL requests time out after 20 s, including during the body read.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: show Railway's real image auto-update state in the Remote panel
+
+The "Railway image updates" select displayed the preference stored by the desktop,
+never what Railway had. It now reads the live state on mount, on control-plane
+changes and after every change or deploy; a policy set in Railway that is not one of
+ours shows as "Custom — set in Railway"; loading, read failures and in-flight writes
+each have their own placeholder and hint ("Checking Railway…", "Current window
+unknown — choose one to set it" with the last known window, "Saving to Railway…");
+Railway failures render an "Open Railway settings" link; feedback is keyed to the
+connected control plane so it cannot be re-attributed after a switch or deploy.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(railway): describe how Desktop manages image auto-updates
+
+The README claimed Desktop enables Railway Image Auto Updates with the Nightly window
+after a deploy; the schedule call it used cannot enable the policy. Describe the
+patch policy, the mode mapping, the read-before-write deploy rule, the loading and
+fallback states, and where the same setting lives in Railway.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (156619d)
+
+
+
+### Testing
+
+- Test(control-plane): make the UI service storage stub safe for concurrent StatusManager calls (#973)
+
+UIService.RefreshAllNodeStatus fans a node refresh out across up to five
+goroutines, each of which calls into storage via StatusManager. Production
+storage backends are safe under that; the uiStorageStub test double was not —
+it wrote updatedHealth/updatedLifecycle/updatedHeartbeat (with lazy make())
+and mutated agentsByID entries with no synchronisation. That took down an
+unrelated PR's coverage job with "fatal error: concurrent map writes" inside
+uiStorageStub.UpdateAgentHealth.
+
+Guard every stub method with a sync.Mutex, lazy-init the maps under the lock,
+and add healthFor/lifecycleFor/heartbeatFor accessors so assertions read the
+recorded values through the same lock instead of touching the maps directly.
+
+Test-only change; no production code touched.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (936f15f)
+
+## [0.1.135-rc.4] - 2026-08-26
+
+
+### CI
+
+- Ci(release): retry the multi-arch image builds once and make npm publish re-runnable (#964)
+
+The v0.1.134 release died in the publish job when BuildKit raced on its own
+QEMU emulator while starting the arm64 stages of the cloud image
+("/dev/.buildkit_qemu_emulator: text file busy"). By then the GitHub
+release, PyPI and npm had already been published, and re-running the job was
+impossible because npm refuses to publish over an existing version.
+
+- Each image build gets one retry; the second attempt reuses the gha cache,
+  so it only redoes the stage that died.
+- npm publish skips versions that are already on the registry, like PyPI's
+  --skip-existing, so "re-run failed jobs" works after a Docker failure.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (3cf0b59)
+
+## [0.1.135-rc.3] - 2026-08-26
+
+
+### Fixed
+
+- Fix(skillkit): install OpenCode skills via native symlinks (#947)
+
+* fix(skillkit): install OpenCode skills via native symlinks
+
+* fix(skillkit): preserve OpenCode uninstall and status errors
+
+* fix(skillkit): report resolved OpenCode skill version
+
+* test(skillkit): cover OpenCode target edge paths
+
+* fix(skillkit): report resolved OpenCode skill version
+
+* test(skillkit): cover OpenCode target status paths
+
+* fix(skillkit): preserve OpenCode version link status
+
+* test(skillkit): cover OpenCode target edge cases
+
+* fix(skillkit): strip the legacy OpenCode AGENTS.md block on install
+
+Moving the OpenCode target to a native ~/.config/opencode/skills/<name>
+symlink leaves the marker block older af binaries appended to
+~/.config/opencode/AGENTS.md behind forever: uninstallMarkerBlock is no
+longer reachable for this target, so nothing can remove it. Upgrading
+users end up with the native skill *and* the stale instructions — the
+AGENTS.md bloat #813 was actually about. Codex made the same migration in
+#910 and shipped removeLegacyMarkerBlock for exactly this reason.
+
+Install (once the symlink is in place) and Uninstall (per catalog skill)
+now strip that block. The rules are deliberately stricter than the Codex
+helper, because the two files are not alike: Codex's AGENTS.override.md
+was created by af for itself, while ~/.config/opencode/AGENTS.md is
+written by the user and read by OpenCode. So a file holding no block of
+ours is never opened for writing — bytes and mtime stay exactly as the
+user left them — and the file is deleted only when removing our block is
+what emptied it. Reusing uninstallMarkerBlock verbatim would instead
+rewrite any AGENTS.md it can read (measured: a user file with no
+agentfield block goes 23 -> 21 bytes) and delete a deliberately empty
+one on every install.
+
+Other tools' marker blocks and user prose on both sides of ours survive;
+a missing file is a no-op; read/write failures propagate, matching the
+target's existing Uninstall error contract.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(skillkit): isolate the OpenCode uninstall test and snapshot its new root
+
+TestOpenCodeTargetUninstallRemovesCatalogEntries was the one OpenCode
+test that did not call withTempHome, so it built and tore down catalog
+entries in the home shared by the whole package instead of its own.
+
+realHomeSnapshot also still only fingerprinted the old
+~/.config/opencode/AGENTS.md. Now that OpenCode installs a directory of
+symlinks, add ~/.config/opencode/skills so the real-home pollution guard
+covers the path this target actually writes to.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* refactor(skillkit): route the OpenCode legacy cleanup through the package seams
+
+removeLegacyMarkerBlock called os.Remove/os.WriteFile/os.Rename directly
+while every other write path in the package goes through the reconcile*
+seams (reconcile.go), which exist precisely so a test can force a failure.
+The consequence was that its "remove", "write" and "rename into" branches
+could not be exercised at all: six lines that never ran once, and error
+strings that could ship wrongly wrapped without anything noticing.
+
+Switch the four filesystem calls to reconcileReadFile/reconcileRemove/
+reconcileWriteFile/reconcileRename and cover each failure through
+Uninstall, modelled on the reconciler's own rewrite-failure subtests.
+
+Also drop legacyRulesPath's error return. It could only fail when
+TargetPath() fails, and both call sites have already proven TargetPath()
+succeeds before reaching it — so the branch was unreachable and told a
+reader about a failure mode that does not exist. It now takes the resolved
+skills root, which lets Uninstall use the TargetPath() result it was
+already computing and discarding instead of re-resolving it per skill.
+
+No behaviour change: same files read, same files written, same errors
+returned.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skillkit): keep a live OpenCode install recorded when the legacy block cannot be cleaned
+
+Install created the symlink first and then failed the whole target if the
+legacy ~/.config/opencode/AGENTS.md could not be cleaned up — a file mode
+000 from a botched dotfiles restore, or a directory sitting at that path.
+The caller records nothing for a failed target, so the outcome was the
+worst of both: the integration live on disk, `af skill list` reporting
+OpenCode as not installed, and every later `af skill install` exiting
+non-zero, all over a stale block that has no bearing on whether OpenCode
+can load the skill.
+
+Downgrade the cleanup to a warning on the install path so the install that
+already succeeded is reported and recorded. Uninstall keeps propagating the
+error: there, stripping the block is the entire point of the call.
+
+The ordering is deliberate and unchanged — the native skill goes in before
+the old block comes out, so an interrupted migration leaves the user with a
+working integration rather than neither.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (9a14e21)
+
+## [0.1.135-rc.2] - 2026-08-26
+
+
+### Fixed
+
+- Fix(openrouter): auto-switch stream=false for non-pcm16 audio formats… (#962)
+
+* fix(openrouter): auto-switch stream=false for non-pcm16 audio formats (#584)
+
+- OpenRouter SSE streaming only emits pcm16 audio deltas; requesting
+  mp3/flac/opus with stream=True returns a format-related error.
+- Add OpenRouterProvider._nonstream_openrouter_audio helper that calls
+  chat/completions with stream=False and parses the JSON response body
+  (choices[0].message.audio.{data, transcript}).
+- generate_audio chat-completions path now selects streaming vs non-streaming
+  based on the requested wire format: pcm16 -> SSE; anything else -> JSON.
+- Existing SSE tests updated to use format=pcm16.
+- New TestOpenRouterNonStreamAudio covers mp3/flac, HTTP errors, invalid JSON,
+  empty choices, and pcm16 staying on the SSE path (13 tests total, all pass).
+
+Closes: #584
+
+* test(openrouter): use pcm16 for SSE integration cases
+
+* test(openrouter): pin SSE integration cases to pcm16 and assert the stream flag
+
+The previous commit switched the requested format to pcm16 but left the
+format assertion expecting mp3. Assert pcm16, and assert stream=True on the
+sent payload so these two tests are explicitly pinned to the SSE path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: fcy222fcy <fcy222fcy@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (fefef44)
+
+## [0.1.135-rc.1] - 2026-08-26
+
+
+### Changed
+
+- Refactor(storage): split local.go into focused files (9009 -> 5917 LOC) (#959)
+
+* refactor(storage): split local.go into focused files (9009 -> 5917 LOC) (#410)
+
+Split the largest file in the repo into logical units. Pure code
+movement, no behavior change, no renames, no new interfaces.
+
+Before: local.go = 9009 lines, 204 methods on LocalStorage
+After:
+  local.go       = 5917 lines (struct def, schema, executions, workflows, etc.)
+  local_init.go  =  398 lines (NewLocalStorage, Initialize, postgres setup, WAL checkpoint)
+  local_did.go   =  870 lines (DID registry, agent DIDs, component DIDs)
+  local_vc.go    =  485 lines (execution VCs, workflow VCs)
+  local_events.go= 1400 lines (workflow events, execution logs, webhook events, DID docs, access policies, tag VCs)
+
+All methods remain on *LocalStorage. No import path changes for
+callers. Tests pass unchanged.
+
+* style(storage): gofmt import ordering and stray blank lines (8515d6e)
+
+## [0.1.134] - 2026-08-26
+
+## [0.1.134-rc.7] - 2026-08-26
+
+
+### Added
+
+- Feat: desktop-driven and automatic updates for the cloud control plane and installed agents (#957)
+
+* control-plane: report the real build version on /health and add GET /api/v1/version
+
+/health hardcoded "version": "1.0.0", so no client could tell what a
+control plane was running. Report the ldflags build version instead, and
+add GET /api/v1/version with commit, build date, a hosting block (railway
+ids from the Railway-provided environment, docker, or local) and the
+feature list clients use for capability detection.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docker: stamp version, commit and build date into the control-plane images
+
+Both Dockerfiles built af without -ldflags, so every published image
+reported "dev". Add VERSION/COMMIT/BUILD_DATE build args, pass them from
+the release workflow, and make the docker smoke test assert the built image
+does not report dev.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: update the cloud control plane from the app and enable Railway auto-updates
+
+Detect a newer stable control-plane release against the RUNNING version
+(GET /api/v1/version) instead of local OpenTofu state, check in the
+background (15 s after launch, then every 4 h) and show a dismissible
+banner. "Update now" works for deployments the desktop created (OpenTofu
+re-apply after a refresh, never a downgrade) and for any Railway-hosted
+control plane that reports its service identity (Railway API: set image +
+redeploy), then waits until the control plane reports the target version.
+
+After a first deploy the desktop enables Railway Image Auto Updates on a
+Nightly (02:00-06:00 UTC) window; Off / Nightly / Weekends / Anytime are
+selectable and bound to the service they were applied to. Re-running a
+deploy never overwrites an explicit choice.
+
+Also fixes "Upgrade & redeploy" being unreachable for accounts with more
+than one Railway workspace, makes railway-status resilient to workspace
+lookup failures, and moves cloud settings merges into the main process so
+the renderer never writes back a stale nested settings object.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: rewrite the Railway deployment guide for the current images and update model
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: show package update status, allow updating any installed agent, and report a stale local control plane
+
+Surface the control plane's per-package update state (available / pinned /
+paused) in the Agents view with Update and Pause/Resume actions, let
+non-catalog packages update from their recorded source, and add a Settings
+row with the last check, the last maintenance pass, Check now and Run
+maintenance now. The boot chain asks the control plane for update state
+once after provisioning so chips are fresh on first paint.
+
+When the managed af binary was replaced on launch and the adopted local
+control plane still runs the old build (Windows/Linux), say so and give the
+restart instruction instead of spawning a second server; macOS is left to
+af-tray. Autostart failures no longer skip bundled provisioning.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: record git provenance and desired state; make process liveness identity-aware
+
+Every git install now records the resolved commit, the requested ref, an
+auto_update flag and updated_at in installed.yaml (mirrored into the
+package metadata), so "is this package current?" is answerable without a
+clone. installed.yaml also gains desired_state — the user's intent, set by
+run and cleared only by an explicit stop — separate from the observed
+status that reconciliation rewrites.
+
+Recorded PIDs are validated by process identity (start time) and by the
+recorded port's health with node identity, through one shared ownership
+rule: a healthy port with a different node id is foreign, a healthy port
+with our id or no id is ours, a silent port means the process is gone, and
+an unidentified PID is never signalled. Forced reinstalls (git and local)
+stop the running package gracefully first and restart it afterwards, and
+`af stop` records the stopped intent even for a crashed node. `af list`
+shows the short commit. Windows gets a taskkill/tasklist stop ladder.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: check packages for updates without cloning; maintenance pass with boot restore
+
+Add a git ls-remote based checker (serialized, 10 s per package) and a
+maintenance service that runs ~20 s after the server starts and every 6 h
+(AGENTFIELD_PACKAGE_UPDATE_INTERVAL): it restarts every package whose
+desired state is running but whose process is gone, checks each git
+package's source, and reinstalls only those whose source moved — skipping
+explicit @ref pins, paused packages, nodes with active executions
+(deferred and retried) and superseded renames. Off with
+AGENTFIELD_PACKAGE_AUTO_UPDATE=0 or when git is unavailable; restore still
+runs. The update job preserves the package's .env and previous port, keeps
+the running intent through its stop, and dispatches to a node under update
+get a 10-minute restart grace. A malformed registry can no longer panic
+the pass.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: expose package update state and maintenance controls over the UI API
+
+Wire the maintenance service into the server lifecycle (cancelled on
+Stop) and add the endpoints the desktop uses: POST
+/api/ui/v1/agents/packages/check-updates, PUT
+/api/ui/v1/agents/packages/:id/auto-update, GET and POST
+/api/ui/v1/agents/packages/maintenance[/run]. The packages list and
+details carry installed_commit, source_ref, auto_update and the last
+check result, and no longer advertise a port for a package that is not
+running. Stopping an already-stopped agent through the UI returns 200 and
+records the intent instead of 400.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: never redeploy a current control plane; report what the update restored; make update controls honest
+
+"Update now" now returns "already running vX" without touching Railway when
+the resolved target equals the running version, sleeps before its first
+probe and only accepts the control plane once it reports a new Railway
+deployment id (falling back to a version match for control planes that
+report no hosting identity). After the restart it waits for the boot
+maintenance pass and names the agents that were restored — and the ones
+that were not, with the reason — instead of assuming.
+
+The update banner now covers control planes too old to report their
+version, keeps a successful result visible for a moment before the
+follow-up check clears it, and the local restart-required notice is global,
+names the af server action, and clears itself once the control plane
+reports the new version. Railway image-update controls are offered only
+when the connected control plane resolves to a Railway service, and the
+workspace picker is read-only once a deployment exists.
+
+Manual package updates send {force} and, on a 409 executions_active
+response, ask "N runs in progress … update anyway?" before retrying;
+rows whose unattended update failed show an "Update failed" chip with the
+reason.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: reconcile lifecycle operations through the ownership rule; bound process stop
+
+RunAgent, StopAgent and forced reinstalls used to decide whether a recorded
+PID was still ours with a PID-only probe (boot id + kill 0). In a replaced
+container PIDs restart from 1, so the recorded PID is frequently alive as an
+unrelated process and RunAgent refused the boot restore with "already
+running" — the exact case the restore exists for. Lifecycle callers now use
+the shared ownership rule on every platform (process start-time identity
+plus the recorded port's health with node identity): a dead or foreign
+record is cleared and the package starts; an equivalent or anonymous healthy
+endpoint is left alone; a foreign process is never signalled. Read paths use
+the same rule on Linux, keep the health-identity rule on Windows and the
+cheap PID probe on macOS so dashboard polls never spawn ps.
+
+DefaultProcessManager.Stop waited on a child forever after SIGTERM; a node
+that ignores the signal wedged the maintenance goroutine for the life of the
+container. It now waits five seconds, then SIGKILLs and reaps with a bound.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: never take a node down for an update that cannot succeed; remember failing commits; 409 on active executions
+
+The update job stopped the running node before cloning, so a source that
+could not be installed (a superseded_by rename, an unreachable remote, a
+broken tree) still cost an outage — and, because the installed commit never
+advanced, the unattended pass repeated the stop/clone/fail/restart cycle
+every six hours forever. The git installer now exposes a BeforeReplace
+transaction boundary that fires only after the incoming tree, manifest,
+expected name and superseded_by target have been validated, immediately
+before the installed directory is stashed; the update job passes its
+stop-for-update there and restarts only if it fired. An unattended failure
+records the remote HEAD it tried as update status "failed" with the reason;
+the same HEAD is re-checked with ls-remote but not cloned or stopped again,
+a moved HEAD retries, and a manual update clears the memo.
+
+Manual updates gained {"force": bool}: without it, a package whose node has
+executions in flight answers 409 {"code": "executions_active",
+"active_executions": N} instead of killing the run; the existing job-slot
+conflict answers 409 {"code": "job_running"}.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: migrate legacy desired state in containers; start restore on readiness; retry with backoff; keep dispatches waiting
+
+The control plane deployed today rewrites status: stopped for any dead PID
+as soon as the desktop polls, so most upgraded cloud registries carry
+"stopped" and no desired_state, and the first boot of the new build would
+restore nothing. Before its first restore, the maintenance pass now migrates
+entries without desired_state once: running when the control plane is
+hosted in a container (Railway or Docker, via the shared hosting helper the
+version endpoint also uses), status-derived on a local machine. Explicit
+stops recorded afterwards are never resurrected.
+
+The boot pass starts two seconds after the HTTP listener is serving instead
+of a flat twenty, and arms the ten-minute dispatch grace for every package
+it intends to restore, so calls that land while nodes are coming back wait
+instead of failing. The grace is honoured before dispatch too:
+ensureAgentDispatchable and the restart wait no longer reject a node the
+health monitor demoted while its update or restore is in progress. A pass
+that leaves a desired-running package down, or defers an update, reschedules
+itself at 1, 5 and 15 minutes before the configured interval; a clean pass
+resets the backoff and next_run_at always reports the real next run. Restore
+skips a package whose update job holds the mutation slot, and each restore
+attempt is bounded to 90 seconds so one stuck start cannot hold the pass.
+
+GET /api/ui/v1/agents/packages/maintenance adds boot_pass_completed and
+hosting so the desktop can report what a control-plane update actually
+brought back.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: give dead-process test fixtures a closed port
+
+Four older fixtures recorded a dead process on port 8001 and asserted it
+reconciles to stopped. The Linux read path now probes the recorded port and
+treats an anonymous healthy listener as ours, so the tests failed whenever
+anything happened to serve on 8001 on the developer's machine. They now
+allocate a port that is guaranteed closed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* sdk/python: port availability check must agree with the server's bind
+
+is_port_available and get_free_port bound a probe socket without
+SO_REUSEADDR, so a port whose previous connections were still in TIME_WAIT
+— every restart within about a minute of a graceful stop — was reported as
+taken even though uvicorn (which sets SO_REUSEADDR) binds it fine. Under
+AGENTFIELD_STRICT_PORT the node then exited or, with an explicit port, moved
+to the next one while the control plane kept polling the port it assigned
+and killed the node for "not becoming ready". The probe now sets
+SO_REUSEADDR to match the server.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: refuse non-comparable versions, decide already-current before auth, make apply feedback dismissible
+
+"Update now" refuses when either version cannot be compared (a NaN used to
+fall through both guards and redeploy the same image), returns the
+already-running result before a Railway token is requested, and the
+post-deploy poll ignores a non-comparable observed version. Apply feedback
+is an explicit state: failures are dismissible and cleared by the next
+status change, and a null latest version never reaches the copy.
+
+The restart-required notice tells the truth — stop the running "af server"
+process and start it again, or restart the machine — and clears as soon as
+cloud mode is enabled. The post-update summary counts only "restore …"
+errors as failed restores, reports other pass errors as maintenance
+warnings, and finishes on boot_restore_completed (or the older
+boot_pass_completed) so it is not held for update checks.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: identify legacy processes by started_at; confirm before treating a live node as dead; serialize registry writes; maintenance loop never spins
+
+Records written before this PR carry started_at but no start_time. They
+now get an identity from the process's wall-clock start (Linux /proc btime
++ ticks, macOS ps, Windows PowerShell): a PID whose process started after
+the record was written is a recycled PID and the restore proceeds; one that
+started when the record says is ours even while its health endpoint is
+silent, so Stop signals it, status reads keep it, and RunAgent starts no
+duplicate. A record with no identity at all is never signalled: Stop now
+says so instead of answering "already stopped".
+
+Lifecycle decisions (RunAgent, Stop, restore) confirm a silent or failing
+health probe up to three times before concluding a live process is
+unhealthy or gone; status reads never block and never clear a record on a
+single missed probe. Every load-modify-save of installed.yaml goes through
+one process-wide registry transaction, so a dashboard reconcile can no
+longer overwrite a concurrent restore's write. Node-facing probes
+(readiness, identity, shutdown, capabilities, dev mode) use a transport
+without keep-alives so a node shutting down leaves no TIME_WAIT on its own
+port — the Python SDK's port check then still accepts the port the control
+plane assigned. Bounded Stop removes its bookkeeping even when the final
+reap times out.
+
+The maintenance loop waited on a zero-delay timer whenever a manual pass
+held the slot, burning a core until it finished; it now waits for the pass
+to end. A restore that overran its bound is tracked per package and later
+passes report it as "starting" instead of launching a second copy; restore
+re-reads desired_state right before and after RunAgent so a stop issued
+during the boot window wins. Pass errors are phase-prefixed (restore /
+check / update), the second in-pass attempt does not duplicate messages,
+and boot_restore_completed is reported as soon as the restore loop ends.
+The dispatch grace is reference-counted and identified by an explicit flag
+(a configured 10-minute grace no longer disables the node_unavailable
+gate), and an in-flight wait re-reads it every poll. A failed migration
+write is logged and the pass restores from the in-memory entries.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: attended rename updates stop and replace the node; failed-commit memo survives check errors; repair updates never 500
+
+An attended update whose manifest redirects to a differently named
+successor stops the running predecessor after the successor is installed,
+retires the old entry and starts the successor with the old port as a
+preference (the BeforeReplace boundary only covers same-name replacements).
+A transient ls-remote error no longer erases a failed@commit memo, so a
+deterministically failing update is not retried until the remote HEAD
+moves. An unreadable manifest falls back to the registry name for the
+active-execution check instead of failing a manual update with 500, and
+node-id candidates are deduplicated by exact string so hyphen/underscore/
+case variants are all queried.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: drop an unused grace read; give the RunAgent fixture a closed port
+
+staticcheck flagged the initial extended-grace value in retryAfterAgentRestart
+as never used (it is re-read every poll). TestRunAgent_Success had its mock
+port manager hand out 8001, which the readiness wait probes for real, so it
+failed whenever a node was serving there on the developer's machine.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: record running intent at an explicit start; close probe connections from the control plane
+
+The e2e harness caught two regressions in the round-2 changes.
+
+An explicit start (af run, the desktop/UI Start button) of a package whose
+desired_state was "stopped" — every fresh install, anything stopped
+before — no longer recorded running intent, because the post-readiness
+write only filled a blank value. After a container replacement the boot
+restore then skipped the node. RunAgent now persists desired_state: running
+before launching; a stop that lands while the node is still starting is
+written after that point and still wins.
+
+Node probes had been switched to "Connection: close", which asks the node
+to close the connection first and parks TIME_WAIT on the node's own port —
+exactly what makes the Python SDK's availability check refuse the assigned
+port on the next start, so nodes drifted to port+1 after every update. The
+node client now keeps the connection alive for the request and closes it
+from the control-plane side as soon as the body is done; E23 asserts the
+node sees the connection go idle and never receives Connection: close.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: drop an empty branch left by the probe change; cover the node client's failure path
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: remove an unused registry helper
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: cover hosting classification, legacy start-time identity and registry store edge cases
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: tighter legacy identity slack; a stop during an update wins; identity lookups outside the registry lock
+
+A legacy record's started_at is written after readiness, so a genuine
+process starts before it — only clock skew puts it after. The +30 s slack
+let a PID reused by a process launched moments after a redeploy count as
+ours; it is now 5 s. An update job no longer restarts a package whose
+desired_state became stopped while it was down (RunAgent would have recorded
+running intent again and erased the user's stop). Process identity is
+resolved before the registry transaction so the macOS/Windows shell-outs
+never stall every registry read. The stop fixture uses a PID above pid_max
+so it can never signal a real process on the developer's machine.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: wait for a pass summary before reporting what the boot restore did
+
+boot_restore_completed flips as soon as the restore loop ends, but on a
+fresh container last_run stays empty until the whole pass finishes; the
+post-update message now waits for a summary (or boot_pass_completed) instead
+of announcing zero agents restored.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: a package reads as current right after an unattended update
+
+The job clears the check memo on success, which left update.status empty
+until the next check — the desktop showed nothing where "Up to date"
+belongs. The pass now records current at the HEAD it just installed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: never leave a node running that the registry could not record
+
+When the runtime write after readiness fails (a full volume fails every
+write), RunAgent used to return the error and leave the freshly started
+process running unrecorded; the next maintenance pass then started another
+copy beside it. The process is stopped before the error is returned.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: keep the update confirmation readable; truthful wording when the version check fails
+
+The follow-up check flips the cloud status to "current" within a second of
+a successful update and that status publication wiped the "Updated to vX.
+N agents restored." line; a successful result now stays for its 10 s window
+regardless of status changes (failures still clear on the next status or a
+dismiss). The version-check failure message no longer suggests restarting
+the desktop, which never re-runs the check; it names the af server restart.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: guard the process manager's PID map
+
+Boot restores that overran their bound keep starting a node while later
+passes and update jobs start and stop others; the PID map was written from
+those goroutines without a lock, which is a fatal "concurrent map writes"
+in Go — the control plane container and every agent child with it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: Stop must not report success for a live node it cannot signal
+
+A Go node (no shutdown endpoint) that still answers on its port while the
+recorded PID is a different process — restarted by hand, a supervisor —
+used to make Stop return success and erase the record, leaving the node
+running with no way to stop it from the control plane. Stop now says the
+process is not the recorded PID and must be stopped manually, keeping the
+record. The service-level E7 case (unidentified live PID, silent port) gets
+its own test after a mutation check showed the guard was untested there.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: publish the boot restore's summary before the update checks
+
+boot_restore_completed flipped as soon as the restore loop ended, but on a
+fresh container nothing was readable until the whole pass finished — the
+update checks that follow can take minutes — so the desktop's post-update
+report had nothing to show. When no pass has finished yet, the in-progress
+summary is published with the flag.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: give Stop/Start time to finish; show deferred and errored update checks
+
+Stopping a node that no longer answers takes the control plane a
+confirmation window plus the graceful-shutdown wait before it signals; the
+10 s request timeout reported "could not reach the control plane" for stops
+that then succeeded. Lifecycle requests now get 60 s. A pending update whose
+check was deferred (node busy) or errored kept the row chip-less; both now
+render with the reason as the tooltip.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* sdk/python: only relax the port probe with SO_REUSEADDR where the server does
+
+On Windows SO_REUSEADDR lets a socket bind over an active listener, so the
+probe would have reported occupied ports as free; the option is now set on
+POSIX only, matching uvicorn's bind.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(railway): the legacy identity window is +5 s after started_at, not +30 s
+
+The README described the window that process_liveness.go enforces
+(legacyStartAfterRecord) with the value from an earlier draft.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e3cc5b2)
+
+## [0.1.134-rc.6] - 2026-08-25
+
+
+### Testing
+
+- Test(storage): extend config lifecycle coverage (#949)
+
+* test(storage): [AgentField/Config] add table-driven CRUD coverage
+
+- verify config versioning, audit metadata, and lexical ordering
+
+- cover missing keys and cancelled set, list, and delete operations
+
+* test(storage): [AgentField/Config] avoid duplicate CRUD suite
+
+- extend existing lifecycle coverage for audit timestamps
+
+- verify exact delete errors and cancelled operations preserve state (86df3c2)
+
+## [0.1.134-rc.5] - 2026-08-25
+
+
+### Fixed
+
+- Fix(sdk): make async teardown exception-safe (#950)
+
+* fix(sdk): make async teardown exception-safe
+
+* fix(sdk): cap litellm for Python 3.10 compatibility (d28379e)
+
+- Fix(sdk/go): propagate caller context through MemoryBackend interface (#433) (#958)
+
+All HTTP methods in ControlPlaneMemoryBackend used http.NewRequest
+(without context), so a cancelled execution context could not cancel
+in-flight memory I/O. This caused 15-second hangs on timeout under
+load when cancelled executions held HTTP connections and goroutines
+until the http.Client timeout fired.
+
+Fix:
+- Add context.Context as first parameter to all MemoryBackend
+  interface methods (Set, Get, Delete, List, SetVector, GetVector,
+  SearchVector, DeleteVector).
+- ControlPlaneMemoryBackend: switch all http.NewRequest calls to
+  http.NewRequestWithContext(ctx, ...).
+- InMemoryBackend: accept context parameter (ignored since in-memory
+  ops are non-blocking).
+- Memory and ScopedMemory: pass through the caller ctx (already
+  available from method signatures) to the backend.
+- Update all test mocks and callers.
+
+Tests:
+- New TestControlPlaneMemoryBackend_ContextCancellation: verifies all
+  8 methods return context.Canceled immediately when context is
+  already cancelled, and DeadlineExceeded returns promptly (not after
+  the 15s client timeout).
+- All existing memory tests pass with updated signatures.
+
+This is an interface-breaking change. Any external MemoryBackend
+implementations must add context.Context as the first parameter to
+all methods. (bcbcc29)
+
+## [0.1.134-rc.4] - 2026-08-24
+
+
+### Fixed
+
+- Fix: Update reinstalls catalog nodes from the catalog source; expose each package's recorded source (#956)
+
+* fix(control-plane): let package update take a source override; expose recorded source
+
+`POST /api/ui/v1/agents/packages/:packageId/update` accepts an optional
+`{"source": "<url>"}`. A present source is validated and used for the
+update job instead of the `source_path` recorded in installed.yaml; an
+absent or empty body keeps the recorded-source behaviour older clients
+rely on. Job semantics are unchanged: still an update (forced reinstall in
+place, stop-if-running, restart-if-was-running), unknown package → 404.
+
+`SyncPackagesFromRegistry` now copies installed.yaml `source_path` into
+the existing `AgentPackage.Repository` column, and the packages list and
+details responses expose it as `source`, so a UI can show where a package
+was actually installed from.
+
+Why: a package installed from a personal e2e repo was "updated" from the
+desktop card that links to Agent-Field/SWE-AF, and the update re-fetched
+the e2e repo — the recorded source was the only one the control plane
+knew, and nothing showed it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): update catalog nodes from the catalog source; show where an install came from
+
+"Update" on an installed catalog card now sends the catalog entry's
+source to the control plane, so the reinstall fetches the vetted repo
+(e.g. Agent-Field/SWE-AF) rather than whatever source the package was
+first installed from. The IPC boundary still carries only a vetted
+catalog name; the source comes from main-process catalog data.
+
+The installed card shows "installed from <owner/repo…>" when the control
+plane reports a recorded source that names a different repository than
+the catalog row. Same repo with a `//subdir` or `@ref` — what a
+`superseded_by:` redirect records — is not drift (`sameSourceRepo`).
+
+Older control planes that ignore the body and report no source keep
+working: the update falls back to their recorded-source behaviour and
+the card shows no label.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1481911)
+
+## [0.1.134-rc.3] - 2026-08-24
+
+
+### Chores
+
+- Chore(deps): bump nanoid override to 3.3.18 (#919) (93acd36)
+
+## [0.1.134-rc.2] - 2026-08-24
+
+
+### Added
+
+- Feat(control-plane): add per-key rate limiting on hot endpoints (#429) (#952)
+
+Without rate limiting, a single misbehaving client can exhaust the
+async worker pool and database connections on hot endpoints, starving
+legitimate traffic.
+
+Implementation:
+- Add RateLimiterStore using golang.org/x/time/rate with per-key
+  token-bucket limiters and background idle eviction (10 min TTL).
+- Add RateLimit gin middleware that keys on API key (from auth
+  middleware) or client IP, returns HTTP 429 with Retry-After header.
+- Add RateLimitConfig to agentfield.yaml config with per-endpoint
+  settings: execute (50 rps/100 burst), discovery (20/40),
+  bulk_status (30/60), global (200/400).
+- Wire into routes: global limiter on /api/v1, dedicated limiters on
+  /execute group, /discovery group, and /nodes/status/bulk.
+- Opt-in via config: rate_limit.enabled = true in agentfield.yaml.
+  Disabled by default to avoid breaking existing deployments.
+- Graceful shutdown: Stop() halts eviction goroutines.
+
+Tests (9 cases):
+- Token bucket enforcement and burst
+- Idle key eviction
+- Active key not evicted
+- Normal traffic allowed
+- 429 returned with Retry-After header and JSON body
+- Per-key isolation (different clients independent)
+- API-key-based keying when auth is present
+- Config enabled/disabled logic
+- Default config values (c78b22c)
+
 ## [0.1.134-rc.1] - 2026-08-23
 
 

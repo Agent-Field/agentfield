@@ -14,6 +14,7 @@ import type {
   ExecutionsResult,
   ExecutionSummary,
   InstalledAgent,
+  LocalControlPlaneRestartStatus,
   RegistryResult,
   SkillSyncRecord,
   UsageGroup,
@@ -117,8 +118,21 @@ export function packageToInstalledAgent(pkg: PackageInfo): InstalledAgent {
     description: pkg.description,
     status: pkg.install_status ?? pkg.status,
     path: pkg.install_path || null,
+    ...(pkg.source === undefined ? {} : { source: pkg.source }),
     port: pkg.port ?? null,
-    pid: pkg.process_id ?? null
+    pid: pkg.process_id ?? null,
+    ...(pkg.installed_commit === undefined ? {} : { installedCommit: pkg.installed_commit }),
+    ...(pkg.auto_update === undefined ? {} : { autoUpdate: pkg.auto_update }),
+    ...(pkg.update === undefined
+      ? {}
+      : {
+          update: {
+            status: pkg.update.status,
+            latestCommit: pkg.update.latest_commit,
+            checkedAt: pkg.update.checked_at,
+            message: pkg.update.message
+          }
+        })
   }
 }
 
@@ -368,6 +382,8 @@ export interface SnapshotOptions {
    * so the IPC handler supplies it and callers that don't care omit it.
    */
   bundled?: BundledStatus[]
+  /** Main-process record of the guarded post-CLI-swap restart check. */
+  localControlPlaneRestart?: LocalControlPlaneRestartStatus | null
 }
 
 /**
@@ -412,6 +428,7 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
     usage,
     skillSync: options.skillSync ?? null,
     bundled: options.bundled ?? [],
+    localControlPlaneRestart: options.localControlPlaneRestart ?? null,
     fetchedAt: new Date().toISOString()
   }
 }

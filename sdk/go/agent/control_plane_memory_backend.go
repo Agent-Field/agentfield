@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,7 +46,7 @@ type memoryAPIResponse struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-func (b *ControlPlaneMemoryBackend) Set(scope MemoryScope, scopeID, key string, value any) error {
+func (b *ControlPlaneMemoryBackend) Set(ctx context.Context, scope MemoryScope, scopeID, key string, value any) error {
 	endpoint, err := url.JoinPath(b.baseURL, "/api/v1/memory/set")
 	if err != nil {
 		return err
@@ -60,7 +61,7 @@ func (b *ControlPlaneMemoryBackend) Set(scope MemoryScope, scopeID, key string, 
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
 	if err != nil {
 		return err
 	}
@@ -79,13 +80,13 @@ func (b *ControlPlaneMemoryBackend) Set(scope MemoryScope, scopeID, key string, 
 	return nil
 }
 
-func (b *ControlPlaneMemoryBackend) Get(scope MemoryScope, scopeID, key string) (any, bool, error) {
+func (b *ControlPlaneMemoryBackend) Get(ctx context.Context, scope MemoryScope, scopeID, key string) (any, bool, error) {
 	endpoint, err := url.JoinPath(b.baseURL, "/api/v1/memory/get")
 	if err != nil {
 		return nil, false, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, endpoint, keyScopeReader(key, b.apiScope(scope)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, keyScopeReader(key, b.apiScope(scope)))
 	if err != nil {
 		return nil, false, err
 	}
@@ -112,13 +113,13 @@ func (b *ControlPlaneMemoryBackend) Get(scope MemoryScope, scopeID, key string) 
 	return mem.Data, true, nil
 }
 
-func (b *ControlPlaneMemoryBackend) Delete(scope MemoryScope, scopeID, key string) error {
+func (b *ControlPlaneMemoryBackend) Delete(ctx context.Context, scope MemoryScope, scopeID, key string) error {
 	endpoint, err := url.JoinPath(b.baseURL, "/api/v1/memory/delete")
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, endpoint, keyScopeReader(key, b.apiScope(scope)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, keyScopeReader(key, b.apiScope(scope)))
 	if err != nil {
 		return err
 	}
@@ -140,13 +141,13 @@ func (b *ControlPlaneMemoryBackend) Delete(scope MemoryScope, scopeID, key strin
 	return nil
 }
 
-func (b *ControlPlaneMemoryBackend) List(scope MemoryScope, scopeID string) ([]string, error) {
+func (b *ControlPlaneMemoryBackend) List(ctx context.Context, scope MemoryScope, scopeID string) ([]string, error) {
 	endpoint, err := url.JoinPath(b.baseURL, "/api/v1/memory/list")
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodGet, endpoint+"?scope="+url.QueryEscape(b.apiScope(scope)), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?scope="+url.QueryEscape(b.apiScope(scope)), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +179,7 @@ func (b *ControlPlaneMemoryBackend) List(scope MemoryScope, scopeID string) ([]s
 	return keys, nil
 }
 
-func (b *ControlPlaneMemoryBackend) SetVector(scope MemoryScope, scopeID, key string, embedding []float64, metadata map[string]any) error {
+func (b *ControlPlaneMemoryBackend) SetVector(ctx context.Context, scope MemoryScope, scopeID, key string, embedding []float64, metadata map[string]any) error {
 	endpoint, err := url.JoinPath(b.baseURL, "/api/v1/memory/vector")
 	if err != nil {
 		return err
@@ -200,7 +201,7 @@ func (b *ControlPlaneMemoryBackend) SetVector(scope MemoryScope, scopeID, key st
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
 	if err != nil {
 		return err
 	}
@@ -219,13 +220,13 @@ func (b *ControlPlaneMemoryBackend) SetVector(scope MemoryScope, scopeID, key st
 	return nil
 }
 
-func (b *ControlPlaneMemoryBackend) GetVector(scope MemoryScope, scopeID, key string) ([]float64, map[string]any, bool, error) {
+func (b *ControlPlaneMemoryBackend) GetVector(ctx context.Context, scope MemoryScope, scopeID, key string) ([]float64, map[string]any, bool, error) {
 	endpoint, err := url.JoinPath(b.baseURL, "/api/v1/memory/vector", url.PathEscape(key))
 	if err != nil {
 		return nil, nil, false, err
 	}
 
-	req, err := http.NewRequest(http.MethodGet, endpoint+"?scope="+url.QueryEscape(b.apiScope(scope)), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?scope="+url.QueryEscape(b.apiScope(scope)), nil)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -262,7 +263,7 @@ func (b *ControlPlaneMemoryBackend) GetVector(scope MemoryScope, scopeID, key st
 	return embeddingF64, res.Metadata, true, nil
 }
 
-func (b *ControlPlaneMemoryBackend) SearchVector(scope MemoryScope, scopeID string, embedding []float64, opts SearchOptions) ([]VectorSearchResult, error) {
+func (b *ControlPlaneMemoryBackend) SearchVector(ctx context.Context, scope MemoryScope, scopeID string, embedding []float64, opts SearchOptions) ([]VectorSearchResult, error) {
 	endpoint, err := url.JoinPath(b.baseURL, "/api/v1/memory/vector/search")
 	if err != nil {
 		return nil, err
@@ -289,7 +290,7 @@ func (b *ControlPlaneMemoryBackend) SearchVector(scope MemoryScope, scopeID stri
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -330,13 +331,13 @@ func (b *ControlPlaneMemoryBackend) SearchVector(scope MemoryScope, scopeID stri
 	return results, nil
 }
 
-func (b *ControlPlaneMemoryBackend) DeleteVector(scope MemoryScope, scopeID, key string) error {
+func (b *ControlPlaneMemoryBackend) DeleteVector(ctx context.Context, scope MemoryScope, scopeID, key string) error {
 	endpoint, err := url.JoinPath(b.baseURL, "/api/v1/memory/vector", url.PathEscape(key))
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodDelete, endpoint+"?scope="+url.QueryEscape(b.apiScope(scope)), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint+"?scope="+url.QueryEscape(b.apiScope(scope)), nil)
 	if err != nil {
 		return err
 	}

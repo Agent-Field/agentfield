@@ -13,17 +13,13 @@ import asyncio
 import os
 from typing import Any, Dict, Optional
 from agentfield.logger import log_error, log_warn
-
-
-# Substring identifying OpenRouter's transient "no upstream provider" 404
-# (issues #3 and #5 in reel-af AGENTFIELD_SDK_ISSUES.md).
-_NO_ENDPOINTS_MARKER = "No endpoints found that support the requested output modalities"
-# Sleeps between the 3 in-loop attempts; index 0 is before the strip attempt.
-# Sequence: attempt 1 → sleep 1s → attempt 2 → sleep 2s → attempt 3 → (sleep 4s
-# → strip-and-retry) if image_config was set, else give up.
-_NO_ENDPOINTS_TOTAL_ATTEMPTS = 3
-_NO_ENDPOINTS_INTER_SLEEPS = (1.0, 2.0)
-_NO_ENDPOINTS_STRIP_SLEEP = 4.0
+from agentfield import openrouter_retry
+from agentfield.openrouter_retry import (
+    NO_ENDPOINTS_INTER_SLEEPS,
+    NO_ENDPOINTS_STRIP_SLEEP,
+    NO_ENDPOINTS_TOTAL_ATTEMPTS,
+    is_no_endpoints_error,
+)
 
 
 async def generate_image_litellm(
@@ -113,6 +109,11 @@ async def generate_image_openrouter(
     the standard chat completions endpoint. This is different from
     LiteLLM's dedicated image generation API.
 
+    Note: ``app.ai_generate_image()`` routes through
+    :meth:`agentfield.media_providers.OpenRouterProvider.generate_image`, which
+    is the supported OpenRouter image path; this function is the older LiteLLM
+    based entry point kept for direct callers.
+
     Supported models:
     - google/gemini-3.1-flash-image-preview
     - And other OpenRouter models with image generation capabilities
@@ -184,7 +185,7 @@ async def generate_image_openrouter(
         timeout = float(os.getenv("AGENTFIELD_LLM_CALL_TIMEOUT", "120.0"))
         response = None
         last_exc: Optional[BaseException] = None
-        for attempt in range(_NO_ENDPOINTS_TOTAL_ATTEMPTS):
+        for attempt in range(NO_ENDPOINTS_TOTAL_ATTEMPTS):
             try:
                 response = await asyncio.wait_for(
                     litellm.acompletion(**completion_params),
@@ -192,11 +193,11 @@ async def generate_image_openrouter(
                 )
                 break
             except Exception as e:
-                if _NO_ENDPOINTS_MARKER not in str(e):
+                if not is_no_endpoints_error(str(e)):
                     raise
                 last_exc = e
-                if attempt < len(_NO_ENDPOINTS_INTER_SLEEPS):
-                    await asyncio.sleep(_NO_ENDPOINTS_INTER_SLEEPS[attempt])
+                if attempt < len(NO_ENDPOINTS_INTER_SLEEPS):
+                    await openrouter_retry.sleep(NO_ENDPOINTS_INTER_SLEEPS[attempt])
         if response is None:
             # All in-loop attempts exhausted. If image_config was set, try once
             # without it before giving up. Falsy check (not `is not None`) is
@@ -209,7 +210,7 @@ async def generate_image_openrouter(
                     "accepted the requested image_config)."
                 )
                 completion_params.pop("image_config", None)
-                await asyncio.sleep(_NO_ENDPOINTS_STRIP_SLEEP)
+                await openrouter_retry.sleep(NO_ENDPOINTS_STRIP_SLEEP)
                 response = await asyncio.wait_for(
                     litellm.acompletion(**completion_params),
                     timeout=timeout,

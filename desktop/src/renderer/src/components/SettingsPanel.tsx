@@ -3,7 +3,8 @@ import type {
   AppUpdateStatus,
   CliStatus,
   DesktopSettings,
-  InstalledAgent
+  InstalledAgent,
+  PackageMaintenanceStatus
 } from '../../../shared/types'
 import { COMMUNITY_LINKS } from './communityLinks'
 import { SecretsSection } from './SecretsPanel'
@@ -137,6 +138,7 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
           <ul className="row-list">
             <AppUpdateRow />
             <CliRow />
+            <PackageUpdatesRow agents={agents} />
           </ul>
         </div>
       </section>
@@ -159,6 +161,126 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
         </div>
       </section>
     </>
+  )
+}
+
+export function packageUpdateTimestamps(
+  status: PackageMaintenanceStatus | null,
+  checkedAt: string | null
+): { lastCheck: string | null; lastMaintenance: string | null } {
+  return {
+    lastCheck: checkedAt,
+    lastMaintenance: status?.last_run?.finished_at ?? null
+  }
+}
+
+export function latestPackageUpdateCheckedAt(agents: InstalledAgent[]): string | null {
+  let latest: string | null = null
+  for (const agent of agents) {
+    const checkedAt = agent.update?.checkedAt
+    if (checkedAt && (latest === null || Date.parse(checkedAt) > Date.parse(latest))) {
+      latest = checkedAt
+    }
+  }
+  return latest
+}
+
+function PackageUpdatesRow({ agents }: { agents: InstalledAgent[] }) {
+  const [status, setStatus] = useState<PackageMaintenanceStatus | null>(null)
+  const snapshotCheckedAt = latestPackageUpdateCheckedAt(agents)
+  const [checkedAt, setCheckedAt] = useState<string | null>(() => snapshotCheckedAt)
+  const [busy, setBusy] = useState<'check' | 'run' | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+
+  const refresh = () => window.agentfield.getMaintenanceStatus().then(setStatus)
+
+  useEffect(() => {
+    void refresh().catch((error) => {
+      setMessage(`${error instanceof Error ? error.message : String(error)} Update the control plane, then try again.`)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!snapshotCheckedAt) return
+    setCheckedAt((current) =>
+      !current || Date.parse(snapshotCheckedAt) > Date.parse(current)
+        ? snapshotCheckedAt
+        : current
+    )
+  }, [snapshotCheckedAt])
+
+  const check = async () => {
+    setBusy('check')
+    setMessage(null)
+    try {
+      const result = await window.agentfield.checkPackageUpdates()
+      setCheckedAt(result.checked_at)
+      setMessage(`Checked ${result.packages.length} installed agent${result.packages.length === 1 ? '' : 's'}.`)
+      await refresh()
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : String(error)} Check the server connection and try again.`)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const run = async () => {
+    setBusy('run')
+    setMessage(null)
+    try {
+      await window.agentfield.runPackageMaintenance()
+      setMessage('Maintenance started. Eligible agents will update one at a time and return on their previous ports.')
+      await refresh()
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : String(error)} Wait for any active maintenance pass, then try again.`)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const timestamps = packageUpdateTimestamps(status, checkedAt)
+  const lastCheck = timestamps.lastCheck
+    ? new Date(timestamps.lastCheck).toLocaleString()
+    : 'not yet'
+  const lastMaintenance = timestamps.lastMaintenance
+    ? new Date(timestamps.lastMaintenance).toLocaleString()
+    : 'not yet'
+
+  return (
+    <li className="row">
+      <div className="row-main">
+        <span className="row-title">Installed agent updates</span>
+        <span className="row-sub">
+          Installed agents update automatically at startup and every 6 h
+        </span>
+        <span className="row-sub">Last check: {lastCheck}</span>
+        <span className="row-sub">Last maintenance pass: {lastMaintenance}</span>
+        {status && !status.enabled && (
+          <span className="row-sub error-text">
+            Automatic package updates are off: {status.reason || 'disabled by the control plane'}.
+          </span>
+        )}
+        {message && <span className="row-sub">{message}</span>}
+      </div>
+      <div className="row-side">
+        <button
+          type="button"
+          className="action-button"
+          disabled={busy !== null}
+          onClick={() => void check()}
+        >
+          {busy === 'check' ? 'Checking…' : 'Check now'}
+        </button>
+        <button
+          type="button"
+          className="action-button primary"
+          disabled={busy !== null || status?.enabled === false}
+          onClick={() => void run()}
+        >
+          {busy === 'run' ? 'Starting…' : 'Run maintenance now'}
+        </button>
+      </div>
+    </li>
   )
 }
 

@@ -6,14 +6,16 @@ import type {
   AgentFieldSnapshot,
   BundledPhase,
   BundledStatus,
-  SnapshotAgent
+  LocalControlPlaneRestartStatus,
+  SnapshotAgent,
+  InstallResult
 } from '../../../shared/types'
 import { EnvEditor } from './EnvEditor'
 import { MenuPopover } from './MenuPopover'
 import { SkeletonRows } from './Skeleton'
 import { EmptyState } from './EmptyMark'
 
-type AgentAction = 'start' | 'stop' | 'restart' | 'uninstall'
+type AgentAction = 'start' | 'stop' | 'restart' | 'update' | 'pause' | 'resume' | 'uninstall'
 
 interface AgentsPanelProps {
   registry: AgentFieldSnapshot['registry'] | null
@@ -40,6 +42,9 @@ const BUSY_LABEL: Record<AgentAction, string> = {
   start: 'Starting…',
   stop: 'Stopping…',
   restart: 'Restarting…',
+  update: 'Updating from the recorded source…',
+  pause: 'Pausing automatic updates…',
+  resume: 'Resuming automatic updates…',
   uninstall: 'Uninstalling…'
 }
 
@@ -66,6 +71,67 @@ export function visibleBundledRows(
 ): BundledStatus[] {
   const installed = new Set(registryNames)
   return bundled.filter((node) => !installed.has(node.name))
+}
+
+export function agentUpdateChip(agent: SnapshotAgent): string | null {
+  if (agent.update?.status === 'failed') return 'Update failed'
+  if (agent.update?.status === 'error') return 'Update check failed'
+  if (agent.autoUpdate === false) return 'Paused'
+  if (agent.update?.status === 'available') return 'Update available'
+  // The pass found an update but the node was busy; it retries on its own.
+  if (agent.update?.status === 'deferred') return 'Update waiting for the node to be idle'
+  if (agent.update?.status === 'pinned') return 'Pinned'
+  return null
+}
+
+export function agentUpdateChipTitle(agent: SnapshotAgent): string | undefined {
+  const status = agent.update?.status
+  return status === 'failed' || status === 'error' || status === 'deferred' ? agent.update?.message : undefined
+}
+
+export function agentManualUpdateActionVisible(_agent: SnapshotAgent): boolean {
+  return true
+}
+
+export function agentAutoUpdateActionVisible(agent: SnapshotAgent): boolean {
+  return agent.autoUpdate !== undefined
+}
+
+export function localControlPlaneRestartVisible(
+  status: LocalControlPlaneRestartStatus | null
+): boolean {
+  return status?.status === 'restart_required'
+}
+
+export function activeExecutionsConfirmation(count: number, agent: string): string {
+  return `${count} ${count === 1 ? 'run' : 'runs'} in progress on ${agent}. Updating will stop them. Update anyway?`
+}
+
+/** Retry exactly once with force after the user acknowledges active runs. */
+export async function updateWithExecutionConfirmation(
+  agent: string,
+  request: (force: boolean) => Promise<InstallResult>,
+  confirm: (message: string) => boolean
+): Promise<InstallResult> {
+  const initial = await request(false)
+  if (initial.activeExecutions === undefined || initial.activeExecutions <= 0) return initial
+  if (!confirm(activeExecutionsConfirmation(initial.activeExecutions, agent))) {
+    return { ok: true, message: 'Update cancelled.' }
+  }
+  return request(true)
+}
+
+export function LocalControlPlaneRestartBanner({
+  status
+}: {
+  status: LocalControlPlaneRestartStatus | null
+}): ReactElement | null {
+  if (!localControlPlaneRestartVisible(status)) return null
+  return (
+    <div className="callout warning" role="status">
+      {status!.message}
+    </div>
+  )
 }
 
 export function AgentsPanel({ registry, bundled, onChanged }: AgentsPanelProps): ReactElement {
@@ -143,7 +209,7 @@ function AgentsBody({ registry, bundled, onChanged }: AgentsPanelProps) {
     // "missing required environment variables" failure — open the editor
     // instead of letting it happen.
     const report = envReports[name]
-    if (action !== 'stop' && action !== 'uninstall' && report && !report.satisfied) {
+    if ((action === 'start' || action === 'restart') && report && !report.satisfied) {
       setExpanded(name)
       setFailure({ name, message: 'This agent needs keys before it can start — add them below.' })
       return
@@ -152,12 +218,26 @@ function AgentsBody({ registry, bundled, onChanged }: AgentsPanelProps) {
     setFailure(null)
     setConfirmUninstall(null)
     setOpenMenu(null)
-    const result =
-      action === 'uninstall'
+    try {
+      const result = action === 'uninstall'
         ? await window.agentfield.uninstall(name)
-        : await window.agentfield.agentAction(action, name)
+        : action === 'update'
+          ? await updateWithExecutionConfirmation(
+              name,
+              (force) => window.agentfield.update(name, force ? { force: true } : undefined),
+              (message) => window.confirm(message)
+            )
+          : action === 'pause' || action === 'resume'
+            ? await window.agentfield.setPackageAutoUpdate(name, action === 'resume')
+            : await window.agentfield.agentAction(action, name)
+      if (!result.ok) setFailure({ name, message: result.message })
+    } catch (error) {
+      setFailure({
+        name,
+        message: `${error instanceof Error ? error.message : String(error)} Try again after checking the control-plane connection.`
+      })
+    }
     setBusy(null)
-    if (!result.ok) setFailure({ name, message: result.message })
     onChanged()
     loadEnv()
   }
@@ -287,6 +367,7 @@ function AgentRow({
   const reducedMotion = useReducedMotion()
   const running = agent.badge === 'running'
   const rowBusy = busy !== null
+  const updateChip = agentUpdateChip(agent)
 
   const descParts = [
     agent.description || null,
@@ -304,6 +385,14 @@ function AgentRow({
               <span className="badge warn">
                 <span className="badge-dot" aria-hidden="true" />
                 Needs keys
+              </span>
+            )}
+            {updateChip && (
+              <span
+                className={`chip ${agent.update?.status === 'available' || agent.update?.status === 'failed' ? 'warn' : ''}`}
+                title={agentUpdateChipTitle(agent)}
+              >
+                {updateChip}
               </span>
             )}
           </div>
@@ -378,6 +467,26 @@ function AgentRow({
                     onClick={() => onAction('restart')}
                   >
                     Restart
+                  </button>
+                )}
+                {agentManualUpdateActionVisible(agent) && (
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => onAction('update')}
+                  >
+                    Update from recorded source
+                  </button>
+                )}
+                {agentAutoUpdateActionVisible(agent) && (
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => onAction(agent.autoUpdate === false ? 'resume' : 'pause')}
+                  >
+                    {agent.autoUpdate === false
+                      ? 'Resume automatic updates'
+                      : 'Pause automatic updates'}
                   </button>
                 )}
                 <button

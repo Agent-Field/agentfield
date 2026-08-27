@@ -105,6 +105,7 @@ vi.mock('@ai-sdk/cohere', () => ({
 }));
 
 import { AIClient } from '../src/ai/AIClient.js';
+import { Audio, File, Image, Video } from '../src/ai/multimodal.js';
 
 describe('AIClient extra coverage', () => {
   beforeEach(() => {
@@ -162,11 +163,68 @@ describe('AIClient extra coverage', () => {
     expect(chunks).toEqual(['one', 'two']);
   });
 
+  it('passes multimodal content through generate and stream requests', async () => {
+    const client = new AIClient({ apiKey: 'test-key' });
+    const image = Image.fromUrl('https://example.com/image.png');
+    const dataImage = await Image.fromBase64('aW1hZ2U=', 'image/webp');
+    const audio = await Audio.fromBase64('YQ==', 'mp3');
+    const video = Video.fromUrl('https://example.com/clip.webm');
+    const dataVideo = await Video.fromBase64('dmlkZW8=', 'video/quicktime');
+    const file = File.fromUrl('https://example.com/report.pdf?download=1');
+    const dataFile = await File.fromBase64('ZmlsZQ==', 'text/plain');
+
+    await client.generate('describe these inputs', {
+      content: [image, dataImage, audio, video, dataVideo, file, dataFile]
+    });
+    await client.stream('summarize these inputs', { content: [image, video, file] });
+
+    expect(generateTextMock).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'describe these inputs' },
+          { type: 'image', image: 'https://example.com/image.png' },
+          { type: 'image', image: 'data:image/webp;base64,aW1hZ2U=' },
+          { type: 'file', data: 'YQ==', mediaType: 'audio/mpeg' },
+          { type: 'file', data: 'https://example.com/clip.webm', mediaType: 'video/webm' },
+          { type: 'file', data: 'data:video/quicktime;base64,dmlkZW8=', mediaType: 'video/quicktime' },
+          { type: 'file', data: 'https://example.com/report.pdf?download=1', mediaType: 'application/pdf' },
+          { type: 'file', data: 'data:text/plain;base64,ZmlsZQ==', mediaType: 'text/plain' }
+        ]
+      }]
+    }));
+    expect(streamTextMock).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'summarize these inputs' },
+          { type: 'image', image: 'https://example.com/image.png' },
+          { type: 'file', data: 'https://example.com/clip.webm', mediaType: 'video/webm' },
+          { type: 'file', data: 'https://example.com/report.pdf?download=1', mediaType: 'application/pdf' }
+        ]
+      }]
+    }));
+  });
+
   it('uses generateObject with JSON repair for structured output', async () => {
     const client = new AIClient({ apiKey: 'test-key' });
     const schema = z.object({ value: z.number() });
 
-    await expect(client.generate('json please', { schema, system: 'sys' })).resolves.toEqual({ ok: true });
+    await expect(client.generate('json please', {
+      schema,
+      system: 'sys',
+      content: [File.fromUrl('https://example.com/data.json')]
+    })).resolves.toEqual({ ok: true });
+
+    expect(generateObjectMock).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'json please' },
+          { type: 'file', data: 'https://example.com/data.json', mediaType: 'application/json' }
+        ]
+      }]
+    }));
 
     const repair = generateObjectMock.mock.calls[0]?.[0]?.experimental_repairText as
       | ((input: { text: string }) => Promise<string | null>)

@@ -5,11 +5,23 @@ import { CATALOG } from '../shared/catalog'
 import { BUNDLED_NODES } from '../shared/bundled'
 import { RAILWAY_TEMPLATE_URL } from '../shared/cloudLinks'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
-import type { DesktopSettings } from '../shared/types'
+import type {
+  CloudAutoUpdateMode,
+  CloudDeployResult,
+  DesktopSettings,
+  LocalControlPlaneRestartStatus
+} from '../shared/types'
 import { getBaseUrl, getSnapshot, setActiveControlPlanePort } from './agentfield'
-import { type AgentAction, runAgentAction, startControlPlane, uninstallAgent } from './agents'
+import {
+  type AgentAction,
+  runAgentAction,
+  setAgentPackageAutoUpdate,
+  startControlPlane,
+  uninstallAgent
+} from './agents'
 import { ensureAforgeCompanion } from './aforge-companion'
-import { runAutostart } from './autostart'
+import { recoverAutostartFailure, runAutostart } from './autostart'
+import { runDesktopBootChain } from './bootChain'
 import { bundledStatuses, ensureBundledAgents } from './bundledAgents'
 import { testCloudConnection, applyConnectionProfile } from './cloud'
 import { isCloudActive } from './connection'
@@ -25,7 +37,15 @@ import {
   revokeStoredSecret,
   setAgentSecret
 } from './secrets'
-import { loadSettings, mergeSettings, saveSettings } from './settings'
+import {
+  loadSettings,
+  mergeSettings,
+  persistCloudAutoUpdatePreference,
+  saveSettings,
+  settingsForCloudService,
+  settingsWithCloudProfile,
+  settingsWithDismissedCloudUpdate
+} from './settings'
 import {
   SkillSync,
   defaultSkillSyncDeps,
@@ -38,6 +58,22 @@ import { setupTray } from './tray'
 import { syncTrayCompanion } from './tray-companion'
 import { AppUpdater } from './updates'
 import {
+  applyCloudAutoUpdateAfterDeploy,
+  applyCloudUpdateWithRailwayToken,
+  cloudAutoUpdatePreferenceAfterReconcile,
+  cloudAutoUpdatePreferenceAfterSet,
+  cloudUpdateApplyPath,
+  cloudUpdateRailwayControlsAvailable,
+  CloudUpdateChecker,
+  getCloudAutoUpdateState,
+  railwaySettingsUrl,
+  setCloudAutoUpdateSchedule
+} from './cloudUpdate'
+import {
+  reconcileLocalControlPlaneRestart,
+  restartAdoptedControlPlaneAfterCliSwap
+} from './localCpUpdate'
+import {
   getFreshAccessToken,
   isLoggedIn,
   listWorkspaces,
@@ -45,7 +81,16 @@ import {
   logout,
   type RailwayAuthDeps
 } from './railwayAuth'
-import { checkCloudImageUpdate, hasDeployment, resolveTofuBinary, runDeploy, runDestroy } from './deployEngine'
+import { createRailwayApi } from './railwayApi'
+import { loadRailwayStatus } from './railwayStatus'
+import {
+  deploymentStateInfo,
+  hasDeployment,
+  refreshDeploymentState,
+  resolveTofuBinary,
+  runDeploy,
+  runDestroy
+} from './deployEngine'
 import appIcon from '../../resources/icon.png?asset'
 
 const isMac = process.platform === 'darwin'
@@ -240,6 +285,7 @@ function releaseInstall(): void {
 
 let cloudDeployInFlight = false
 let settings: DesktopSettings
+let localControlPlaneRestart: LocalControlPlaneRestartStatus | null = null
 
 function settingsFile(): string {
   return join(app.getPath('userData'), 'settings.json')
@@ -490,7 +536,7 @@ function main(): void {
     // Resolve which af to drive (managed → PATH → bundled); on a machine
     // with no AgentField at all this provisions the bundled CLI, so a
     // desktop-app-only install still gets a working `af`.
-    await initializeCli(bundledCliPath())
+    const cliInitialization = await initializeCli(bundledCliPath())
     // Skills and the furrow client belong to local coding agents even when
     // their control plane and workspaces are remote.
     skillSync = new SkillSync(defaultSkillSyncDeps(skillSyncLogFile()))
@@ -514,9 +560,31 @@ function main(): void {
     // The snapshot also carries the bundled-node provisioning rows, so the
     // Agents view can show the two nodes arriving on a first launch off the
     // poll it already runs.
-    ipcMain.handle('agentfield:snapshot', () =>
-      getSnapshot({ skillSync: skillSync.last(), bundled: bundledStatuses() })
-    )
+    ipcMain.handle('agentfield:snapshot', async () => {
+      if (localControlPlaneRestart?.status === 'restart_required') {
+        if (settings.cloud.enabled) {
+          localControlPlaneRestart = reconcileLocalControlPlaneRestart(
+            localControlPlaneRestart,
+            null,
+            true
+          )
+        } else {
+          try {
+            localControlPlaneRestart = reconcileLocalControlPlaneRestart(
+              localControlPlaneRestart,
+              await createCpClient().getVersion()
+            )
+          } catch {
+            // Keep the actionable warning while the local server is unreachable.
+          }
+        }
+      }
+      return getSnapshot({
+        skillSync: skillSync.last(),
+        bundled: bundledStatuses(),
+        localControlPlaneRestart
+      })
+    })
     // Bundled nodes stay listed so an uninstalled one can be reinstalled from the curated UI.
     ipcMain.handle('agentfield:catalog', () => [...BUNDLED_NODES, ...CATALOG])
     ipcMain.handle('agentfield:install', async (event, name: unknown) => {
@@ -568,8 +636,22 @@ function main(): void {
     })
     // Update shares the install mutex and progress channel: it is an install
     // with a stop/restart wrapped around it.
-    ipcMain.handle('agentfield:update', async (event, name: unknown) => {
-      if (typeof name !== 'string') {
+    ipcMain.handle('agentfield:update', async (event, name: unknown, updateOptions: unknown) => {
+      if (
+        typeof name !== 'string' ||
+        (
+          updateOptions !== undefined &&
+          (
+            typeof updateOptions !== 'object' ||
+            updateOptions === null ||
+            Array.isArray(updateOptions) ||
+            (
+              (updateOptions as { force?: unknown }).force !== undefined &&
+              typeof (updateOptions as { force?: unknown }).force !== 'boolean'
+            )
+          )
+        )
+      ) {
         return { ok: false, message: 'invalid update request' }
       }
       if (installInFlight) {
@@ -577,15 +659,38 @@ function main(): void {
       }
       installInFlight = true
       try {
-        return await updateAgent(name, (line) => {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send('agentfield:install-progress', line)
-          }
-        })
+        return await updateAgent(
+          name,
+          (line) => {
+            if (!event.sender.isDestroyed()) {
+              event.sender.send('agentfield:install-progress', line)
+            }
+          },
+          undefined,
+          updateOptions as { force?: boolean } | undefined
+        )
       } finally {
         releaseInstall()
       }
     })
+    ipcMain.handle('agentfield:package-updates-check', () =>
+      createCpClient().checkPackageUpdates()
+    )
+    ipcMain.handle(
+      'agentfield:package-auto-update-set',
+      async (_event, id: unknown, enabled: unknown) => {
+        if (typeof id !== 'string' || typeof enabled !== 'boolean') {
+          throw new Error('Invalid package auto-update request.')
+        }
+        return setAgentPackageAutoUpdate(id, enabled)
+      }
+    )
+    ipcMain.handle('agentfield:package-maintenance-get', () =>
+      createCpClient().getMaintenanceStatus()
+    )
+    ipcMain.handle('agentfield:package-maintenance-run', () =>
+      createCpClient().runPackageMaintenance()
+    )
     ipcMain.handle('agentfield:agent-action', (_event, action: unknown, name: unknown) => {
       if (
         typeof name !== 'string' ||
@@ -689,7 +794,223 @@ function main(): void {
     // look like an update — so only packaged apps poll the channel. Manual
     // checks from Settings still work anywhere.
     if (app.isPackaged) updater.startAutoCheck()
+
+    const cloudUpdater = new CloudUpdateChecker({
+      enabled: () => settings.cloud.enabled,
+      getVersion: () => createCpClient().getVersion(),
+      getTfstateImage: () => deploymentStateInfo(deployPaths().workspaceDir)?.image ?? null,
+      canApplyUpdate: (running) => {
+        const state = deploymentStateInfo(deployPaths().workspaceDir)
+        return cloudUpdateApplyPath({
+          running,
+          tfstateImage: state?.image ?? null,
+          tfstateServiceId: state?.serviceId,
+          tfstateUrl: state?.url,
+          connectedServerUrl: settings.cloud.serverUrl
+        }) !== 'none'
+      },
+      canManageRailway: (running) => {
+        const state = deploymentStateInfo(deployPaths().workspaceDir)
+        return cloudUpdateRailwayControlsAvailable({
+          running,
+          tfstateImage: state?.image ?? null,
+          tfstateServiceId: state?.serviceId,
+          tfstateEnvironmentId: state?.environmentId,
+          tfstateUrl: state?.url,
+          connectedServerUrl: settings.cloud.serverUrl
+        })
+      },
+      applyUpdate: async (running, tfstateImage) => {
+        const paths = deployPaths()
+        const state = deploymentStateInfo(paths.workspaceDir)
+        const options = {
+          running,
+          tfstateImage,
+          tfstateServiceId: state?.serviceId,
+          tfstateUrl: state?.url,
+          connectedServerUrl: settings.cloud.serverUrl
+        }
+        return applyCloudUpdateWithRailwayToken(options, {
+          getAccessToken: () => getFreshAccessToken(authDeps()),
+          createApplyDeps: (token) => {
+            const api = createRailwayApi(token)
+            return {
+              refreshAndDeploy: async (targetImage) => {
+                if (!state?.workspaceId) {
+                  return {
+                    ok: false,
+                    message: 'Desktop deployment state is missing its Railway workspace. Choose the deployment workspace and re-run deploy.'
+                  }
+                }
+                const deployOptions = {
+                  railwayToken: token,
+                  workspaceId: state.workspaceId,
+                  ...paths
+                }
+                const refreshed = await refreshDeploymentState(deployOptions)
+                if (!refreshed.ok) return refreshed
+                return runDeploy({ ...deployOptions, image: targetImage })
+              },
+              setServiceImage: (serviceId, environmentId, image) =>
+                api.setServiceImage(serviceId, environmentId, image),
+              redeploy: (serviceId, environmentId) => api.redeploy(serviceId, environmentId),
+              getVersion: () => createCpClient().getVersion(),
+              getMaintenanceStatus: () => createCpClient().getMaintenanceStatus()
+            }
+          }
+        })
+      },
+      onCompletedCheck: (running) => {
+        const serviceId = running?.hosting.service_id
+        if (serviceId) {
+          const next = settingsForCloudService(settings, serviceId)
+          if (next !== settings) {
+            settings = next
+            void saveSettings(settingsFile(), settings).catch((error) => {
+              console.error('could not reset cloud auto-update preference:', error)
+            })
+          }
+        }
+      },
+      onStatus: (status) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('agentfield:cloud-update-status', status)
+        }
+      }
+    })
+    ipcMain.handle('agentfield:cloud-update-check', () => cloudUpdater.check())
+    ipcMain.handle('agentfield:cloud-update-apply', async () => {
+      if (cloudDeployInFlight) {
+        return { ok: false, message: 'A cloud deployment is already running.' }
+      }
+      cloudDeployInFlight = true
+      try {
+        return await cloudUpdater.apply()
+      } finally {
+        cloudDeployInFlight = false
+      }
+    })
+    ipcMain.handle('agentfield:cloud-update-dismiss', async (_event, version: unknown) => {
+      if (typeof version !== 'string' || version === '') return
+      settings = settingsWithDismissedCloudUpdate(settings, version)
+      await saveSettings(settingsFile(), settings)
+    })
+    ipcMain.handle('agentfield:cloud-auto-update-get', async () => {
+      const state = deploymentStateInfo(deployPaths().workspaceDir)
+      return getCloudAutoUpdateState({
+        connectedServerUrl: settings.cloud.serverUrl,
+        tfstate: state
+          ? {
+              projectId: state.projectId,
+              serviceId: state.serviceId,
+              environmentId: state.environmentId,
+              url: state.url
+            }
+          : null
+      }, {
+        getAccessToken: () => getFreshAccessToken(authDeps()),
+        getVersion: () => createCpClient().getVersion(),
+        getAutoUpdates: (token, environmentId, serviceId) =>
+          createRailwayApi(token).getEnvironmentConfigAutoUpdates(
+            environmentId,
+            serviceId
+          )
+      })
+    })
+    ipcMain.handle(
+      'agentfield:cloud-auto-update-set',
+      async (_event, mode: unknown) => {
+        if (mode !== 'off' && mode !== 'nightly' && mode !== 'weekends' && mode !== 'anytime') {
+          return { ok: false, message: 'Choose Off, Nightly, Weekends, or Anytime.' }
+        }
+        if (cloudDeployInFlight) {
+          return { ok: false, message: 'Wait for the current cloud deployment to finish, then try again.' }
+        }
+        const state = deploymentStateInfo(deployPaths().workspaceDir)
+        const result = await setCloudAutoUpdateSchedule({
+          mode: mode as CloudAutoUpdateMode,
+          connectedServerUrl: settings.cloud.serverUrl,
+          tfstate: state
+            ? {
+                projectId: state.projectId,
+                serviceId: state.serviceId,
+                environmentId: state.environmentId,
+                url: state.url
+              }
+            : null
+        }, {
+          getAccessToken: () => getFreshAccessToken(authDeps()),
+          getVersion: () => createCpClient().getVersion(),
+          getAutoUpdates: (token, environmentId, serviceId) =>
+            createRailwayApi(token).getEnvironmentConfigAutoUpdates(
+              environmentId,
+              serviceId
+            ),
+          setImageAutoUpdates: (
+            token,
+            environmentId,
+            serviceId,
+            selectedMode,
+            policy
+          ) =>
+            createRailwayApi(token).setImageAutoUpdates(
+              environmentId,
+              serviceId,
+              selectedMode,
+              policy
+            )
+        })
+        const preference = cloudAutoUpdatePreferenceAfterSet(
+          result,
+          mode as CloudAutoUpdateMode
+        )
+        if (preference) {
+          try {
+            settings = await persistCloudAutoUpdatePreference(
+              settings,
+              preference.mode,
+              preference.serviceId,
+              (next) => saveSettings(settingsFile(), next)
+            )
+          } catch (error) {
+            return {
+              ok: false,
+              message: `Railway saved the schedule, but Desktop could not persist the preference: ${error instanceof Error ? error.message : String(error)}.`,
+              settingsUrl: result.settingsUrl
+            }
+          }
+        }
+        return {
+          ok: result.ok,
+          message: result.message,
+          settingsUrl: result.settingsUrl
+        }
+      }
+    )
+    cloudUpdater.startAutoCheck()
     ipcMain.handle('agentfield:settings-get', () => settings)
+    ipcMain.handle('agentfield:cloud-profile-set', async (_event, profile: unknown) => {
+      const value = typeof profile === 'object' && profile !== null
+        ? profile as Record<string, unknown>
+        : null
+      if (
+        !value ||
+        typeof value.enabled !== 'boolean' ||
+        typeof value.serverUrl !== 'string' ||
+        typeof value.apiKey !== 'string'
+      ) {
+        throw new Error('Invalid cloud profile request.')
+      }
+      const next = settingsWithCloudProfile(settings, {
+        enabled: value.enabled,
+        serverUrl: value.serverUrl,
+        apiKey: value.apiKey
+      })
+      await saveSettings(settingsFile(), next)
+      settings = next
+      applyConnectionProfile(settings)
+      return settings
+    })
     ipcMain.handle('agentfield:cloud-test', (_event, url: string, apiKey: string) =>
       testCloudConnection(url, apiKey)
     )
@@ -699,17 +1020,16 @@ function main(): void {
     ipcMain.handle('agentfield:railway-status', async () => {
       const deps = authDeps()
       const { workspaceDir, binaryDir } = deployPaths()
+      const deployment = deploymentStateInfo(workspaceDir)
       const token = isLoggedIn(deps) ? await getFreshAccessToken(deps) : null
-      return {
-        loggedIn: token !== null,
+      return loadRailwayStatus({
+        token,
         engineAvailable: resolveTofuBinary(binaryDir) !== null,
         hasDeployment: hasDeployment(workspaceDir),
-        workspaces: token ? await listWorkspaces(token) : []
-      }
-    })
-    ipcMain.handle('agentfield:cloud-image-update', () => {
-      const { workspaceDir } = deployPaths()
-      return checkCloudImageUpdate(workspaceDir)
+        deploymentWorkspaceId: deployment?.workspaceId ?? null,
+        deploymentServiceId: deployment?.serviceId ?? null,
+        listWorkspaces: (accessToken) => listWorkspaces(accessToken)
+      })
     })
     ipcMain.handle('agentfield:railway-login', async () => {
       const deps = authDeps()
@@ -719,7 +1039,7 @@ function main(): void {
       return { ...result, workspaces: token ? await listWorkspaces(token) : [] }
     })
     ipcMain.handle('agentfield:railway-logout', () => logout(authDeps()))
-    ipcMain.handle('agentfield:cloud-deploy', async (event, workspaceId: unknown) => {
+    ipcMain.handle('agentfield:cloud-deploy', async (event, workspaceId: unknown): Promise<CloudDeployResult> => {
       if (typeof workspaceId !== 'string' || workspaceId === '') {
         return { ok: false, message: 'Choose a Railway workspace first' }
       }
@@ -738,14 +1058,76 @@ function main(): void {
             }
           }
         })
+        let autoUpdateOk: boolean | undefined
+        let autoUpdateMessage: string | undefined
+        let autoUpdateSettingsUrl: string | undefined
         if (result.ok && result.url && result.apiKey) {
+          const serviceId = result.serviceId ?? null
+          const storedAutoUpdateMode =
+            serviceId !== null && settings.cloud.autoUpdateServiceId === serviceId
+              ? settings.cloud.autoUpdate
+              : null
+          let cachedAutoUpdateMode = cloudAutoUpdatePreferenceAfterReconcile(
+            null,
+            storedAutoUpdateMode
+          )
+          if (result.serviceId && result.environmentId) {
+            const railwayApi = createRailwayApi(token)
+            const reconciled = await applyCloudAutoUpdateAfterDeploy({
+              firstDeploy: result.firstDeploy === true,
+              projectId: result.projectId ?? null,
+              environmentId: result.environmentId,
+              serviceId: result.serviceId,
+              storedMode: settings.cloud.autoUpdate,
+              storedServiceId: settings.cloud.autoUpdateServiceId
+            }, {
+              getAutoUpdates: (environmentId, targetServiceId) =>
+                railwayApi.getEnvironmentConfigAutoUpdates(
+                  environmentId,
+                  targetServiceId
+                ),
+              setImageAutoUpdates: (environmentId, targetServiceId, mode, policy) =>
+                railwayApi.setImageAutoUpdates(
+                  environmentId,
+                  targetServiceId,
+                  mode,
+                  policy
+                )
+            })
+            cachedAutoUpdateMode = cloudAutoUpdatePreferenceAfterReconcile(
+              reconciled,
+              storedAutoUpdateMode
+            )
+            autoUpdateOk = reconciled.autoUpdateOk
+            autoUpdateMessage = reconciled.autoUpdateMessage
+            autoUpdateSettingsUrl = reconciled.autoUpdateSettingsUrl
+          } else {
+            autoUpdateOk = false
+            autoUpdateMessage = 'Automatic updates could not be scheduled because Railway service outputs were missing. Re-run deploy to reconcile them.'
+            autoUpdateSettingsUrl = railwaySettingsUrl(result.projectId, result.serviceId)
+          }
           settings = mergeSettings(settings, {
-            cloud: { enabled: true, serverUrl: result.url, apiKey: result.apiKey }
+            cloud: {
+              ...settings.cloud,
+              enabled: true,
+              serverUrl: result.url,
+              apiKey: result.apiKey,
+              autoUpdate: cachedAutoUpdateMode,
+              autoUpdateServiceId: serviceId
+            }
           })
           await saveSettings(settingsFile(), settings)
           applyConnectionProfile(settings)
         }
-        return { ok: result.ok, url: result.url, furrowAddress: result.furrowAddress, message: result.message }
+        return {
+          ok: result.ok,
+          url: result.url,
+          furrowAddress: result.furrowAddress,
+          message: result.message,
+          autoUpdateOk,
+          autoUpdateMessage,
+          autoUpdateSettingsUrl
+        }
       } finally {
         cloudDeployInFlight = false
       }
@@ -759,7 +1141,12 @@ function main(): void {
         const result = await runDestroy({ railwayToken: token, workspaceId: '', ...deployPaths() })
         if (result.ok) {
           settings = mergeSettings(settings, {
-            cloud: { ...settings.cloud, enabled: false }
+            cloud: {
+              ...settings.cloud,
+              enabled: false,
+              autoUpdate: null,
+              autoUpdateServiceId: null
+            }
           })
           await saveSettings(settingsFile(), settings)
           applyConnectionProfile(settings)
@@ -818,8 +1205,9 @@ function main(): void {
     // Bundled-node provisioning is chained onto the SAME promise rather than
     // started beside it: it installs through the control plane, so it has to
     // wait for the one autostart adopted or brought up.
-    void userPathReady
-      .finally(() =>
+    void runDesktopBootChain({
+      userPathReady,
+      runAutostart: () =>
         runAutostart(
           settings,
           (message) => console.log(message),
@@ -827,10 +1215,31 @@ function main(): void {
             settings = mergeSettings(settings, { lastControlPlanePort: port })
             await saveSettings(settingsFile(), settings)
           }
-        ).catch((err) => console.error('autostart failed:', err))
-      )
-      .then(() => provisionBundledAgents())
-      .catch((err) => console.error('bundled provisioning failed:', err))
+        ),
+      recoverAutostartFailure,
+      afterAutostart: async (autostart) => {
+        if (cliInitialization.managedBinaryReplaced) {
+          localControlPlaneRestart = await restartAdoptedControlPlaneAfterCliSwap(
+            {
+              managedBinaryReplaced: true,
+              platform: process.platform,
+              cloudEnabled: settings.cloud.enabled,
+              autostart,
+              cliVersion: cliInitialization.status.version
+            },
+            {
+              getVersion: () => createCpClient().getVersion()
+            }
+          )
+          console.log(`local control-plane update: ${localControlPlaneRestart.message}`)
+        }
+      },
+      provisionBundledAgents,
+      checkPackageUpdates: () => createCpClient().checkPackageUpdates().then(() => undefined),
+      log: (message) => console.log(message),
+      warn: (message) => console.warn(message),
+      error: (message, error) => console.error(message, error)
+    })
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

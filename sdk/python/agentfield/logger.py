@@ -8,7 +8,6 @@ This module provides a centralized logging system for the AgentField SDK that:
 - Preserves stdout mirroring for local developer ergonomics
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -185,36 +184,47 @@ class AgentFieldLogger:
         return record
 
     def _dispatch_to_cp(self, record: Dict[str, Any]) -> None:
-        """Send the structured log record to the control plane (best-effort, non-blocking)."""
+        """Send the structured log record to the control plane (best-effort, non-blocking).
+
+        Delegates to :func:`agentfield.run_async.fire_and_forget` rather than
+        hand-rolling the two branches. That matters twice over (#620):
+
+        * on a running loop the scheduled task is retained until it finishes,
+          so it cannot be garbage-collected mid-flight (#902);
+        * with no running loop the work goes to the SDK's long-lived
+          background loop instead of a fresh loop that is closed again the
+          moment the record is sent — closing that loop used to strand the
+          shared HTTP client's connection pool on a dead loop, and the agent's
+          next request then failed with ``RuntimeError: Event loop is closed``.
+
+        Emitting a log must never fail the caller, so nothing propagates.
+        """
         client = self._cp_client
         if client is None:
             return
         execution_id = record.get("execution_id")
         if not execution_id:
             return
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(client.post_execution_logs(execution_id, record))
-        except RuntimeError:
-            # No running event loop — fire from a background thread
-            threading.Thread(
-                target=self._dispatch_sync,
-                args=(client, execution_id, record),
-                daemon=True,
-            ).start()
 
-    @staticmethod
-    def _dispatch_sync(
-        client: "AgentFieldClient",
-        execution_id: str,
-        record: Dict[str, Any],
-    ) -> None:
+        # Imported here, not at module scope: agentfield.run_async imports
+        # this module for its own logger.
+        from .run_async import fire_and_forget
+
+        coro = None
         try:
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(client.post_execution_logs(execution_id, record))
-            loop.close()
+            coro = client.post_execution_logs(execution_id, record)
+            fire_and_forget(coro)
         except Exception:
-            pass
+            close = getattr(coro, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    pass
+            self.logger.debug(
+                "Failed to dispatch execution log to the control plane",
+                exc_info=True,
+            )
 
     def _emit_plain(
         self,

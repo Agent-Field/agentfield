@@ -118,6 +118,23 @@ envelope. Schema runs use a unique output directory per invocation so parallel
 jobs can safely share a checkout. Set `AFORGE_BIN` to an absolute path when the
 binary is installed somewhere off `PATH`.
 
+### OpenCode concurrency
+
+The OpenCode adapters cap how many `opencode run` subprocesses may be in flight
+at once, so a wide fan-out does not overwhelm the upstream provider with
+parallel requests. Set `OPENCODE_MAX_CONCURRENT` to a positive integer to change
+the cap. The defaults differ per SDK:
+
+| SDK | Default | Source |
+| --- | --- | --- |
+| Go | 4 | `sdk/go/harness/opencode.go` |
+| Python | 10 | `sdk/python/agentfield/harness/providers/opencode.py` |
+
+The value is read once per process — Go reads it the first time the limiter is
+used, Python reads it at import time — so export it before starting the agent
+rather than mutating the environment mid-run. The TypeScript OpenCode provider
+has no limiter and ignores the variable.
+
 ## Model selection and reasoning-effort variants
 
 Every provider accepts a `model` option on `.harness()` calls. Leaving it unset

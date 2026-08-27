@@ -2,6 +2,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,9 +19,11 @@ import (
 
 // DefaultPackageService implements the PackageService interface
 type DefaultPackageService struct {
-	registryStorage interfaces.RegistryStorage
-	fileSystem      interfaces.FileSystemAdapter
-	agentfieldHome  string
+	registryStorage       interfaces.RegistryStorage
+	fileSystem            interfaces.FileSystemAdapter
+	agentfieldHome        string
+	stopForReinstall      func(string) (packages.ReinstallState, error)
+	restartAfterReinstall func(string, packages.ReinstallState) error
 }
 
 // NewPackageService creates a new package service instance
@@ -57,6 +60,8 @@ func (ps *DefaultPackageService) InstallPackageWithResult(source string, options
 	// into recursive dependency installs.
 	depOptions := options
 	depOptions.Path = ""
+	depOptions.ExpectedPackageName = ""
+	depOptions.BeforeReplace = nil
 	if err := ps.installNodeDependencies(installedName, depOptions, map[string]bool{installedName: true}); err != nil {
 		return "", err
 	}
@@ -71,6 +76,8 @@ func (ps *DefaultPackageService) installOne(source string, options domain.Instal
 			AgentFieldHome: ps.agentfieldHome,
 			Verbose:        options.Verbose,
 			Subdir:         options.Path,
+			ExpectedName:   options.ExpectedPackageName,
+			BeforeReplace:  options.BeforeReplace,
 		}
 		if err := installer.InstallFromGit(source, options.Force); err != nil {
 			return "", err
@@ -198,8 +205,22 @@ func (ps *DefaultPackageService) installLocalPackageWithName(sourcePath string, 
 	spinner.Success("Package structure validated")
 
 	// 2. Check if already installed
-	if !force && ps.isPackageInstalled(metadata.Name) {
+	replacing := ps.isPackageInstalled(metadata.Name)
+	if !force && replacing {
 		return "", fmt.Errorf("package %s already installed (use --force to reinstall)", metadata.Name)
+	}
+	reinstallState := packages.ReinstallState{}
+	if force && replacing {
+		stop := ps.stopForReinstall
+		if stop == nil {
+			stop = func(name string) (packages.ReinstallState, error) {
+				return packages.StopPackageForReinstall(context.Background(), ps.agentfieldHome, name)
+			}
+		}
+		reinstallState, err = stop(metadata.Name)
+		if err != nil {
+			return "", fmt.Errorf("failed to stop %s before reinstall: %w", metadata.Name, err)
+		}
 	}
 
 	// 3. Copy package to global location
@@ -224,6 +245,17 @@ func (ps *DefaultPackageService) installLocalPackageWithName(sourcePath string, 
 	// 5. Update installation registry
 	if err := ps.updateRegistry(metadata, sourcePath, destPath); err != nil {
 		return "", fmt.Errorf("failed to update registry: %w", err)
+	}
+	if reinstallState.WasRunning {
+		restart := ps.restartAfterReinstall
+		if restart == nil {
+			restart = func(name string, state packages.ReinstallState) error {
+				return packages.RestartPackageAfterReinstall(ps.agentfieldHome, name, state)
+			}
+		}
+		if err := restart(metadata.Name, reinstallState); err != nil {
+			return "", fmt.Errorf("failed to restart %s after reinstall: %w", metadata.Name, err)
+		}
 	}
 
 	fmt.Printf("%s Installed %s v%s\n", ps.green(ps.statusSuccess()), ps.bold(metadata.Name), ps.gray(metadata.Version))
@@ -284,8 +316,10 @@ func (ps *DefaultPackageService) uninstallPackage(packageName string, force bool
 	}
 
 	// 7. Update registry
-	delete(registry.Installed, packageName)
-	if err := ps.saveRegistry(registry); err != nil {
+	if err := packages.UpdateInstallationRegistry(filepath.Join(ps.agentfieldHome, "installed.yaml"), func(latest *packages.InstallationRegistry) error {
+		delete(latest.Installed, packageName)
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
@@ -315,13 +349,7 @@ func (ps *DefaultPackageService) stopAgentNode(agentNode *packages.InstalledPack
 // saveRegistry saves the installation registry
 func (ps *DefaultPackageService) saveRegistry(registry *packages.InstallationRegistry) error {
 	registryPath := filepath.Join(ps.agentfieldHome, "installed.yaml")
-
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	if err := os.WriteFile(registryPath, data, 0644); err != nil {
+	if err := packages.WriteInstallationRegistry(registryPath, registry); err != nil {
 		return fmt.Errorf("failed to write registry: %w", err)
 	}
 
@@ -366,18 +394,7 @@ func (ps *DefaultPackageService) GetPackageInfo(name string) (*domain.InstalledP
 // TODO: Eventually replace with registryStorage interface usage
 func (ps *DefaultPackageService) loadRegistryDirect() (*packages.InstallationRegistry, error) {
 	registryPath := filepath.Join(ps.agentfieldHome, "installed.yaml")
-
-	registry := &packages.InstallationRegistry{
-		Installed: make(map[string]packages.InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return nil, fmt.Errorf("failed to parse registry: %w", err)
-		}
-	}
-
-	return registry, nil
+	return packages.LoadInstallationRegistry(registryPath)
 }
 
 // convertToDomainPackage converts packages.InstalledPackage to domain.InstalledPackage
@@ -595,48 +612,21 @@ func (ps *DefaultPackageService) hasRequirementsFile(packagePath string) bool {
 // updateRegistry updates the installation registry with the new package
 func (ps *DefaultPackageService) updateRegistry(metadata *packages.PackageMetadata, sourcePath, destPath string) error {
 	registryPath := filepath.Join(ps.agentfieldHome, "installed.yaml")
-
-	// Load existing registry or create new one
-	registry := &packages.InstallationRegistry{
-		Installed: make(map[string]packages.InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return fmt.Errorf("failed to parse registry: %w", err)
-		}
-	}
-
-	// Add/update package entry
-	registry.Installed[metadata.Name] = packages.InstalledPackage{
-		Name:        metadata.Name,
-		Version:     metadata.Version,
-		Description: metadata.Description,
-		Path:        destPath,
-		Source:      "local",
-		SourcePath:  sourcePath,
-		InstalledAt: time.Now().Format(time.RFC3339),
-		Status:      "stopped",
-		Runtime: packages.RuntimeInfo{
-			Port:      nil,
-			PID:       nil,
-			StartedAt: nil,
-			LogFile:   filepath.Join(ps.agentfieldHome, "logs", metadata.Name+".log"),
-		},
-	}
-
-	// Save registry
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(registryPath), 0755); err != nil {
+	if err := os.MkdirAll(ps.agentfieldHome, 0o755); err != nil {
 		return fmt.Errorf("failed to create registry directory: %w", err)
 	}
-
-	if err := os.WriteFile(registryPath, data, 0644); err != nil {
+	if err := packages.UpdateInstallationRegistry(registryPath, func(registry *packages.InstallationRegistry) error {
+		previous := registry.Installed[metadata.Name]
+		registry.Installed[metadata.Name] = packages.InstalledPackage{
+			Name: metadata.Name, Version: metadata.Version, Description: metadata.Description,
+			Path: destPath, Source: "local", SourcePath: sourcePath,
+			InstalledAt: time.Now().Format(time.RFC3339), Commit: previous.Commit, Ref: previous.Ref,
+			AutoUpdate: previous.AutoUpdate, UpdatedAt: previous.UpdatedAt,
+			Status: "stopped", DesiredState: previous.EffectiveDesiredState(),
+			Runtime: packages.RuntimeInfo{Port: previous.Runtime.Port, LogFile: filepath.Join(ps.agentfieldHome, "logs", metadata.Name+".log")},
+		}
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to write registry: %w", err)
 	}
 

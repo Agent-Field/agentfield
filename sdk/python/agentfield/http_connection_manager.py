@@ -243,22 +243,31 @@ class ConnectionManager:
                     return
                 self._closed = True
 
-            # Cancel background tasks (same loop — safe to await).
-            await cancel_and_await_if_same_loop(self._health_check_task, owning_loop)
-            self._health_check_task = None
-            await cancel_and_await_if_same_loop(self._cleanup_task, owning_loop)
-            self._cleanup_task = None
+            # A task's cancellation cleanup can raise an unrelated exception.
+            # Preserve that exception, but never let it skip the resources and
+            # state cleanup that follows.
+            try:
+                await cancel_and_await_if_same_loop(
+                    self._health_check_task, owning_loop
+                )
+            finally:
+                self._health_check_task = None
+                try:
+                    await cancel_and_await_if_same_loop(self._cleanup_task, owning_loop)
+                finally:
+                    self._cleanup_task = None
+                    try:
+                        if self._session:
+                            await self._session.close()
+                    finally:
+                        self._session = None
+                        try:
+                            if self._connector:
+                                await self._connector.close()
+                        finally:
+                            self._connector = None
+                            self._loop = None
 
-            # Close session and connector
-            if self._session:
-                await self._session.close()
-                self._session = None
-
-            if self._connector:
-                await self._connector.close()
-                self._connector = None
-
-            self._loop = None
             logger.info("ConnectionManager closed")
 
     def _close_cross_loop(self, owning_loop: asyncio.AbstractEventLoop) -> None:

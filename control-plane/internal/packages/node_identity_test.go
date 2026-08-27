@@ -1,6 +1,7 @@
 package packages
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -8,6 +9,64 @@ import (
 	"testing"
 	"time"
 )
+
+func TestProbeHealthIdentityUsesManifestPathThenHealthFallback(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	paths := make(chan string, 2)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		paths <- request.URL.Path
+		if request.URL.Path == "/readyz" {
+			_, _ = w.Write([]byte(`{"status":"healthy"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"node_id":"demo"}`))
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	identity := ProbeHealthIdentity(context.Background(), port, "readyz")
+	if !identity.Healthy || identity.NodeID != "demo" {
+		t.Fatalf("identity=%+v", identity)
+	}
+	if first, second := <-paths, <-paths; first != "/readyz" || second != "/health" {
+		t.Fatalf("probe paths=%q, %q", first, second)
+	}
+}
+
+func TestProbeHealthIdentityAnonymousAndErrorResponses(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/anonymous" {
+			_, _ = w.Write([]byte(`{"status":"healthy"}`))
+			return
+		}
+		http.Error(w, "unhealthy", http.StatusServiceUnavailable)
+	})}
+	go func() { _ = server.Serve(listener) }()
+
+	identity := ProbeHealthIdentity(context.Background(), port, "/anonymous")
+	if !identity.Healthy || identity.NodeID != "" {
+		t.Fatalf("anonymous identity=%+v", identity)
+	}
+	if ProbeHealthIdentity(context.Background(), port, "").Healthy {
+		t.Fatal("non-2xx /health response was healthy")
+	}
+	_ = server.Close()
+	if ProbeHealthIdentity(context.Background(), port, "/health").Healthy {
+		t.Fatal("closed endpoint was healthy")
+	}
+	if got := probeHealthPath(context.Background(), port, "\n"); got.Healthy {
+		t.Fatal("invalid health path was healthy")
+	}
+}
 
 func TestHealthNodeID(t *testing.T) {
 	cases := []struct {
