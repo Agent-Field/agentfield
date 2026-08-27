@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -108,6 +110,109 @@ func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
 		// Queue wasn't full, which is fine - test still validates the code path exists
 		require.Equal(t, http.StatusAccepted, resp.Code)
 	}
+}
+
+func TestExecuteAsyncHandler_ConcurrencyRejectionHasNoPersistence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldLimiter := concurrencyLimiter
+	concurrencyLimiter = &AgentConcurrencyLimiter{maxPerAgent: 1}
+	require.NoError(t, concurrencyLimiter.Acquire("node-1"))
+	defer func() { concurrencyLimiter = oldLimiter }()
+
+	oldPool := asyncPool
+	oldOnce := asyncPoolOnce
+	asyncPool = newAsyncWorkerPool(1, 2)
+	asyncPoolOnce = sync.Once{}
+	asyncPoolOnce.Do(func() {})
+	defer func() { asyncPool, asyncPoolOnce = oldPool, oldOnce }()
+
+	agent := &types.AgentNode{ID: "node-1", BaseURL: "http://agent.example", Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}}}
+	store := newTestExecutionStorage(agent)
+	payloadDir := t.TempDir()
+	router := gin.New()
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, services.NewFilePayloadStore(payloadDir), nil, time.Second, ""))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{"foo":"bar"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusTooManyRequests, resp.Code)
+	require.Equal(t, "1", resp.Header().Get("Retry-After"))
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Equal(t, "concurrency_limit", body["error_category"])
+	require.Equal(t, float64(1), body["retry_after"])
+	records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Empty(t, records)
+	workflows, err := store.QueryWorkflowExecutions(context.Background(), types.WorkflowExecutionFilters{})
+	require.NoError(t, err)
+	require.Empty(t, workflows)
+	files, err := filepath.Glob(filepath.Join(payloadDir, "*"))
+	require.NoError(t, err)
+	require.Empty(t, files)
+}
+
+func TestExecuteAsyncHandler_QueueFullHasNoPersistence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldPool, oldOnce := asyncPool, asyncPoolOnce
+	asyncPool = newAsyncWorkerPool(0, 1)
+	require.True(t, asyncPool.reserve())
+	asyncPoolOnce = sync.Once{}
+	asyncPoolOnce.Do(func() {})
+	defer func() { asyncPool, asyncPoolOnce = oldPool, oldOnce }()
+
+	agent := &types.AgentNode{ID: "node-1", BaseURL: "http://agent.example", Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}}}
+	store := newTestExecutionStorage(agent)
+	payloadDir := t.TempDir()
+	router := gin.New()
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, services.NewFilePayloadStore(payloadDir), nil, time.Second, ""))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
+	require.Equal(t, "1", resp.Header().Get("Retry-After"))
+	records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Empty(t, records)
+	files, err := filepath.Glob(filepath.Join(payloadDir, "*"))
+	require.NoError(t, err)
+	require.Empty(t, files)
+}
+
+func TestWriteExecutionError_ConcurrencyLimitIncludesRetryAfter(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	writeExecutionError(ctx, &executionPreconditionError{code: http.StatusTooManyRequests, message: "busy", category: ErrorCategoryConcurrencyLimit})
+	require.Equal(t, "1", recorder.Header().Get("Retry-After"))
+	require.JSONEq(t, `{"error":"busy","error_category":"concurrency_limit","retry_after":1}`, recorder.Body.String())
+}
+
+func TestAsyncWorkerPoolStopFailsQueuedJobsAndRejectsSubmissions(t *testing.T) {
+	agent := &types.AgentNode{ID: "node-1"}
+	store := newTestExecutionStorage(agent)
+	now := time.Now().UTC()
+	exec := &types.Execution{ExecutionID: "queued-1", RunID: "run-1", NodeID: "node-1", AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, CreatedAt: now, StartedAt: now, UpdatedAt: now}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), exec))
+	require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{ExecutionID: exec.ExecutionID, WorkflowID: exec.RunID, RunID: &exec.RunID, AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, StartedAt: now, CreatedAt: now, UpdatedAt: now}))
+	target, err := parseTarget("node-1.reasoner-a")
+	require.NoError(t, err)
+	pool := newAsyncWorkerPool(0, 2)
+	require.True(t, pool.submit(asyncExecutionJob{controller: newExecutionController(store, nil, nil, time.Second, ""), plan: preparedExecution{exec: exec, target: target}}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pool.Stop(ctx)
+	require.False(t, pool.submit(asyncExecutionJob{}))
+	stored, err := store.GetExecutionRecord(context.Background(), exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusFailed, stored.Status)
+	require.Equal(t, "control_plane_shutdown", *stored.StatusReason)
+	workflow, err := store.GetWorkflowExecution(context.Background(), exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusFailed, workflow.Status)
+	require.Equal(t, "control_plane_shutdown", *workflow.StatusReason)
 }
 
 func TestExecuteAsyncHandler_WithWebhook(t *testing.T) {
@@ -412,8 +517,8 @@ func TestCallAgent_Timeout(t *testing.T) {
 	errorMsg := err.Error()
 	require.True(t,
 		strings.Contains(strings.ToLower(errorMsg), "timeout") ||
-		strings.Contains(strings.ToLower(errorMsg), "deadline exceeded") ||
-		strings.Contains(strings.ToLower(errorMsg), "context deadline"),
+			strings.Contains(strings.ToLower(errorMsg), "deadline exceeded") ||
+			strings.Contains(strings.ToLower(errorMsg), "context deadline"),
 		"Expected timeout-related error, got: %s", errorMsg)
 	require.Nil(t, body)
 	require.Greater(t, elapsed, time.Duration(0))
