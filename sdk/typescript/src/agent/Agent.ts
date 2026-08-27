@@ -77,6 +77,7 @@ import {
   type SessionDefinition,
   type SessionOptions
 } from '../session.js';
+import { parseShutdownTimeout, type ServeOptions } from './signals.js';
 
 interface WildcardParams extends ParamsDictionary {
   0: string;
@@ -125,6 +126,9 @@ export class Agent {
   readonly skills = new SkillRegistry();
   private server?: http.Server;
   private heartbeatTimer?: NodeJS.Timeout;
+  private shutdownPromise?: Promise<void>;
+  private readonly inFlightExecutions = new Set<Promise<void>>();
+  private signalHandlers?: { SIGTERM: () => void; SIGINT: () => void };
   private readonly aiClient: AIClient;
   private readonly agentFieldClient: AgentFieldClient;
   private readonly memoryClient: MemoryClient;
@@ -639,7 +643,7 @@ export class Agent {
     };
   }
 
-  async serve(): Promise<void> {
+  async serve(options: ServeOptions = {}): Promise<void> {
     await this.registerWithControlPlane();
 
     // Perform a blocking initial refresh for local verification before accepting requests
@@ -665,21 +669,55 @@ export class Agent {
     });
     this.memoryEventClient.start();
     this.startHeartbeat();
+    if (options.handleSignals !== false) this.installSignalHandlers();
   }
 
   async shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shutdownPromise = this.performShutdown();
+    return this.shutdownPromise;
+  }
+
+  private async performShutdown(): Promise<void> {
+    // Notification intentionally precedes listener close and execution drain.
+    try { await this.agentFieldClient.shutdown(this.config.nodeId); }
+    catch (err) { console.warn('[Agent] Failed to notify control plane of shutdown:', err); }
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
     }
-    // Unblock any reasoner still parked in ctx.pause() so shutdown doesn't hang.
-    this.pauseManager.cancelAll();
     await new Promise<void>((resolve, reject) => {
-      this.server?.close((err) => {
+      if (!this.server) return resolve();
+      this.server.close((err) => {
         if (err) reject(err);
         else resolve();
       });
     });
+    const timeoutMs = parseShutdownTimeout(process.env.AGENTFIELD_SHUTDOWN_TIMEOUT);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), timeoutMs); });
+    const drained = Promise.allSettled([...this.inFlightExecutions]).then(() => 'drained' as const);
+    if (await Promise.race([drained, timeout]) === 'timeout') {
+      for (const executionId of this.pauseClocks.keys()) this.cancelRegistry.cancel(executionId, 'shutdown_timeout');
+      this.pauseManager.cancelAll();
+      await Promise.allSettled([...this.inFlightExecutions]);
+    }
+    if (timer) clearTimeout(timer);
     this.memoryEventClient.stop();
+    if (this.signalHandlers) {
+      process.off('SIGTERM', this.signalHandlers.SIGTERM);
+      process.off('SIGINT', this.signalHandlers.SIGINT);
+      this.signalHandlers = undefined;
+    }
+  }
+
+  private installSignalHandlers(): void {
+    if (this.signalHandlers) return;
+    const handle = (signal: 'SIGTERM' | 'SIGINT') => () => {
+      void this.shutdown().finally(() => { process.exitCode = signal === 'SIGTERM' ? 143 : 130; });
+    };
+    this.signalHandlers = { SIGTERM: handle('SIGTERM'), SIGINT: handle('SIGINT') };
+    process.on('SIGTERM', this.signalHandlers.SIGTERM);
+    process.on('SIGINT', this.signalHandlers.SIGINT);
   }
 
   async call(target: string, input: any) {
@@ -1188,7 +1226,9 @@ export class Agent {
     if (reasoner && this.shouldRunAsync(req)) {
       res.status(202).json({ status: 'processing', execution_id: metadata.executionId });
       // Detached — do not await; runReasonerAsync reports its own terminal status.
-      void this.runReasonerAsync(reasoner, { targetName: name, input: req.body, metadata });
+      const execution = this.runReasonerAsync(reasoner, { targetName: name, input: req.body, metadata });
+      this.inFlightExecutions.add(execution);
+      void execution.finally(() => this.inFlightExecutions.delete(execution));
       return;
     }
 

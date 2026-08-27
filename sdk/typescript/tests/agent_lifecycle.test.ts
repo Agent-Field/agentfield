@@ -49,6 +49,7 @@ function attachFakeListener(agent: Agent, server: FakeServer) {
 describe('Agent lifecycle', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(AgentFieldClient.prototype, 'shutdown').mockResolvedValue({});
   });
 
   afterEach(() => {

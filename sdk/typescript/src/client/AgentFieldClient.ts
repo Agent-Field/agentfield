@@ -185,6 +185,15 @@ export class AgentFieldClient {
     return res.data;
   }
 
+  async shutdown(nodeId: string): Promise<any> {
+    const bodyStr = JSON.stringify({ reason: 'shutdown', version: this.config.version ?? '' });
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
+    const res = await this.http.post(`/api/v1/nodes/${encodeURIComponent(nodeId)}/shutdown`, bodyStr, {
+      headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders })
+    });
+    return res.data;
+  }
+
   async heartbeat(status: 'starting' | 'ready' | 'degraded' | 'offline' = 'ready'): Promise<HealthStatus> {
     const nodeId = this.config.nodeId;
     const bodyStr = JSON.stringify({ status, version: this.config.version ?? '', timestamp: new Date().toISOString() });
