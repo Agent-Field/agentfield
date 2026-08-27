@@ -61,7 +61,7 @@ func TestWorkflowExecutionInsertQueriesCoverLifecycleColumns(t *testing.T) {
 		{name: "sqlite", query: sqliteWorkflowExecutionInsertQuery, placeholder: "?"},
 	}
 
-	const expectedPlaceholders = 43
+	const expectedPlaceholders = 44
 
 	for _, tc := range tests {
 		tc := tc
