@@ -222,3 +222,10 @@ Attribution is sent as `HTTP-Referer` and `X-Title`:
 - `AGENTFIELD_INFRON_ATTRIBUTION=false`: Disable Infron attribution headers.
 
 When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution values are used as fallbacks, so a deployment that already declares its identity keeps it after switching gateways: `AGENTFIELD_OPENROUTER_SITE_URL`, `OR_SITE_URL`, `AGENTFIELD_OPENROUTER_APP_NAME`, `OR_APP_NAME`. The opt-out travels with them: when `AGENTFIELD_OPENROUTER_ATTRIBUTION=false`, these values are not inherited and the Infron defaults apply instead. To control Infron attribution specifically, set the `AGENTFIELD_INFRON_*` vars explicitly or disable it with `AGENTFIELD_INFRON_ATTRIBUTION=false`.
+
+### Harness (SDKs)
+
+- `AGENTFIELD_HARNESS_DEPTH`: Marks subprocesses running inside an AgentField
+  harness session. The SDKs set it to `1` for a first-level child and increment
+  an inherited numeric value for nested sessions. An explicit per-call `env`
+  value wins over the derived depth.

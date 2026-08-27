@@ -163,8 +163,8 @@ CLI-specific command construction to application code.
 | Project root | `--dir` | process working directory | `--cwd` plus process working directory |
 | One-shot machine output | JSON output | stdin + JSON event stream | stdin + JSON event stream |
 | System prompt | Native prompt option | Native prompt option | Native prompt option |
-| Tool allowlist | Native tool flags | Normalized Pi tool names | Normalized OMP tool names |
-| Plan / auto permissions | Native permission flags | Read-only tools / no approval flag | Read-only tools / `--auto-approve` |
+| Tool allowlist | Ignored today | Normalized Pi tool names | Normalized OMP tool names |
+| Plan / auto permissions | Ignored today | Read-only tools / no approval flag | Read-only tools / `--auto-approve` |
 | Session resume | Native session option | `--session` | `--resume` |
 | Structured output | Isolated schema file protocol | Same protocol | Same protocol |
 | Metrics | Sessions, turns, tokens, cost, duration | Same normalized fields | Same normalized fields |
@@ -178,6 +178,10 @@ differences stay inside the provider adapters. Unsupported native concepts are
 handled consistently: plan mode removes mutating tools, explicit model variants
 override `#variant`, and provider-reported metrics are normalized into the shared
 result type.
+
+OpenCode currently receives only the selected model, project directory, and
+prompt. Its adapters ignore `tools` and `permission_mode`; they do not translate
+either option to native OpenCode flags today.
 
 ## Model selection and reasoning-effort variants
 
