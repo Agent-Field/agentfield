@@ -405,16 +405,25 @@ func (a *Agent) shutdownWithOptions(ctx context.Context, graceful bool, timeout 
 	a.serverMu.RUnlock()
 
 	if server != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
+		if !graceful {
+			if err := server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				a.logger.Printf("failed to close HTTP server during immediate shutdown: %v", err)
+			}
+		}
 	}
 	if graceful {
+		shutdownCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if server != nil {
+			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				a.logger.Printf("failed to drain HTTP server during shutdown: %v", err)
+			}
+		}
 		done := make(chan struct{})
 		go func() { a.executionWG.Wait(); close(done) }()
 		select {
 		case <-done:
-		case <-time.After(timeout):
+		case <-shutdownCtx.Done():
 			a.cancelMu.Lock()
 			for _, cancel := range a.cancelFuncs {
 				cancel()
@@ -423,7 +432,14 @@ func (a *Agent) shutdownWithOptions(ctx context.Context, graceful bool, timeout 
 			if a.pauseManager != nil {
 				a.pauseManager.CancelAll()
 			}
-			<-done
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				a.cancelMu.Lock()
+				abandoned := len(a.cancelFuncs)
+				a.cancelMu.Unlock()
+				a.logger.Printf("shutdown proceeding with %d execution(s) abandoned after cancellation", abandoned)
+			}
 		}
 	} else {
 		a.cancelMu.Lock()
