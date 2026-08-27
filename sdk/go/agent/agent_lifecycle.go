@@ -17,6 +17,8 @@ import (
 	"github.com/Agent-Field/agentfield/sdk/go/types"
 )
 
+var postCancelSettlementTimeout = 5 * time.Second
+
 // Initialize registers the agent with the AgentField control plane without starting a listener.
 func (a *Agent) Initialize(ctx context.Context) error {
 	a.initMu.Lock()
@@ -434,7 +436,7 @@ func (a *Agent) shutdownWithOptions(ctx context.Context, graceful bool, timeout 
 			}
 			select {
 			case <-done:
-			case <-time.After(5 * time.Second):
+			case <-time.After(postCancelSettlementTimeout):
 				a.cancelMu.Lock()
 				abandoned := len(a.cancelFuncs)
 				a.cancelMu.Unlock()

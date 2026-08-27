@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -202,12 +203,126 @@ func TestResolveShutdownTimeout(t *testing.T) {
 	}
 }
 
+func TestResolveShutdownTimeoutLogsInvalidValue(t *testing.T) {
+	var logs bytes.Buffer
+	assert.Equal(t, 30*time.Second, resolveShutdownTimeout("not-a-timeout", log.New(&logs, "", 0)))
+	assert.Contains(t, logs.String(), `invalid AGENTFIELD_SHUTDOWN_TIMEOUT "not-a-timeout"; using 30s`)
+}
+
 func TestShutdownRouteAccepted(t *testing.T) {
 	a, err := New(Config{NodeID: "node-1", Version: "1", Logger: log.New(io.Discard, "", 0)})
 	require.NoError(t, err)
 	recorder := httptest.NewRecorder()
 	a.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/shutdown", strings.NewReader(`{"graceful":false,"timeout_seconds":1}`)))
 	assert.Equal(t, http.StatusAccepted, recorder.Code)
+}
+
+func TestAcceptedReasonerRequestAfterShutdownBeginsReturnsUnavailable(t *testing.T) {
+	a, err := New(Config{
+		NodeID:        "node-1",
+		Version:       "1",
+		AgentFieldURL: "https://control-plane.example",
+		Logger:        log.New(io.Discard, "", 0),
+	})
+	require.NoError(t, err)
+	a.RegisterReasoner("echo", func(context.Context, map[string]any) (any, error) {
+		return map[string]any{"ok": true}, nil
+	})
+	a.shutdownMu.Lock()
+	a.shuttingDown = true
+	a.shutdownMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/reasoners/echo", strings.NewReader(`{}`))
+	req.Header.Set("X-Execution-ID", "exec-after-shutdown")
+	recorder := httptest.NewRecorder()
+	a.Handler().ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "agent is shutting down")
+}
+
+func TestServeReturnsAfterRemoteImmediateShutdown(t *testing.T) {
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/nodes":
+			_, _ = io.WriteString(w, `{"success":true}`)
+		case "/api/v1/nodes/node-1/status":
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/v1/nodes/node-1/shutdown":
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cp.Close()
+
+	a, err := New(Config{
+		NodeID:           "node-1",
+		Version:          "1",
+		AgentFieldURL:    cp.URL,
+		ListenAddress:    "127.0.0.1:0",
+		DisableLeaseLoop: true,
+		Logger:           log.New(io.Discard, "", 0),
+	})
+	require.NoError(t, err)
+	a.RegisterReasoner("echo", func(context.Context, map[string]any) (any, error) {
+		return map[string]any{"ok": true}, nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- a.Serve(context.Background()) }()
+	require.Eventually(t, func() bool {
+		a.serverMu.RLock()
+		defer a.serverMu.RUnlock()
+		return a.server != nil && a.initialized
+	}, 500*time.Millisecond, 5*time.Millisecond)
+
+	recorder := httptest.NewRecorder()
+	a.Handler().ServeHTTP(recorder, httptest.NewRequest(
+		http.MethodPost, "/shutdown", strings.NewReader(`{"graceful":false}`),
+	))
+	require.Equal(t, http.StatusAccepted, recorder.Code)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Serve did not return after remote immediate shutdown")
+	}
+}
+
+func TestShutdownAbandonsExecutionThatIgnoresCancellation(t *testing.T) {
+	previous := postCancelSettlementTimeout
+	postCancelSettlementTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { postCancelSettlementTimeout = previous })
+
+	var logs bytes.Buffer
+	started := make(chan struct{})
+	a, err := New(Config{
+		NodeID:          "node-1",
+		Version:         "1",
+		AgentFieldURL:   "https://control-plane.example",
+		ShutdownTimeout: 10 * time.Millisecond,
+		Logger:          log.New(&logs, "", 0),
+	})
+	require.NoError(t, err)
+	// Avoid a real control-plane request while retaining AgentFieldURL so the
+	// reasoner request follows the detached 202 path.
+	a.client = nil
+	a.RegisterReasoner("ignores-cancel", func(context.Context, map[string]any) (any, error) {
+		close(started)
+		select {}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/reasoners/ignores-cancel", strings.NewReader(`{}`))
+	req.Header.Set("X-Execution-ID", "exec-abandoned")
+	recorder := httptest.NewRecorder()
+	a.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusAccepted, recorder.Code)
+	<-started
+
+	begin := time.Now()
+	require.NoError(t, a.shutdown(context.Background()))
+	assert.Less(t, time.Since(begin), 250*time.Millisecond)
+	assert.Contains(t, logs.String(), "shutdown proceeding with 1 execution(s) abandoned after cancellation")
 }
 
 func TestShutdownWaitsForAcceptedAsyncExecutionTerminalStatus(t *testing.T) {
