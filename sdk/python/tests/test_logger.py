@@ -24,12 +24,12 @@ def test_structured_stdout_can_be_disabled(monkeypatch, capsys):
 
 
 @pytest.mark.unit
-def test_structured_stdout_is_disabled_by_default(capsys):
+def test_structured_stdout_is_enabled_by_default(capsys):
     logger = AgentFieldLogger("structured.stdout.default")
 
     logger._emit_structured_record({"event_type": "test"})
 
-    assert capsys.readouterr().out == ""
+    assert '"event_type":"test"' in capsys.readouterr().out
 
 
 @pytest.mark.unit
@@ -46,7 +46,9 @@ def test_structured_stdout_disabled_for_every_falsy_spelling(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("value", ["true", "TRUE", "  True  ", "1", "yes", "on"])
+@pytest.mark.parametrize(
+    "value", ["true", "TRUE", "  True  ", "1", "yes", "on", "", "ture"]
+)
 def test_structured_stdout_stays_on_unless_explicitly_disabled(
     monkeypatch, capsys, value
 ):
@@ -54,7 +56,7 @@ def test_structured_stdout_stays_on_unless_explicitly_disabled(
 
     ``1``/``yes``/``on`` are truthy everywhere else in the SDK, and a
     set-but-empty or misspelt value must not silently drop log output -- the
-    Explicit truthy values enable the opt-in mirror.
+    default has to fail towards keeping records visible.
     """
     monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", value)
     logger = AgentFieldLogger(

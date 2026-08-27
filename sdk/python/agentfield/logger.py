@@ -74,7 +74,7 @@ class AgentFieldLogger:
         )
         self.show_fire = os.getenv("AGENTFIELD_LOG_FIRE", "false").lower() == "true"
         self.emit_structured_stdout = (
-            os.getenv("AGENTFIELD_LOG_STDOUT", "false").strip().lower()
+            os.getenv("AGENTFIELD_LOG_STDOUT", "true").strip().lower()
             not in _FALSY_ENV_VALUES
         )
 
