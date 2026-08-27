@@ -512,7 +512,8 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	handlers.InitConcurrencyLimiter(cfg.AgentField.ExecutionQueue.MaxConcurrentPerAgent)
 
 	// Initialize execution cleanup service
-	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.AgentField.ExecutionCleanup)
+	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.AgentField.ExecutionCleanup, payloadStore)
+	logger.Logger.Info().Dur("agent_call_timeout", cfg.AgentField.ExecutionQueue.AgentCallTimeout).Msg("effective agent call timeout")
 
 	adminPort := cfg.AgentField.Port + 100
 	if envPort := os.Getenv("AGENTFIELD_ADMIN_GRPC_PORT"); envPort != "" {

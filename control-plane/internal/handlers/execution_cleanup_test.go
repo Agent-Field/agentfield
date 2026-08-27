@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/rs/zerolog"
 )
@@ -49,6 +51,42 @@ type cleanupStoreMock struct {
 	retryStaleCalls []markStaleCall
 	retryStaleIDs   [][]string
 	retryStaleErrs  []error
+}
+
+type payloadCleanupStore struct {
+	*cleanupStoreMock
+	expired []string
+	refs    map[string]struct{}
+}
+
+func (s *payloadCleanupStore) ListExpiredExecutionPayloadURIs(context.Context, time.Duration, int) ([]string, error) {
+	return s.expired, nil
+}
+func (s *payloadCleanupStore) ListPayloadURIs(context.Context) (map[string]struct{}, error) {
+	return s.refs, nil
+}
+
+type cleanupPayloadStore struct {
+	removed []string
+	swept   bool
+}
+
+func (s *cleanupPayloadStore) SaveFromReader(context.Context, io.Reader) (*services.PayloadRecord, error) {
+	return nil, nil
+}
+func (s *cleanupPayloadStore) SaveBytes(context.Context, []byte) (*services.PayloadRecord, error) {
+	return nil, nil
+}
+func (s *cleanupPayloadStore) Open(context.Context, string) (io.ReadCloser, error) {
+	return nil, errors.New("unused")
+}
+func (s *cleanupPayloadStore) Remove(_ context.Context, uri string) error {
+	s.removed = append(s.removed, uri)
+	return nil
+}
+func (s *cleanupPayloadStore) Sweep(context.Context, map[string]struct{}, time.Duration, int) (int, int, error) {
+	s.swept = true
+	return 2, 1, nil
 }
 
 func (m *cleanupStoreMock) CleanupOldExecutions(ctx context.Context, retentionPeriod time.Duration, batchSize int) (int, error) {
@@ -259,6 +297,34 @@ func TestExecutionCleanupService_PerformCleanup_CleansStaleExecutionsInBatches(t
 	}
 	if !strings.Contains(logs, "Execution cleanup completed") {
 		t.Fatalf("expected completion log to be present, got logs: %s", logs)
+	}
+}
+
+func TestExecutionCleanupService_RemovesDeletedPayloadsAndSweepsOrphans(t *testing.T) {
+	setupExecutionCleanupTestLogger(t)
+	store := &payloadCleanupStore{cleanupStoreMock: &cleanupStoreMock{cleanupResponses: []cleanupResponse{{count: 1}}}, expired: []string{"payload://input", "payload://result"}, refs: map[string]struct{}{"payload://live": {}}}
+	payloads := &cleanupPayloadStore{}
+	service := NewExecutionCleanupService(store, testExecutionCleanupConfig(10), payloads)
+	service.performCleanup(context.Background())
+	if !payloads.swept {
+		t.Fatal("expected orphan sweep on cleanup pass")
+	}
+	if strings.Join(payloads.removed, ",") != "payload://input,payload://result" {
+		t.Fatalf("unexpected removed payloads: %v", payloads.removed)
+	}
+}
+
+func TestExecutionCleanupService_StartClampsInvalidTickerInterval(t *testing.T) {
+	setupExecutionCleanupTestLogger(t)
+	service := NewExecutionCleanupService(&cleanupStoreMock{}, config.ExecutionCleanupConfig{Enabled: true, CleanupInterval: -time.Second})
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if service.config.CleanupInterval != config.DefaultExecutionCleanupInterval {
+		t.Fatalf("interval was not clamped: %s", service.config.CleanupInterval)
+	}
+	if err := service.Stop(); err != nil {
+		t.Fatal(err)
 	}
 }
 

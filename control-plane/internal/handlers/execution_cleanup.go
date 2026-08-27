@@ -7,6 +7,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 )
 
@@ -18,6 +19,7 @@ const defaultInitialCleanupDelay = 30 * time.Second
 // ExecutionCleanupService manages the background cleanup of old executions
 type ExecutionCleanupService struct {
 	storage   storage.StorageProvider
+	payloads  services.PayloadStore
 	config    config.ExecutionCleanupConfig
 	stopChan  chan struct{}
 	wg        sync.WaitGroup
@@ -36,13 +38,17 @@ type ExecutionCleanupService struct {
 }
 
 // NewExecutionCleanupService creates a new execution cleanup service
-func NewExecutionCleanupService(storage storage.StorageProvider, config config.ExecutionCleanupConfig) *ExecutionCleanupService {
-	return &ExecutionCleanupService{
+func NewExecutionCleanupService(storage storage.StorageProvider, config config.ExecutionCleanupConfig, payloads ...services.PayloadStore) *ExecutionCleanupService {
+	service := &ExecutionCleanupService{
 		storage:      storage,
 		config:       config,
 		stopChan:     make(chan struct{}),
 		initialDelay: defaultInitialCleanupDelay,
 	}
+	if len(payloads) > 0 {
+		service.payloads = payloads[0]
+	}
+	return service
 }
 
 // Start begins the background cleanup process
@@ -58,12 +64,19 @@ func (ecs *ExecutionCleanupService) Start(ctx context.Context) error {
 		logger.Logger.Warn().Msg("Execution cleanup is disabled")
 		return nil
 	}
+	if ecs.config.CleanupInterval <= 0 {
+		logger.Logger.Warn().Dur("configured_interval", ecs.config.CleanupInterval).Dur("default_interval", config.DefaultExecutionCleanupInterval).Msg("invalid execution cleanup interval; using default")
+		ecs.config.CleanupInterval = config.DefaultExecutionCleanupInterval
+	}
 
-	logger.Logger.Debug().
+	logger.Logger.Info().
+		Bool("enabled", ecs.config.Enabled).
 		Dur("retention_period", ecs.config.RetentionPeriod).
 		Dur("cleanup_interval", ecs.config.CleanupInterval).
+		Dur("stale_timeout", ecs.config.StaleExecutionTimeout).
 		Int("batch_size", ecs.config.BatchSize).
-		Msg("Starting execution cleanup service")
+		Msg("execution cleanup configuration")
+	ecs.sweepOrphans(ctx)
 
 	ecs.isRunning = true
 	ecs.wg.Add(1)
@@ -139,6 +152,7 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 	// Create a context with timeout for the cleanup operation
 	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	ecs.sweepOrphans(cleanupCtx)
 
 	// Perform cleanup in batches until no more executions to clean
 	totalCleaned := 0
@@ -182,6 +196,14 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 	}
 
 	for {
+		var payloadURIs []string
+		if ecs.payloads != nil && ecs.config.RetentionPeriod > 0 {
+			if source, ok := ecs.storage.(interface {
+				ListExpiredExecutionPayloadURIs(context.Context, time.Duration, int) ([]string, error)
+			}); ok {
+				payloadURIs, _ = source.ListExpiredExecutionPayloadURIs(cleanupCtx, ecs.config.RetentionPeriod, ecs.config.BatchSize)
+			}
+		}
 		cleaned, err := ecs.storage.CleanupOldExecutions(cleanupCtx, ecs.config.RetentionPeriod, ecs.config.BatchSize)
 		if err != nil {
 			ecs.mu.Lock()
@@ -197,6 +219,11 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 		}
 
 		totalCleaned += cleaned
+		for _, uri := range payloadURIs {
+			if err := ecs.payloads.Remove(cleanupCtx, uri); err != nil {
+				logger.Logger.Warn().Err(err).Str("uri", uri).Msg("failed to remove retained execution payload")
+			}
+		}
 
 		// If we cleaned fewer than the batch size, we're done
 		if cleaned < ecs.config.BatchSize {
@@ -235,6 +262,35 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 			Dur("duration", duration).
 			Msg("Execution cleanup completed - no executions to clean")
 	}
+}
+
+func (ecs *ExecutionCleanupService) sweepOrphans(ctx context.Context) {
+	if ecs.payloads == nil {
+		return
+	}
+	sweeper, ok := ecs.payloads.(interface {
+		Sweep(context.Context, map[string]struct{}, time.Duration, int) (int, int, error)
+	})
+	if !ok {
+		return
+	}
+	source, ok := ecs.storage.(interface {
+		ListPayloadURIs(context.Context) (map[string]struct{}, error)
+	})
+	if !ok {
+		return
+	}
+	references, err := source.ListPayloadURIs(ctx)
+	if err != nil {
+		logger.Logger.Warn().Err(err).Msg("failed to list payload references for orphan sweep")
+		return
+	}
+	inspected, removed, err := sweeper.Sweep(ctx, references, ecs.config.PayloadOrphanGrace, 10000)
+	if err != nil {
+		logger.Logger.Warn().Err(err).Msg("payload orphan sweep failed")
+		return
+	}
+	logger.Logger.Info().Int("inspected", inspected).Int("removed", removed).Msg("payload orphan sweep completed")
 }
 
 // ForceCleanup performs an immediate cleanup operation (useful for testing or manual triggers)

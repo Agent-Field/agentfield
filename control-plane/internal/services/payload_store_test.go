@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,35 @@ func TestFilePayloadStoreLifecycle(t *testing.T) {
 	require.NoError(t, store.Remove(ctx, record.URI))
 
 	_, err = store.Open(ctx, record.URI)
+	require.Error(t, err)
+}
+
+func TestFilePayloadStoreSweepPreservesReferencesAndGrace(t *testing.T) {
+	ctx := context.Background()
+	store := NewFilePayloadStore(t.TempDir())
+	referenced, err := store.SaveBytes(ctx, []byte("referenced"))
+	require.NoError(t, err)
+	orphan, err := store.SaveBytes(ctx, []byte("orphan"))
+	require.NoError(t, err)
+	recent, err := store.SaveBytes(ctx, []byte("recent"))
+	require.NoError(t, err)
+	old := time.Now().Add(-2 * time.Hour)
+	for _, uri := range []string{referenced.URI, orphan.URI} {
+		path, err := store.resolvePath(uri)
+		require.NoError(t, err)
+		require.NoError(t, os.Chtimes(path, old, old))
+	}
+	inspected, removed, err := store.Sweep(ctx, map[string]struct{}{referenced.URI: {}}, time.Hour, 10000)
+	require.NoError(t, err)
+	require.Equal(t, 3, inspected)
+	require.Equal(t, 1, removed)
+	reader, err := store.Open(ctx, referenced.URI)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	reader, err = store.Open(ctx, recent.URI)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	_, err = store.Open(ctx, orphan.URI)
 	require.Error(t, err)
 }
 
