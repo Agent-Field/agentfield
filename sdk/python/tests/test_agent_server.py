@@ -1,6 +1,7 @@
 """
 Tests for agentfield.agent_server — AgentServer route registration and utility methods.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -155,9 +156,7 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
     app.lifecycle_events = events
     app.agentfield_handler = SimpleNamespace(
         start_heartbeat=lambda interval: events.append("heartbeat-start"),
-        setup_fast_lifecycle_signal_handlers=lambda: events.append(
-            "signal-handlers"
-        ),
+        setup_fast_lifecycle_signal_handlers=lambda: events.append("signal-handlers"),
         stop_heartbeat=lambda: events.append("heartbeat-stop"),
         send_enhanced_heartbeat=AsyncMock(return_value=True),
         enhanced_heartbeat_loop=AsyncMock(),
@@ -173,7 +172,9 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
 
         asyncio.run(exercise_lifespan())
 
-    monkeypatch.setattr("agentfield.connection_manager.ConnectionManager", _FakeConnectionManager)
+    monkeypatch.setattr(
+        "agentfield.connection_manager.ConnectionManager", _FakeConnectionManager
+    )
     monkeypatch.setattr("agentfield.agent_server.uvicorn.run", fake_uvicorn_run)
 
     AgentServer(app).serve(port=8001)
@@ -327,7 +328,9 @@ async def test_status_endpoint_shutdown_requested():
         def num_threads(self):
             return 1
 
-    with patch.dict(sys.modules, {"psutil": SimpleNamespace(Process=lambda: DummyProcess())}):
+    with patch.dict(
+        sys.modules, {"psutil": SimpleNamespace(Process=lambda: DummyProcess())}
+    ):
         resp = await _get(app, "/status")
 
     assert resp.json()["status"] == "stopping"
@@ -501,7 +504,12 @@ class TestValidateSSLConfig:
 
     def test_nonexistent_files(self, tmp_path):
         s = self._server(dev_mode=True)
-        assert s._validate_ssl_config(str(tmp_path / "nope.key"), str(tmp_path / "nope.crt")) is False
+        assert (
+            s._validate_ssl_config(
+                str(tmp_path / "nope.key"), str(tmp_path / "nope.crt")
+            )
+            is False
+        )
 
     def test_valid_files(self, tmp_path):
         key = tmp_path / "server.key"
@@ -566,8 +574,10 @@ async def test_logs_endpoint_disabled():
 async def test_logs_endpoint_unauthorized():
     app = make_agent_app()
     _setup_server(app)
-    with patch("agentfield.node_logs.logs_enabled", return_value=True), \
-         patch("agentfield.node_logs.verify_internal_bearer", return_value=False):
+    with (
+        patch("agentfield.node_logs.logs_enabled", return_value=True),
+        patch("agentfield.node_logs.verify_internal_bearer", return_value=False),
+    ):
         resp = await _get(app, "/agentfield/v1/logs")
     assert resp.status_code == 401
 
@@ -577,8 +587,10 @@ async def test_logs_endpoint_tail_too_large(monkeypatch):
     app = make_agent_app()
     _setup_server(app)
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_TAIL_LINES", "100")
-    with patch("agentfield.node_logs.logs_enabled", return_value=True), \
-         patch("agentfield.node_logs.verify_internal_bearer", return_value=True):
+    with (
+        patch("agentfield.node_logs.logs_enabled", return_value=True),
+        patch("agentfield.node_logs.verify_internal_bearer", return_value=True),
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -594,9 +606,11 @@ async def test_logs_endpoint_success():
     async def fake_iter(tail, since, follow):
         yield '{"line": 1}\n'
 
-    with patch("agentfield.node_logs.logs_enabled", return_value=True), \
-         patch("agentfield.node_logs.verify_internal_bearer", return_value=True), \
-         patch("agentfield.node_logs.async_iter_tail_ndjson", side_effect=fake_iter):
+    with (
+        patch("agentfield.node_logs.logs_enabled", return_value=True),
+        patch("agentfield.node_logs.verify_internal_bearer", return_value=True),
+        patch("agentfield.node_logs.async_iter_tail_ndjson", side_effect=fake_iter),
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -671,8 +685,7 @@ async def test_debug_tasks_endpoint_captures_pending_coroutines():
         joined = "\n".join(body["tasks"])
         assert "simulated-hung-llm-call" in joined, (
             "/debug/tasks must surface tasks suspended on Futures so we can "
-            "diagnose deadlocks in production. Found tasks: "
-            + joined[:500]
+            "diagnose deadlocks in production. Found tasks: " + joined[:500]
         )
     finally:
         pending_event.set()

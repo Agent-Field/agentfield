@@ -15,7 +15,16 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import AsyncIterator, Deque, Iterable, Iterator, List, Optional, TextIO, cast
+from typing import (
+    AsyncIterator,
+    Deque,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    TextIO,
+    cast,
+)
 
 from .lock_utils import timed_lock
 
@@ -184,7 +193,9 @@ class _TeeTextIO(io.TextIOBase):
         with self._write_lock:
             if self._buf:
                 try:
-                    self._ring.append(self._stream_name, self._buf, self._max_line_bytes)
+                    self._ring.append(
+                        self._stream_name, self._buf, self._max_line_bytes
+                    )
                 except Exception:
                     pass
                 self._buf = ""

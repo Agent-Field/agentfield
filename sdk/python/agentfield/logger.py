@@ -220,7 +220,9 @@ class AgentFieldLogger:
 
     @staticmethod
     def _json_line(record: Dict[str, Any]) -> str:
-        return json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str)
+        return json.dumps(
+            record, ensure_ascii=False, separators=(",", ":"), default=str
+        )
 
     def _bounded_mirror_line(self, record: Dict[str, Any]) -> str:
         """Serialize a valid JSON view while leaving the dispatched record untouched."""

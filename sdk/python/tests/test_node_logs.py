@@ -326,7 +326,9 @@ class TestTeeTextIO:
             for index in range(lines_per_thread):
                 tee.write(f"{worker}:{index}\n")
 
-        threads = [threading.Thread(target=write_lines, args=(n,)) for n in range(thread_count)]
+        threads = [
+            threading.Thread(target=write_lines, args=(n,)) for n in range(thread_count)
+        ]
         for thread in threads:
             thread.start()
         for thread in threads:
