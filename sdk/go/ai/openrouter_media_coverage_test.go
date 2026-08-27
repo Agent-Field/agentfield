@@ -21,6 +21,9 @@ func TestBaseURLEmptyUsesDefault(t *testing.T) {
 }
 
 func TestOpenRouterMediaProviderHeadersIncludeAttribution(t *testing.T) {
+	t.Setenv("AGENTFIELD_OPENROUTER_CATEGORIES", "")
+	t.Setenv("OR_CATEGORIES", "")
+
 	var received http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received = r.Header
@@ -48,6 +51,7 @@ func TestOpenRouterMediaProviderHeadersIncludeAttribution(t *testing.T) {
 	assert.Equal(t, "https://media.example", received.Get("HTTP-Referer"))
 	assert.Equal(t, "Media App", received.Get("X-OpenRouter-Title"))
 	assert.Equal(t, "Media App", received.Get("X-Title"))
+	assert.Equal(t, defaultOpenRouterCategories, received.Get("X-OpenRouter-Categories"))
 }
 
 // GenerateVideo exercises every optional payload field.
@@ -269,7 +273,7 @@ func TestGenerateAudioDefaultVoice(t *testing.T) {
 	p := &OpenRouterMediaProvider{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
 	p.SeedModelMeta("openai/gpt-audio-mini", []string{"text", "audio"}, []string{"text"})
 	_, err := p.GenerateAudio(context.Background(), AudioRequest{
-		Text: "hi", Model: "openai/gpt-audio-mini", Format: "mp3",
+		Text: "hi", Model: "openai/gpt-audio-mini", Format: "pcm16",
 	})
 	require.NoError(t, err)
 	audioConf := got["audio"].(map[string]any)
@@ -287,7 +291,7 @@ func TestGenerateAudioHTTPError(t *testing.T) {
 	p := &OpenRouterMediaProvider{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
 	p.SeedModelMeta("openai/gpt-audio-mini", []string{"text", "audio"}, []string{"text"})
 	_, err := p.GenerateAudio(context.Background(), AudioRequest{
-		Text: "hi", Model: "openai/gpt-audio-mini", Format: "mp3",
+		Text: "hi", Model: "openai/gpt-audio-mini", Format: "pcm16",
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
@@ -312,7 +316,7 @@ func TestGenerateAudioSkipsInvalidSSELines(t *testing.T) {
 	p := &OpenRouterMediaProvider{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
 	p.SeedModelMeta("openai/gpt-audio-mini", []string{"text", "audio"}, []string{"text"})
 	resp, err := p.GenerateAudio(context.Background(), AudioRequest{
-		Text: "hi", Model: "openai/gpt-audio-mini", Format: "mp3",
+		Text: "hi", Model: "openai/gpt-audio-mini", Format: "pcm16",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "ok", resp.Text)
@@ -333,7 +337,7 @@ func TestGenerateAudioInvalidBase64Chunk(t *testing.T) {
 	p := &OpenRouterMediaProvider{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
 	p.SeedModelMeta("openai/gpt-audio-mini", []string{"text", "audio"}, []string{"text"})
 	_, err := p.GenerateAudio(context.Background(), AudioRequest{
-		Text: "hi", Model: "openai/gpt-audio-mini", Format: "mp3",
+		Text: "hi", Model: "openai/gpt-audio-mini", Format: "pcm16",
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "decode audio chunk")
@@ -357,7 +361,7 @@ func TestGenerateAudioRawStdBase64Fallback(t *testing.T) {
 	p := &OpenRouterMediaProvider{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
 	p.SeedModelMeta("openai/gpt-audio-mini", []string{"text", "audio"}, []string{"text"})
 	resp, err := p.GenerateAudio(context.Background(), AudioRequest{
-		Text: "hi", Model: "openai/gpt-audio-mini", Format: "mp3",
+		Text: "hi", Model: "openai/gpt-audio-mini", Format: "pcm16",
 	})
 	require.NoError(t, err)
 	decoded, err := base64.StdEncoding.DecodeString(resp.Audio.Data)

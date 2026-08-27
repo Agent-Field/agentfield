@@ -9,8 +9,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
  * Inline prompt shown on admin pages for managing the admin token.
- * Always visible: shows a form when no token is set, or a compact
- * status bar with change/clear actions when a token is active.
+ * Shows a form when no token is set, or a compact status bar with
+ * change/clear actions when a token is active. Callers decide when to
+ * render it — only when the server actually enforces an admin token
+ * (or one is already stored and should be clearable).
  */
 export function AdminTokenPrompt({ onTokenSet }: { onTokenSet?: () => void }) {
   const { adminToken, setAdminToken } = useAuth();
@@ -42,7 +44,6 @@ export function AdminTokenPrompt({ onTokenSet }: { onTokenSet?: () => void }) {
           Admin token saved in this browser
           <HintIcon label="About the admin token">
             Matches server <code className="font-mono">admin_token</code> or env. Not Settings.
-            Unchanged repo default is often <code className="font-mono">admin-secret</code>.
           </HintIcon>
         </span>
         <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setEditing(true)}>
@@ -67,7 +68,6 @@ export function AdminTokenPrompt({ onTokenSet }: { onTokenSet?: () => void }) {
             <HintIcon label="About the admin token">
               Must match server <code className="font-mono">admin_token</code> or{" "}
               <code className="font-mono">AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN</code>. This browser only.
-              Default YAML is often <code className="font-mono">admin-secret</code>.
             </HintIcon>
           </span>
           <form onSubmit={handleSubmit} className="flex flex-1 flex-wrap items-center gap-2">

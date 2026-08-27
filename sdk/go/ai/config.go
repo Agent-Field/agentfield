@@ -91,7 +91,10 @@ func DefaultConfig() *Config {
 	}
 	switch {
 	case cfg.IsOpenRouter():
-		cfg.SiteURL, cfg.SiteName, _ = resolveOpenRouterAttribution("", "")
+		if attr, ok := resolveOpenRouterAttribution("", ""); ok {
+			cfg.SiteURL = attr.siteURL
+			cfg.SiteName = attr.appName
+		}
 	case cfg.IsInfron():
 		cfg.SiteURL, cfg.SiteName, _ = resolveInfronAttribution("", "")
 	}

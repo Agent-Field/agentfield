@@ -72,12 +72,23 @@ type InstallOptions struct {
 	// root-first behavior. It applies only to the top-level source, never to
 	// recursively-installed node dependencies.
 	Path string `json:"path"`
+	// ExpectedPackageName constrains unattended updates to an in-place package
+	// name. Empty preserves interactive/user-initiated supersede behaviour.
+	ExpectedPackageName string `json:"-"`
+	// BeforeReplace is a git-install transaction boundary. It runs only after
+	// the incoming tree and manifest have been validated, immediately before
+	// the installed directory is stashed for replacement.
+	BeforeReplace func() error `json:"-"`
 }
 
 // RunOptions represents options for running an agent
 type RunOptions struct {
 	Port   int  `json:"port"`
 	Detach bool `json:"detach"`
+	// PortIsPreference is reserved for automatic restore/update callers. A busy
+	// preferred port may fall back to another port; a user-requested port must
+	// fail instead of silently starting somewhere else.
+	PortIsPreference bool `json:"-"`
 }
 
 // RunningAgent represents a currently running agent instance

@@ -557,6 +557,9 @@ type Agent struct {
 	procLogRing *processLogRing
 	procLogOnce sync.Once
 
+	spanEventCh   chan types.WorkflowExecutionEvent
+	spanEventOnce sync.Once
+
 	initMu        sync.Mutex
 	initialized   bool
 	leaseLoopOnce sync.Once

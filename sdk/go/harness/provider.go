@@ -3,6 +3,8 @@ package harness
 import "context"
 
 const (
+	// ProviderAforge is the provider name for the Aforge CLI.
+	ProviderAforge = "aforge"
 	// ProviderOpenCode is the provider name for OpenCode CLI.
 	ProviderOpenCode = "opencode"
 	// ProviderClaudeCode is the provider name for Claude Code CLI.
@@ -15,8 +17,17 @@ const (
 	ProviderPi = "pi"
 	// ProviderOMP is the provider name for the Oh My Pi coding-agent CLI.
 	ProviderOMP = "omp"
-	// DefaultProvider is used when a harness call does not select a provider.
-	DefaultProvider = ProviderOMP
+)
+
+const (
+	// DefaultProvider is the harness provider used when no provider is
+	// configured explicitly and AGENTFIELD_HARNESS_PROVIDER is unset.
+	// AForge is AgentField's native coding harness.
+	DefaultProvider = ProviderAforge
+
+	// ProviderEnvVar overrides the default provider process-wide. An
+	// explicitly configured provider still wins over it.
+	ProviderEnvVar = "AGENTFIELD_HARNESS_PROVIDER"
 )
 
 // Provider is the interface that CLI-based harness providers implement.
@@ -29,7 +40,10 @@ type Provider interface {
 // Options control a single harness invocation. Fields are optional;
 // zero values mean "use default".
 type Options struct {
-	// Provider name: "claude-code", "codex", "gemini", "opencode", "pi", or "omp".
+	// Provider name: "aforge", "opencode", "claude-code", "codex",
+	// "gemini", "pi", or "omp". An explicit value wins over
+	// AGENTFIELD_HARNESS_PROVIDER; when both are empty, the provider
+	// defaults to "aforge".
 	Provider string
 
 	// Model identifier passed to the coding agent. It may carry a

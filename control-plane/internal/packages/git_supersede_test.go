@@ -61,6 +61,34 @@ func TestInstallFromGit_SupersededRedirectsToSuccessor(t *testing.T) {
 	}
 }
 
+// Contract: an unattended update may follow a redirect only when the final
+// manifest keeps the installed package name. A rename is rejected before the
+// successor is copied or the old package is retired.
+func TestInstallFromGit_UnattendedSupersededRenameIsRejected(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	writeTestPackage(t, repo, supersededRoot)
+	writeSubdirManifest(t, filepath.Join(repo, "go"), "dual-node-go")
+	setupFakeGit(t, "copy", repo, false)
+	oldDir := seedInstalled(t, home, "dual-node")
+
+	installer := &GitInstaller{AgentFieldHome: home, ExpectedName: "dual-node"}
+	err := installer.InstallFromGit("https://gitlab.com/acme/dual", true)
+	if err == nil || !strings.Contains(err.Error(), "would rename") {
+		t.Fatalf("InstallFromGit error = %v, want unattended rename rejection", err)
+	}
+	registry := readRegistryFile(t, filepath.Join(home, "installed.yaml"))
+	if _, ok := registry.Installed["dual-node"]; !ok {
+		t.Fatal("the existing package must remain installed")
+	}
+	if _, ok := registry.Installed["dual-node-go"]; ok {
+		t.Fatal("the differently-named successor must not be installed")
+	}
+	if _, err := os.Stat(oldDir); err != nil {
+		t.Fatalf("existing package was changed: %v", err)
+	}
+}
+
 // Contract: when the superseded package is already installed it is replaced —
 // the successor lands first, then the old package is stopped and removed.
 func TestInstallFromGit_SupersededReplacesExistingInstall(t *testing.T) {
@@ -329,11 +357,42 @@ func TestInstallFromGit_FailedReinstallRestoresPreviousPackage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(oldDir, "predecessor.txt"), []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	registry, err := (&PackageUninstaller{AgentFieldHome: home}).loadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := registry.Installed["solo-node"]
+	entry.Status = "running"
+	entry.DesiredState = DesiredStateRunning
+	registry.Installed["solo-node"] = entry
+	if err := (&PackageUninstaller{AgentFieldHome: home}).saveRegistry(registry); err != nil {
+		t.Fatal(err)
+	}
+	stopped, restarted := false, false
 
-	err := (&GitInstaller{AgentFieldHome: home}).
+	err = (&GitInstaller{
+		AgentFieldHome: home,
+		BeforeForceInstall: func(string) error {
+			stopped = true
+			return nil
+		},
+		AfterForceInstall: func(_ string, state ReinstallState) error {
+			restarted = true
+			if !state.WasRunning || !stopped {
+				t.Fatalf("restart state=%+v stopped=%v", state, stopped)
+			}
+			if _, statErr := os.Stat(filepath.Join(oldDir, "predecessor.txt")); statErr != nil {
+				t.Fatalf("restart happened before the previous backup was restored: %v", statErr)
+			}
+			return nil
+		},
+	}).
 		InstallFromGit("https://gitlab.com/acme/solo", true)
 	if err == nil {
 		t.Fatal("expected the install to fail in the dependency step")
+	}
+	if !stopped || !restarted {
+		t.Fatalf("failed forced reinstall did not restore service availability: stopped=%v restarted=%v", stopped, restarted)
 	}
 
 	if _, statErr := os.Stat(filepath.Join(oldDir, "predecessor.txt")); statErr != nil {

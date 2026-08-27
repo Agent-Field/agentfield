@@ -12,7 +12,6 @@ import pytest
 
 from agentfield.harness.providers._base import HarnessProvider
 from agentfield.harness.providers._factory import (
-    DEFAULT_HARNESS_PROVIDER,
     SUPPORTED_PROVIDERS,
     build_provider,
 )
@@ -45,11 +44,43 @@ def test_supported_providers_contains_expected_names():
     assert "grok" in SUPPORTED_PROVIDERS
 
 
-def test_default_provider_is_omp():
+def test_default_provider_is_aforge():
+    from agentfield.harness.providers.aforge import AforgeProvider
+
+    assert HarnessConfig().provider == "aforge"
+    assert isinstance(build_provider(HarnessConfig()), AforgeProvider)
+
+
+def test_build_provider_pi_returns_pi_provider():
+    from agentfield.harness.providers.pi import PiProvider
+
+    provider = build_provider(_make_config("pi"))
+    assert isinstance(provider, PiProvider)
+    assert provider._bin == "pi"
+
+
+def test_build_provider_pi_custom_bin():
+    from agentfield.harness.providers.pi import PiProvider
+
+    provider = build_provider(_make_config("pi", pi_bin="/opt/pi"))
+    assert isinstance(provider, PiProvider)
+    assert provider._bin == "/opt/pi"
+
+
+def test_build_provider_omp_returns_omp_provider():
     from agentfield.harness.providers.pi import OMPProvider
 
-    assert DEFAULT_HARNESS_PROVIDER == "omp"
-    assert isinstance(build_provider(HarnessConfig()), OMPProvider)
+    provider = build_provider(_make_config("omp"))
+    assert isinstance(provider, OMPProvider)
+    assert provider._bin == "omp"
+
+
+def test_build_provider_omp_custom_bin():
+    from agentfield.harness.providers.pi import OMPProvider
+
+    provider = build_provider(_make_config("omp", omp_bin="/opt/omp"))
+    assert isinstance(provider, OMPProvider)
+    assert provider._bin == "/opt/omp"
 
 
 # ---------------------------------------------------------------------------

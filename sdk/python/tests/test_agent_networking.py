@@ -97,6 +97,7 @@ def test_build_callback_candidates_prefers_env(monkeypatch):
     monkeypatch.setattr(agent_mod, "_detect_container_ip", lambda: "203.0.113.10")
     monkeypatch.setattr(agent_mod, "_detect_local_ip", lambda: "10.0.0.5")
     monkeypatch.setattr(agent_mod.socket, "gethostname", lambda: "agent-host")
+    monkeypatch.delenv("AGENTFIELD_DISABLE_IP_DETECTION", raising=False)
     monkeypatch.setenv("AGENT_CALLBACK_URL", "https://env.example")
     monkeypatch.setenv("RAILWAY_SERVICE_NAME", "agentfield")
     monkeypatch.setenv("RAILWAY_ENVIRONMENT", "prod")
@@ -104,9 +105,13 @@ def test_build_callback_candidates_prefers_env(monkeypatch):
     candidates = _build_callback_candidates(None, 9090)
     assert candidates[0] == "https://env.example:9090"
     assert any("railway.internal" in candidate for candidate in candidates)
-    assert any(candidate.startswith("http://203.0.113.10") for candidate in candidates)
     assert any(candidate.startswith("http://10.0.0.5") for candidate in candidates)
     assert any(candidate.endswith(":9090") for candidate in candidates)
+    # The configured callback URL suppresses the public-IP probe, so the
+    # detected address is not offered as a candidate.
+    assert not any(
+        candidate.startswith("http://203.0.113.10") for candidate in candidates
+    )
 
 
 def test_resolve_callback_url_uses_first_candidate(monkeypatch):
@@ -242,3 +247,245 @@ async def test_on_change_decorator_registers_listener(monkeypatch):
 
     subscriptions = getattr(agent.memory_event_client, "subscriptions", [])
     assert any(patterns == ["user.*"] for patterns, _ in subscriptions)
+
+
+# ---------------------------------------------------------------------------
+# Outbound IP detection opt-out (issue #624)
+#
+# _detect_container_ip() reaches out to the cloud metadata endpoints and to
+# api.ipify.org. These tests pin down when that probe is allowed to fire.
+# ---------------------------------------------------------------------------
+
+
+def _stub_callback_environment(
+    monkeypatch,
+    *,
+    container_ip="203.0.113.10",
+    local_ip="10.0.0.5",
+    hostname="agent-host",
+    in_container=True,
+):
+    """Neutralise every networking side effect and record probe invocations.
+
+    Returns the list that receives one entry per _detect_container_ip() call, so
+    a test can assert on whether the probe fired rather than on how the code is
+    structured.
+    """
+
+    probe_calls = []
+
+    def fake_detect_container_ip():
+        probe_calls.append(container_ip)
+        return container_ip
+
+    monkeypatch.setattr(agent_mod, "_is_running_in_container", lambda: in_container)
+    monkeypatch.setattr(agent_mod, "_detect_container_ip", fake_detect_container_ip)
+    monkeypatch.setattr(agent_mod, "_detect_local_ip", lambda: local_ip)
+    monkeypatch.setattr(agent_mod.socket, "gethostname", lambda: hostname)
+    for name in (
+        "AGENT_CALLBACK_URL",
+        "AGENTFIELD_DISABLE_IP_DETECTION",
+        "RAILWAY_SERVICE_NAME",
+        "RAILWAY_ENVIRONMENT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    return probe_calls
+
+
+def test_container_ip_probe_runs_when_nothing_is_configured(monkeypatch):
+    """Default behaviour in a container is unchanged: probe, and use the result."""
+    probe_calls = _stub_callback_environment(monkeypatch)
+
+    candidates = _build_callback_candidates(None, 9000)
+
+    assert probe_calls == ["203.0.113.10"]
+    assert "http://203.0.113.10:9000" in candidates
+
+
+def test_container_ip_probe_skipped_for_explicit_callback_argument(monkeypatch):
+    probe_calls = _stub_callback_environment(monkeypatch)
+
+    candidates = _build_callback_candidates("https://agent.svc.example:8443", 9000)
+
+    assert probe_calls == []
+    assert candidates[0] == "https://agent.svc.example:8443"
+    assert not any("203.0.113.10" in candidate for candidate in candidates)
+
+
+def test_container_ip_probe_skipped_for_callback_url_env_var(monkeypatch):
+    probe_calls = _stub_callback_environment(monkeypatch)
+    monkeypatch.setenv("AGENT_CALLBACK_URL", "http://my-agent.default.svc:8001")
+
+    candidates = _build_callback_candidates(None, 9000)
+
+    assert probe_calls == []
+    assert candidates[0] == "http://my-agent.default.svc:8001"
+    assert not any("203.0.113.10" in candidate for candidate in candidates)
+
+
+def test_explicit_callback_argument_is_preferred_over_env_var(monkeypatch):
+    probe_calls = _stub_callback_environment(monkeypatch)
+    monkeypatch.setenv("AGENT_CALLBACK_URL", "http://from-env:8001")
+
+    candidates = _build_callback_candidates("http://from-arg:8002", 9000)
+
+    assert probe_calls == []
+    assert candidates[0] == "http://from-arg:8002"
+    assert "http://from-env:8001" in candidates
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "Yes", "  yes  "])
+def test_disable_flag_truthy_values_skip_the_probe(monkeypatch, value):
+    probe_calls = _stub_callback_environment(monkeypatch)
+    monkeypatch.setenv("AGENTFIELD_DISABLE_IP_DETECTION", value)
+
+    candidates = _build_callback_candidates(None, 9000)
+
+    assert probe_calls == []
+    assert not any("203.0.113.10" in candidate for candidate in candidates)
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "maybe"])
+def test_disable_flag_non_truthy_values_leave_the_probe_enabled(monkeypatch, value):
+    probe_calls = _stub_callback_environment(monkeypatch)
+    monkeypatch.setenv("AGENTFIELD_DISABLE_IP_DETECTION", value)
+
+    candidates = _build_callback_candidates(None, 9000)
+
+    assert probe_calls == ["203.0.113.10"]
+    assert "http://203.0.113.10:9000" in candidates
+
+
+def test_unusable_callback_url_still_allows_the_probe(monkeypatch):
+    """A value that normalizes to nothing is not a configured callback URL."""
+    probe_calls = _stub_callback_environment(monkeypatch)
+
+    candidates = _build_callback_candidates("   ", 9000)
+
+    assert probe_calls == ["203.0.113.10"]
+    assert "http://203.0.113.10:9000" in candidates
+
+
+def test_skipping_the_probe_keeps_every_other_candidate(monkeypatch):
+    probe_calls = _stub_callback_environment(monkeypatch)
+    monkeypatch.setenv("AGENTFIELD_DISABLE_IP_DETECTION", "1")
+    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "my-service")
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
+
+    candidates = _build_callback_candidates(None, 9000)
+
+    assert probe_calls == []
+    for expected in (
+        "http://my-service.railway.internal:9000",
+        "http://10.0.0.5:9000",
+        "http://agent-host:9000",
+        "http://host.docker.internal:9000",
+        "http://localhost:9000",
+        "http://127.0.0.1:9000",
+    ):
+        assert expected in candidates
+
+
+def test_probe_never_runs_outside_a_container(monkeypatch):
+    probe_calls = _stub_callback_environment(monkeypatch, in_container=False)
+
+    candidates = _build_callback_candidates(None, 9000)
+
+    assert probe_calls == []
+    assert candidates[0] == "http://10.0.0.5:9000"
+
+
+def test_resolve_callback_url_with_detection_disabled_falls_back_locally(monkeypatch):
+    _stub_callback_environment(monkeypatch, local_ip=None, hostname="")
+    monkeypatch.setenv("AGENTFIELD_DISABLE_IP_DETECTION", "true")
+
+    assert _resolve_callback_url(None, 8080) == "http://host.docker.internal:8080"
+
+
+# ---------------------------------------------------------------------------
+# The same guarantee, one level lower.
+#
+# The tests above stub _detect_container_ip itself, so they prove "the helper is
+# not called". The literal symptom in #624 is stronger: no HTTP request leaves
+# the process. The two tests below leave _detect_container_ip in place and
+# assert against its only outbound entry point, requests.get.
+# ---------------------------------------------------------------------------
+
+
+def _stub_everything_but_the_probe(monkeypatch):
+    """Force the in-container branch without touching _detect_container_ip."""
+
+    monkeypatch.setattr(agent_mod, "_is_running_in_container", lambda: True)
+    monkeypatch.setattr(agent_mod, "_detect_local_ip", lambda: "10.0.0.5")
+    monkeypatch.setattr(agent_mod.socket, "gethostname", lambda: "agent-host")
+    for name in (
+        "AGENT_CALLBACK_URL",
+        "AGENTFIELD_DISABLE_IP_DETECTION",
+        "RAILWAY_SERVICE_NAME",
+        "RAILWAY_ENVIRONMENT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize(
+    "callback_url, env",
+    [
+        ("https://agent.svc.example:8443", {}),
+        (None, {"AGENT_CALLBACK_URL": "http://my-agent.default.svc:8001"}),
+        (None, {"AGENTFIELD_DISABLE_IP_DETECTION": "1"}),
+    ],
+    ids=["callback_argument", "callback_env_var", "disable_flag"],
+)
+def test_no_http_request_is_made_when_the_callback_url_is_known(
+    monkeypatch, callback_url, env
+):
+    """No packet is aimed at the metadata services or api.ipify.org.
+
+    ``requests.get`` is ``_detect_container_ip``'s only outbound entry point
+    (it imports ``requests`` lazily and makes no other network call), so a
+    tripwire there covers every probe target. The tripwire *records* each
+    attempt as well as raising, because ``_detect_container_ip`` wraps each
+    request in ``except Exception: pass`` — a bare ``AssertionError`` would be
+    swallowed by the code under test, and the recorded list would not be.
+    """
+
+    _stub_everything_but_the_probe(monkeypatch)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    attempted = []
+
+    def forbidden_get(url, *args, **kwargs):
+        attempted.append(url)
+        raise AssertionError("no HTTP probe expected")
+
+    monkeypatch.setattr("requests.get", forbidden_get)
+
+    candidates = _build_callback_candidates(callback_url, 9000)
+
+    assert attempted == []
+    assert candidates, "the agent still needs somewhere to be called back on"
+
+
+def test_http_request_is_made_when_nothing_is_configured(monkeypatch):
+    """Control case: the tripwire above would fire if the probe still ran."""
+
+    _stub_everything_but_the_probe(monkeypatch)
+
+    attempted = []
+
+    class DummyResponse:
+        status_code = 200
+        text = "198.51.100.5"
+
+    def fake_get(url, *args, **kwargs):
+        attempted.append(url)
+        return DummyResponse()
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    candidates = _build_callback_candidates(None, 9000)
+
+    assert attempted == ["http://169.254.169.254/latest/meta-data/public-ipv4"]
+    assert "http://198.51.100.5:9000" in candidates

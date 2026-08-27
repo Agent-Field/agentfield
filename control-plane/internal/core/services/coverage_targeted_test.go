@@ -138,56 +138,7 @@ func TestDevServiceRunDev(t *testing.T) {
 }
 
 func TestAgentServiceStopAgentAdditionalCoverage(t *testing.T) {
-	t.Run("http shutdown success updates registry", func(t *testing.T) {
-		home := t.TempDir()
-		cmd := exec.Command("sleep", "60")
-		require.NoError(t, cmd.Start())
-		pid := cmd.Process.Pid
-		t.Cleanup(func() {
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-				_, _ = cmd.Process.Wait()
-			}
-		})
-
-		port := 8131
-		startedAt := time.Now().Add(-time.Minute).Format(time.RFC3339)
-		registry := &packages.InstallationRegistry{
-			Installed: map[string]packages.InstalledPackage{
-				"http-agent": {
-					Name:   "http-agent",
-					Status: "running",
-					Runtime: packages.RuntimeInfo{
-						Port:      &port,
-						PID:       &pid,
-						StartedAt: &startedAt,
-					},
-				},
-			},
-		}
-		data, err := yaml.Marshal(registry)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644))
-
-		agentClient := newMockAgentClient()
-		agentClient.shutdownFunc = func(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*interfaces.AgentShutdownResponse, error) {
-			return &interfaces.AgentShutdownResponse{Status: "shutting_down"}, nil
-		}
-
-		service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), agentClient, home).(*DefaultAgentService)
-		require.NoError(t, service.StopAgent("http-agent"))
-
-		updatedData, err := os.ReadFile(filepath.Join(home, "installed.yaml"))
-		require.NoError(t, err)
-		var updated packages.InstallationRegistry
-		require.NoError(t, yaml.Unmarshal(updatedData, &updated))
-		assert.Equal(t, "stopped", updated.Installed["http-agent"].Status)
-		assert.Nil(t, updated.Installed["http-agent"].Runtime.PID)
-		assert.Nil(t, updated.Installed["http-agent"].Runtime.Port)
-		assert.Nil(t, updated.Installed["http-agent"].Runtime.StartedAt)
-	})
-
-	t.Run("running agent without pid returns error", func(t *testing.T) {
+	t.Run("running agent without pid reconciles idempotently", func(t *testing.T) {
 		home := t.TempDir()
 		port := 8132
 		registry := &packages.InstallationRegistry{
@@ -207,11 +158,10 @@ func TestAgentServiceStopAgentAdditionalCoverage(t *testing.T) {
 
 		service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), nil, home).(*DefaultAgentService)
 		err = service.StopAgent("missing-pid-agent")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not running")
+		require.NoError(t, err)
 	})
 
-	t.Run("running agent without port returns error", func(t *testing.T) {
+	t.Run("running agent without port reconciles idempotently", func(t *testing.T) {
 		home := t.TempDir()
 		cmd := exec.Command("sleep", "60")
 		require.NoError(t, cmd.Start())
@@ -242,11 +192,16 @@ func TestAgentServiceStopAgentAdditionalCoverage(t *testing.T) {
 
 		service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), nil, home).(*DefaultAgentService)
 		err = service.StopAgent("missing-port-agent")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no port found")
+		require.NoError(t, err)
+		updated, loadErr := service.loadRegistryDirect()
+		require.NoError(t, loadErr)
+		entry := updated.Installed["missing-port-agent"]
+		require.Equal(t, "stopped", entry.Status)
+		require.Equal(t, packages.DesiredStateStopped, entry.DesiredState)
+		require.Nil(t, entry.Runtime.PID)
 	})
 
-	t.Run("stopped agent returns not running", func(t *testing.T) {
+	t.Run("stopped agent remains idempotently stopped", func(t *testing.T) {
 		home := t.TempDir()
 		registry := &packages.InstallationRegistry{
 			Installed: map[string]packages.InstalledPackage{
@@ -262,44 +217,7 @@ func TestAgentServiceStopAgentAdditionalCoverage(t *testing.T) {
 
 		service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), nil, home).(*DefaultAgentService)
 		err = service.StopAgent("already-stopped")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not running")
-	})
-
-	t.Run("process already finished during fallback is handled", func(t *testing.T) {
-		home := t.TempDir()
-		cmd := exec.Command("sh", "-c", "sleep 0.1")
-		require.NoError(t, cmd.Start())
-		pid := cmd.Process.Pid
-		port := 8133
-		startedAt := time.Now().Add(-time.Minute).Format(time.RFC3339)
-		registry := &packages.InstallationRegistry{
-			Installed: map[string]packages.InstalledPackage{
-				"finished-agent": {
-					Name:   "finished-agent",
-					Status: "running",
-					Runtime: packages.RuntimeInfo{
-						Port:      &port,
-						PID:       &pid,
-						StartedAt: &startedAt,
-					},
-				},
-			},
-		}
-		data, err := yaml.Marshal(registry)
 		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644))
-
-		agentClient := newMockAgentClient()
-		agentClient.shutdownFunc = func(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*interfaces.AgentShutdownResponse, error) {
-			// Sleep is inherent to the test: simulates a slow shutdown response.
-			time.Sleep(300 * time.Millisecond)
-			return nil, fmt.Errorf("shutdown unavailable")
-		}
-
-		service := NewAgentService(newMockProcessManager(), newMockPortManager(), newMockRegistryStorage(), agentClient, home).(*DefaultAgentService)
-		require.NoError(t, service.StopAgent("finished-agent"))
-		_, _ = cmd.Process.Wait()
 	})
 }
 
@@ -609,6 +527,7 @@ func TestAgentServiceRunAgentAdditionalCoverage(t *testing.T) {
 
 		port := 8144
 		startedAt := time.Now().Add(-time.Minute).Format(time.RFC3339)
+		startTime := packages.CurrentProcessStartTime(pid)
 		registry := &packages.InstallationRegistry{
 			Installed: map[string]packages.InstalledPackage{
 				"running-agent": {
@@ -619,6 +538,7 @@ func TestAgentServiceRunAgentAdditionalCoverage(t *testing.T) {
 						Port:      &port,
 						PID:       &pid,
 						StartedAt: &startedAt,
+						StartTime: startTime,
 					},
 				},
 			},
@@ -676,6 +596,7 @@ func TestAgentServiceRunAgentAdditionalCoverage(t *testing.T) {
 		_, err = service.RunAgent("update-agent", domain.RunOptions{Port: port})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to update runtime info")
+		assert.True(t, processManager.stoppedPIDs[5151], "a node the registry could not record must not be left running")
 	})
 }
 

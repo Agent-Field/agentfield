@@ -62,6 +62,9 @@ func (s *AgentFieldServer) registerUIAPI() {
 		{
 			// Package API endpoints
 			packagesHandler := ui.NewPackageHandler(s.storage)
+			if s.packageMaintenance != nil {
+				packagesHandler.ConfigurePackageUpdates(s.packageMaintenance)
+			}
 			agents.GET("/packages", packagesHandler.ListPackagesHandler)
 			agents.GET("/packages/:packageId/details", packagesHandler.GetPackageDetailsHandler)
 
@@ -74,6 +77,13 @@ func (s *AgentFieldServer) registerUIAPI() {
 			agents.GET("/packages/install/jobs/:jobId", privileged, installHandler.GetInstallJobHandler)
 			agents.POST("/packages/:packageId/uninstall", privileged, installHandler.UninstallPackageHandler)
 			agents.POST("/packages/:packageId/update", privileged, installHandler.UpdatePackageHandler)
+			if s.packageMaintenance != nil {
+				updateHandler := ui.NewPackageUpdateHandler(s.packageMaintenance, packagesHandler)
+				agents.POST("/packages/check-updates", privileged, updateHandler.CheckUpdatesHandler)
+				agents.PUT("/packages/:packageId/auto-update", privileged, updateHandler.SetAutoUpdateHandler)
+				agents.GET("/packages/maintenance", updateHandler.MaintenanceStatusHandler)
+				agents.POST("/packages/maintenance/run", privileged, updateHandler.RunMaintenanceHandler)
+			}
 
 			// Agent lifecycle management endpoints
 			lifecycleHandler := ui.NewLifecycleHandler(s.storage, s.agentService)

@@ -187,6 +187,9 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 	}
 	defer rollbackTx(tx, "UpdateExecutionRecord:"+executionID)
 
+	// Lock the row for the duration of the read-modify-write (postgres only;
+	// see forUpdate). A concurrent updater blocks here until this transaction
+	// commits, then re-reads the committed row instead of a stale snapshot.
 	row := tx.QueryRowContext(ctx, `
 		SELECT execution_id, run_id, parent_execution_id,
 		       agent_node_id, reasoner_id, node_id,
@@ -197,7 +200,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 		       notes,
 		       created_at, updated_at
 		FROM executions
-		WHERE execution_id = ?`, executionID)
+		WHERE execution_id = ?`+tx.forUpdate(), executionID)
 
 	current, err := scanExecution(row)
 	if err != nil {
@@ -1366,6 +1369,11 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 // status used is "failed" (the agent restarted mid-execution; the work was
 // not completed and was not a deadline timeout).
 //
+// Executions marked ExecutionReasonAwaitingAgentRestart are deliberately
+// exempt: those are the ones the dispatcher is holding open ACROSS this very
+// restart and is about to re-send. Reaping them would fail the run that the
+// restart-absorbing retry exists to save.
+//
 // Two single bulk UPDATEs — workflow_executions is the source of truth for
 // the DAG UI; the legacy `executions` table is mirrored best-effort so any
 // older code path reading it sees a consistent picture. We deliberately do
@@ -1386,8 +1394,10 @@ func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNo
 		UPDATE workflow_executions
 		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
 		WHERE agent_node_id = ?
-		  AND status IN ('running', 'pending', 'queued', 'waiting')`,
+		  AND status IN ('running', 'pending', 'queued', 'waiting')
+		  AND COALESCE(status_reason, '') <> ?`,
 		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+		types.ExecutionReasonAwaitingAgentRestart,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("update orphaned workflow executions: %w", err)
@@ -1402,8 +1412,10 @@ func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNo
 		UPDATE executions
 		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
 		WHERE agent_node_id = ?
-		  AND status IN ('running', 'pending', 'queued', 'waiting')`,
+		  AND status IN ('running', 'pending', 'queued', 'waiting')
+		  AND COALESCE(status_reason, '') <> ?`,
 		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+		types.ExecutionReasonAwaitingAgentRestart,
 	)
 
 	return int(affected), nil

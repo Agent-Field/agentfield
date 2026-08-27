@@ -235,3 +235,54 @@ func TestMarkAgentExecutionsOrphaned_DefaultReasonWhenEmpty(t *testing.T) {
 	require.NotNil(t, got.StatusReason)
 	require.NotEmpty(t, *got.StatusReason, "empty reason must be replaced with a default audit string")
 }
+
+// TestMarkAgentExecutionsOrphaned_SkipsExecutionsHeldAcrossTheRestart covers
+// the exemption that makes the dispatcher's restart-absorbing retry work.
+//
+// When a call finds the agent's port closed, the control plane stamps the
+// execution ExecutionReasonAwaitingAgentRestart and waits for the process to
+// come back. The re-registration that ends the wait is exactly what triggers
+// this reaper — so without the exemption the reaper fails the one execution
+// the retry was about to complete, and the caller receives that failure even
+// though the work went on to succeed.
+func TestMarkAgentExecutionsOrphaned_SkipsExecutionsHeldAcrossTheRestart(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+
+	seedRunningWorkflowExecution(t, ls, "exec-held", "demoproj", now.Add(-5*time.Second))
+	seedRunningWorkflowExecution(t, ls, "exec-orphan", "demoproj", now.Add(-5*time.Minute))
+
+	// The dispatcher claims exec-held while it waits out the restart.
+	held := types.ExecutionReasonAwaitingAgentRestart
+	require.NoError(t, ls.UpdateWorkflowExecution(ctx, "exec-held",
+		func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+			current.StatusReason = &held
+			return current, nil
+		}))
+	_, err := ls.UpdateExecutionRecord(ctx, "exec-held",
+		func(current *types.Execution) (*types.Execution, error) {
+			current.StatusReason = &held
+			return current, nil
+		})
+	require.NoError(t, err)
+
+	reaped, err := ls.MarkAgentExecutionsOrphaned(ctx, "demoproj",
+		"agent_restart_orphaned: demoproj re-registered with new instance")
+	require.NoError(t, err)
+	require.Equal(t, 1, reaped, "only the genuinely orphaned execution should be reaped")
+
+	heldRow, err := ls.GetWorkflowExecution(ctx, "exec-held")
+	require.NoError(t, err)
+	require.Equal(t, "running", heldRow.Status,
+		"an execution held across the restart must survive it")
+
+	heldExec, err := ls.GetExecutionRecord(ctx, "exec-held")
+	require.NoError(t, err)
+	require.Equal(t, "running", heldExec.Status,
+		"the executions-table mirror must be exempt too")
+
+	orphanRow, err := ls.GetWorkflowExecution(ctx, "exec-orphan")
+	require.NoError(t, err)
+	require.Equal(t, "failed", orphanRow.Status,
+		"an execution with no hold is still a real orphan")
+}

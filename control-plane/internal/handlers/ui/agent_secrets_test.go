@@ -20,6 +20,13 @@ import (
 const agentSecretsTestScope = "test-node"
 
 func newAgentSecretsTestRouter(t *testing.T) (*gin.Engine, string) {
+	return newAgentSecretsTestRouterWithLookup(t, func(string) (string, bool) { return "", false })
+}
+
+func newAgentSecretsTestRouterWithLookup(
+	t *testing.T,
+	lookupEnv func(string) (string, bool),
+) (*gin.Engine, string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	agentfieldHome := t.TempDir()
@@ -44,12 +51,54 @@ func newAgentSecretsTestRouter(t *testing.T) (*gin.Engine, string) {
 	require.NoError(t, err)
 
 	handler := NewAgentSecretsHandler(store, agentfieldHome)
+	handler.lookupEnv = lookupEnv
 	router := gin.New()
 	router.GET("/agents/:agentId/secrets", handler.ListAgentSecretsHandler)
 	router.PUT("/agents/:agentId/secrets", handler.SetAgentSecretHandler)
 	router.DELETE("/agents/:agentId/secrets/:key", handler.DeleteAgentSecretHandler)
 	router.GET("/secrets", handler.ListAllSecretsHandler)
 	return router, agentfieldHome
+}
+
+func TestAgentSecretsListProcessEnvironmentResolution(t *testing.T) {
+	environment := map[string]string{
+		"OPENAI_API_KEY":    "env-value",
+		"ANTHROPIC_API_KEY": "",
+		"NODE_SCOPED_KEY":   "env-value",
+	}
+	router, home := newAgentSecretsTestRouterWithLookup(t, func(key string) (string, bool) {
+		value, ok := environment[key]
+		return value, ok
+	})
+	store, err := packages.NewSecretStore(home)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(agentSecretsTestScope, "NODE_SCOPED_KEY", "stored-value"))
+
+	response := agentSecretsRequest(t, router, http.MethodGet, "/agents/agent-x/secrets?include=env", "")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.NotContains(t, response.Body.String(), "env-value")
+	require.NotContains(t, response.Body.String(), "stored-value")
+	require.JSONEq(t, `{"secrets":[
+		{"key":"AGENTFIELD_SERVER","is_set":false,"declared_scope":"global","description":"Control-plane URL","default":"http://localhost:8080","requirement":"optional"},
+		{"key":"ANTHROPIC_API_KEY","is_set":false,"declared_scope":"global","description":"Anthropic key","secret":true,"requirement":"one_of","group":"llm_provider","group_description":"an LLM provider key"},
+		{"key":"NODE_SCOPED_KEY","is_set":true,"env":true,"scope":"node","declared_scope":"node","secret":true,"requirement":"required"},
+		{"key":"OPENAI_API_KEY","is_set":true,"env":true,"declared_scope":"global","description":"OpenAI key","secret":true,"requirement":"required"},
+		{"key":"SWE_DEFAULT_RUNTIME","is_set":false,"declared_scope":"global","description":"Coding runtime","requirement":"optional"}
+	]}`, response.Body.String())
+}
+
+// A handler built without an injected lookup (a zero-value struct rather than
+// the constructor) must still consult the real process environment.
+func TestAgentSecretsListDefaultsToProcessEnvironment(t *testing.T) {
+	router, _ := newAgentSecretsTestRouterWithLookup(t, nil)
+	t.Setenv("OPENAI_API_KEY", "from-process")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	response := agentSecretsRequest(t, router, http.MethodGet, "/agents/agent-x/secrets?include=env", "")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.NotContains(t, response.Body.String(), "from-process")
+	require.Contains(t, response.Body.String(), `{"key":"OPENAI_API_KEY","is_set":true,"env":true,`)
+	require.Contains(t, response.Body.String(), `{"key":"ANTHROPIC_API_KEY","is_set":false,`)
 }
 
 func agentSecretsRequest(t *testing.T, router http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -63,6 +112,10 @@ func agentSecretsRequest(t *testing.T, router http.Handler, method, path, body s
 
 // Validation contract 1: PUT writes the node scope consumed by runner-side resolution.
 func TestAgentSecretsPutResolvesForRunner(t *testing.T) {
+	// EnvResolver prefers a non-empty process env value, so a developer
+	// machine with this key exported would resolve the host value instead of
+	// the stored one. Empty counts as unset; this keeps the test hermetic.
+	t.Setenv("OPENAI_API_KEY", "")
 	router, home := newAgentSecretsTestRouter(t)
 	response := agentSecretsRequest(t, router, http.MethodPut, "/agents/agent-x/secrets",
 		`{"key":"OPENAI_API_KEY","value":"sk-test"}`)

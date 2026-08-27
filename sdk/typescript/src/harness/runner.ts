@@ -1,5 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { buildPromptSuffix, cleanupTempFiles, getOutputPath, parseAndValidate } from './schema.js';
-import { buildProvider, DEFAULT_HARNESS_PROVIDER } from './providers/factory.js';
+import { buildProvider, resolveProviderName } from './providers/factory.js';
 import type { HarnessProvider } from './providers/base.js';
 import {
   createHarnessResult,
@@ -41,6 +43,8 @@ type RunnerOptions = Omit<HarnessOptions, 'schema'> & {
   initialDelay?: number;
   maxDelay?: number;
   backoffFactor?: number;
+  projectDir?: string;
+  aforgeBin?: string;
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
@@ -54,25 +58,32 @@ export class HarnessRunner {
   public async run(prompt: string, options: HarnessOptions = {}) {
     const { schema, ...rest } = options;
     const resolved = this.resolveOptions(this.config, rest);
+    resolved.provider = resolveProviderName(resolved.provider);
 
-    resolved.provider ??= DEFAULT_HARNESS_PROVIDER;
-
-    const cwd = resolved.projectDir ?? resolved.cwd ?? '.';
     const provider = await this.buildProvider(resolved.provider, resolved);
-    const effectivePrompt = schema === undefined ? prompt : `${prompt}${buildPromptSuffix(schema, cwd)}`;
+    const cwd = resolved.cwd ?? '.';
+    const outputRoot = resolved.projectDir ?? cwd;
+    let outputDir: string | undefined;
+    if (schema !== undefined) {
+      fs.mkdirSync(outputRoot, { recursive: true });
+      outputDir = fs.mkdtempSync(path.join(outputRoot, '.agentfield-out-'));
+    }
+    const effectivePrompt = schema === undefined ? prompt : `${prompt}${buildPromptSuffix(schema, outputDir!)}`;
     const startTime = Date.now();
 
     try {
       const raw = await this.executeWithRetry(provider, effectivePrompt, resolved);
 
       if (schema !== undefined) {
-        return this.handleSchemaOutput(raw, schema, cwd, startTime);
+        return this.handleSchemaOutput(raw, schema, outputDir!, startTime);
       }
 
       return createHarnessResult({
         result: raw.result,
         isError: raw.isError,
         errorMessage: raw.errorMessage,
+        failureType: raw.failureType,
+        returnCode: raw.returnCode,
         costUsd: raw.metrics.totalCostUsd,
         numTurns: raw.metrics.numTurns,
         durationMs: Date.now() - startTime,
@@ -82,7 +93,8 @@ export class HarnessRunner {
       });
     } finally {
       if (schema !== undefined) {
-        cleanupTempFiles(cwd);
+        cleanupTempFiles(outputDir!);
+        fs.rmSync(outputDir!, { recursive: true, force: true });
       }
     }
   }
@@ -106,6 +118,7 @@ export class HarnessRunner {
         'env',
         'cwd',
         'projectDir',
+        'aforgeBin',
         'codexBin',
         'geminiBin',
         'opencodeBin',
@@ -182,6 +195,8 @@ export class HarnessRunner {
         result: raw.result,
         parsed,
         isError: false,
+        failureType: raw.failureType,
+        returnCode: raw.returnCode,
         costUsd: raw.metrics.totalCostUsd,
         numTurns: raw.metrics.numTurns,
         durationMs: Date.now() - startTime,
@@ -195,6 +210,8 @@ export class HarnessRunner {
       result: raw.result,
       isError: true,
       errorMessage: 'Schema validation failed after parse and cosmetic repair attempts.',
+      failureType: 'schema',
+      returnCode: raw.returnCode,
       costUsd: raw.metrics.totalCostUsd,
       numTurns: raw.metrics.numTurns,
       durationMs: Date.now() - startTime,
@@ -206,7 +223,7 @@ export class HarnessRunner {
 
   private async buildProvider(providerName: string, options: RunnerOptions): Promise<HarnessProvider> {
     const { provider: _, ...rest } = options;
-    return buildProvider({ provider: providerName as HarnessConfig['provider'], ...rest });
+    return buildProvider({ provider: providerName as NonNullable<HarnessConfig['provider']>, ...rest });
   }
 
   private computeBackoffDelay(

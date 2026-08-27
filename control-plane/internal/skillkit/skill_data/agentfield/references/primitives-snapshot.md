@@ -76,7 +76,7 @@ result = await app.ai(
     response_format=None,      # "auto" / "json" / "text" / dict / None
     tools=None,                # list of tool defs, OR "discover" to auto-discover
     context=None,
-    memory_scope=None,         # e.g., ["workflow", "session", "reasoner"]
+    memory_scope=None,         # accepted but not yet applied; scopes are workflow/session/actor/global
     **kwargs,
 )
 ```
@@ -184,22 +184,25 @@ If any of those four are false, refactor to `app.ai(tools=[...])` or a chunked-l
 
 ## Memory
 
-| Scope | Lifetime |
-|---|---|
-| `global` | Cross everything |
-| `agent` | This node, all sessions |
-| `session` | One conversation thread |
-| `run` | Single workflow execution |
+| Scope | Keyed by | Lifetime |
+|---|---|---|
+| `global` | fixed scope id `"global"` | Shared by every agent and session |
+| `session` | `X-Session-ID` | One conversation thread |
+| `actor` | `X-Actor-ID` | One actor across all its sessions |
+| `workflow` | `X-Workflow-ID` (falls back to the run id) | One workflow run |
+
+`session`, `actor` and `workflow` are sibling dimensions, not a nested chain; an unscoped read walks `workflow -> session -> actor -> global`. There is no `agent` or `run` scope.
 
 ```python
-await app.memory.set(key, value, scope="run")
-v = await app.memory.get(key, default=None, scope="run")
-await app.memory.exists(key, scope="run")
-await app.memory.delete(key, scope="run")
-keys = await app.memory.list_keys(scope="agent")
+await app.memory.set(key, value)                       # unscoped: the workflow scope of this run
+v = await app.memory.get(key, default=None)             # unscoped: workflow -> session -> actor -> global
+await app.memory.set(key, value, scope="session")
+v = await app.memory.get(key, default=None, scope="session")
+await app.memory.delete(key, scope="session")
+keys = await app.memory.session(session_id).list_keys()  # list_keys lives on the scoped clients
 ```
 
-Vector memory (`set_vector` / `search_vectors`) and event memory (`app.memory.events.*`) also exist. See live docs for current API.
+Vector memory (`set_vector` / `delete_vector` / `similarity_search`) and change listeners (`@app.memory.on_change(patterns)`) also exist. See live docs for current API.
 
 ---
 

@@ -61,10 +61,10 @@ describe('OpenRouterMediaProvider: model metadata fetch', () => {
 
     const provider = new OpenRouterMediaProvider({ apiKey: 'k' });
     await provider.generateAudio({
-      text: 'a', model: 'openrouter/openai/gpt-audio-mini', format: 'mp3',
+      text: 'a', model: 'openrouter/openai/gpt-audio-mini', format: 'pcm16',
     });
     await provider.generateAudio({
-      text: 'b', model: 'openrouter/openai/gpt-audio-mini', format: 'mp3',
+      text: 'b', model: 'openrouter/openai/gpt-audio-mini', format: 'pcm16',
     });
     // 1 metadata GET + 2 audio POSTs = 3 calls
     expect(mockFetch).toHaveBeenCalledTimes(3);

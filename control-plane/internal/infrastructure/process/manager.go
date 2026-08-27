@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 )
@@ -14,8 +16,16 @@ import (
 // DefaultProcessManager provides a default implementation for managing system processes.
 // It keeps track of running processes and provides methods to start, stop, and monitor them.
 type DefaultProcessManager struct {
+	// mu guards runningProcesses: boot restores and update jobs start and stop
+	// nodes from different goroutines.
+	mu               sync.Mutex
 	runningProcesses map[int]*exec.Cmd
+	// stopProcess is a narrow test seam for the platform-specific bounded stop
+	// path. Production always uses stopManagedProcess below.
+	stopProcess func(*exec.Cmd, int) error
 }
+
+const gracefulStopTimeout = 5 * time.Second
 
 // NewProcessManager creates a new instance of DefaultProcessManager.
 // It initializes the map for tracking running processes.
@@ -73,7 +83,9 @@ func (pm *DefaultProcessManager) Start(config interfaces.ProcessConfig) (pid int
 	pid = cmd.Process.Pid
 
 	// Track the running process
+	pm.mu.Lock()
 	pm.runningProcesses[pid] = cmd
+	pm.mu.Unlock()
 
 	return pid, nil
 }
@@ -81,19 +93,41 @@ func (pm *DefaultProcessManager) Start(config interfaces.ProcessConfig) (pid int
 // Stop terminates a process identified by its PID.
 // It attempts graceful termination first, then forceful termination if necessary.
 func (pm *DefaultProcessManager) Stop(pid int) error {
+	pm.mu.Lock()
 	cmd, exists := pm.runningProcesses[pid]
+	pm.mu.Unlock()
 	if !exists {
 		return fmt.Errorf("process with PID %d not found in managed processes", pid)
 	}
+	// Tracking is bookkeeping, not proof that an unresponsive process was
+	// reaped. Every bounded return path must release the slot.
+	defer func() {
+		pm.mu.Lock()
+		delete(pm.runningProcesses, pid)
+		pm.mu.Unlock()
+	}()
 
 	// Check if process is still running
 	if cmd.Process == nil {
 		// Process already terminated, clean up
-		delete(pm.runningProcesses, pid)
 		return nil
 	}
+	if pm.stopProcess != nil {
+		return pm.stopProcess(cmd, pid)
+	}
+	return stopManagedProcess(cmd, pid)
+}
 
-	// Try graceful termination first (SIGTERM)
+func stopManagedProcess(cmd *exec.Cmd, pid int) error {
+	// Start reaping before signalling so every exit path is observed exactly
+	// once and a child that ignores SIGTERM cannot wedge the caller forever.
+	waited := make(chan struct{}, 1)
+	go func() {
+		_, _ = cmd.Process.Wait()
+		waited <- struct{}{}
+	}()
+
+	// Try graceful termination first (SIGTERM).
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		if !errors.Is(err, os.ErrProcessDone) {
 			// If SIGTERM fails, try forceful termination (SIGKILL)
@@ -103,18 +137,30 @@ func (pm *DefaultProcessManager) Stop(pid int) error {
 		}
 	}
 
-	// Wait for the process to actually terminate
-	// Ignore errors as process might have already exited
-	_, _ = cmd.Process.Wait()
-
-	// Clean up tracking
-	delete(pm.runningProcesses, pid)
+	timer := time.NewTimer(gracefulStopTimeout)
+	select {
+	case <-waited:
+		timer.Stop()
+	case <-timer.C:
+		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			return fmt.Errorf("failed to force kill process %d after %s: %w", pid, gracefulStopTimeout, killErr)
+		}
+		// Kill makes Wait return and reaps the child. Keep this final wait bounded
+		// as defense against an unusual platform/process implementation.
+		select {
+		case <-waited:
+		case <-time.After(time.Second):
+			return fmt.Errorf("timed out reaping process %d after force kill", pid)
+		}
+	}
 
 	return nil
 }
 
 // Status retrieves the current status and information of a process identified by its PID.
 func (pm *DefaultProcessManager) Status(pid int) (interfaces.ProcessInfo, error) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 	cmd, exists := pm.runningProcesses[pid]
 	if !exists {
 		return interfaces.ProcessInfo{}, fmt.Errorf("process with PID %d not found in managed processes", pid)

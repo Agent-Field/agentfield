@@ -34,9 +34,15 @@ jobs:
           file: deployments/docker/Dockerfile.control-plane
           load: true
           tags: agentfield-control-plane:test
+          build-args: VERSION=test
 
       - name: Smoke test control plane image
-        run: docker run --rm agentfield-control-plane:test --help
+        run: |
+          docker run --rm agentfield-control-plane:test --help
+          version="$(docker run --rm agentfield-control-plane:test version)"
+          echo "$version"
+          echo "$version" | grep -q 'Version:    test'
+          ! echo "$version" | grep -q 'Version:    dev'
 
   control-plane-cloud-image:
     runs-on: ubuntu-latest
@@ -54,12 +60,17 @@ jobs:
           file: deployments/docker/Dockerfile.control-plane-cloud
           load: true
           tags: agentfield-control-plane-cloud:test
+          build-args: VERSION=test
 
       - name: Smoke test cloud image toolchains
         run: |
           docker run --rm --entrypoint sh agentfield-control-plane-cloud:test -c '
             set -e
             af --help > /dev/null
+            version="$(af version)"
+            echo "$version"
+            echo "$version" | grep -q "Version:    test"
+            ! echo "$version" | grep -q "Version:    dev"
             git --version
             python3 --version
             python3 -m pip --version

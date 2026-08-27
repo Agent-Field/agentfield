@@ -18,7 +18,7 @@ from agentfield.harness.providers.pi import OMPProvider, PiProvider
 @pytest.mark.parametrize(
     ("provider", "name", "module", "install_command"),
     [
-        (AforgeProvider(bin_path="aforge-missing"), "aforge", "aforge", "aforge-v2"),
+        (AforgeProvider(bin_path="aforge-missing"), "aforge", "aforge", "af aforge ensure"),
         (CodexProvider(bin_path="codex-missing"), "codex", "codex", "@openai/codex"),
         (
             OpenCodeProvider(bin_path="opencode-missing"),

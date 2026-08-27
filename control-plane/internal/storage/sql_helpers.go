@@ -93,6 +93,30 @@ func newSQLTx(tx *sql.Tx, mode string) *sqlTx {
 	return &sqlTx{Tx: tx, mode: mode}
 }
 
+// forUpdate returns the row-locking suffix for a SELECT that the same
+// transaction follows with an UPDATE of that row. Postgres needs an explicit
+// FOR UPDATE: under READ COMMITTED, two read-modify-write transactions can
+// both read the same snapshot and the later UPDATE silently writes the stale
+// copy back (a lost update — e.g. an execution-note write racing the terminal
+// status callback reverted status "succeeded" to "running" and dropped the
+// result, stranding the caller's poll loop). SQLite serializes writers and
+// does not accept FOR UPDATE syntax, so the suffix is empty there.
+func (db *sqlDatabase) forUpdate() string {
+	if db != nil && db.mode == "postgres" {
+		return " FOR UPDATE"
+	}
+	return ""
+}
+
+// forUpdate mirrors sqlDatabase.forUpdate for statements running on the
+// transaction handle (the usual case for read-modify-write helpers).
+func (tx *sqlTx) forUpdate() string {
+	if tx != nil && tx.mode == "postgres" {
+		return " FOR UPDATE"
+	}
+	return ""
+}
+
 func (tx *sqlTx) rebind(query string) string {
 	if tx == nil {
 		return query

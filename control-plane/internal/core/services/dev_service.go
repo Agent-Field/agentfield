@@ -106,8 +106,15 @@ func (ds *DefaultDevService) runDev(packagePath string, options domain.DevOption
 		return fmt.Errorf("failed to start agent: %w", agentStartErr)
 	}
 
-	// 2. Discover the port the agent actually chose
-	port, discoverErr := ds.discoverAgentPort(120 * time.Second)
+	// 2. A requested dev port is authoritative and avoids probing a thousand
+	// closed loopback ports. With no requested port, retain SDK auto-discovery.
+	port := options.Port
+	var discoverErr error
+	if port > 0 {
+		discoverErr = ds.waitForAgent(port, 120*time.Second)
+	} else {
+		port, discoverErr = ds.discoverAgentPort(120 * time.Second)
+	}
 	if discoverErr != nil {
 		if agentCmd.Process != nil {
 			_ = agentCmd.Process.Kill()
@@ -260,7 +267,7 @@ func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, erro
 	if timeout < perReq {
 		perReq = timeout
 	}
-	client := &http.Client{Timeout: perReq}
+	client := packages.NewNodeHTTPClient(perReq)
 	deadline := time.Now().Add(timeout)
 
 	fmt.Printf("🔍 Discovering agent port...\n")
@@ -274,7 +281,7 @@ func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, erro
 			if time.Now().After(deadline) {
 				break
 			}
-			resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
+			resp, err := devNodeGet(client, fmt.Sprintf("http://127.0.0.1:%d/health", port))
 
 			if err == nil && resp.StatusCode == 200 {
 				resp.Body.Close()
@@ -299,10 +306,8 @@ func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, erro
 }
 
 // waitForAgent waits for the agent to become ready in dev mode.
-//
-//nolint:unused // retained for future dev-service enhancements
 func (ds *DefaultDevService) waitForAgent(port int, timeout time.Duration) error {
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := packages.NewNodeHTTPClient(2 * time.Second)
 	deadline := time.Now().Add(timeout)
 
 	fmt.Printf("🔍 Waiting for agent to become ready on port %d...\n", port)
@@ -312,7 +317,7 @@ func (ds *DefaultDevService) waitForAgent(port int, timeout time.Duration) error
 
 	for time.Now().Before(deadline) {
 		checkCount++
-		resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
+		resp, err := devNodeGet(client, fmt.Sprintf("http://127.0.0.1:%d/health", port))
 
 		if err == nil {
 			if resp.StatusCode == 200 {
@@ -344,10 +349,10 @@ func (ds *DefaultDevService) waitForAgent(port int, timeout time.Duration) error
 
 // displayDevCapabilities fetches and displays agent capabilities in dev mode
 func (ds *DefaultDevService) displayDevCapabilities(port int) error {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := packages.NewNodeHTTPClient(5 * time.Second)
 
 	// Get reasoners
-	reasonersResp, err := client.Get(fmt.Sprintf("http://localhost:%d/reasoners", port))
+	reasonersResp, err := devNodeGet(client, fmt.Sprintf("http://127.0.0.1:%d/reasoners", port))
 	if err != nil {
 		return err
 	}
@@ -359,7 +364,7 @@ func (ds *DefaultDevService) displayDevCapabilities(port int) error {
 	}
 
 	// Get skills
-	skillsResp, err := client.Get(fmt.Sprintf("http://localhost:%d/skills", port))
+	skillsResp, err := devNodeGet(client, fmt.Sprintf("http://127.0.0.1:%d/skills", port))
 	if err != nil {
 		return err
 	}
@@ -402,6 +407,14 @@ func (ds *DefaultDevService) displayDevCapabilities(port int) error {
 	}
 
 	return nil
+}
+
+func devNodeGet(client *http.Client, url string) (*http.Response, error) {
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(request)
 }
 
 // loadDevEnvFile loads environment variables from package .env file for dev mode

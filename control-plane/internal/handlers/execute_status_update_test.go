@@ -32,13 +32,13 @@ func TestUpdateExecutionStatusHandler_Success(t *testing.T) {
 	// Create an execution record
 	execution := &types.Execution{
 		ExecutionID: "exec-1",
-		RunID:        "run-1",
-		AgentNodeID:  "node-1",
-		ReasonerID:   "reasoner-a",
-		Status:       types.ExecutionStatusRunning,
-		StartedAt:    time.Now().UTC(),
-		CreatedAt:    time.Now().UTC(),
-		UpdatedAt:    time.Now().UTC(),
+		RunID:       "run-1",
+		AgentNodeID: "node-1",
+		ReasonerID:  "reasoner-a",
+		Status:      types.ExecutionStatusRunning,
+		StartedAt:   time.Now().UTC(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
 	}
 	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
 
@@ -390,6 +390,144 @@ func TestUpdateExecutionStatusHandler_TerminalIdempotent(t *testing.T) {
 	require.Equal(t, types.ExecutionStatusFailed, updated.Status)
 }
 
+// TestUpdateExecutionStatusHandler_CrossTerminalConflict verifies the guard
+// also refuses to rewrite one terminal status as a different one. Before this
+// guard, a duplicate or late callback could flip "succeeded" to "failed" (or
+// the reverse) after the outcome had already been observed by pollers,
+// webhooks, and telemetry.
+func TestUpdateExecutionStatusHandler_CrossTerminalConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newTestExecutionStorage(nil)
+	payloads := services.NewFilePayloadStore(t.TempDir())
+
+	completed := time.Now().UTC().Add(-time.Minute)
+	execution := &types.Execution{
+		ExecutionID: "exec-cross-terminal",
+		RunID:       "run-1",
+		Status:      types.ExecutionStatusSucceeded,
+		StartedAt:   time.Now().UTC().Add(-5 * time.Minute),
+		CompletedAt: &completed,
+		CreatedAt:   time.Now().UTC().Add(-5 * time.Minute),
+		UpdatedAt:   completed,
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	router := gin.New()
+	router.PUT("/api/v1/executions/:execution_id/status", UpdateExecutionStatusHandler(store, payloads, nil, 90*time.Second))
+
+	reqBody := `{"status": "failed", "error": "late duplicate callback"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/executions/exec-cross-terminal/status", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusConflict, resp.Code)
+
+	updated, err := store.GetExecutionRecord(context.Background(), "exec-cross-terminal")
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusSucceeded, updated.Status)
+	require.Nil(t, updated.ErrorMessage)
+	require.NotNil(t, updated.CompletedAt)
+	require.Equal(t, completed.Unix(), updated.CompletedAt.Unix())
+}
+
+// TestUpdateExecutionStatusHandler_TerminalRetryIsNoOp confirms an idempotent
+// re-delivery of the final status is acknowledged with 200 but runs no side
+// effect a second time: no second lifecycle event on the bus (every bus
+// consumer — SSE clients, tracing, telemetry — would re-count the
+// completion), no second webhook notification, and no rewrite of the
+// persisted record.
+func TestUpdateExecutionStatusHandler_TerminalRetryIsNoOp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	agent := &types.AgentNode{
+		ID:        "node-1",
+		BaseURL:   "http://agent.example",
+		Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}},
+	}
+
+	store := newTestExecutionStorage(agent)
+	payloads := services.NewFilePayloadStore(t.TempDir())
+
+	notifyCount := 0
+	mockWebhook := &mockWebhookDispatcher{
+		notifyFunc: func(ctx context.Context, executionID string) error {
+			notifyCount++
+			return nil
+		},
+	}
+
+	execution := &types.Execution{
+		ExecutionID: "exec-retry-noop",
+		RunID:       "run-1",
+		Status:      types.ExecutionStatusRunning,
+		StartedAt:   time.Now().UTC(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	secret := "test-secret"
+	require.NoError(t, store.RegisterExecutionWebhook(context.Background(), &types.ExecutionWebhook{
+		ExecutionID: "exec-retry-noop",
+		URL:         "https://example.com/webhook",
+		Secret:      &secret,
+	}))
+
+	eventCh := store.GetExecutionEventBus().Subscribe("terminal-retry-noop-test")
+	defer store.GetExecutionEventBus().Unsubscribe("terminal-retry-noop-test")
+
+	router := gin.New()
+	router.PUT("/api/v1/executions/:execution_id/status", UpdateExecutionStatusHandler(store, payloads, mockWebhook, 90*time.Second))
+
+	send := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/executions/exec-retry-noop/status", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		return resp
+	}
+	drain := func() int {
+		count := 0
+		for {
+			select {
+			case <-eventCh:
+				count++
+			default:
+				return count
+			}
+		}
+	}
+
+	// First delivery completes the execution and runs the side effects once.
+	resp := send(`{"status": "succeeded", "result": {"output": "original"}, "duration_ms": 1200}`)
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, 1, notifyCount)
+	require.Equal(t, 1, drain(), "first terminal delivery must publish exactly one lifecycle event")
+
+	first, err := store.GetExecutionRecord(context.Background(), "exec-retry-noop")
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusSucceeded, first.Status)
+
+	// Re-delivery of the same terminal status (e.g. the SDK retrying after a
+	// lost 200) is acknowledged but must not repeat any side effect or
+	// rewrite the record — even when the retry carries a different payload.
+	resp = send(`{"status": "succeeded", "result": {"output": "rewritten"}, "duration_ms": 9999}`)
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, 1, notifyCount, "webhook must not be re-notified on an idempotent retry")
+	require.Equal(t, 0, drain(), "idempotent retry must not publish a duplicate lifecycle event")
+
+	second, err := store.GetExecutionRecord(context.Background(), "exec-retry-noop")
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusSucceeded, second.Status)
+	require.Equal(t, string(first.ResultPayload), string(second.ResultPayload), "retry must not rewrite the result payload")
+	require.Equal(t, *first.DurationMS, *second.DurationMS, "retry must not rewrite the duration")
+	require.NotNil(t, second.CompletedAt)
+	require.Equal(t, first.CompletedAt.UnixNano(), second.CompletedAt.UnixNano(), "retry must not move completed_at")
+}
+
 func TestWaitForExecutionCompletion_Success(t *testing.T) {
 	store := newTestExecutionStorage(nil)
 	controller := newExecutionController(store, nil, nil, 90*time.Second, "")
@@ -561,4 +699,128 @@ type testExecutionStorageWithoutEventBus struct {
 
 func (s *testExecutionStorageWithoutEventBus) GetExecutionEventBus() *events.ExecutionEventBus {
 	return nil
+}
+
+// TestUpdateExecutionStatusHandler_WebhookTriggeredFromStore validates the fix
+// for issue #936: webhook delivery must be triggered based on the
+// execution_webhooks table, not the in-memory WebhookRegistered field (which
+// is not persisted due to db:"-" tag).
+func TestUpdateExecutionStatusHandler_WebhookTriggeredFromStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	agent := &types.AgentNode{
+		ID:        "node-1",
+		BaseURL:   "http://agent.example",
+		Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}},
+	}
+
+	store := newTestExecutionStorage(agent)
+	payloads := services.NewFilePayloadStore(t.TempDir())
+
+	webhookCalled := false
+	mockWebhook := &mockWebhookDispatcher{
+		notifyFunc: func(ctx context.Context, executionID string) error {
+			webhookCalled = true
+			return nil
+		},
+	}
+
+	// Create execution WITHOUT WebhookRegistered set (simulates loading from DB
+	// where the field is always false due to db:"-").
+	execution := &types.Execution{
+		ExecutionID:       "exec-wh-store",
+		RunID:             "run-1",
+		Status:            types.ExecutionStatusRunning,
+		StartedAt:         time.Now().UTC(),
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		WebhookRegistered: false, // Explicitly false — as if loaded from DB
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	// Register webhook in the store (separate table)
+	secret := "test-secret"
+	webhook := &types.ExecutionWebhook{
+		ExecutionID: "exec-wh-store",
+		URL:         "https://example.com/webhook",
+		Secret:      &secret,
+	}
+	require.NoError(t, store.RegisterExecutionWebhook(context.Background(), webhook))
+
+	router := gin.New()
+	router.PUT("/api/v1/executions/:execution_id/status", UpdateExecutionStatusHandler(store, payloads, mockWebhook, 90*time.Second))
+
+	reqBody := `{
+		"status": "succeeded",
+		"result": {"output": "done"}
+	}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/executions/exec-wh-store/status", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.True(t, webhookCalled, "webhook must be triggered even when WebhookRegistered is false on the execution record (issue #936)")
+
+	// Also verify the status response reports webhook_registered=true
+	var statusResp ExecutionStatusResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &statusResp))
+	require.True(t, statusResp.WebhookRegistered, "GET status must report webhook_registered=true from the webhooks table")
+}
+
+// A terminal status can reach the store without a lifecycle event on the bus
+// (the SDK's reasoner.completed workflow event takes that path, and the
+// /status callback that follows is then an idempotent no-op). The waiter must
+// still return promptly rather than sit out the full timeout.
+func TestWaitForExecutionCompletion_TerminalStatusWithoutEvent(t *testing.T) {
+	store := newTestExecutionStorage(nil)
+	controller := newExecutionController(store, nil, nil, 90*time.Second, "")
+
+	previousInterval := completionPollInterval
+	completionPollInterval = 50 * time.Millisecond
+	defer func() { completionPollInterval = previousInterval }()
+
+	execution := &types.Execution{
+		ExecutionID: "exec-1",
+		RunID:       "run-1",
+		Status:      types.ExecutionStatusRunning,
+		StartedAt:   time.Now().UTC(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	done := make(chan struct{})
+	var result *types.Execution
+	var err error
+	started := time.Now()
+	go func() {
+		result, err = controller.waitForExecutionCompletion(context.Background(), "exec-1", 5*time.Second)
+		close(done)
+	}()
+
+	// Let the waiter subscribe and run its pre-subscribe check while the
+	// record is still running, then store the terminal state with NO event.
+	time.Sleep(100 * time.Millisecond)
+	_, updateErr := store.UpdateExecutionRecord(context.Background(), "exec-1", func(current *types.Execution) (*types.Execution, error) {
+		if current == nil {
+			return nil, nil
+		}
+		now := time.Now().UTC()
+		current.Status = types.ExecutionStatusSucceeded
+		current.CompletedAt = &now
+		return current, nil
+	})
+	require.NoError(t, updateErr)
+
+	select {
+	case <-done:
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, types.ExecutionStatusSucceeded, result.Status)
+		require.Less(t, time.Since(started), 2*time.Second, "waiter should complete from the poll, not the timeout")
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForExecutionCompletion never noticed the stored terminal status")
+	}
 }

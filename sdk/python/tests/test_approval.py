@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -280,7 +281,7 @@ async def test_aclose_cleans_up_manager_and_http_client(client: AgentFieldClient
     http_client = SimpleNamespace(aclose=AsyncMock())
     client._async_execution_manager = manager
     client._async_http_client = http_client
-    client._async_http_client_lock = object()
+    client._async_http_client_loop = asyncio.get_running_loop()
 
     await client.aclose()
 
@@ -288,4 +289,5 @@ async def test_aclose_cleans_up_manager_and_http_client(client: AgentFieldClient
     http_client.aclose.assert_awaited_once()
     assert client._async_execution_manager is None
     assert client._async_http_client is None
-    assert client._async_http_client_lock is None
+    # The slot is free again: the next loop to ask can own it.
+    assert client._async_http_client_loop is None

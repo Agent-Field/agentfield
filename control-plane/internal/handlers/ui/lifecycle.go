@@ -133,16 +133,9 @@ func (h *LifecycleHandler) StopAgentHandler(c *gin.Context) {
 		return
 	}
 
-	if !agentStatus.IsRunning {
-		c.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error":   "agent not running",
-			"status":  "stopped",
-			"message": "agent is already stopped",
-		})
-		return
-	}
-
-	// Stop the agent using the agent service
+	// StopAgent is intentionally idempotent: even when the observed process has
+	// already crashed, it persists the user's stopped intent so maintenance does
+	// not resurrect it.
 	if err := h.agentService.StopAgent(agentID); err != nil {
 		RespondInternalError(c, "failed to stop agent: "+err.Error())
 		return
@@ -153,6 +146,9 @@ func (h *LifecycleHandler) StopAgentHandler(c *gin.Context) {
 		"agent_id": agentID,
 		"status":   "stopped",
 		"message":  "agent stopped successfully",
+	}
+	if !agentStatus.IsRunning {
+		response["message"] = "agent is already stopped"
 	}
 
 	c.JSON(http.StatusOK, response)

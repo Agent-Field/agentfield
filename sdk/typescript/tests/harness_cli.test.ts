@@ -20,10 +20,11 @@ class MockStream extends EventEmitter {
 }
 
 type MockChild = EventEmitter &
-  Pick<ChildProcessWithoutNullStreams, 'stdout' | 'stderr' | 'kill'>;
+  Pick<ChildProcessWithoutNullStreams, 'stdin' | 'stdout' | 'stderr' | 'kill'>;
 
 const createProcess = (): MockChild => {
   const proc = new EventEmitter() as MockChild;
+  proc.stdin = { end: vi.fn() } as unknown as ChildProcessWithoutNullStreams['stdin'];
   proc.stdout = new MockStream() as ChildProcessWithoutNullStreams['stdout'];
   proc.stderr = new MockStream() as ChildProcessWithoutNullStreams['stderr'];
   proc.kill = vi.fn();
@@ -79,12 +80,31 @@ describe('harness cli utilities', () => {
       env: expect.objectContaining({
         AGENTFIELD_OPENROUTER_SITE_URL: 'https://agentfield.ai',
         AGENTFIELD_OPENROUTER_APP_NAME: 'Caller App',
+        AGENTFIELD_OPENROUTER_CATEGORIES: 'cli-agent,programming-app',
         OR_SITE_URL: 'https://agentfield.ai',
-        OR_APP_NAME: 'Caller App'
+        OR_APP_NAME: 'Caller App',
+        OR_CATEGORIES: 'cli-agent,programming-app'
       }),
       cwd: undefined,
       stdio: ['ignore', 'pipe', 'pipe']
     });
+
+    proc.emit('close', 0);
+    await expect(pending).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it('pipes an explicit prompt over stdin and closes the stream', async () => {
+    const proc = createProcess();
+    spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);
+
+    const pending = runCli(['aforge', 'do', '--json'], { inputText: 'keep me off argv' });
+
+    expect(spawnMock).toHaveBeenCalledWith('aforge', ['do', '--json'], {
+      env: expect.any(Object),
+      cwd: undefined,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    expect(proc.stdin.end).toHaveBeenCalledWith('keep me off argv');
 
     proc.emit('close', 0);
     await expect(pending).resolves.toMatchObject({ exitCode: 0 });

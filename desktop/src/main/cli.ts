@@ -205,17 +205,38 @@ function buildStatus(
  * the bundled copy into ~/.agentfield/bin so terminals and coding agents get
  * a stable af too, then re-resolve.
  */
-export async function initializeCli(bundledPath: string | null): Promise<CliStatus> {
-  const probeAll = async () => Promise.all(cliCandidates(bundledPath).map(probeCli))
+export interface CliInitialization {
+  status: CliStatus
+  /** True only when an existing managed binary changed from an old version. */
+  managedBinaryReplaced: boolean
+}
+
+export interface CliInitializationDeps {
+  candidates?: (bundledPath: string | null) => CliCandidate[]
+  probe?: (candidate: CliCandidate) => Promise<ProbedCandidate>
+  install?: (bundledPath: string) => Promise<AgentActionResult>
+}
+
+export async function initializeCli(
+  bundledPath: string | null,
+  deps: CliInitializationDeps = {}
+): Promise<CliInitialization> {
+  const candidates = deps.candidates ?? cliCandidates
+  const probe = deps.probe ?? probeCli
+  const install = deps.install ?? installBundledCli
+  const probeAll = async () => Promise.all(candidates(bundledPath).map(probe))
 
   let probed = await probeAll()
+  const managedBefore = probed.find((candidate) => candidate.source === 'managed' && candidate.responds)
   let minVersion = effectiveMinVersion(probed)
   let { chosen, outdated } = selectCli(probed, minVersion)
   const bundled = probed.find((c) => c.source === 'bundled') ?? null
+  let installedManaged = false
 
   if ((chosen === null || chosen.source === 'bundled') && bundled?.responds) {
-    const installed = await installBundledCli(bundledPath as string)
+    const installed = await install(bundledPath as string)
     if (installed.ok) {
+      installedManaged = true
       probed = await probeAll()
       minVersion = effectiveMinVersion(probed)
       ;({ chosen, outdated } = selectCli(probed, minVersion))
@@ -223,7 +244,17 @@ export async function initializeCli(bundledPath: string | null): Promise<CliStat
   }
 
   if (chosen) activeCommand = chosen.command
-  return buildStatus(chosen, outdated, bundled, minVersion)
+  const managedAfter = probed.find((candidate) => candidate.source === 'managed' && candidate.responds)
+  return {
+    status: buildStatus(chosen, outdated, bundled, minVersion),
+    managedBinaryReplaced:
+      installedManaged &&
+      managedBefore !== undefined &&
+      managedAfter !== undefined &&
+      managedAfter.version !== null &&
+      (managedBefore.version === null ||
+        compareVersions(managedBefore.version, managedAfter.version) < 0)
+  }
 }
 
 /** Re-resolve without side effects (used after an explicit update). */

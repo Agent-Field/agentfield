@@ -226,6 +226,34 @@ describe('AgentFieldClient', () => {
     await expect(client.execute('remote.plan', { foo: 'bar' })).rejects.toBe(networkError);
   });
 
+  it('restartExecution() validates the execution id before making a request', async () => {
+    const client = new AgentFieldClient({
+      nodeId: 'node-1',
+      agentFieldUrl: 'http://control-plane.local'
+    });
+
+    await expect(client.restartExecution('')).rejects.toThrow('executionId is required');
+    expect(getHttp().post).not.toHaveBeenCalled();
+  });
+
+  it('restartExecution() preserves structured control-plane errors', async () => {
+    const client = new AgentFieldClient({
+      nodeId: 'node-1',
+      agentFieldUrl: 'http://control-plane.local'
+    });
+    const http = getHttp();
+    http.post.mockRejectedValue(makeResponseError(409, { error: 'execution is already running' }));
+
+    await expect(client.restartExecution('exec/1')).rejects.toThrow(
+      'restart execution exec/1 failed (409): execution is already running'
+    );
+    expect(http.post).toHaveBeenCalledWith(
+      '/api/v1/executions/exec%2F1/restart',
+      expect.any(String),
+      expect.objectContaining({ headers: expect.objectContaining({ 'Content-Type': 'application/json' }) })
+    );
+  });
+
   it('attaches DID signing headers to register, heartbeat, and execute requests when credentials are configured', async () => {
     const client = new AgentFieldClient({
       nodeId: 'node-1',

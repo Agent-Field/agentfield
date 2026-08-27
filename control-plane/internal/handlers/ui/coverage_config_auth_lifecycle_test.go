@@ -58,19 +58,19 @@ type stubExecutionRecordStore struct {
 
 type overrideStorage struct {
 	storagepkg.StorageProvider
-	getAgentPackageFn              func(context.Context, string) (*types.AgentPackage, error)
-	getAgentConfigurationFn        func(context.Context, string, string) (*types.AgentConfiguration, error)
-	validateAgentConfigurationFn   func(context.Context, string, string, map[string]interface{}) (*types.ConfigurationValidationResult, error)
-	storeAgentConfigurationFn      func(context.Context, *types.AgentConfiguration) error
-	updateAgentConfigurationFn     func(context.Context, *types.AgentConfiguration) error
-	getAgentFn                     func(context.Context, string) (*types.AgentNode, error)
-	listAgentsFn                   func(context.Context, types.AgentFilters) ([]*types.AgentNode, error)
+	getAgentPackageFn               func(context.Context, string) (*types.AgentPackage, error)
+	getAgentConfigurationFn         func(context.Context, string, string) (*types.AgentConfiguration, error)
+	validateAgentConfigurationFn    func(context.Context, string, string, map[string]interface{}) (*types.ConfigurationValidationResult, error)
+	storeAgentConfigurationFn       func(context.Context, *types.AgentConfiguration) error
+	updateAgentConfigurationFn      func(context.Context, *types.AgentConfiguration) error
+	getAgentFn                      func(context.Context, string) (*types.AgentNode, error)
+	listAgentsFn                    func(context.Context, types.AgentFilters) ([]*types.AgentNode, error)
 	getReasonerPerformanceMetricsFn func(context.Context, string) (*types.ReasonerPerformanceMetrics, error)
-	getReasonerExecutionHistoryFn  func(context.Context, string, int, int) (*types.ReasonerExecutionHistory, error)
-	queryAgentPackagesFn           func(context.Context, types.PackageFilters) ([]*types.AgentPackage, error)
-	getConfigFn                    func(context.Context, string) (*storagepkg.ConfigEntry, error)
-	setConfigFn                    func(context.Context, string, string, string) error
-	hasExecutionWebhookFn          func(context.Context, string) (bool, error)
+	getReasonerExecutionHistoryFn   func(context.Context, string, int, int) (*types.ReasonerExecutionHistory, error)
+	queryAgentPackagesFn            func(context.Context, types.PackageFilters) ([]*types.AgentPackage, error)
+	getConfigFn                     func(context.Context, string) (*storagepkg.ConfigEntry, error)
+	setConfigFn                     func(context.Context, string, string, string) error
+	hasExecutionWebhookFn           func(context.Context, string) (bool, error)
 }
 
 func (s *stubExecutionRecordStore) QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error) {
@@ -218,11 +218,11 @@ func TestConfigHandlerCoverage(t *testing.T) {
 		router = newConfigRouter(storage)
 		storage.getAgentPackageFn = func(ctx context.Context, packageID string) (*types.AgentPackage, error) {
 			return &types.AgentPackage{
-			ID:                  "pkg",
-			Name:                "pkg",
-			Version:             "1.0.0",
-			ConfigurationSchema: json.RawMessage(`{invalid`),
-		}, nil
+				ID:                  "pkg",
+				Name:                "pkg",
+				Version:             "1.0.0",
+				ConfigurationSchema: json.RawMessage(`{invalid`),
+			}, nil
 		}
 		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/agents/agent-1/config/schema?packageId=pkg", nil)
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -234,12 +234,12 @@ func TestConfigHandlerCoverage(t *testing.T) {
 		desc := "package description"
 		storage.getAgentPackageFn = func(ctx context.Context, packageID string) (*types.AgentPackage, error) {
 			return &types.AgentPackage{
-			ID:                  "pkg",
-			Name:                "Package",
-			Version:             "1.0.0",
-			Description:         &desc,
-			ConfigurationSchema: json.RawMessage(`{"required":{"token":{"type":"secret"}}}`),
-		}, nil
+				ID:                  "pkg",
+				Name:                "Package",
+				Version:             "1.0.0",
+				Description:         &desc,
+				ConfigurationSchema: json.RawMessage(`{"required":{"token":{"type":"secret"}}}`),
+			}, nil
 		}
 
 		rec := performJSONRequest(router, http.MethodGet, "/api/ui/v1/agents/agent-1/config/schema?packageId=pkg", nil)
@@ -272,15 +272,15 @@ func TestConfigHandlerCoverage(t *testing.T) {
 
 		storage.getAgentConfigurationFn = func(ctx context.Context, agentID, packageID string) (*types.AgentConfiguration, error) {
 			return &types.AgentConfiguration{
-			AgentID:         "agent-1",
-			PackageID:       "pkg",
-			Configuration:   map[string]interface{}{"token": "abc"},
-			EncryptedFields: []string{"token"},
-			Status:          types.ConfigurationStatusActive,
-			Version:         2,
-			CreatedAt:       now,
-			UpdatedAt:       now,
-		}, nil
+				AgentID:         "agent-1",
+				PackageID:       "pkg",
+				Configuration:   map[string]interface{}{"token": "abc"},
+				EncryptedFields: []string{"token"},
+				Status:          types.ConfigurationStatusActive,
+				Version:         2,
+				CreatedAt:       now,
+				UpdatedAt:       now,
+			}, nil
 		}
 		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/agents/agent-1/config?packageId=pkg", nil)
 		require.Equal(t, http.StatusOK, rec.Code)
@@ -388,7 +388,7 @@ func TestAuthorizationHandlerCoverage(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code)
 		var body struct {
 			Agents []AgentTagSummaryResponse `json:"agents"`
-			Total  int                      `json:"total"`
+			Total  int                       `json:"total"`
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 		require.Len(t, body.Agents, 2)
@@ -404,6 +404,21 @@ func TestAuthorizationHandlerCoverage(t *testing.T) {
 		require.Equal(t, "voice", body.Agents[1].Components.Sessions[0].ID)
 		require.Equal(t, []string{"support"}, body.Agents[1].Components.Sessions[0].ApprovedTags)
 	})
+}
+
+func TestStopAgentHandlerPersistsCrashedNodeIntent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	agentSvc := &mockLifecycleAgentService{}
+	agentSvc.On("GetAgentStatus", "crashed").Return(&domain.AgentStatus{Name: "crashed", IsRunning: false}, nil).Once()
+	agentSvc.On("StopAgent", "crashed").Return(nil).Once()
+	handler := NewLifecycleHandler(nil, agentSvc)
+	router := gin.New()
+	router.POST("/api/ui/v1/agents/:agentId/stop", handler.StopAgentHandler)
+
+	rec := performJSONRequest(router, http.MethodPost, "/api/ui/v1/agents/crashed/stop", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"status":"stopped"`)
+	agentSvc.AssertExpectations(t)
 }
 
 func TestLifecycleHandlerCoverage(t *testing.T) {
@@ -471,8 +486,10 @@ func TestLifecycleHandlerCoverage(t *testing.T) {
 		require.Equal(t, http.StatusNotFound, rec.Code)
 
 		agentSvc.On("GetAgentStatus", "idle").Return(&domain.AgentStatus{Name: "idle", IsRunning: false}, nil).Once()
+		agentSvc.On("StopAgent", "idle").Return(nil).Once()
 		rec = performJSONRequest(router, http.MethodPost, "/api/ui/v1/agents/idle/stop", nil)
-		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Contains(t, rec.Body.String(), `"status":"stopped"`)
 
 		agentSvc.On("GetAgentStatus", "busy").Return(&domain.AgentStatus{Name: "busy", IsRunning: true}, nil).Once()
 		agentSvc.On("StopAgent", "busy").Return(errors.New("fail")).Once()

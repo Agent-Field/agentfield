@@ -572,7 +572,36 @@ func TestSimulatedContextFromNilCases(t *testing.T) {
 	if SimulatedContextFrom(nil) != nil {
 		t.Fatal("expected nil for a nil context")
 	}
-	if withSimContext(context.Background(), nil) == nil {
-		t.Fatal("withSimContext with nil tc should return the parent, not nil")
+}
+
+// TestSimulatedContextIsReadableByFromContext is the guard against the
+// simulated and live dispatch paths drifting apart: a handler written against
+// FromContext (as production code is) must see the context the Simulate*
+// helpers attach. Before these shared, the helpers used a private key and
+// FromContext returned nil under test while working in production.
+func TestSimulatedContextIsReadableByFromContext(t *testing.T) {
+	var viaFromContext *Context
+
+	handler := func(ctx context.Context, input map[string]any) (any, error) {
+		viaFromContext = FromContext(ctx)
+		return nil, nil
+	}
+
+	if _, err := SimulateEvent(t, handler, SimulateEventOpts{
+		Source:    "stripe",
+		EventType: "payment_intent.succeeded",
+		EventID:   "evt_shared",
+	}); err != nil {
+		t.Fatalf("SimulateEvent returned error: %v", err)
+	}
+
+	if viaFromContext == nil {
+		t.Fatal("FromContext must see the context attached by SimulateEvent")
+	}
+	if viaFromContext.Source != "stripe" {
+		t.Fatalf("Source = %q, want stripe", viaFromContext.Source)
+	}
+	if viaFromContext.EventID != "evt_shared" {
+		t.Fatalf("EventID = %q, want evt_shared", viaFromContext.EventID)
 	}
 }

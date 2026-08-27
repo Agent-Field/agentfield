@@ -296,6 +296,9 @@ func TestComplete_WithOptions(t *testing.T) {
 }
 
 func TestComplete_WithOpenRouterHeaders(t *testing.T) {
+	t.Setenv("AGENTFIELD_OPENROUTER_CATEGORIES", "")
+	t.Setenv("OR_CATEGORIES", "")
+
 	var receivedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedHeaders = r.Header
@@ -347,9 +350,13 @@ func TestComplete_WithOpenRouterHeaders(t *testing.T) {
 	assert.Equal(t, "https://example.com", receivedHeaders.Get("HTTP-Referer"))
 	assert.Equal(t, "MyApp", receivedHeaders.Get("X-OpenRouter-Title"))
 	assert.Equal(t, "MyApp", receivedHeaders.Get("X-Title"))
+	assert.Equal(t, defaultOpenRouterCategories, receivedHeaders.Get("X-OpenRouter-Categories"))
 }
 
 func TestStreamComplete_WithOpenRouterHeaders(t *testing.T) {
+	t.Setenv("AGENTFIELD_OPENROUTER_CATEGORIES", "")
+	t.Setenv("OR_CATEGORIES", "")
+
 	var receivedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedHeaders = r.Header
@@ -380,6 +387,7 @@ func TestStreamComplete_WithOpenRouterHeaders(t *testing.T) {
 	assert.Equal(t, "https://stream.example", receivedHeaders.Get("HTTP-Referer"))
 	assert.Equal(t, "Stream App", receivedHeaders.Get("X-OpenRouter-Title"))
 	assert.Equal(t, "Stream App", receivedHeaders.Get("X-Title"))
+	assert.Equal(t, defaultOpenRouterCategories, receivedHeaders.Get("X-OpenRouter-Categories"))
 }
 
 func TestComplete_ErrorHandling(t *testing.T) {

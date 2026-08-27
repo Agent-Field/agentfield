@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,7 +34,7 @@ func TestControlPlaneMemoryBackend_SetSendsScopeHeaders(t *testing.T) {
 	defer srv.Close()
 
 	b := NewControlPlaneMemoryBackend(srv.URL, "", "agent-1")
-	if err := b.Set(ScopeWorkflow, "wf-1", "k", map[string]any{"v": 1}); err != nil {
+	if err := b.Set(context.Background(), ScopeWorkflow, "wf-1", "k", map[string]any{"v": 1}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if gotPath != "/api/v1/memory/set" {
@@ -63,7 +64,7 @@ func TestControlPlaneMemoryBackend_UserScopeMapsToActor(t *testing.T) {
 	defer srv.Close()
 
 	b := NewControlPlaneMemoryBackend(srv.URL, "", "agent-1")
-	if err := b.Set(ScopeUser, "u-1", "k", "v"); err != nil {
+	if err := b.Set(context.Background(), ScopeUser, "u-1", "k", "v"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if gotActor != "u-1" {
@@ -82,7 +83,7 @@ func TestControlPlaneMemoryBackend_GetNotFound(t *testing.T) {
 	defer srv.Close()
 
 	b := NewControlPlaneMemoryBackend(srv.URL, "", "agent-1")
-	val, found, err := b.Get(ScopeSession, "s-1", "missing")
+	val, found, err := b.Get(context.Background(), ScopeSession, "s-1", "missing")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestControlPlaneMemoryBackend_ListReturnsKeys(t *testing.T) {
 	defer srv.Close()
 
 	b := NewControlPlaneMemoryBackend(srv.URL, "", "agent-1")
-	keys, err := b.List(ScopeGlobal, "global")
+	keys, err := b.List(context.Background(), ScopeGlobal, "global")
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -148,22 +149,22 @@ func TestControlPlaneMemoryBackend_VectorOperationsRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	b := NewControlPlaneMemoryBackend(srv.URL, "token-123", "agent-1")
-	require.NoError(t, b.SetVector(ScopeSession, "sess-1", "vector-key", []float64{1.25, 2.5}, map[string]any{"kind": "cached"}))
+	require.NoError(t, b.SetVector(context.Background(), ScopeSession, "sess-1", "vector-key", []float64{1.25, 2.5}, map[string]any{"kind": "cached"}))
 
-	embedding, metadata, found, err := b.GetVector(ScopeSession, "sess-1", "vector-key")
+	embedding, metadata, found, err := b.GetVector(context.Background(), ScopeSession, "sess-1", "vector-key")
 	require.NoError(t, err)
 	assert.True(t, found)
 	assert.InDeltaSlice(t, []float64{1.25, 2.5}, embedding, 1e-6)
 	assert.Equal(t, map[string]any{"kind": "cached"}, metadata)
 
-	results, err := b.SearchVector(ScopeSession, "sess-1", []float64{1.25, 2.5}, SearchOptions{Limit: 3, Threshold: 0.5, Filters: map[string]any{"kind": "cached"}, Scope: ScopeWorkflow})
+	results, err := b.SearchVector(context.Background(), ScopeSession, "sess-1", []float64{1.25, 2.5}, SearchOptions{Limit: 3, Threshold: 0.5, Filters: map[string]any{"kind": "cached"}, Scope: ScopeWorkflow})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "vector-key", results[0].Key)
 	assert.Equal(t, ScopeWorkflow, results[0].Scope)
 	assert.Equal(t, "wf-1", results[0].ScopeID)
 
-	require.NoError(t, b.DeleteVector(ScopeSession, "sess-1", "vector-key"))
+	require.NoError(t, b.DeleteVector(context.Background(), ScopeSession, "sess-1", "vector-key"))
 	assert.Equal(t, "Bearer token-123", sawAuthorization)
 	assert.Equal(t, "sess-1", sawSession)
 	assert.Equal(t, "session", setVectorBody["scope"])
@@ -180,12 +181,12 @@ func TestControlPlaneMemoryBackend_ErrorPathsAndHelpers(t *testing.T) {
 		defer srv.Close()
 
 		b := NewControlPlaneMemoryBackend(srv.URL, "", "agent-1")
-		embedding, metadata, found, err := b.GetVector(ScopeWorkflow, "wf-1", "missing")
+		embedding, metadata, found, err := b.GetVector(context.Background(), ScopeWorkflow, "wf-1", "missing")
 		require.NoError(t, err)
 		assert.False(t, found)
 		assert.Nil(t, embedding)
 		assert.Nil(t, metadata)
-		require.NoError(t, b.DeleteVector(ScopeWorkflow, "wf-1", "missing"))
+		require.NoError(t, b.DeleteVector(context.Background(), ScopeWorkflow, "wf-1", "missing"))
 	})
 
 	t.Run("vector search surfaces server errors", func(t *testing.T) {
@@ -196,7 +197,7 @@ func TestControlPlaneMemoryBackend_ErrorPathsAndHelpers(t *testing.T) {
 		defer srv.Close()
 
 		b := NewControlPlaneMemoryBackend(srv.URL, "", "agent-1")
-		_, err := b.SearchVector(ScopeGlobal, "global", []float64{1}, SearchOptions{})
+		_, err := b.SearchVector(context.Background(), ScopeGlobal, "global", []float64{1}, SearchOptions{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "vector memory search failed")
 	})

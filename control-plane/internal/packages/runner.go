@@ -12,8 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 // AgentNodeRunner handles running agent nodes
@@ -309,12 +307,17 @@ func (ar *AgentNodeRunner) waitForAgentNode(port int, healthPath, expectedNodeID
 	if healthPath == "" {
 		healthPath = "/health"
 	}
-	client := &http.Client{Timeout: 1 * time.Second}
+	client := NewNodeHTTPClient(1 * time.Second)
 	deadline := time.Now().Add(timeout)
 
 	impostor := ""
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(fmt.Sprintf("http://localhost:%d%s", port, healthPath))
+		request, requestErr := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%d%s", port, healthPath), nil)
+		var resp *http.Response
+		err := requestErr
+		if requestErr == nil {
+			resp, err = client.Do(request)
+		}
 		if err == nil && resp.StatusCode == 200 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
@@ -343,7 +346,7 @@ func (ar *AgentNodeRunner) displayCapabilities(_ InstalledPackage, port int) err
 // DisplayCapabilities prints the reasoners and skills served by a running node.
 // It understands both the current /discover contract and legacy split endpoints.
 func DisplayCapabilities(port int) error {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := NewNodeHTTPClient(5 * time.Second)
 
 	// Current SDKs expose one discovery document. Older Python nodes expose
 	// separate /reasoners and /skills collections, so fall back to those when
@@ -399,7 +402,11 @@ func DisplayCapabilities(port int) error {
 }
 
 func fetchCapabilityDocument(client *http.Client, port int, path string) (map[string]interface{}, error) {
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%d%s", port, path))
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%d%s", port, path), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}
@@ -417,47 +424,24 @@ func fetchCapabilityDocument(client *http.Client, port int, path string) (map[st
 // updateRuntimeInfo updates the registry with runtime information
 func (ar *AgentNodeRunner) updateRuntimeInfo(agentNodeName string, port, pid int) error {
 	registryPath := filepath.Join(ar.AgentFieldHome, "installed.yaml")
-
-	// Load registry
-	registry := &InstallationRegistry{}
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return fmt.Errorf("failed to parse registry: %w", err)
+	return UpdateInstallationRegistry(registryPath, func(registry *InstallationRegistry) error {
+		if agentNode, exists := registry.Installed[agentNodeName]; exists {
+			startedAt := time.Now().Format(time.RFC3339)
+			agentNode.Status = "running"
+			agentNode.Runtime.Port = &port
+			agentNode.Runtime.PID = &pid
+			agentNode.Runtime.StartedAt = &startedAt
+			agentNode.Runtime.BootID = CurrentBootID()
+			agentNode.Runtime.StartTime = CurrentProcessStartTime(pid)
+			registry.Installed[agentNodeName] = agentNode
 		}
-	}
-
-	// Update runtime info
-	if agentNode, exists := registry.Installed[agentNodeName]; exists {
-		startedAt := time.Now().Format(time.RFC3339)
-		agentNode.Status = "running"
-		agentNode.Runtime.Port = &port
-		agentNode.Runtime.PID = &pid
-		agentNode.Runtime.StartedAt = &startedAt
-		registry.Installed[agentNodeName] = agentNode
-	}
-
-	// Save registry
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(registryPath, data, 0644)
+		return nil
+	})
 }
 
 // loadRegistry loads the installation registry
 func (ar *AgentNodeRunner) loadRegistry() (*InstallationRegistry, error) {
 	registryPath := filepath.Join(ar.AgentFieldHome, "installed.yaml")
 
-	registry := &InstallationRegistry{
-		Installed: make(map[string]InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return nil, fmt.Errorf("failed to parse registry: %w", err)
-		}
-	}
-
-	return registry, nil
+	return LoadInstallationRegistry(registryPath)
 }

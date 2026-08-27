@@ -21,7 +21,7 @@ func TestSkillCatalogAndEmbeddedMirrorsStayAligned(t *testing.T) {
 	}{
 		{name: "agentfield", version: "0.5.2"},
 		{name: "agentfield-personal", version: "0.1.0"},
-		{name: "agentfield-use", version: "0.6.0"},
+		{name: "agentfield-use", version: "0.8.0"},
 	}
 
 	for _, tt := range tests {

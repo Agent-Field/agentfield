@@ -1,3 +1,36 @@
+# aforge — the pinned coding-harness binary AgentField's harness providers
+# spawn (`aforge exec --json -w <dir>`). Fetched in its own stage so the
+# runtime layer is a single COPY and the download never drags curl/apt state
+# into the final image.
+#
+# Soft fetch, hard verify: the download host goes live with the website
+# deploy, so a 404 degrades to "this image ships without aforge" rather than
+# breaking every image build in the meantime. A download that DOES land is
+# always checksum-verified — checksums.txt carries the sha256 of the
+# UNCOMPRESSED binary, so the hash is taken after gunzip.
+#
+# Pin overrides (both are build args): AFORGE_BASE_URL, AFORGE_VERSION.
+FROM debian:bookworm-slim AS aforge-dist
+ARG TARGETARCH
+ARG AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge
+ARG AFORGE_VERSION=v0.1.0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /out
+RUN set -eu; \
+    if curl -fsSL "${AFORGE_BASE_URL}/${AFORGE_VERSION}/aforge-linux-${TARGETARCH}.gz" -o aforge.gz \
+       && curl -fsSL "${AFORGE_BASE_URL}/${AFORGE_VERSION}/checksums.txt" -o checksums.txt; then \
+        gunzip -c aforge.gz > "aforge-linux-${TARGETARCH}"; \
+        grep " aforge-linux-${TARGETARCH}\$" checksums.txt | sha256sum -c -; \
+        chmod 0755 "aforge-linux-${TARGETARCH}"; \
+        mv "aforge-linux-${TARGETARCH}" aforge; \
+    else \
+        echo "WARNING: aforge ${AFORGE_VERSION} is not available at ${AFORGE_BASE_URL}; this image ships without it" >&2; \
+    fi; \
+    rm -f aforge.gz checksums.txt
+
 FROM golang:1.25-alpine
 
 WORKDIR /workspace
@@ -6,6 +39,11 @@ COPY sdk/go /tmp/go-sdk
 
 RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
     cd /tmp/go-sdk && go mod download && go test ./...
+
+# aforge is a statically linked ELF binary, so the debian-built asset runs
+# unchanged on this musl/alpine base. See the aforge-dist stage for why
+# this copies a directory, not a file.
+COPY --from=aforge-dist /out/ /usr/local/bin/
 
 ENV GO111MODULE=on
 

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, m, useReducedMotion } from 'motion/react'
-import type { CatalogEntry } from '../../../shared/types'
+import type { CatalogEntry, InstalledAgent } from '../../../shared/types'
+import { installedSourceLabel } from '../../../shared/catalog'
 import { COMMUNITY_LINKS } from './communityLinks'
 import { MenuPopover } from './MenuPopover'
 import { SkeletonRows } from './Skeleton'
+import { updateWithExecutionConfirmation } from './AgentsPanel'
 
 /**
  * Install-success checkmark (DESIGN.md §5.2): the path draws in ~400ms via
@@ -36,7 +38,8 @@ function InstallCheck() {
 // featured marketplace card grid. Rendered by App inside the Agents view —
 // there is no separate Install view anymore.
 interface InstallPanelProps {
-  installedNames: string[]
+  installedAgents: InstalledAgent[]
+  provisioningNames: string[]
   onInstalled: () => void
   /** Installed agents count — labels the "Back to installed (N)" affordance. */
   libraryCount: number
@@ -118,7 +121,8 @@ export function parseRepoSource(input: string): ParsedRepo | null {
 }
 
 export function InstallPanel({
-  installedNames,
+  installedAgents,
+  provisioningNames,
   onInstalled,
   libraryCount,
   onBackToLibrary
@@ -200,7 +204,11 @@ export function InstallPanel({
   const update = async (name: string) => {
     setOpenMenu(null)
     setPhase({ state: 'installing', name, progress: 'Updating…', lines: ['Updating…'] })
-    const result = await window.agentfield.update(name)
+    const result = await updateWithExecutionConfirmation(
+      name,
+      (force) => window.agentfield.update(name, force ? { force: true } : undefined),
+      (message) => window.confirm(message)
+    )
     setPhase({
       state: 'done',
       name,
@@ -212,6 +220,7 @@ export function InstallPanel({
   }
 
   const installing = phase.state === 'installing'
+  const installedByName = new Map(installedAgents.map((agent) => [agent.name, agent]))
   const parsed = parseRepoSource(repoUrl)
   const repoInvalid = repoUrl.trim().length > 0 && parsed === null
   const showRepoError = repoInvalid && repoTouched
@@ -386,7 +395,8 @@ export function InstallPanel({
             <FeaturedCard
               key={entry.name}
               entry={entry}
-              installed={installedNames.includes(entry.name)}
+              installedAgent={installedByName.get(entry.name)}
+              provisioning={provisioningNames.includes(entry.name)}
               installing={installing}
               phase={phase}
               confirming={confirming === entry.name}
@@ -416,7 +426,8 @@ export function InstallPanel({
  */
 function FeaturedCard({
   entry,
-  installed,
+  installedAgent,
+  provisioning,
   installing,
   phase,
   confirming,
@@ -429,7 +440,8 @@ function FeaturedCard({
   onToggleMenu
 }: {
   entry: CatalogEntry
-  installed: boolean
+  installedAgent?: InstalledAgent
+  provisioning: boolean
   installing: boolean
   phase: InstallPhase
   confirming: boolean
@@ -444,11 +456,17 @@ function FeaturedCard({
   const active = phase.state !== 'idle' && phase.name === entry.name
   const busy = installing && phase.state === 'installing' && phase.name === entry.name
   const cardLines = busy && phase.state === 'installing' ? phase.lines : []
+  const installed = installedAgent !== undefined
 
   // Curated sources are https git URLs (link out) or af://registry refs
   // (plain text). Show the short org/repo form as the trust cue.
   const sourceHref = entry.source.startsWith('https://') ? entry.source : null
   const sourceLabel = entry.source.replace(/^https:\/\/github\.com\//, '')
+  // Drift means a different REPOSITORY, not a different string: a catalog
+  // install is recorded as the redirect target (`…/SWE-AF//go`), which must
+  // not read as "installed from somewhere else".
+  const recordedSource = installedAgent?.source?.trim()
+  const recordedSourceLabel = installedSourceLabel(recordedSource, entry.source)
 
   return (
     <div className="market-card">
@@ -485,20 +503,31 @@ function FeaturedCard({
       )}
 
       <div className="market-card-foot">
-        {sourceHref ? (
-          <a
-            className="market-source"
-            href={sourceHref}
-            target="_blank"
-            rel="noreferrer"
-            title={`Open ${entry.source}`}
-          >
-            {sourceLabel} ↗
-          </a>
-        ) : (
-          <span className="market-source">{sourceLabel}</span>
-        )}
-        {installed ? (
+        <div className="market-provenance">
+          {sourceHref ? (
+            <a
+              className="market-source"
+              href={sourceHref}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open ${entry.source}`}
+            >
+              {sourceLabel} ↗
+            </a>
+          ) : (
+            <span className="market-source">{sourceLabel}</span>
+          )}
+          {recordedSourceLabel ? (
+            <span className="market-source market-installed-source" title={recordedSource}>
+              installed from {recordedSourceLabel}
+            </span>
+          ) : null}
+        </div>
+        {provisioning ? (
+          <button className="install-button" disabled>
+            Installing…
+          </button>
+        ) : installed ? (
           confirming ? (
             <div className="row-actions">
               <button className="action-button danger" disabled={installing} onClick={onUninstall}>

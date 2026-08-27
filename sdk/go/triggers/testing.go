@@ -13,34 +13,16 @@ import (
 // dependency-free (and importable from agent without a cycle).
 type HandlerFunc func(ctx context.Context, input map[string]any) (any, error)
 
-// simContextKey is the context key used by the test helpers to attach the
-// synthetic *Context.
-//
-// Note: this deliberately mirrors what the dispatch path does. Once the
-// dispatch-side helpers land (#514) this will be replaced by the shared
-// NewContext/FromContext pair so the simulated and live paths use one
-// implementation.
-type simContextKey struct{}
-
-// withSimContext attaches tc to ctx for retrieval by SimulatedContextFrom.
-func withSimContext(parent context.Context, tc *Context) context.Context {
-	if tc == nil {
-		return parent
-	}
-	return context.WithValue(parent, simContextKey{}, tc)
-}
-
 // SimulatedContextFrom returns the *Context attached by SimulateEvent or
 // SimulateSchedule, or nil when ctx carries none.
 //
-// Handlers under test that read the trigger context should use this in tests;
-// production code uses the dispatch-side accessor.
+// This is an alias for FromContext: the helpers attach the context through the
+// same mechanism the live dispatch path uses, so a handler reading
+// FromContext(ctx) in production sees the simulated context unchanged under
+// test. Prefer FromContext in handler code; this name is kept for symmetry
+// with the Simulate* helpers.
 func SimulatedContextFrom(ctx context.Context) *Context {
-	if ctx == nil {
-		return nil
-	}
-	tc, _ := ctx.Value(simContextKey{}).(*Context)
-	return tc
+	return FromContext(ctx)
 }
 
 // SimulateEventOpts configures a simulated event dispatch.
@@ -125,7 +107,7 @@ func SimulateEvent(t *testing.T, handler HandlerFunc, opts SimulateEventOpts) (a
 	// Apply the matching binding's Transform, mirroring the dispatch path.
 	input := body
 	if len(opts.Bindings) > 0 {
-		transformed := applyMatchingTransform(tc, opts.Bindings, body)
+		transformed := ApplyTransform(tc, opts.Bindings, body)
 		if resolved, ok := transformed.(map[string]any); ok {
 			input = resolved
 		} else {
@@ -137,7 +119,7 @@ func SimulateEvent(t *testing.T, handler HandlerFunc, opts SimulateEventOpts) (a
 	if parent == nil {
 		parent = context.Background()
 	}
-	return handler(withSimContext(parent, tc), input)
+	return handler(NewContext(parent, tc), input)
 }
 
 // SimulateSchedule runs a cron-triggered handler with a synthetic tick event.
@@ -161,78 +143,6 @@ func SimulateSchedule(t *testing.T, handler HandlerFunc, opts SimulateScheduleOp
 		ReceivedAt: opts.ReceivedAt,
 		Ctx:        opts.Ctx,
 	})
-}
-
-// applyMatchingTransform picks the best-matching binding for tc and runs its
-// Transform against input.
-//
-// Matching rules (identical to the Python and TypeScript SDKs):
-//  1. binding.Source must equal tc.Source
-//  2. when the binding declares EventTypes, tc.EventType must match one of
-//     them exactly or by dotted prefix ("pull_request" matches
-//     "pull_request.opened")
-//  3. a binding with explicit EventTypes wins over a catch-all binding
-//  4. if the winning binding has no Transform, input is returned unchanged
-//
-// A panicking Transform is recovered and the raw input returned, so a buggy
-// transform degrades to pass-through instead of failing the test run with an
-// unhelpful stack.
-func applyMatchingTransform(tc *Context, bindings []Binding, input map[string]any) any {
-	if tc == nil || len(bindings) == 0 {
-		return input
-	}
-
-	var best *Binding
-	bestSpecificity := -1
-
-	for i := range bindings {
-		b := &bindings[i]
-		if b.Kind != EventBinding {
-			continue
-		}
-		if b.Source != tc.Source {
-			continue
-		}
-		if len(b.EventTypes) > 0 {
-			if !eventTypeMatches(b.EventTypes, tc.EventType) {
-				continue
-			}
-			if bestSpecificity < 1 {
-				best, bestSpecificity = b, 1
-			}
-			continue
-		}
-		if bestSpecificity < 0 {
-			best, bestSpecificity = b, 0
-		}
-	}
-
-	if best == nil || best.TransformFn == nil {
-		return input
-	}
-
-	return func() (out any) {
-		defer func() {
-			if recover() != nil {
-				out = input
-			}
-		}()
-		return best.TransformFn(input)
-	}()
-}
-
-// eventTypeMatches reports whether eventType matches any filter exactly or as
-// a dotted prefix.
-func eventTypeMatches(filters []string, eventType string) bool {
-	for _, f := range filters {
-		if f == "" || f == eventType {
-			return true
-		}
-		if len(eventType) > len(f)+1 && eventType[:len(f)] == f && eventType[len(f)] == '.' {
-			return true
-		}
-	}
-	return false
 }
 
 // orRandomID returns value when non-empty, else prefix plus 12 random hex

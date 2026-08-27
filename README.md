@@ -20,7 +20,7 @@
 
 <div align="center">
 <a href="https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness-banner">
-<img src="assets/harness-banner.png" alt="Now includes Harness Orchestration — multi-turn coding agents with Claude Code, Codex, Gemini CLI, and OpenCode" width="100%" />
+<img src="assets/harness-banner.png" alt="Now includes Harness Orchestration — multi-turn coding agents with AForge, Claude Code, Codex, Gemini CLI, and OpenCode" width="100%" />
 </a>
 </div>
 
@@ -41,6 +41,10 @@ https://github.com/user-attachments/assets/9fb7b1cf-26de-4b9b-9ba2-917252cc26ec
 ```bash
 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
+
+The installer also drops the `aforge` coding harness beside `af` in
+`~/.agentfield/bin`, so harness-backed agents work out of the box; skip it with
+`--no-aforge`.
 
 On macOS the installer also registers the control plane to start at login (under
 launchd) and adds a menu-bar icon. Stop it with `af service stop` or the menu-bar
@@ -247,7 +251,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 - **[Reasoners & Skills](https://agentfield.ai/docs/build/building-blocks/reasoners?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-reasoners)** - `@app.reasoner()` for AI judgment, `@app.skill()` for deterministic code
 - **[Structured AI](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-structured-ai)** - `app.ai(schema=MyModel)` → typed Pydantic/Zod output from any LLM
-- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to OMP (default), Pi, Claude Code, Codex, Gemini CLI, or OpenCode
+- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to AForge, AgentField's own coding harness — no setup. Add `provider="claude-code"` (or `codex`, `gemini`, `opencode`, `pi`, `omp`) to orchestrate someone else's.
 - **[Cross-Agent Calls](https://agentfield.ai/docs/build/coordination/cross-agent-calls?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-cross-agent-calls)** - `app.call("other-agent.func")` routes through the control plane with full tracing
 - **[Discovery](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-discovery)** - `app.discover(tags=["ml*"])` finds agents and capabilities across the mesh. `tools="discover"` lets LLMs auto-invoke them.
 - **[Memory](https://agentfield.ai/docs/build/coordination/shared-memory?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-memory)** - `app.memory.set()` / `.get()` / `.similarity_search()` - KV + vector search, four scopes, no Redis needed
@@ -279,7 +283,8 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Feature | How |
 |---|---|
 | Structured output (Pydantic/Zod) | `app.ai(schema=MyModel)` |
-| Multi-turn coding agents | `app.harness("task")` (OMP default) or `provider="pi"` / another provider |
+| Multi-turn coding agents | `app.harness("task")` — AForge by default |
+| Orchestrate another harness | `app.harness("task", provider="claude-code")` (also `codex`, `gemini`, `opencode`, `pi`, `omp`) |
 | LLM auto-discovers agents and tools | `app.ai(tools="discover")` |
 | Multimodal (text, image, audio) | `app.ai("Describe", image_url="...")` |
 | Streaming responses | `app.ai("...", stream=True)` |
@@ -375,7 +380,9 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 | Feature | How |
 |---|---|
-| 4 providers | Claude Code, Codex, Gemini CLI, OpenCode |
+| Zero-setup default harness | AForge (`aforge`), installed alongside `af` |
+| Swap the worker, keep the loop | `provider="claude-code"` \| `"codex"` \| `"gemini"` \| `"opencode"` |
+| Fleet-wide default override | `AGENTFIELD_HARNESS_PROVIDER=codex` |
 | Schema-constrained output | `schema=ResultModel` (Pydantic/Zod) |
 | Cost capping | `max_budget_usd=3.0` |
 | Turn limiting | `max_turns=100` |
@@ -420,6 +427,7 @@ af install https://github.com/Agent-Field/SWE-AF             # autonomous engine
 af install https://github.com/Agent-Field/sec-af             # security auditor              → node: sec-af
 af install https://github.com/Agent-Field/cloudsecurity-af   # cloud / IaC security scanner  → node: cloudsecurity
 af install https://github.com/Agent-Field/pr-af              # agentic code review           → node: pr-af
+af install https://github.com/Agent-Field/person-to-brief-af # cited person intelligence     → node: person-to-brief-af
 
 af run swe-planner                                          # start a node (prompts once for required secrets)
 af call swe-planner.build --in '{"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}'
@@ -498,6 +506,21 @@ Full walkthrough — authoring, installing, and configuring nodes: [Installing a
       <sub>#1 open-source reviewer on Code-Review-Bench - 0.706 golden recall across 42 tools compared, at ~10x lower cost per review. Builds a custom review strategy for every PR, then adversarially challenges its own findings.</sub>
       <br/><br/>
       <a href="https://agentfield.ai/github/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">View project →</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://github.com/Agent-Field/person-to-brief-af">
+        <img src="assets/examples/person-to-brief-af.png" alt="Person to Brief AF" />
+      </a>
+      <br/>
+      <b>Person to Brief AF</b>
+      <br/>
+      <sub>Give it a name and company. It resolves the right identity, researches public professional sources in parallel, verifies claims, and returns an outreach-ready brief plus cited PDF.</sub>
+      <br/><br/>
+      <a href="https://github.com/Agent-Field/person-to-brief-af">View project →</a>
+    </td>
+    <td align="center" width="50%">
     </td>
   </tr>
 </table>

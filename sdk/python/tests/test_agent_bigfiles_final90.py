@@ -110,6 +110,7 @@ def test_callback_candidate_helpers(monkeypatch):
     monkeypatch.setattr("agentfield.agent._detect_container_ip", lambda: "198.51.100.20")
     monkeypatch.setattr("agentfield.agent._detect_local_ip", lambda: "10.0.0.8")
     monkeypatch.setattr("agentfield.agent.socket.gethostname", lambda: "hostbox")
+    monkeypatch.delenv("AGENTFIELD_DISABLE_IP_DETECTION", raising=False)
     monkeypatch.setenv("AGENT_CALLBACK_URL", "callback.internal")
     monkeypatch.setenv("RAILWAY_SERVICE_NAME", "svc")
     monkeypatch.setenv("RAILWAY_ENVIRONMENT", "prod")
@@ -122,12 +123,13 @@ def test_callback_candidate_helpers(monkeypatch):
     expected_urls = [
         "http://callback.internal:8001",
         "http://svc.railway.internal:8001",
-        "http://198.51.100.20:8001",
         "http://10.0.0.8:8001",
         "http://hostbox:8001",
     ]
     for url in expected_urls:
         assert any(c == url for c in candidates), f"{url} not found in candidates"
+    # An explicit callback URL suppresses the public-IP probe entirely.
+    assert "http://198.51.100.20:8001" not in candidates
     assert _resolve_callback_url(None, 7777) == "http://callback.internal:7777"
 
 

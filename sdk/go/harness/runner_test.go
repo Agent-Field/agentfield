@@ -36,13 +36,16 @@ func (m *mockProvider) Execute(_ context.Context, prompt string, opts Options) (
 func TestRunner_Run_NoSchema(t *testing.T) {
 	runner := NewRunner(Options{Provider: "opencode"})
 
-	// The zero-value SDK configuration resolves to OMP.
-	t.Run("default provider", func(t *testing.T) {
-		r := NewRunner(Options{})
-		assert.Equal(t, ProviderOMP, r.DefaultOptions.Provider)
-		provider, err := BuildProvider("", "")
+	// We can't easily test with real providers, so test the merge/validation logic
+	t.Run("empty provider defaults to aforge", func(t *testing.T) {
+		t.Setenv(ProviderEnvVar, "")
+		r := NewRunner(Options{BinPath: filepath.Join(t.TempDir(), "missing-aforge")})
+		result, err := r.Run(context.Background(), "test", nil, nil, Options{})
 		require.NoError(t, err)
-		assert.IsType(t, &OMPProvider{}, provider)
+		require.NotNil(t, result)
+		assert.True(t, result.IsError)
+		assert.Contains(t, result.ErrorMessage, "missing-aforge")
+		assert.NotContains(t, result.ErrorMessage, "no harness provider specified")
 	})
 
 	t.Run("unknown provider", func(t *testing.T) {
@@ -418,6 +421,7 @@ func TestOpenCodeProvider_OpenRouterConfigOverlay(t *testing.T) {
 	assert.Equal(t, "https://agentfield.ai", headers["HTTP-Referer"])
 	assert.Equal(t, "AgentField AI", headers["X-OpenRouter-Title"])
 	assert.Equal(t, "AgentField AI", headers["X-Title"])
+	assert.Equal(t, defaultOpenRouterCategories, headers["X-OpenRouter-Categories"])
 }
 
 // --- Codex provider tests ---
@@ -545,18 +549,44 @@ func TestGeminiProvider_NonZeroExit(t *testing.T) {
 
 func TestGeminiProvider_WithModel(t *testing.T) {
 	dir := t.TempDir()
-	script := writeTestScript(t, dir, "gemini", "#!/bin/sh\necho \"args: $@\"\n")
+	script := writeTestScript(t, dir, "gemini", "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
 
-	p := NewGeminiProvider(script)
-	raw, err := p.Execute(context.Background(), "test prompt", Options{
-		Model:          "gemini-2.5-pro",
-		PermissionMode: "auto",
-	})
-	assert.NoError(t, err)
-	assert.False(t, raw.IsError)
-	assert.Contains(t, raw.Result, "-m")
-	assert.Contains(t, raw.Result, "gemini-2.5-pro")
-	assert.Contains(t, raw.Result, "--sandbox")
+	tests := []struct {
+		name    string
+		options Options
+		want    []string
+	}{
+		{
+			name:    "auto uses yolo",
+			options: Options{Cwd: dir, PermissionMode: "auto"},
+			want:    []string{"--yolo", "-p", "test prompt"},
+		},
+		{
+			name:    "plan precedes stripped model and prompt",
+			options: Options{PermissionMode: "plan", Model: "gemini-2.5-pro#high"},
+			want:    []string{"--approval-mode", "plan", "-m", "gemini-2.5-pro", "-p", "test prompt"},
+		},
+		{
+			name: "unset permission mode adds no flag",
+			want: []string{"-p", "test prompt"},
+		},
+		{
+			name:    "unknown permission mode adds no flag",
+			options: Options{PermissionMode: "unknown", Model: "gemini-2.5-flash"},
+			want:    []string{"-m", "gemini-2.5-flash", "-p", "test prompt"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := NewGeminiProvider(script).Execute(context.Background(), "test prompt", tc.options)
+			require.NoError(t, err)
+			assert.False(t, raw.IsError)
+			assert.Equal(t, tc.want, strings.Split(raw.Result, "\n"))
+			assert.NotContains(t, raw.Result, "-C")
+			assert.NotContains(t, raw.Result, "--sandbox")
+		})
+	}
 }
 
 // --- BuildProvider factory tests ---
@@ -568,6 +598,7 @@ func TestBuildProvider(t *testing.T) {
 		wantType string
 		wantErr  bool
 	}{
+		{"aforge", "aforge", "*harness.AforgeProvider", false},
 		{"claude-code", "claude-code", "*harness.ClaudeCodeProvider", false},
 		{"codex", "codex", "*harness.CodexProvider", false},
 		{"gemini", "gemini", "*harness.GeminiProvider", false},
@@ -592,8 +623,8 @@ func TestBuildProvider(t *testing.T) {
 }
 
 func TestRunner_BuildProvider_UsesFactory(t *testing.T) {
-	// Verify the runner can build every provider without starting external CLIs.
-	for _, name := range []string{"claude-code", "codex", "gemini", "opencode", "pi", "omp"} {
+	// Verify the runner can build every registered provider.
+	for _, name := range []string{"aforge", "claude-code", "codex", "gemini", "opencode", "pi", "omp"} {
 		t.Run(name, func(t *testing.T) {
 			runner := NewRunner(Options{Provider: name})
 			provider, err := runner.buildProvider(runner.DefaultOptions)

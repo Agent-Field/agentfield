@@ -18,6 +18,17 @@ const (
 	ExecutionStatusTimeout   ExecutionStatus = "timeout"
 )
 
+// ExecutionReasonAwaitingAgentRestart is written to an execution's
+// status_reason while the control plane is deliberately holding it through a
+// restart of its agent node — the dispatch found the port closed and is
+// waiting for the process to come back rather than failing the run.
+//
+// Such an execution is NOT an orphan: the control plane still owns it and is
+// about to re-dispatch it. MarkAgentExecutionsOrphaned therefore skips rows
+// carrying this reason, so the re-registration that ends the restart does not
+// fail the very execution that was waiting for it.
+const ExecutionReasonAwaitingAgentRestart = "awaiting_agent_restart"
+
 var canonicalExecutionStatuses = map[ExecutionStatus]struct{}{
 	ExecutionStatusUnknown:   {},
 	ExecutionStatusPending:   {},

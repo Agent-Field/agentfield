@@ -1,19 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CATALOG } from '../shared/catalog'
+import { BUNDLED_NODES } from '../shared/bundled'
 import { CpApiError, type CpClient } from './cpClient'
 import { installAgent, installCommand, installFromSource, parseRepoSource, sanitizeInstallOutput, updateAgent } from './installer'
 
+// Any vetted installable entry; the marketplace CATALOG is currently empty, so
+// the bundled roster is where installCommand's name→source contract lives.
+const ENTRY = BUNDLED_NODES[0]
+
 describe('installCommand', () => {
   it('builds a plain install for a catalog entry', () => {
-    const cmd = installCommand(CATALOG[0].name)
+    const cmd = installCommand(ENTRY.name)
     expect(cmd).not.toBeNull()
-    expect(cmd!.args).toEqual(['install', CATALOG[0].source])
+    expect(cmd!.args).toEqual(['install', ENTRY.source])
   })
 
   it('appends --force for updates (reinstall in place, secrets survive)', () => {
-    const cmd = installCommand(CATALOG[0].name, true)
+    const cmd = installCommand(ENTRY.name, true)
     expect(cmd).not.toBeNull()
-    expect(cmd!.args).toEqual(['install', CATALOG[0].source, '--force'])
+    expect(cmd!.args).toEqual(['install', ENTRY.source, '--force'])
   })
 
   it('refuses names outside the curated catalog', () => {
@@ -109,24 +113,30 @@ function installClient(overrides: Partial<CpClient> = {}): CpClient {
 describe('control-plane installs', () => {
   it('preserves progress callbacks and terminal success/failure', async () => {
     const lines: string[] = []
-    expect(await installAgent(CATALOG[0].name, (line) => lines.push(line), false, { cpClient: installClient() })).toEqual({ ok: true, message: `${CATALOG[0].name} installed` })
+    expect(await installAgent(ENTRY.name, (line) => lines.push(line), false, { cpClient: installClient() })).toEqual({ ok: true, message: `${ENTRY.name} installed` })
     expect(lines).toEqual(['Cloning', 'Installed'])
     const failed = installClient({ watchInstallJob: vi.fn(async () => ({ id: 'job', source: '', kind: 'install' as const, status: 'failed' as const, error: 'clone failed', lines: [] })) })
-    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: failed })).toEqual({ ok: false, message: 'clone failed' })
+    expect(await installAgent(ENTRY.name, () => {}, false, { cpClient: failed })).toEqual({ ok: false, message: 'clone failed' })
   })
 
   it('forwards force for reinstall-in-place updates', async () => {
     const client = installClient()
-    await installAgent(CATALOG[0].name, () => {}, true, { cpClient: client })
-    expect(client.installPackage).toHaveBeenCalledWith(CATALOG[0].source, true)
+    await installAgent(ENTRY.name, () => {}, true, { cpClient: client })
+    expect(client.installPackage).toHaveBeenCalledWith(ENTRY.source, true)
+  })
+
+  it('updates catalog agents from the current catalog source', async () => {
+    const client = installClient()
+    await updateAgent(ENTRY.name, () => {}, { cpClient: client })
+    expect(client.updatePackage).toHaveBeenCalledWith(ENTRY.name, { source: ENTRY.source })
   })
 
   it('surfaces conflict and old-control-plane errors without fallback', async () => {
     const conflict = installClient({ installPackage: vi.fn(async () => { throw new CpApiError({ status: 409, message: 'another install is running' }) }) })
-    expect((await installAgent(CATALOG[0].name, () => {}, false, { cpClient: conflict })).message).toMatch(/another install/i)
+    expect((await installAgent(ENTRY.name, () => {}, false, { cpClient: conflict })).message).toMatch(/another install/i)
     const old = installClient({ hasInstallApi: vi.fn(async () => false) })
-    expect((await installAgent(CATALOG[0].name, () => {}, false, { cpClient: old })).message).toMatch(/update AgentField CLI/)
-    expect((await updateAgent(CATALOG[0].name, () => {}, { cpClient: old })).message).toMatch(/update AgentField CLI/)
+    expect((await installAgent(ENTRY.name, () => {}, false, { cpClient: old })).message).toMatch(/update AgentField CLI/)
+    expect((await updateAgent(ENTRY.name, () => {}, { cpClient: old })).message).toMatch(/update AgentField CLI/)
   })
 
   it('maps mid-request 404s to the update-required result', async () => {
@@ -134,7 +144,7 @@ describe('control-plane installs', () => {
     const install = installClient({
       installPackage: vi.fn(async () => { throw missing })
     })
-    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: install })).toEqual({
+    expect(await installAgent(ENTRY.name, () => {}, false, { cpClient: install })).toEqual({
       ok: false,
       message: 'Control plane update required — update AgentField CLI'
     })
@@ -142,7 +152,7 @@ describe('control-plane installs', () => {
     const update = installClient({
       updatePackage: vi.fn(async () => { throw missing })
     })
-    expect(await updateAgent(CATALOG[0].name, () => {}, { cpClient: update })).toEqual({
+    expect(await updateAgent(ENTRY.name, () => {}, { cpClient: update })).toEqual({
       ok: false,
       message: 'Control plane update required — update AgentField CLI'
     })
@@ -152,7 +162,7 @@ describe('control-plane installs', () => {
     const client = installClient({
       installPackage: vi.fn(async () => { throw new TypeError('offline') })
     })
-    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: client })).toEqual({
+    expect(await installAgent(ENTRY.name, () => {}, false, { cpClient: client })).toEqual({
       ok: false,
       message: 'Could not reach the control plane — start the control plane and try again'
     })
@@ -168,7 +178,7 @@ describe('control-plane installs', () => {
         lines: ['clone failed']
       }))
     })
-    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: failedWithLine })).toEqual({
+    expect(await installAgent(ENTRY.name, () => {}, false, { cpClient: failedWithLine })).toEqual({
       ok: false,
       message: 'clone failed'
     })
@@ -182,18 +192,23 @@ describe('control-plane installs', () => {
         lines: []
       }))
     })
-    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: failedEmpty })).toEqual({
+    expect(await installAgent(ENTRY.name, () => {}, false, { cpClient: failedEmpty })).toEqual({
       ok: false,
       message: 'Install failed'
     })
   })
 
-  it('rejects unknown catalog names at the async function boundary', async () => {
-    await expect(installAgent('not-in-catalog', () => {})).resolves.toEqual({
-      ok: false,
-      message: '"not-in-catalog" is not in the install catalog'
+  it('updates non-catalog packages from their recorded source', async () => {
+    const client = installClient()
+    await expect(updateAgent('custom-agent', () => {}, { cpClient: client })).resolves.toEqual({
+      ok: true,
+      message: 'custom-agent updated'
     })
-    await expect(updateAgent('not-in-catalog', () => {})).resolves.toEqual({
+    expect(client.updatePackage).toHaveBeenCalledWith('custom-agent', undefined)
+  })
+
+  it('still rejects unknown catalog names on install', async () => {
+    await expect(installAgent('not-in-catalog', () => {})).resolves.toEqual({
       ok: false,
       message: '"not-in-catalog" is not in the install catalog'
     })
@@ -235,20 +250,20 @@ describe('superseded installs report what actually landed', () => {
 
   it('names the successor when a catalog install redirects elsewhere', async () => {
     expect(
-      await installAgent(CATALOG[0].name, () => {}, false, { cpClient: landedAs('successor-node') })
+      await installAgent(ENTRY.name, () => {}, false, { cpClient: landedAs('successor-node') })
     ).toEqual({ ok: true, message: 'successor-node installed' })
   })
 
   it('reports an update that renamed the node as a replacement', async () => {
     expect(
-      await updateAgent(CATALOG[0].name, () => {}, { cpClient: landedAs('successor-node') })
-    ).toEqual({ ok: true, message: `${CATALOG[0].name} replaced by successor-node` })
+      await updateAgent(ENTRY.name, () => {}, { cpClient: landedAs('successor-node') })
+    ).toEqual({ ok: true, message: `${ENTRY.name} replaced by successor-node` })
   })
 
   it('still reads as a plain update when the name is unchanged', async () => {
     expect(
-      await updateAgent(CATALOG[0].name, () => {}, { cpClient: landedAs(CATALOG[0].name) })
-    ).toEqual({ ok: true, message: `${CATALOG[0].name} updated` })
+      await updateAgent(ENTRY.name, () => {}, { cpClient: landedAs(ENTRY.name) })
+    ).toEqual({ ok: true, message: `${ENTRY.name} updated` })
   })
 })
 

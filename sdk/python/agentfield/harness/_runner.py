@@ -10,6 +10,7 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
+from agentfield.harness._defaults import resolve_harness_provider
 from agentfield.harness._result import FailureType, HarnessResult, RawResult
 from agentfield.harness._schema import (
     build_followup_prompt,
@@ -26,10 +27,7 @@ from agentfield.harness._schema import (
     try_parse_from_text,
 )
 from agentfield.harness.providers._base import HarnessProvider
-from agentfield.harness.providers._factory import (
-    DEFAULT_HARNESS_PROVIDER,
-    build_provider,
-)
+from agentfield.harness.providers._factory import build_provider
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +278,7 @@ class HarnessRunner:
         }
         options = _resolve_options(self._config, overrides)
 
-        resolved_provider = options.get("provider") or DEFAULT_HARNESS_PROVIDER
+        resolved_provider = resolve_harness_provider(options.get("provider"))
         options["provider"] = resolved_provider
 
         resolved_cwd = str(options.get("cwd") or ".")

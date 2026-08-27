@@ -21,6 +21,8 @@ type Metrics struct {
 	DurationAPIMS int
 	NumTurns      int
 	SessionID     string
+	// Model is the model the provider actually ran, when the provider reports one; empty when unknown.
+	Model string
 
 	// CostUSD is the cost in USD reported by the provider for this single
 	// execution, or nil when the provider does not report a cost. Mirrors the
@@ -65,6 +67,8 @@ type Result struct {
 	IsError      bool
 	ErrorMessage string
 	FailureType  FailureType
+	// Model is the model the provider actually ran, when the provider reports one; empty when unknown.
+	Model string
 
 	// CostUSD is the total cost in USD accumulated across every provider
 	// execution that contributed to this result (including failed retry

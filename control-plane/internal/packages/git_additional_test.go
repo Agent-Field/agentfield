@@ -57,6 +57,10 @@ if [ "${1:-}" = "clone" ]; then
       ;;
   esac
 fi
+if [ "${1:-}" = "-C" ] && [ "${3:-}" = "rev-parse" ] && [ "${4:-}" = "HEAD" ]; then
+  echo "${FAKE_GIT_COMMIT:-0123456789abcdef0123456789abcdef01234567}"
+  exit 0
+fi
 echo "unexpected git args: $*" >&2
 exit 1
 `
@@ -173,6 +177,86 @@ func TestGitInstallerInstallFromGitAdditionalCoverage(t *testing.T) {
 			t.Fatalf("InstallFromGit error = %v", err)
 		}
 	})
+}
+
+func TestForcedGitReinstallStopsExistingPackageBeforeReplacement(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	writeTestPackage(t, repo, "name: demo\nversion: 2.0.0\n")
+	setupFakeGit(t, "copy", repo, false)
+	dest := seedInstalled(t, home, "demo")
+	registry, err := (&PackageUninstaller{AgentFieldHome: home}).loadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := registry.Installed["demo"]
+	entry.Status = "running"
+	entry.DesiredState = DesiredStateRunning
+	registry.Installed["demo"] = entry
+	if err := (&PackageUninstaller{AgentFieldHome: home}).saveRegistry(registry); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dest, "old-version-marker")
+	if err := os.WriteFile(marker, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stopCalled := false
+	restartCalled := false
+	installer := &GitInstaller{
+		AgentFieldHome: home,
+		BeforeForceInstall: func(name string) error {
+			stopCalled = true
+			if name != "demo" {
+				t.Fatalf("stop name = %q", name)
+			}
+			if _, err := os.Stat(marker); err != nil {
+				t.Fatalf("package files were replaced before stop: %v", err)
+			}
+			return nil
+		},
+		AfterForceInstall: func(name string, state ReinstallState) error {
+			restartCalled = true
+			if name != "demo" || !state.WasRunning {
+				t.Fatalf("restart name=%q state=%+v", name, state)
+			}
+			return nil
+		},
+	}
+	if err := installer.InstallFromGit("https://gitlab.com/acme/demo", true); err != nil {
+		t.Fatal(err)
+	}
+	if !stopCalled {
+		t.Fatal("forced reinstall did not invoke stop-before-install")
+	}
+	if !restartCalled {
+		t.Fatal("forced reinstall did not restart the previously running package")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("old package files still present after replacement: %v", err)
+	}
+}
+
+func TestStopPackageForReinstallPreservesRunningIntentAndPort(t *testing.T) {
+	home := t.TempDir()
+	port := 8123
+	registry := InstallationRegistry{Installed: map[string]InstalledPackage{
+		"demo": {Name: "demo", Status: "running", Runtime: RuntimeInfo{Port: &port}},
+	}}
+	data, err := yaml.Marshal(&registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := stopPackageForReinstall(home, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	updated := readRegistryFile(t, filepath.Join(home, "installed.yaml")).Installed["demo"]
+	if updated.Status != "stopped" || updated.DesiredState != DesiredStateRunning || updated.Runtime.Port == nil || *updated.Runtime.Port != port {
+		t.Fatalf("stopped reinstall entry = %+v", updated)
+	}
 }
 
 func TestUpdateRegistryWithGitInvalidRegistry(t *testing.T) {

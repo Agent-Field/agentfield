@@ -213,7 +213,11 @@ func TestRenderedGoScaffoldBuilds(t *testing.T) {
 	}
 	commands := [][]string{
 		{"mod", "edit", "-replace=github.com/Agent-Field/agentfield/sdk/go=" + sdkRoot},
-		{"build", "-mod=mod", "./..."},
+		// -buildvcs=false: the rendered scaffold is not a repository, and go
+		// build's VCS auto-detection walks above the temp dir — a .git anywhere
+		// up the tree (a dotfiles $HOME, a stray /tmp/.git) would fail the build
+		// for reasons unrelated to the template. Mirrors InstallGoDependencies.
+		{"build", "-buildvcs=false", "-mod=mod", "./..."},
 	}
 	for _, args := range commands {
 		cmd := exec.Command("go", args...)

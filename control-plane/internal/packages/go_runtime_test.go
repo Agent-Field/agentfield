@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -276,6 +277,41 @@ func TestInstallGoDependencies_BuildsBinary(t *testing.T) {
 	}
 	if err := InstallGoDependencies(dir, md); err != nil {
 		t.Fatalf("InstallGoDependencies: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "bin", "node")); err != nil {
+		t.Fatalf("expected built binary bin/node: %v", err)
+	}
+}
+
+// Contract: a Go node must build regardless of what surrounds the package
+// directory. `go build`'s VCS auto-detection walks up past the package root,
+// so a .git anywhere above ~/.agentfield/packages — a dotfiles-managed $HOME,
+// a stray /tmp/.git — used to hard-fail the install with "error obtaining VCS
+// status" (the copied package is not a repository, so there is nothing
+// truthful to stamp). Uses the real toolchain: the failure lives inside `go
+// build`'s repository detection, which stubGo cannot reproduce.
+func TestInstallGoDependencies_IgnoresParentVCS(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("real Go toolchain required")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir fake .git: %v", err)
+	}
+	dir := filepath.Join(root, "pkg")
+	writeGoManifest(t, dir,
+		"name: n\nversion: 0.1.0\nlanguage: go\nentrypoint:\n  build: ./cmd/node\n  start: bin/node\n",
+		"1.21", "")
+	if err := os.MkdirAll(filepath.Join(dir, "cmd", "node"), 0o755); err != nil {
+		t.Fatalf("mkdir cmd/node: %v", err)
+	}
+	writeFile(t, dir, "cmd/node/main.go", "package main\n\nfunc main() {}\n")
+	md, err := ParsePackageMetadata(dir)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := InstallGoDependencies(dir, md); err != nil {
+		t.Fatalf("InstallGoDependencies under a foreign .git: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "bin", "node")); err != nil {
 		t.Fatalf("expected built binary bin/node: %v", err)

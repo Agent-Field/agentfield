@@ -438,6 +438,7 @@ func TestAgentServiceRunStopAndStatusWithLiveProcess(t *testing.T) {
 
 		port := 8126
 		startedAt := time.Now().Add(-2 * time.Minute).Format(time.RFC3339)
+		startTime := packages.CurrentProcessStartTime(pid)
 		registry := &packages.InstallationRegistry{
 			Installed: map[string]packages.InstalledPackage{
 				"stop-agent": {
@@ -449,6 +450,7 @@ func TestAgentServiceRunStopAndStatusWithLiveProcess(t *testing.T) {
 						Port:      &port,
 						PID:       &pid,
 						StartedAt: &startedAt,
+						StartTime: startTime,
 						LogFile:   filepath.Join(home, "agent.log"),
 					},
 				},
@@ -487,6 +489,7 @@ func TestAgentServiceRunStopAndStatusWithLiveProcess(t *testing.T) {
 
 		port := 8127
 		startedAt := time.Now().Add(-90 * time.Second).Format(time.RFC3339)
+		startTime := packages.CurrentProcessStartTime(pid)
 		registry := &packages.InstallationRegistry{
 			Installed: map[string]packages.InstalledPackage{
 				"status-agent": {
@@ -498,6 +501,7 @@ func TestAgentServiceRunStopAndStatusWithLiveProcess(t *testing.T) {
 						Port:      &port,
 						PID:       &pid,
 						StartedAt: &startedAt,
+						StartTime: startTime,
 						LogFile:   filepath.Join(home, "agent.log"),
 					},
 				},

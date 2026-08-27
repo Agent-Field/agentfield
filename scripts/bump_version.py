@@ -20,10 +20,17 @@ PY_INIT_FILE = REPO_ROOT / "sdk/python/agentfield/__init__.py"
 PKG_INFO_FILE = REPO_ROOT / "sdk/python/agentfield.egg-info/PKG-INFO"
 TS_PACKAGE_JSON = REPO_ROOT / "sdk/typescript/package.json"
 GO_TEMPLATE_FILE = REPO_ROOT / "control-plane/internal/templates/go/go.mod.tmpl"
+TS_TEMPLATE_PACKAGE_JSON = (
+    REPO_ROOT / "control-plane/internal/templates/typescript/package.json.tmpl"
+)
 REQUIREMENT_FILES = [
     REPO_ROOT / "examples/python_agent_nodes/hello_world_rag/requirements.txt",
     REPO_ROOT / "examples/python_agent_nodes/agentic_rag/requirements.txt",
     REPO_ROOT / "examples/python_agent_nodes/documentation_chatbot/requirements.txt",
+    # Scaffold template: keeps `af init` floors current so fresh scaffolds
+    # (and Docker layer caches keyed on the requirements file) resolve the
+    # release that matches the generated code.
+    REPO_ROOT / "control-plane/internal/templates/python/requirements.txt.tmpl",
 ]
 
 
@@ -231,7 +238,10 @@ def update_requirements(version: SemVer) -> None:
         lines = path.read_text(encoding="utf-8").splitlines()
         replaced = False
         for idx, line in enumerate(lines):
-            if line.strip().startswith("agentfield"):
+            # Match the agentfield distribution only (bare or with a version
+            # specifier), not other packages that share the prefix, e.g.
+            # agentfield-cli or agentfield_extras.
+            if re.match(r"^agentfield\s*(?:[<>=~!].*)?$", line.strip()):
                 lines[idx] = f"agentfield>={version}"
                 replaced = True
                 break
@@ -261,6 +271,21 @@ def update_ts_package_json(version: SemVer) -> None:
     write_file(TS_PACKAGE_JSON, json.dumps(data, indent=2) + "\n")
 
 
+def update_ts_template(version: SemVer) -> None:
+    # The template contains Go template actions ({{jsonQuote ...}}), so edit
+    # the dependency line with a regex instead of parsing it as JSON.
+    text = TS_TEMPLATE_PACKAGE_JSON.read_text(encoding="utf-8")
+    new_text, count = re.subn(
+        r'("@agentfield/sdk"\s*:\s*")[^"]+(")',
+        rf"\g<1>^{version}\g<2>",
+        text,
+        count=1,
+    )
+    if count != 1:
+        raise RuntimeError("Failed to update @agentfield/sdk pin in package.json.tmpl")
+    write_file(TS_TEMPLATE_PACKAGE_JSON, new_text)
+
+
 def apply_version(version: SemVer) -> None:
     update_version_file(version)
     update_pyproject(version)
@@ -271,6 +296,10 @@ def apply_version(version: SemVer) -> None:
     # so examples would fail to install without --pre flag.
     if not version.prerelease:
         update_requirements(version)
+        # Prerelease floors would pin scaffolds to a single -rc stream
+        # (npm caret + PEP 440 both exclude prereleases by default), so the
+        # scaffold templates only track stable releases.
+        update_ts_template(version)
     update_go_template(version)
     update_ts_package_json(version)
 

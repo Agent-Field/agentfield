@@ -242,6 +242,13 @@ func (s *testExecutionStorage) RegisterExecutionWebhook(ctx context.Context, web
 	return nil
 }
 
+func (s *testExecutionStorage) HasExecutionWebhook(ctx context.Context, executionID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.webhooks[executionID]
+	return ok, nil
+}
+
 func (s *testExecutionStorage) CreateExecutionRecord(ctx context.Context, execution *types.Execution) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

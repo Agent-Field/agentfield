@@ -1,15 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
-import { areGovernanceAdminRoutesAvailable } from "@/lib/governanceProbe";
+import { probeGovernanceAdminAccess } from "@/lib/governanceProbe";
 import { listPolicies } from "@/services/accessPoliciesApi";
 import { listAllAgentsWithTags } from "@/services/tagApprovalApi";
 
 /** Shared TanStack Query prefix for access policy + agent tag admin data. */
 export const ACCESS_MANAGEMENT_QUERY_KEY = "access-management";
 
-export function useAccessAdminRoutesProbe(adminToken: string | null) {
+export function useAccessAdminRoutesProbe() {
   return useQuery({
-    queryKey: [ACCESS_MANAGEMENT_QUERY_KEY, "probe", adminToken ?? ""],
-    queryFn: areGovernanceAdminRoutesAvailable,
+    queryKey: [ACCESS_MANAGEMENT_QUERY_KEY, "probe"],
+    queryFn: probeGovernanceAdminAccess,
     staleTime: 60_000,
     retry: 1,
   });

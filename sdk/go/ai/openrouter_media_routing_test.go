@@ -360,7 +360,7 @@ func TestSeedModelMetaRoutesToChatCompletions(t *testing.T) {
 	p.SeedModelMeta("openai/gpt-audio-mini", []string{"text", "audio"}, []string{"text"})
 
 	_, err := p.GenerateAudio(context.Background(), AudioRequest{
-		Text: "hi", Model: "openai/gpt-audio-mini", Format: "mp3",
+		Text: "hi", Model: "openai/gpt-audio-mini", Format: "pcm16",
 	})
 	require.NoError(t, err)
 }

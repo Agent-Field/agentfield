@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
+import * as z4 from 'zod/v4';
 
 import { toJsonSchema } from '../src/utils/schema.js';
 
@@ -19,6 +20,18 @@ describe('toJsonSchema', () => {
     const result = toJsonSchema(z.object({ name: z.string() }));
 
     expect(result).not.toHaveProperty('$schema');
+  });
+
+  it('converts zod 4 objects with the native converter', () => {
+    expect(toJsonSchema(z4.object({ name: z4.string(), count: z4.number().optional() }))).toEqual({
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        count: { type: 'number' },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    });
   });
 
   it('returns plain json schema objects unchanged', () => {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"path/filepath"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
@@ -111,25 +112,25 @@ func TestHarnessRunner_ConcurrentAccess(t *testing.T) {
 	}
 }
 
-func TestHarness_DefaultProviderIsOMP(t *testing.T) {
-	// A provider-less call reaches OMP. This environment intentionally has no
-	// OMP binary, so the provider returns its typed, actionable runtime result.
+func TestHarness_ErrorWithoutProvider(t *testing.T) {
+	// With no provider configured, Harness() defaults to aforge and reaches
+	// provider execution. A missing binary may fail, but provider resolution does not.
+	t.Setenv(harness.ProviderEnvVar, "")
 	a := newTestAgentForHarness(t)
 
-	result, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{
-		BinPath: t.TempDir() + "/missing-omp",
-	})
+	missingAforge := filepath.Join(t.TempDir(), "missing-aforge")
+	result, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{BinPath: missingAforge})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.True(t, result.IsError)
-	assert.Contains(t, result.ErrorMessage, "OMP binary not found")
-	assert.Contains(t, result.ErrorMessage, "https://omp.sh/install")
+	assert.Contains(t, result.ErrorMessage, "missing-aforge")
+	assert.NotContains(t, result.ErrorMessage, "no harness provider specified")
 }
 
 func TestHarness_PassesOptsToRunner(t *testing.T) {
 	// Verify that per-call Options are forwarded to the runner.
-	// Using a non-existent provider triggers a provider-build error, which
-	// confirms the explicit override won over the OMP default.
+	// Using a non-existent provider triggers a provider-build error,
+	// which confirms the Options reached Run().
 	a := newTestAgentForHarness(t)
 
 	_, err := a.Harness(context.Background(), "test", nil, nil, harness.Options{

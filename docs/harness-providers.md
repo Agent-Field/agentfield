@@ -1,48 +1,86 @@
 # Harness providers
 
-AgentField harness providers run external coding agents behind one SDK contract.
-OMP is the default in Python, TypeScript, and Go; an explicit provider always
-wins. Install the provider wrapper you need, install its CLI when required, and
-verify the runtime before starting a workflow.
+`app.harness()` hands a task to a coding agent — a multi-turn worker that reads,
+writes, and edits files, then reports back through the same structured-output
+contract as `app.ai()`. AgentField ships its own harness, **AForge**, and it is
+the default: a call with no provider set runs `aforge`. Naming a different
+provider swaps the worker without changing the surrounding loop, which is how
+you orchestrate Claude Code, Codex, Gemini CLI, OpenCode, Pi, or OMP from a
+reasoner.
 
-## Default selection
+## Default: AForge
 
-Provider resolution is identical in every SDK:
+The `aforge` binary is provisioned alongside the `af` CLI — the curl installer,
+the desktop app, and the published Docker images all ship it. To install or
+repair it on demand:
 
-1. The provider passed to the individual harness call.
-2. The provider in the agent's harness configuration.
-3. OMP.
-
-Model resolution follows the same first two layers, then defers to the selected
-CLI's configured default. AgentField does not silently force a Claude model onto
-OMP or another provider.
-
-```python
-# Python: provider omitted, so this runs OMP.
-result = await app.harness("Fix the failing test")
+```bash
+af aforge ensure
 ```
 
-```typescript
-// TypeScript: provider omitted, so this runs OMP.
-const result = await app.harness('Fix the failing test');
+Set `OPENROUTER_API_KEY`, then call the harness with nothing else configured:
+
+```python
+result = await app.harness("Fix the failing test in tests/test_auth.py", schema=Report)
 ```
 
 ```go
-// Go: the zero-value Options use OMP.
-result, err := app.Harness(ctx, "Fix the failing test", nil, nil, harness.Options{})
+result, err := agent.Harness(ctx, task, schema, &dest, harness.Options{Cwd: repoRoot})
 ```
+
+```ts
+const result = await app.harness(task, { schema });
+```
+
+The model defaults to AForge's own default. Set `AFORGE_MODEL` to change it
+process-wide, or pass `model=` per call.
+
+Verify the runtime before a paid run:
+
+```bash
+af harness doctor --provider aforge
+```
+
+## Choosing a different provider
+
+Provider selection follows one precedence chain:
+
+| Order | Source | Example |
+| --- | --- | --- |
+| 1 | Explicit value on the call or in the agent's harness config | `app.harness(task, provider="codex")` |
+| 2 | `AGENTFIELD_HARNESS_PROVIDER` environment variable | `AGENTFIELD_HARNESS_PROVIDER=claude-code` |
+| 3 | Default | `aforge` |
+
+Same loop code, different worker:
+
+```python
+# AForge — nothing to configure
+report = await app.harness(task, schema=Report)
+
+# Orchestrate Claude Code instead
+report = await app.harness(task, schema=Report, provider="claude-code")
+
+# ...or Codex, Gemini CLI, OpenCode, Pi, OMP
+report = await app.harness(task, schema=Report, provider="codex")
+```
+
+The same override exists in every SDK — `harness.Options{Provider: harness.ProviderCodex}`
+in Go, `{ provider: 'codex' }` in TypeScript — and an agent-wide default can be
+set once on the agent's harness config (`HarnessConfig(provider="codex")` in
+Python, `agent.HarnessConfig{Provider: "codex"}` in Go).
 
 ## Install
 
-| Provider | Python extra | Required CLI | Authentication |
-| --- | --- | --- | --- |
-| `aforge` | None | `aforge` | `OPENROUTER_API_KEY` |
-| Claude Code | `agentfield[harness-claude]` | Bundled by `claude-agent-sdk` | Claude login or `ANTHROPIC_API_KEY` |
-| Codex | `agentfield[harness-codex]` | `codex` | Codex login or `OPENAI_API_KEY` |
-| Gemini | None | `gemini` | Gemini login, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
-| OpenCode | `agentfield[harness-opencode]` | `opencode` | Provider credentials configured in OpenCode |
-| Pi | None | `pi` | Provider login or API key such as `OPENROUTER_API_KEY` |
-| OMP (Oh My Pi, default) | None | `omp` | Provider login or API key such as `OPENROUTER_API_KEY` |
+| Provider | Install | Python extra | Required CLI | Authentication |
+| --- | --- | --- | --- | --- |
+| `aforge` (default) | `af aforge ensure` (shipped with `af`) | None | `aforge` | `OPENROUTER_API_KEY` |
+| `claude-code` | `pip install 'agentfield[harness-claude]'` | `agentfield[harness-claude]` | Bundled by `claude-agent-sdk` | Claude login or `ANTHROPIC_API_KEY` |
+| `codex` | `npm install -g @openai/codex` | `agentfield[harness-codex]` | `codex` | Codex login or `OPENAI_API_KEY` |
+| `gemini` | `npm install -g @google/gemini-cli` | None | `gemini` | Gemini login, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
+| `opencode` | `curl -fsSL https://opencode.ai/install \| bash` | `agentfield[harness-opencode]` | `opencode` | Provider credentials configured in OpenCode |
+| `grok` | Install the Grok Build CLI, then `grok login` | None | `grok` | `XAI_API_KEY` |
+| `pi` | `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` | None | `pi` | Provider login or API key such as `OPENROUTER_API_KEY` |
+| `omp` | `curl -fsSL https://omp.sh/install \| sh` | None | `omp` | Provider login or API key such as `OPENROUTER_API_KEY` |
 
 Install every Python wrapper with:
 
@@ -50,12 +88,56 @@ Install every Python wrapper with:
 pip install 'agentfield[harness-all]'
 ```
 
-The extras install Python wrappers. AgentField does not install or upgrade a
-coding-agent executable at application startup. This is the same lifecycle used
-for Codex, Gemini, and OpenCode: operators choose and pin the CLI version, while
-the SDK locates it on `PATH` (or through a provider-specific binary override).
-Aforge and Gemini are CLI-only, and Codex or OpenCode may still require a
-separately available executable depending on the wrapper and platform.
+`aforge` is the one CLI AgentField distributes itself. Every install surface
+provisions it beside `af` in `~/.agentfield/bin` — the curl installer, the
+desktop app on launch, and the `python-agent` / `go-agent` / cloud control-plane
+images. To install or repair it by hand:
+
+```bash
+af aforge ensure          # --force re-downloads even when already current
+```
+
+The pinned build, its download host and the opt-out are documented under
+`AGENTFIELD_AFORGE_BASE_URL` / `AGENTFIELD_SKIP_AFORGE` in
+[docs/ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md).
+
+The extras install Python wrappers. They do not replace the runtime preflight:
+AForge and Gemini are CLI-only, and Codex or OpenCode may still require a
+separately available executable depending on the wrapper and platform. `grok`
+is available in the Python SDK only. Pi and OMP are CLI-only: install their
+upstream binaries as shown below.
+
+### AForge adapter contract
+
+AForge is registered as `aforge` in the Python, Go, and TypeScript SDKs. The
+adapters default to the direct non-interactive contract, `aforge exec --json`,
+send the task over stdin, and map AForge's usage ledger into AgentField turns,
+token counts, and cost metrics. Set `AGENTFIELD_AFORGE_COMMAND=do` to opt into
+the routed `aforge do --json --yes-spend` workflow instead.
+
+Set `AFORGE_MAX_CONCURRENT` to cap simultaneous AForge subprocesses. The
+default is 8. `AGENTFIELD_HARNESS_TIMEOUT_SECONDS` is the outer watchdog; each
+adapter gives AForge a five-second landing window to emit its exit-2 timeout
+envelope. Schema runs use a unique output directory per invocation so parallel
+jobs can safely share a checkout. Set `AFORGE_BIN` to an absolute path when the
+binary is installed somewhere off `PATH`.
+
+### OpenCode concurrency
+
+The OpenCode adapters cap how many `opencode run` subprocesses may be in flight
+at once, so a wide fan-out does not overwhelm the upstream provider with
+parallel requests. Set `OPENCODE_MAX_CONCURRENT` to a positive integer to change
+the cap. The defaults differ per SDK:
+
+| SDK | Default | Source |
+| --- | --- | --- |
+| Go | 4 | `sdk/go/harness/opencode.go` |
+| Python | 10 | `sdk/python/agentfield/harness/providers/opencode.py` |
+
+The value is read once per process — Go reads it the first time the limiter is
+used, Python reads it at import time — so export it before starting the agent
+rather than mutating the environment mid-run. The TypeScript OpenCode provider
+has no limiter and ignores the variable.
 
 Install Pi or OMP directly from their official distributions:
 
@@ -97,8 +179,10 @@ into the shared result type.
 
 ## Model selection and reasoning-effort variants
 
-Every provider accepts a `model` option on `.harness()` calls. The model string
-may carry a reasoning-effort variant after a `#` separator:
+Every provider accepts a `model` option on `.harness()` calls. Leaving it unset
+uses the provider's own default — AForge picks its own model, `claude-code`
+keeps using `sonnet`. The model string may carry a reasoning-effort variant
+after a `#` separator:
 
 ```python
 result = await app.harness(
@@ -116,7 +200,7 @@ Pi and OMP accept the same OpenRouter model strings in every SDK, for example
 
 | Provider | Model flag | Variant handling |
 | --- | --- | --- |
-| `aforge` | `AFORGE_MODEL` env var with a bare OpenRouter slug (a leading `openrouter/` is stripped) | `AFORGE_EXEC_REASONING` (`off`, `low`, `medium`, or `high`) |
+| `aforge` | `exec`: `--model` and `--plan-model`; `do`: `AFORGE_MODEL` (a leading `openrouter/` is stripped) | `AFORGE_EXEC_REASONING` (`off`, `low`, `medium`, or `high`) |
 | OpenCode | `-m <model>` | `--variant <v>` (provider-specific effort, e.g. `high`, `max`, `minimal`) |
 | Codex | `-m <model>` | `-c model_reasoning_effort=<v>` |
 | Claude Code | SDK `model` option | No effort control — variant is dropped with a debug log |

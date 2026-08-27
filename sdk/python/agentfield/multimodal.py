@@ -4,6 +4,8 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
+from agentfield.data_url import data_url_mime_type, decode_data_url, is_data_url
+
 
 class Text(BaseModel):
     """Represents text content in a multimodal prompt."""
@@ -53,6 +55,22 @@ class Image(BaseModel):
         return cls(image_url={"url": url, "detail": detail})
 
 
+# Audio formats the LiteLLM ``input_audio`` block understands, keyed by the MIME
+# type a ``data:`` URL can declare. Anything unrecognised falls back to
+# ``_DEFAULT_AUDIO_FORMAT``, which is also what an http(s) URL gets when the
+# caller does not say - the URL alone carries no reliable type.
+_DEFAULT_AUDIO_FORMAT = "wav"
+_AUDIO_MIME_FORMATS = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/flac": "flac",
+    "audio/ogg": "ogg",
+}
+
+
 class Audio(BaseModel):
     """Represents audio content in a multimodal prompt."""
 
@@ -82,15 +100,30 @@ class Audio(BaseModel):
         return cls(input_audio={"data": audio_data, "format": format})
 
     @classmethod
-    def from_url(cls, url: str, format: str = "wav") -> "Audio":
-        """Create Audio from URL (downloads and converts to base64)."""
+    def from_url(cls, url: str, format: Optional[str] = None) -> "Audio":
+        """Create Audio from URL.
+
+        ``data:`` URLs carry their payload inline and are decoded locally;
+        their declared MIME type picks the format when *format* is not given
+        (``data:audio/mpeg;base64,...`` -> ``"mp3"``), falling back to
+        ``"wav"`` for a MIME type this SDK does not map. http(s) URLs are
+        downloaded and converted to base64, and default to ``"wav"``. An
+        explicit *format* always wins.
+        """
+        if is_data_url(url):
+            audio_data = base64.b64encode(decode_data_url(url)).decode()
+            resolved = format or _AUDIO_MIME_FORMATS.get(
+                data_url_mime_type(url), _DEFAULT_AUDIO_FORMAT
+            )
+            return cls(input_audio={"data": audio_data, "format": resolved})
+        resolved = format or _DEFAULT_AUDIO_FORMAT
         try:
             import requests
 
             response = requests.get(url)
             response.raise_for_status()
             audio_data = base64.b64encode(response.content).decode()
-            return cls(input_audio={"data": audio_data, "format": format})
+            return cls(input_audio={"data": audio_data, "format": resolved})
         except ImportError:
             raise ImportError("URL download requires requests: pip install requests")
 
@@ -192,7 +225,7 @@ def audio_from_file(file_path: Union[str, Path], format: Optional[str] = None) -
     return Audio.from_file(file_path, format)
 
 
-def audio_from_url(url: str, format: str = "wav") -> Audio:
+def audio_from_url(url: str, format: Optional[str] = None) -> Audio:
     """Create audio content from URL."""
     return Audio.from_url(url, format)
 

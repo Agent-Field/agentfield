@@ -1,6 +1,7 @@
 /**
  * OpenRouter-backed MediaProvider implementation.
- * Supports video generation (async job), image generation, and audio generation via SSE.
+ * Supports video generation (async job), image generation, and audio generation
+ * via SSE (which only carries pcm16 audio — see #584).
  */
 
 import type {
@@ -510,8 +511,24 @@ export class OpenRouterMediaProvider implements MediaProvider {
       );
     }
 
-    // Chat-completions audio modality: openai/gpt-audio family. Streaming on
-    // OpenAI is locked to pcm16 — wire that and re-wrap to user's format below.
+    // Chat-completions audio modality (openai/gpt-audio family) only ever
+    // delivers pcm16: OpenAI rejects any other audio.format while streaming,
+    // and OpenRouter's gateway rejects an audio completion that is not streamed
+    // at all ("Audio output requires stream: true"), so there is no route to
+    // mp3/flac/opus through this endpoint. Refuse up front instead of relaying
+    // an upstream 400 that blames a request the caller never made. See #584.
+    if (requestedFormat !== 'pcm16' && requestedFormat !== 'wav') {
+      throw new MediaProviderError(
+        `Audio format "${requestedFormat}" is not available from model ${model}: ` +
+          'OpenRouter delivers chat-completions audio only as pcm16 — request ' +
+          '"pcm16", or "wav" for those same samples wrapped in a RIFF/WAVE ' +
+          'container client-side',
+        { provider: 'openrouter', model }
+      );
+    }
+
+    // Streaming on OpenAI is locked to pcm16 — wire that and re-wrap to the
+    // user's format below.
     const wireFormat = requestedFormat === 'wav' ? 'pcm16' : requestedFormat;
     const messages: unknown[] = [{ role: 'user', content: request.text }];
     const body: Record<string, unknown> = {

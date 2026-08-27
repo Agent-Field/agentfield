@@ -1,6 +1,6 @@
 import type { CloudTestResult, DesktopSettings } from '../shared/types'
 import { connect as netConnect } from 'node:net'
-import { clearCloudConnection, setCloudConnection, setLocalApiKey } from './connection'
+import { clearCloudConnection, setCloudConnection, setLocalApiKey, setLocalPort } from './connection'
 
 export type { CloudTestResult } from '../shared/types'
 
@@ -241,6 +241,12 @@ export async function testCloudConnection(
 }
 
 export function applyConnectionProfile(settings: DesktopSettings): void {
+  // The local control plane lives on the configured port, or the one the
+  // last launch ended up on. Seed it before anything polls: otherwise the
+  // first snapshots of a launch go to :8080 while autostart is still
+  // resolving the real port — and read whatever else answers there.
+  const localPort = settings.controlPlanePort ?? settings.lastControlPlanePort
+  if (localPort !== null && localPort !== undefined) setLocalPort(localPort)
   // Kept current even while cloud is active, so switching back to local
   // restores the local credential rather than dropping to no key at all.
   setLocalApiKey(settings.localApiKey ?? '')

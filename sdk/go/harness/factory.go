@@ -1,15 +1,32 @@
 package harness
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+// ResolveProviderName applies harness provider precedence: an explicit name
+// wins, then AGENTFIELD_HARNESS_PROVIDER, then DefaultProvider ("aforge").
+// Blank / whitespace-only values are treated as unset.
+func ResolveProviderName(name string) string {
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		return trimmed
+	}
+	if envName := strings.TrimSpace(os.Getenv(ProviderEnvVar)); envName != "" {
+		return envName
+	}
+	return DefaultProvider
+}
 
 // BuildProvider creates a Provider instance for the given provider name.
-// An empty name selects DefaultProvider (OMP).
-// Supported providers: "claude-code", "codex", "gemini", "opencode", "pi", "omp".
+// Supported providers: "aforge", "claude-code", "codex", "gemini",
+// "opencode", "pi", "omp".
 func BuildProvider(name string, binPath string) (Provider, error) {
-	if name == "" {
-		name = DefaultProvider
-	}
+	name = ResolveProviderName(name)
 	switch name {
+	case ProviderAforge:
+		return NewAforgeProvider(binPath), nil
 	case ProviderClaudeCode:
 		return NewClaudeCodeProvider(binPath), nil
 	case ProviderCodex:
@@ -24,8 +41,8 @@ func BuildProvider(name string, binPath string) (Provider, error) {
 		return NewOMPProvider(binPath), nil
 	default:
 		return nil, fmt.Errorf(
-			"unknown harness provider: %q (supported: %s, %s, %s, %s, %s, %s)",
-			name, ProviderClaudeCode, ProviderCodex, ProviderGemini, ProviderOpenCode, ProviderPi, ProviderOMP,
+			"unknown harness provider: %q (supported: %s, %s, %s, %s, %s, %s, %s)",
+			name, ProviderAforge, ProviderClaudeCode, ProviderCodex, ProviderGemini, ProviderOpenCode, ProviderPi, ProviderOMP,
 		)
 	}
 }

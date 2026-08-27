@@ -3,14 +3,17 @@ package packagejobs
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services"
 	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
 )
@@ -56,17 +59,20 @@ func TestProductionInstallerReportsTheNameItInstalled(t *testing.T) {
 }
 
 type stubInstaller struct {
-	mu           sync.Mutex
-	installErr   error
-	resultName   string
-	block        <-chan struct{}
-	installed    []domain.InstalledPackage
-	afterInstall []domain.InstalledPackage
-	calls        *[]string
-	lastOptions  domain.InstallOptions
-	listErr      error
-	infoErr      error
-	uninstallErr error
+	mu                sync.Mutex
+	installErr        error
+	beforeReplaceErr  error
+	resultName        string
+	block             <-chan struct{}
+	installed         []domain.InstalledPackage
+	afterInstall      []domain.InstalledPackage
+	calls             *[]string
+	lastSource        string
+	lastOptions       domain.InstallOptions
+	listErr           error
+	infoErr           error
+	uninstallErr      error
+	skipBeforeReplace bool
 }
 
 func (s *stubInstaller) InstallPackageWithResult(source string, options domain.InstallOptions) (string, error) {
@@ -77,15 +83,24 @@ func (s *stubInstaller) InstallPackageWithResult(source string, options domain.I
 	return s.resultName, nil
 }
 
-func (s *stubInstaller) InstallPackage(_ string, options domain.InstallOptions) error {
+func (s *stubInstaller) InstallPackage(source string, options domain.InstallOptions) error {
 	if s.block != nil {
 		<-s.block
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastOptions = options
+	s.lastSource = source
 	if s.calls != nil {
 		*s.calls = append(*s.calls, "install")
+	}
+	if s.beforeReplaceErr != nil {
+		return s.beforeReplaceErr
+	}
+	if options.BeforeReplace != nil && !s.skipBeforeReplace {
+		if err := options.BeforeReplace(); err != nil {
+			return err
+		}
 	}
 	if s.installErr == nil && s.afterInstall != nil {
 		s.installed = append([]domain.InstalledPackage(nil), s.afterInstall...)
@@ -93,8 +108,19 @@ func (s *stubInstaller) InstallPackage(_ string, options domain.InstallOptions) 
 	return s.installErr
 }
 func (s *stubInstaller) UninstallPackage(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.calls != nil {
 		*s.calls = append(*s.calls, "remove:"+name)
+	}
+	if s.uninstallErr == nil {
+		kept := s.installed[:0]
+		for _, pkg := range s.installed {
+			if pkg.Name != name {
+				kept = append(kept, pkg)
+			}
+		}
+		s.installed = kept
 	}
 	return s.uninstallErr
 }
@@ -117,14 +143,17 @@ func (s *stubInstaller) GetPackageInfo(name string) (*domain.InstalledPackage, e
 }
 
 type stubAgentService struct {
-	running   bool
-	calls     *[]string
-	statusErr error
-	stopErr   error
-	runErr    error
+	running    bool
+	calls      *[]string
+	statusErr  error
+	stopErr    error
+	runErr     error
+	runOptions []domain.RunOptions
+	updateStop bool
 }
 
-func (s *stubAgentService) RunAgent(name string, _ domain.RunOptions) (*domain.RunningAgent, error) {
+func (s *stubAgentService) RunAgent(name string, options domain.RunOptions) (*domain.RunningAgent, error) {
+	s.runOptions = append(s.runOptions, options)
 	if s.calls != nil {
 		*s.calls = append(*s.calls, "start:"+name)
 	}
@@ -136,6 +165,10 @@ func (s *stubAgentService) StopAgent(name string) error {
 	}
 	s.running = false
 	return s.stopErr
+}
+func (s *stubAgentService) StopAgentForUpdate(name string) error {
+	s.updateStop = true
+	return s.StopAgent(name)
 }
 func (s *stubAgentService) GetAgentStatus(name string) (*domain.AgentStatus, error) {
 	return &domain.AgentStatus{Name: name, IsRunning: s.running}, s.statusErr
@@ -319,14 +352,14 @@ func TestUpdateStopsForceInstallsAndRestarts(t *testing.T) {
 	var calls []string
 	inst := &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}, calls: &calls}
 	manager := newManager(inst, &stubAgentService{running: true, calls: &calls}, home)
-	job, err := manager.StartUpdate("demo")
+	job, err := manager.StartUpdate("demo", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
 		t.Fatalf("job = %#v", got)
 	}
-	if strings.Join(calls, ",") != "stop:demo,install,start:demo" {
+	if strings.Join(calls, ",") != "install,stop:demo,start:demo" {
 		t.Fatalf("calls = %v", calls)
 	}
 	if !inst.lastOptions.Force {
@@ -334,24 +367,88 @@ func TestUpdateStopsForceInstallsAndRestarts(t *testing.T) {
 	}
 }
 
+func TestStartUpdateSelectsOverrideOrRecordedSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		override   string
+		wantSource string
+		wantRepo   string
+		wantPath   string
+	}{
+		{
+			name:       "catalog override",
+			override:   " https://github.com/catalog/latest//agent/ ",
+			wantSource: "https://github.com/catalog/latest//agent",
+			wantRepo:   "https://github.com/catalog/latest",
+			wantPath:   "agent",
+		},
+		{
+			name:       "recorded source",
+			override:   " ",
+			wantSource: "https://github.com/recorded/original//go@main",
+			wantRepo:   "https://github.com/recorded/original@main",
+			wantPath:   "go",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/recorded/original//go@main\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			inst := &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}
+			manager := newManager(inst, &stubAgentService{}, home)
+
+			job, err := manager.StartUpdate("demo", test.override, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.Source != test.wantSource {
+				t.Fatalf("job source = %q, want %q", job.Source, test.wantSource)
+			}
+			if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+				t.Fatalf("job = %#v", got)
+			}
+			if inst.lastSource != test.wantRepo || inst.lastOptions.Path != test.wantPath {
+				t.Fatalf("installer source = %q, path = %q", inst.lastSource, inst.lastOptions.Path)
+			}
+		})
+	}
+}
+
+func TestStartUpdateValidatesOverrideAfterRegistryLookup(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/recorded/original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := newManager(&stubInstaller{}, &stubAgentService{}, home)
+	if _, err := manager.StartUpdate("demo", "not-a-github-source", false); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("invalid override error = %v", err)
+	}
+	if _, err := manager.StartUpdate("missing", "https://github.com/catalog/latest", false); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown package error = %v", err)
+	}
+}
+
 // Contract: updating a package whose recorded source redirects (`superseded_by`)
 // to a differently-named successor follows the rename. The old package is gone
 // by the time the install returns, so reporting or restarting the name that went
 // in would name a node that no longer exists.
-func TestUpdateFollowsASupersededRename(t *testing.T) {
+func TestE9UpdateFollowsASupersededRename(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/o/repo\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	var calls []string
 	inst := &stubInstaller{
-		resultName:   "demo-v2",
-		installed:    []domain.InstalledPackage{{Name: "demo"}},
-		afterInstall: []domain.InstalledPackage{{Name: "demo-v2"}},
-		calls:        &calls,
+		resultName:        "demo-v2",
+		installed:         []domain.InstalledPackage{{Name: "demo"}},
+		afterInstall:      []domain.InstalledPackage{{Name: "demo"}, {Name: "demo-v2"}},
+		calls:             &calls,
+		skipBeforeReplace: true,
 	}
 	manager := newManager(inst, &stubAgentService{running: true, calls: &calls}, home)
-	job, err := manager.StartUpdate("demo")
+	job, err := manager.StartUpdate("demo", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +461,7 @@ func TestUpdateFollowsASupersededRename(t *testing.T) {
 	}
 	// Stopped under the old name (that is what was running), restarted under
 	// the new one (that is what is now installed).
-	if strings.Join(calls, ",") != "stop:demo,install,start:demo-v2" {
+	if strings.Join(calls, ",") != "install,stop:demo,remove:demo,start:demo-v2" {
 		t.Fatalf("calls = %v", calls)
 	}
 }
@@ -452,7 +549,7 @@ func TestStartUpdateRegistryFailures(t *testing.T) {
 				}
 			}
 			manager := newManager(&stubInstaller{}, &stubAgentService{}, home)
-			_, err := manager.StartUpdate("demo")
+			_, err := manager.StartUpdate("demo", "", false)
 			if err == nil || (test.want != nil && !errors.Is(err, test.want)) {
 				t.Fatalf("err = %v, want %v", err, test.want)
 			}
@@ -611,7 +708,7 @@ func TestUpdateRegistryChangeHook(t *testing.T) {
 			calls := 0
 			manager.SetOnRegistryChange(func() { calls++ })
 
-			job, err := manager.StartUpdate("demo")
+			job, err := manager.StartUpdate("demo", "", false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -630,10 +727,15 @@ func TestSourceFromRegistry(t *testing.T) {
 		want    string
 		wantErr error
 	}{
-		{name: "resolved ref", source: "owner/repo@sha", want: "https://github.com/owner/repo"},
+		{name: "resolved ref", source: "owner/repo@sha", want: "https://github.com/owner/repo@sha"},
 		{name: "bare repository", source: "owner/repo", want: "https://github.com/owner/repo"},
-		{name: "subdirectory ref", source: "owner/repo//subdir@ref", want: "https://github.com/owner/repo//subdir"},
+		{name: "subdirectory ref", source: "owner/repo//subdir@ref", want: "https://github.com/owner/repo//subdir@ref"},
+		{name: "recorded gitlab source", source: "https://gitlab.com/owner/repo@release", want: "https://gitlab.com/owner/repo@release"},
 		{name: "at before final subdirectory segment", source: "owner/repo//sub@dir/agent", wantErr: ErrInvalidSource},
+		{name: "invalid protocol", source: "ftp://owner/repo", wantErr: ErrInvalidSource},
+		{name: "option-like source", source: "-upload-pack", wantErr: ErrInvalidSource},
+		{name: "unsafe non-github ref", source: "https://gitlab.com/owner/repo@-bad", wantErr: ErrInvalidSource},
+		{name: "traversing non-github subdir", source: "https://gitlab.com/owner/repo//../secret", wantErr: ErrInvalidSource},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -645,6 +747,213 @@ func TestSourceFromRegistry(t *testing.T) {
 				t.Fatalf("source = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestUpdateCombinesInstallAndRestartFailures(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := &stubAgentService{running: true, runErr: errors.New("restart failed")}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}, installErr: errors.New("install failed")}, agent, home)
+	job, err := manager.StartUpdate("demo", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := waitForJob(t, manager, job.ID)
+	if result.Status != StatusFailed || !strings.Contains(result.Error, "install failed") || !strings.Contains(result.Error, "restart failed") {
+		t.Fatalf("job=%+v", result)
+	}
+}
+
+func TestSuccessfulRenameClearsOldAndNewUpdateCacheEntries(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}, resultName: "demo-v2"}, &stubAgentService{}, home)
+	var cleared []string
+	manager.SetUpdateCacheClearer(func(name string) { cleared = append(cleared, name) })
+	job, err := manager.StartUpdate("demo", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := waitForJob(t, manager, job.ID); result.Status != StatusSucceeded {
+		t.Fatalf("job=%+v", result)
+	}
+	if !reflect.DeepEqual(cleared, []string{"demo", "demo-v2"}) {
+		t.Fatalf("cleared=%v", cleared)
+	}
+}
+
+func TestUpdateFallsBackToAgentServiceStopContract(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := &stubAgentService{running: true}
+	var legacy interfaces.AgentService = struct{ interfaces.AgentService }{base}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, legacy, home)
+	job, err := manager.StartUpdate("demo", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := waitForJob(t, manager, job.ID); result.Status != StatusSucceeded {
+		t.Fatalf("job=%+v", result)
+	}
+	if base.running {
+		t.Fatal("legacy StopAgent fallback was not invoked")
+	}
+}
+
+func TestPortAvailabilityReflectsLoopbackBind(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if isPortAvailable(port) {
+		t.Fatalf("occupied port %d reported available", port)
+	}
+	listener.Close()
+	if !isPortAvailable(port) {
+		t.Fatalf("released port %d reported occupied", port)
+	}
+}
+
+func TestUpdateReusesPreviousPortOnlyWhenItIsFree(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		portAvailable bool
+		wantPort      int
+	}{
+		{name: "same port free", portAvailable: true, wantPort: 8123},
+		{name: "same port occupied", portAvailable: false, wantPort: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			registry := "installed:\n  demo:\n    source_path: https://github.com/acme/demo\n    runtime:\n      port: 8123\n"
+			if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte(registry), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			agent := &stubAgentService{running: true}
+			manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, agent, home)
+			manager.portAvailable = func(port int) bool { return port == 8123 && test.portAvailable }
+			job, err := manager.StartUpdate("demo", "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+				t.Fatalf("job=%+v", got)
+			}
+			if len(agent.runOptions) != 1 || agent.runOptions[0].Port != test.wantPort || !agent.runOptions[0].PortIsPreference {
+				t.Fatalf("run options = %+v, want port %d", agent.runOptions, test.wantPort)
+			}
+		})
+	}
+}
+
+func TestFailedUpdateRestartsPreviouslyRunningPackage(t *testing.T) {
+	home := t.TempDir()
+	registry := "installed:\n  demo:\n    source_path: https://github.com/acme/demo\n    runtime:\n      port: 8123\n"
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte(registry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := &stubAgentService{running: true}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}, installErr: errors.New("build failed")}, agent, home)
+	manager.portAvailable = func(int) bool { return true }
+	job, err := manager.StartUpdate("demo", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitForJob(t, manager, job.ID); got.Status != StatusFailed {
+		t.Fatalf("job=%+v", got)
+	}
+	if len(agent.runOptions) != 1 || agent.runOptions[0].Port != 8123 {
+		t.Fatalf("previous version was not restarted on port 8123: %+v", agent.runOptions)
+	}
+}
+
+func TestMaintenanceUpdateCarriesExpectedPackageName(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inst := &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}
+	manager := newManager(inst, &stubAgentService{}, home)
+	job, err := manager.StartMaintenanceUpdate("demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForJob(t, manager, job.ID)
+	if inst.lastOptions.ExpectedPackageName != "demo" {
+		t.Fatalf("expected package name = %q, want demo", inst.lastOptions.ExpectedPackageName)
+	}
+}
+
+func TestSuccessfulUpdateClearsCachedCheckAndBracketsRestartGrace(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, &stubAgentService{}, home)
+	var cleared []string
+	var states []bool
+	var hookNames []string
+	var hookMu sync.Mutex
+	hookDone := make(chan struct{})
+	manager.SetUpdateCacheClearer(func(name string) { cleared = append(cleared, name) })
+	manager.SetUpdateStateHook(func(name string, active bool) {
+		hookMu.Lock()
+		hookNames = append(hookNames, name)
+		states = append(states, active)
+		hookMu.Unlock()
+		if !active {
+			close(hookDone)
+		}
+	})
+	job, err := manager.StartUpdate("demo", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+		t.Fatalf("job=%+v", got)
+	}
+	select {
+	case <-hookDone:
+	case <-time.After(time.Second):
+		t.Fatal("deferred update-state hook did not finish")
+	}
+	if strings.Join(cleared, ",") != "demo" {
+		t.Fatalf("cleared = %v", cleared)
+	}
+	hookMu.Lock()
+	defer hookMu.Unlock()
+	if !reflect.DeepEqual(hookNames, []string{"demo", "demo"}) {
+		t.Fatalf("update state names = %v", hookNames)
+	}
+	if !reflect.DeepEqual(states, []bool{true, false}) {
+		t.Fatalf("update states = %v", states)
+	}
+}
+
+func TestUpdateStopPreservesRunningIntentThroughDedicatedPath(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := &stubAgentService{running: true}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, agent, home)
+	job, err := manager.StartUpdate("demo", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+		t.Fatalf("job=%+v", got)
+	}
+	if !agent.updateStop {
+		t.Fatal("update used the user-stop path and would clear desired_state")
 	}
 }
 
@@ -679,5 +988,171 @@ func TestUninstallIsBusyDuringInstallAndSucceedsAfterward(t *testing.T) {
 	}
 	if got := strings.Join(calls, ","); got != "install,remove:demo" {
 		t.Fatalf("calls = %s", got)
+	}
+}
+
+// A catalog-source override changes WHERE the update fetches from and nothing
+// else: it is still an update job — forced reinstall in place, the running
+// node stopped first and restarted after — not a plain install of a new source.
+func TestStartUpdateOverrideKeepsUpdateSemantics(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/recorded/original//go\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	inst := &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}, calls: &calls}
+	manager := newManager(inst, &stubAgentService{running: true, calls: &calls}, home)
+
+	job, err := manager.StartUpdate("demo", "https://github.com/catalog/latest", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Kind != JobUpdate {
+		t.Fatalf("job kind = %q, want %q", job.Kind, JobUpdate)
+	}
+	if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+		t.Fatalf("job = %#v", got)
+	}
+	if strings.Join(calls, ",") != "install,stop:demo,start:demo" {
+		t.Fatalf("calls = %v", calls)
+	}
+	if !inst.lastOptions.Force {
+		t.Fatal("override update was not forced")
+	}
+	if inst.lastSource != "https://github.com/catalog/latest" {
+		t.Fatalf("installer source = %q", inst.lastSource)
+	}
+}
+
+func TestC18UnattendedRenameFailureDoesNotStopOrRestartNode(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	installer := &stubInstaller{
+		installed: []domain.InstalledPackage{{Name: "demo"}}, calls: &calls,
+		beforeReplaceErr: errors.New("unattended update of demo would rename the package to demo-v2"),
+	}
+	manager := newManager(installer, &stubAgentService{running: true, calls: &calls}, home)
+	job, err := manager.StartMaintenanceUpdate("demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := waitForJob(t, manager, job.ID)
+	if result.Status != StatusFailed || strings.Join(calls, ",") != "install" || !strings.Contains(result.Error, "rename") {
+		t.Fatalf("job=%+v calls=%v", result, calls)
+	}
+}
+
+func TestC20ManualUpdateClearsFailedMemoAndStillStarts(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, &stubAgentService{}, home)
+	var cleared []string
+	manager.SetUpdateCacheClearer(func(name string) { cleared = append(cleared, name) })
+	job, err := manager.StartUpdate("demo", "", false)
+	if err != nil || job == nil {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	if len(cleared) == 0 || cleared[0] != "demo" {
+		t.Fatalf("failed memo was not cleared: %v", cleared)
+	}
+	waitForJob(t, manager, job.ID)
+}
+
+func TestC23ManagerBlocksActiveExecutionsUnlessForced(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, &stubAgentService{}, home)
+	manager.SetExecutionActivity(func(string) (int, error) { return 1, nil })
+	if _, err := manager.StartUpdate("demo", "", false); err == nil {
+		t.Fatal("active execution update was accepted without force")
+	} else {
+		var active *ErrExecutionsActive
+		if !errors.As(err, &active) || active.Count != 1 {
+			t.Fatalf("err=%v", err)
+		}
+	}
+	job, err := manager.StartUpdate("demo", "", true)
+	if err != nil {
+		t.Fatalf("forced update: %v", err)
+	}
+	waitForJob(t, manager, job.ID)
+	manager.SetExecutionActivity(func(string) (int, error) { return 0, nil })
+	job, err = manager.StartUpdate("demo", "", false)
+	if err != nil {
+		t.Fatalf("idle update: %v", err)
+	}
+	waitForJob(t, manager, job.ID)
+}
+
+func TestC21CloneFailureLeavesRunningNodeUntouched(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: https://github.com/acme/demo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	installer := &stubInstaller{
+		installed: []domain.InstalledPackage{{Name: "demo"}}, calls: &calls,
+		beforeReplaceErr: errors.New("failed to clone repository: unreachable"),
+	}
+	manager := newManager(installer, &stubAgentService{running: true, calls: &calls}, home)
+	job, err := manager.StartMaintenanceUpdate("demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := waitForJob(t, manager, job.ID)
+	if result.Status != StatusFailed || strings.Join(calls, ",") != "install" {
+		t.Fatalf("job=%+v calls=%v", result, calls)
+	}
+}
+
+func TestC22SuccessfulUnattendedUpdateStopsAfterValidationAndRestartsPreferredPort(t *testing.T) {
+	home := t.TempDir()
+	registry := "installed:\n  demo:\n    source_path: https://github.com/acme/demo\n    runtime:\n      port: 8123\n"
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte(registry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	agent := &stubAgentService{running: true, calls: &calls}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}, calls: &calls}, agent, home)
+	manager.portAvailable = func(port int) bool { return port == 8123 }
+	job, err := manager.StartMaintenanceUpdate("demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := waitForJob(t, manager, job.ID); result.Status != StatusSucceeded {
+		t.Fatalf("job=%+v", result)
+	}
+	if strings.Join(calls, ",") != "install,stop:demo,start:demo" || len(agent.runOptions) != 1 || agent.runOptions[0].Port != 8123 {
+		t.Fatalf("calls=%v options=%+v", calls, agent.runOptions)
+	}
+}
+
+// E25: a stop issued while the node was down for an update wins — the job
+// does not restart it, because RunAgent would record running intent again.
+func TestE25UpdateDoesNotRestartAPackageStoppedDuringTheUpdate(t *testing.T) {
+	home := t.TempDir()
+	registry := "installed:\n  demo:\n    source_path: https://github.com/acme/demo\n    desired_state: stopped\n    runtime:\n      port: 8123\n"
+	if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte(registry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := &stubAgentService{running: true}
+	manager := newManager(&stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, agent, home)
+	manager.portAvailable = func(int) bool { return true }
+	job, err := manager.StartUpdate("demo", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+		t.Fatalf("job=%+v", got)
+	}
+	if len(agent.runOptions) != 0 {
+		t.Fatalf("a package stopped during the update must not be restarted: %+v", agent.runOptions)
 	}
 }

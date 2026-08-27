@@ -225,3 +225,197 @@ async def test_fire_and_forget_running_loop_task_is_retained_until_done():
 
     assert finished["value"] is True
     assert task not in run_async._BACKGROUND_TASKS
+
+
+def test_fire_and_forget_without_a_running_loop_reuses_one_open_loop():
+    """Work scheduled from sync code shares one loop that is never closed.
+
+    A loop created and closed per call strands anything the coroutine bound to
+    it — notably the SDK's shared httpx.AsyncClient connection pool — so the
+    next use on the caller's own loop fails with ``Event loop is closed``.
+    """
+    loops = []
+    ran = threading.Semaphore(0)
+
+    async def record():
+        loops.append(asyncio.get_running_loop())
+        ran.release()
+
+    fire_and_forget(record())
+    fire_and_forget(record())
+
+    assert ran.acquire(timeout=5)
+    assert ran.acquire(timeout=5)
+
+    assert loops[0] is loops[1], "each call got its own event loop"
+    assert not loops[0].is_closed(), "the background loop was closed after use"
+
+
+def test_fire_and_forget_without_a_running_loop_survives_a_failure():
+    """A failing coroutine must not stop later work from running."""
+    ran = threading.Semaphore(0)
+
+    async def fail():
+        raise ValueError("boom")
+
+    async def ok():
+        ran.release()
+
+    fire_and_forget(fail())
+    fire_and_forget(ok())
+
+    assert ran.acquire(timeout=5)
+
+
+def test_background_dispatch_loop_names_the_loop_sync_work_runs_on():
+    """Callers can recognise the loop best-effort work is running on.
+
+    ``AgentFieldClient`` uses this to keep the background loop from taking
+    ownership of the agent's shared HTTP client.
+    """
+    loops = []
+    ran = threading.Semaphore(0)
+
+    async def record():
+        loops.append(asyncio.get_running_loop())
+        ran.release()
+
+    fire_and_forget(record())
+    assert ran.acquire(timeout=5)
+
+    assert run_async.background_dispatch_loop() is loops[0]
+
+
+def test_background_dispatch_loop_does_not_start_one(monkeypatch):
+    """Asking must never be what brings the background thread to life."""
+    monkeypatch.setattr(run_async, "_BACKGROUND_LOOP", None)
+
+    before = {thread.ident for thread in threading.enumerate()}
+    assert run_async.background_dispatch_loop() is None
+    after = {thread.ident for thread in threading.enumerate()}
+
+    assert after - before == set(), "asking started a thread"
+
+
+# ---------------------------------------------------------------------------
+# The fallback loop must be recognisable too
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_dispatch_loop_is_recognised_as_a_dispatch_loop(monkeypatch):
+    """The last-resort loop is a dispatch loop, and the loudest kind.
+
+    When the shared loop cannot be started, ``fire_and_forget`` runs the work
+    on a one-shot loop that closes the moment it finishes. A caller that keeps
+    loop-affine state must be able to tell — otherwise that loop looks like an
+    ordinary caller, claims the state, and takes it to the grave (#620).
+    """
+    monkeypatch.setattr(run_async, "_background_loop", lambda: None)
+
+    seen = {}
+    ran = threading.Semaphore(0)
+
+    async def record():
+        loop = asyncio.get_running_loop()
+        seen["loop"] = loop
+        seen["is_dispatch"] = run_async.is_background_dispatch_loop(loop)
+        ran.release()
+
+    fire_and_forget(record())
+
+    assert ran.acquire(timeout=5), "the fallback path never ran the work"
+    assert seen["is_dispatch"] is True
+
+
+def test_the_shared_background_loop_is_recognised_as_a_dispatch_loop():
+    loops = []
+    ran = threading.Semaphore(0)
+
+    async def record():
+        loops.append(asyncio.get_running_loop())
+        ran.release()
+
+    fire_and_forget(record())
+    assert ran.acquire(timeout=5)
+
+    assert run_async.is_background_dispatch_loop(loops[0]) is True
+
+
+def test_an_ordinary_loop_is_not_a_dispatch_loop():
+    loop = asyncio.new_event_loop()
+    try:
+        assert run_async.is_background_dispatch_loop(loop) is False
+    finally:
+        loop.close()
+
+
+def test_recognising_a_dispatch_loop_starts_nothing(monkeypatch):
+    """The yes/no answer must not be what brings a thread to life."""
+    monkeypatch.setattr(run_async, "_BACKGROUND_LOOP", None)
+
+    loop = asyncio.new_event_loop()
+    before = {thread.ident for thread in threading.enumerate()}
+    try:
+        assert run_async.is_background_dispatch_loop(loop) is False
+    finally:
+        loop.close()
+
+    assert {thread.ident for thread in threading.enumerate()} - before == set()
+
+
+# ---------------------------------------------------------------------------
+# A background loop that never signals readiness is not left running
+# ---------------------------------------------------------------------------
+
+
+def test_background_loop_that_never_starts_is_not_left_behind(monkeypatch):
+    """A start that times out must not strand its loop and thread.
+
+    ``_BACKGROUND_LOOP`` is only published on success, so a loop left running
+    after a timeout is unreachable forever — and the next call builds another
+    one beside it.
+    """
+    monkeypatch.setattr(run_async, "_BACKGROUND_LOOP", None)
+    monkeypatch.setattr(run_async, "_BACKGROUND_LOOP_START_TIMEOUT", 0.25)
+
+    real_new_event_loop = asyncio.new_event_loop
+    park = threading.Event()
+    arm = {"on": False}
+
+    def _stalled_loop():
+        loop = real_new_event_loop()
+        if arm["on"]:
+            arm["on"] = False
+            # Queued ahead of the readiness callback, so the loop is busy
+            # here when the start timeout expires.
+            loop.call_soon_threadsafe(lambda: park.wait(timeout=10))
+        return loop
+
+    monkeypatch.setattr(asyncio, "new_event_loop", _stalled_loop)
+
+    before = {
+        t for t in threading.enumerate() if t.name == "agentfield-background-loop"
+    }
+
+    started = []
+    try:
+        for _ in range(3):
+            arm["on"] = True
+            assert run_async._background_loop() is None
+            started = [
+                t
+                for t in threading.enumerate()
+                if t.name == "agentfield-background-loop" and t not in before
+            ]
+    finally:
+        park.set()
+
+    assert started, "the test never created a background-loop thread to strand"
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and any(t.is_alive() for t in started):
+        time.sleep(0.01)
+
+    assert not [t for t in started if t.is_alive()], (
+        "a background loop that failed to start was left running"
+    )

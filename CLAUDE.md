@@ -201,10 +201,14 @@ af run
 ```go
 import agentfieldagent "github.com/Agent-Field/agentfield/sdk/go/agent"
 
-agent, _ := agentfieldagent.New(agentfieldagent.Config{
-    NodeID:   "my-agent",
+agent, err := agentfieldagent.New(agentfieldagent.Config{
+    NodeID:        "my-agent",
+    Version:       "1.0.0", // required — New returns an error without it
     AgentFieldURL: "http://localhost:8080",
 })
+if err != nil {
+    log.Fatal(err)
+}
 agent.RegisterSkill("greet", func(ctx context.Context, input map[string]any) (any, error) {
     return map[string]any{"message": "hello"}, nil
 })
@@ -264,12 +268,17 @@ Storage interface is unified—services call storage layer methods, storage laye
 - Never direct agent-to-agent HTTP—always through control plane
 
 ### Memory Scopes
-- **Global:** Shared across all agents/sessions
-- **Agent:** Scoped to one agent, all sessions
-- **Session:** Scoped to one session (multi-turn conversation)
-- **Run:** Scoped to single execution/workflow run
 
-Automatically synced by control plane. Agents access via SDK methods: `agent.memory.get/set(scope, key, value)`
+The control plane defines four scopes: `global`, `session`, `actor`, and `workflow`. The HTTP handler does not alias `agent` or `run` to those scopes. Python's `MemoryInterface` rejects any name outside `_VALID_SCOPES = ("global", "session", "actor", "workflow")`. The Go SDK remaps unknown names (including `agent` and `run`) to `global` before they hit the wire; its constant for the actor scope is `agent.ScopeUser` (`"user"`), which `apiScope` translates to `actor` (`sdk/go/agent/control_plane_memory_backend.go`). Do not use `agent` or `run` as scope names.
+
+- **`global`:** Shared by every agent and session; fixed scope id `global`
+- **`session`:** One conversation, keyed by `X-Session-ID`
+- **`actor`:** One actor across all its sessions, keyed by `X-Actor-ID`
+- **`workflow`:** One workflow run, keyed by `X-Workflow-ID`
+
+`session`, `actor` and `workflow` are sibling dimensions, not a nested chain. A read with no explicit scope resolves `workflow -> session -> actor -> global` and returns the first hit. Scope controls lookup and isolation, not lifetime: nothing is purged when a session or run ends — values persist until explicitly deleted.
+
+Agents access via SDK methods: `agent.memory.get(key, default=None, scope=..., scope_id=...)` / `agent.memory.set(key, data, scope=..., scope_id=...)`. See `sdk/python/agentfield/memory.py` for the authoritative description.
 
 ### DID/VC (Cryptographic Identity)
 - Opt-in per agent: Set `app.vc_generator.set_enabled(True)` in Python or equivalent in Go
@@ -314,7 +323,8 @@ See `control-plane/.env.example` for comprehensive list. Key vars:
 - `AGENTFIELD_UI_MODE` - `embedded` (production) or `development` (Vite proxy)
 - `AGENTFIELD_CONFIG_FILE` - Path to config YAML
 - `GIN_MODE` - `debug` or `release`
-- `LOG_LEVEL` - `debug`, `info`, `warn`, `error`
+- `AGENTFIELD_LOG_LEVEL` - `debug`, `info`, `warn`, `error` (default: `info`; `af --verbose` overrides it)
+- `AGENTFIELD_LOG_REDACT_PAYLOADS` - `true` (default) keeps execution payloads and agent response bodies out of logs
 
 ## Code Style
 

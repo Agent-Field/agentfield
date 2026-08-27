@@ -31,15 +31,36 @@ func InitLoggerWithLevel(levelStr string) {
 }
 
 // ParseLevel converts a human-friendly level string to a zerolog.Level.
+// Anything it does not recognize — including the empty string — becomes info.
+// Callers that need to tell "the operator asked for info" apart from "the
+// operator asked for something meaningless" should use ParseLevelStrict.
 func ParseLevel(levelStr string) zerolog.Level {
+	level, _ := ParseLevelStrict(levelStr)
+	return level
+}
+
+// ParseLevelStrict converts a human-friendly level string to a zerolog.Level
+// and reports whether the string was recognized. An unrecognized value still
+// yields info, so callers can log the fallback and carry on rather than
+// failing to start.
+func ParseLevelStrict(levelStr string) (zerolog.Level, bool) {
 	switch strings.ToLower(strings.TrimSpace(levelStr)) {
 	case "debug", "verbose", "trace":
-		return zerolog.DebugLevel
+		return zerolog.DebugLevel, true
+	case "info":
+		return zerolog.InfoLevel, true
 	case "warn", "warning":
-		return zerolog.WarnLevel
+		return zerolog.WarnLevel, true
 	case "error", "err":
-		return zerolog.ErrorLevel
+		return zerolog.ErrorLevel, true
 	default:
-		return zerolog.InfoLevel
+		return zerolog.InfoLevel, false
 	}
+}
+
+// AcceptedLevels lists the canonical level names, in increasing severity, for
+// use in operator-facing messages. The aliases ParseLevelStrict also accepts
+// (verbose, trace, warning, err) are deliberately not advertised.
+func AcceptedLevels() []string {
+	return []string{"debug", "info", "warn", "error"}
 }

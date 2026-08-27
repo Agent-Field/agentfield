@@ -175,9 +175,28 @@ except ImportError:
     aiohttp = None
 
 
+# Values that count as "on" for opt-in boolean environment variables.
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when ``name`` is set to a truthy value (``1``/``true``/``yes``).
+
+    Comparison is case-insensitive and tolerates surrounding whitespace. Unset,
+    empty and unrecognised values are all treated as False, so a flag has to be
+    opted into deliberately.
+    """
+    return (os.getenv(name) or "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
 def _detect_container_ip() -> Optional[str]:
     """
     Detect the external IP address when running in a containerized environment.
+
+    Sends outbound requests to the cloud metadata services and, as a last
+    resort, to a public IP echo service. Only ``_build_callback_candidates``
+    calls this, and it skips the probe whenever the callback URL is already
+    known or ``AGENTFIELD_DISABLE_IP_DETECTION`` is set.
 
     Returns:
         External IP address if detected, None otherwise
@@ -342,7 +361,17 @@ def _normalize_candidate(candidate: str, port: int) -> Optional[str]:
 def _build_callback_candidates(
     callback_url: Optional[str], port: int, *, include_defaults: bool = True
 ) -> List[str]:
-    """Assemble a prioritized list of callback URL candidates."""
+    """Assemble a prioritized list of callback URL candidates.
+
+    ``_detect_container_ip`` is the only step here that puts a request on the
+    wire: it reaches out to the cloud metadata endpoints and a public IP echo
+    service. (``_detect_local_ip`` opens a connectionless UDP socket toward
+    8.8.8.8 to read back the kernel's chosen source address; it sends nothing.)
+    The probe is skipped when the operator has already supplied a callback URL
+    (constructor argument or ``AGENT_CALLBACK_URL``), and can be turned off
+    outright with ``AGENTFIELD_DISABLE_IP_DETECTION=1``. This function is the
+    probe's only call site, so that flag suppresses it everywhere.
+    """
 
     candidates: List[str] = []
     seen: Set[str] = set()
@@ -360,6 +389,18 @@ def _build_callback_candidates(
     env_callback_url = os.getenv("AGENT_CALLBACK_URL")
     add_candidate(env_callback_url)
 
+    # An operator-supplied callback URL already answers the question the public
+    # IP probe exists to answer, and it always sorts ahead of anything the probe
+    # could contribute. Probing anyway costs nothing but egress the operator
+    # never asked for — on Kubernetes it shows up as NetworkPolicy deny noise
+    # against the link-local metadata address. Anything that failed to normalize
+    # is not treated as configured, so a malformed value still falls back to
+    # full auto-detection rather than leaving the agent with no candidates.
+    explicit_callback_configured = bool(candidates)
+    skip_ip_detection = explicit_callback_configured or _env_flag_enabled(
+        "AGENTFIELD_DISABLE_IP_DETECTION"
+    )
+
     # 3. Container/platform-specific hints
     if _is_running_in_container():
         railway_service_name = os.getenv("RAILWAY_SERVICE_NAME")
@@ -367,9 +408,10 @@ def _build_callback_candidates(
         if railway_service_name and railway_environment:
             add_candidate(f"http://{railway_service_name}.railway.internal:{port}")
 
-        external_ip = _detect_container_ip()
-        if external_ip:
-            add_candidate(f"http://{external_ip}:{port}")
+        if not skip_ip_detection:
+            external_ip = _detect_container_ip()
+            if external_ip:
+                add_candidate(f"http://{external_ip}:{port}")
 
     # 4. Local network hints
     local_ip = _detect_local_ip()
@@ -400,6 +442,9 @@ def _resolve_callback_url(callback_url: Optional[str], port: int) -> str:
     2. AGENT_CALLBACK_URL environment variable
     3. Auto-detection for containerized environments
     4. Fallback to localhost
+
+    Steps 1 and 2 short-circuit the public-IP half of step 3: once a callback
+    URL is configured there is nothing left for the probe to discover.
 
     Args:
         callback_url: Explicit callback URL from constructor
@@ -688,6 +733,12 @@ class Agent(FastAPI):
             callback_url (str, optional): Explicit callback URL for AgentField server to reach this agent.
                                          If not provided, will use AGENT_CALLBACK_URL environment variable,
                                          auto-detection for containers, or fallback to localhost.
+                                         Supplying it here is also what makes the agent resolve its
+                                         callback URL at construction time, and that resolution no longer
+                                         runs the outbound cloud-metadata/public-IP probe, because the URL
+                                         is already known. AGENT_CALLBACK_URL suppresses the probe the same
+                                         way for any caller that goes through callback discovery, and
+                                         AGENTFIELD_DISABLE_IP_DETECTION=1 suppresses it unconditionally.
             vc_enabled (bool | None, optional): Controls default VC generation policy for this agent node.
                                          True enables VCs for all reasoners/skills (default), False disables,
                                          and None defers entirely to platform defaults.
@@ -1491,11 +1542,21 @@ class Agent(FastAPI):
         agents to store and retrieve data across function calls, workflow steps,
         and even across different agent interactions.
 
-        Memory is automatically scoped by:
-        - Execution context (workflow instance)
-        - Agent node ID
-        - Session information
-        - User context (if available)
+        A write with no explicit scope lands in the most specific scope the current
+        request carries, picked from the execution-context headers the SDK sends:
+        X-Workflow-ID (workflow), then X-Session-ID (session), then X-Actor-ID
+        (actor), falling back to the shared "global" scope when none is present.
+        A read with no explicit scope walks the same dimensions in the order
+        workflow -> session -> actor -> global and returns the first hit.
+
+        In practice the Python SDK always sends X-Workflow-ID (it falls back to
+        the run id when no workflow id is set), so an unscoped write from a
+        reasoner lands in the workflow scope of that run, and a later run in
+        the same session will not see it. Pass scope="session" (or use
+        app.memory.session(...)) for values that must outlive one run.
+
+        The agent's node ID travels with the request as X-Agent-Node-ID, but it is
+        attribution on the emitted memory change event - it is not a scope key.
 
         Returns:
             MemoryInterface: Interface for memory operations if execution context is available.
@@ -1508,16 +1569,16 @@ class Agent(FastAPI):
                 '''Analyze message with conversation history context.'''
 
                 # Store current message in conversation history
-                history = app.memory.get("conversation.history", [])
+                history = await app.memory.get("conversation.history", [])
                 history.append({
                     "message": message,
                     "timestamp": datetime.now().isoformat(),
                     "role": "user"
                 })
-                app.memory.set("conversation.history", history)
+                await app.memory.set("conversation.history", history)
 
                 # Get user preferences for analysis
-                user_prefs = app.memory.get("user.analysis_preferences", {
+                user_prefs = await app.memory.get("user.analysis_preferences", {
                     "sentiment_analysis": True,
                     "topic_extraction": True,
                     "language_detection": False
@@ -1540,16 +1601,16 @@ class Agent(FastAPI):
                 )
 
                 # Store analysis results
-                app.memory.set("conversation.last_analysis", result.model_dump())
+                await app.memory.set("conversation.last_analysis", result.model_dump())
 
                 return result
 
             @app.skill()
-            def get_conversation_summary() -> dict:
+            async def get_conversation_summary() -> dict:
                 '''Get summary of current conversation.'''
 
-                history = app.memory.get("conversation.history", [])
-                last_analysis = app.memory.get("conversation.last_analysis", {})
+                history = await app.memory.get("conversation.history", [])
+                last_analysis = await app.memory.get("conversation.last_analysis", {})
 
                 return {
                     "message_count": len(history),
@@ -1559,21 +1620,43 @@ class Agent(FastAPI):
             ```
 
         Memory Operations:
-            - `app.memory.get(key, default=None)`: Retrieve value by key
-            - `app.memory.set(key, value)`: Store value by key
-            - `app.memory.delete(key)`: Remove value by key
-            - `app.memory.exists(key)`: Check if key exists
-            - `app.memory.keys(pattern="*")`: List keys matching pattern
-            - `app.memory.clear(pattern="*")`: Clear keys matching pattern
+            `app.memory` is a `MemoryInterface`. Every value operation on it is a
+            coroutine and has to be awaited:
+
+            - `await app.memory.get(key, default=None, scope=None, scope_id=None)`:
+              Read a value; with `scope=None` this is the hierarchical lookup above
+            - `await app.memory.set(key, data, scope=None, scope_id=None)`: Store a value
+            - `await app.memory.delete(key, scope=None, scope_id=None)`: Remove a value
+            - `await app.memory.exists(key)`: Present, but it answers True for any key
+              as long as the backend is reachable; compare
+              `await app.memory.get(key, sentinel)` against a sentinel instead
+            - `await app.memory.set_vector(key, embedding, metadata=None)`: Store an embedding
+            - `await app.memory.delete_vector(key)`: Remove an embedding
+            - `await app.memory.similarity_search(query_embedding, top_k=10, filters=None,
+              scope=None, scope_id=None)`: Search stored embeddings
+
+            The scope accessors are ordinary (non-async) calls returning a scoped
+            client whose own methods are coroutines:
+
+            - `app.memory.session(session_id)`, `app.memory.actor(actor_id)`,
+              `app.memory.workflow(workflow_id)`, `app.memory.global_scope`
+            - `await app.memory.global_scope.list_keys()`: List the keys in one scope -
+              `list_keys` lives on the scoped clients, not on `app.memory` itself
+            - `@app.memory.on_change(patterns)`: Register a memory change listener
+
+            There is no `keys()` and no `clear()` method on `app.memory`.
 
         Memory Scopes:
-            - Session: Data persists for the duration of a user session
-            - Workflow: Data persists for the duration of a workflow execution
-            - Agent: Data persists across all executions for this agent
-            - Global: Data shared across all agents (use with caution)
+            - Session: One conversation, keyed by X-Session-ID
+            - Actor: One actor across all its sessions, keyed by X-Actor-ID
+            - Workflow: One workflow run, keyed by X-Workflow-ID
+            - Global: Shared by every agent and session; fixed scope id "global"
+
+            session, actor, and workflow are sibling dimensions, not a nested
+            chain. There is no Agent or Run scope.
 
         Note:
-            - Memory is automatically cleaned up based on retention policies
+            - Values persist until explicitly deleted; scope is lookup/isolation, not lifetime
             - Large objects should be stored efficiently (consider serialization)
             - Memory operations are atomic and thread-safe
             - Memory events can trigger `@on_change` listeners
@@ -2773,6 +2856,14 @@ class Agent(FastAPI):
                 "execution_id": execution_id,
                 "reasoner": reasoner_name,
             }
+            # Propagate the HTTP status code when the exception carries one so
+            # the control plane can return the correct 4xx to callers instead of
+            # a blanket 502 Bad Gateway (issue #862).
+            exc_status = getattr(exc, "status_code", None)
+            if exc_status is None:
+                exc_status = getattr(exc, "code", None)
+            if isinstance(exc_status, int) and 400 <= exc_status < 600:
+                payload["error_status_code"] = exc_status
             # A reasoner that ran, determined its own work failed, and wants its
             # structured outcome preserved raises ReasonerFailed(result=...).
             # Carry that result onto the failed-status payload so the control
@@ -3656,7 +3747,9 @@ class Agent(FastAPI):
             stream (bool, optional): Enable streaming response.
             response_format (str, optional): Desired response format ('auto', 'json', 'text').
             context (Dict, optional): Additional context data to pass to the LLM.
-            memory_scope (List[str], optional): Memory scopes to inject (e.g., ['workflow', 'session', 'reasoner']).
+            memory_scope (List[str], optional): Memory scopes to inject, drawn from the
+                four real scopes 'workflow', 'session', 'actor' and 'global'. Accepted
+                today but not yet applied to the prompt.
             **kwargs: Additional provider-specific parameters to pass to the LLM.
 
         Returns:
@@ -3735,8 +3828,9 @@ class Agent(FastAPI):
             prompt: Task description for the coding agent.
             schema: Pydantic BaseModel class for structured output validation.
             provider: Override provider ("aforge", "claude-code", "codex", "gemini",
-                "opencode", "pi", "omp").
-            model: Override model identifier.
+                "opencode", "grok", "pi", "omp"). Omit to use
+                ``AGENTFIELD_HARNESS_PROVIDER`` when set, otherwise ``aforge``.
+            model: Override model identifier. Empty uses the provider's own default.
             max_turns: Maximum agent iterations.
             max_budget_usd: Cost cap in USD.
             tools: Allowed tools list.
@@ -3805,6 +3899,7 @@ class Agent(FastAPI):
                 derive_provider,
                 get_current_cost_tracker,
             )
+            from agentfield.harness._defaults import resolve_harness_provider
 
             input_tokens = getattr(result, "input_tokens", 0) or 0
             output_tokens = getattr(result, "output_tokens", 0) or 0
@@ -3823,7 +3918,7 @@ class Agent(FastAPI):
             if tracker is None:
                 return
 
-            resolved_provider = (
+            resolved_provider = resolve_harness_provider(
                 str(provider) if provider else self._harness_provider_name()
             )
             harness_name = (
@@ -4179,7 +4274,9 @@ class Agent(FastAPI):
         Generate music from a text prompt.
 
         Routes to a music-capable provider (OpenRouter with models like
-        google/lyria-3-pro). Returns a MultimodalResponse with audio data.
+        google/lyria-3-pro-preview). Returns a MultimodalResponse with audio
+        data; ``.audio.format`` reports the container the model actually
+        produced, which may differ from the requested ``format``.
 
         Args:
             prompt (str): Text description of the music to generate.
@@ -4194,7 +4291,7 @@ class Agent(FastAPI):
             ```python
             result = await app.ai_generate_music("upbeat jazz piano solo")
             if result.has_audio:
-                result.audio.save("jazz.wav")
+                result.audio.save(f"jazz.{result.audio.format}")
             ```
         """
         return await self.ai_handler.ai_generate_music(

@@ -1,16 +1,30 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { AnimatePresence, m, useReducedMotion } from 'motion/react'
-import type { AgentEnvReport, AgentFieldSnapshot, SnapshotAgent } from '../../../shared/types'
+import type {
+  AgentEnvReport,
+  AgentFieldSnapshot,
+  BundledPhase,
+  BundledStatus,
+  LocalControlPlaneRestartStatus,
+  SnapshotAgent,
+  InstallResult
+} from '../../../shared/types'
 import { EnvEditor } from './EnvEditor'
 import { MenuPopover } from './MenuPopover'
 import { SkeletonRows } from './Skeleton'
 import { EmptyState } from './EmptyMark'
 
-type AgentAction = 'start' | 'stop' | 'restart' | 'uninstall'
+type AgentAction = 'start' | 'stop' | 'restart' | 'update' | 'pause' | 'resume' | 'uninstall'
 
 interface AgentsPanelProps {
   registry: AgentFieldSnapshot['registry'] | null
+  /**
+   * Bundled nodes the app is provisioning for this launch (shared/bundled.ts).
+   * They are not in the registry yet, so they ride above the installed rows as
+   * read-only progress until the install lands and the real row replaces them.
+   */
+  bundled: BundledStatus[]
   /** Called after a lifecycle action so the snapshot refreshes promptly. */
   onChanged: () => void
 }
@@ -28,28 +42,122 @@ const BUSY_LABEL: Record<AgentAction, string> = {
   start: 'Starting…',
   stop: 'Stopping…',
   restart: 'Restarting…',
+  update: 'Updating from the recorded source…',
+  pause: 'Pausing automatic updates…',
+  resume: 'Resuming automatic updates…',
   uninstall: 'Uninstalling…'
 }
 
-export function AgentsPanel({ registry, onChanged }: AgentsPanelProps): ReactElement {
+// First-launch provisioning reads as calm progress, never as a broken agent:
+// the badge says what the app is doing, not that something is wrong.
+const BUNDLED_LABEL: Record<BundledPhase, string> = {
+  pending: 'Queued',
+  installing: 'Installing…',
+  installed: 'Installed',
+  failed: 'Install failed'
+}
+
+// A failed bundled node is not marked provisioned, so the next launch tries
+// again — say so instead of leaving a dead-looking row.
+const BUNDLED_FAILED_TITLE = 'This node is retried automatically on the next launch.'
+
+export function rosterKey(names: readonly string[]): string {
+  return [...new Set(names)].sort().join('\0')
+}
+
+export function visibleBundledRows(
+  bundled: BundledStatus[],
+  registryNames: readonly string[]
+): BundledStatus[] {
+  const installed = new Set(registryNames)
+  return bundled.filter((node) => !installed.has(node.name))
+}
+
+export function agentUpdateChip(agent: SnapshotAgent): string | null {
+  if (agent.update?.status === 'failed') return 'Update failed'
+  if (agent.update?.status === 'error') return 'Update check failed'
+  if (agent.autoUpdate === false) return 'Paused'
+  if (agent.update?.status === 'available') return 'Update available'
+  // The pass found an update but the node was busy; it retries on its own.
+  if (agent.update?.status === 'deferred') return 'Update waiting for the node to be idle'
+  if (agent.update?.status === 'pinned') return 'Pinned'
+  return null
+}
+
+export function agentUpdateChipTitle(agent: SnapshotAgent): string | undefined {
+  const status = agent.update?.status
+  return status === 'failed' || status === 'error' || status === 'deferred' ? agent.update?.message : undefined
+}
+
+export function agentManualUpdateActionVisible(_agent: SnapshotAgent): boolean {
+  return true
+}
+
+export function agentAutoUpdateActionVisible(agent: SnapshotAgent): boolean {
+  return agent.autoUpdate !== undefined
+}
+
+export function localControlPlaneRestartVisible(
+  status: LocalControlPlaneRestartStatus | null
+): boolean {
+  return status?.status === 'restart_required'
+}
+
+export function activeExecutionsConfirmation(count: number, agent: string): string {
+  return `${count} ${count === 1 ? 'run' : 'runs'} in progress on ${agent}. Updating will stop them. Update anyway?`
+}
+
+/** Retry exactly once with force after the user acknowledges active runs. */
+export async function updateWithExecutionConfirmation(
+  agent: string,
+  request: (force: boolean) => Promise<InstallResult>,
+  confirm: (message: string) => boolean
+): Promise<InstallResult> {
+  const initial = await request(false)
+  if (initial.activeExecutions === undefined || initial.activeExecutions <= 0) return initial
+  if (!confirm(activeExecutionsConfirmation(initial.activeExecutions, agent))) {
+    return { ok: true, message: 'Update cancelled.' }
+  }
+  return request(true)
+}
+
+export function LocalControlPlaneRestartBanner({
+  status
+}: {
+  status: LocalControlPlaneRestartStatus | null
+}): ReactElement | null {
+  if (!localControlPlaneRestartVisible(status)) return null
   return (
-    <div className="panel">
-      <AgentsBody registry={registry} onChanged={onChanged} />
+    <div className="callout warning" role="status">
+      {status!.message}
     </div>
   )
 }
 
-function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
+export function AgentsPanel({ registry, bundled, onChanged }: AgentsPanelProps): ReactElement {
+  return (
+    <div className="panel">
+      <AgentsBody registry={registry} bundled={bundled} onChanged={onChanged} />
+    </div>
+  )
+}
+
+function AgentsBody({ registry, bundled, onChanged }: AgentsPanelProps) {
   const [busy, setBusy] = useState<{ name: string; action: AgentAction } | null>(null)
   const [failure, setFailure] = useState<{ name: string; message: string } | null>(null)
   const [envReports, setEnvReports] = useState<Record<string, AgentEnvReport>>({})
   const [expanded, setExpanded] = useState<string | null>(null)
   const [confirmUninstall, setConfirmUninstall] = useState<string | null>(null)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const registryRosterKey = rosterKey(registry?.agents.map((agent) => agent.name) ?? [])
+  const visibleBundled = visibleBundledRows(
+    bundled,
+    registry?.agents.map((agent) => agent.name) ?? []
+  )
 
   // Env/secret statuses come from the af CLI + manifests — refreshed on
-  // mount and after any change, not on the snapshot poll (each refresh
-  // shells out to `af secrets ls`).
+  // mount, when the registry roster changes, and after any action. The stable
+  // set key avoids shelling out to `af secrets ls` on ordinary snapshot polls.
   const loadEnv = useCallback(() => {
     window.agentfield
       .getEnvReports()
@@ -60,7 +168,7 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
       })
       .catch(() => {})
   }, [])
-  useEffect(loadEnv, [loadEnv])
+  useEffect(loadEnv, [loadEnv, registryRosterKey])
 
   useEffect(() => {
     if (openMenu === null) return
@@ -84,7 +192,9 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
   }
   // Rarely rendered: App shows the Agents add-mode (marketplace) whenever the
   // library is empty, so this only covers odd registry states mid-refresh.
-  if (!registry.exists || registry.agents.length === 0) {
+  // A launch that is still provisioning bundled nodes is not empty — it is
+  // not finished — so the provisioning rows suppress this state.
+  if ((!registry.exists || registry.agents.length === 0) && visibleBundled.length === 0) {
     return (
       <EmptyState
         variant="orbit"
@@ -99,7 +209,7 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
     // "missing required environment variables" failure — open the editor
     // instead of letting it happen.
     const report = envReports[name]
-    if (action !== 'stop' && action !== 'uninstall' && report && !report.satisfied) {
+    if ((action === 'start' || action === 'restart') && report && !report.satisfied) {
       setExpanded(name)
       setFailure({ name, message: 'This agent needs keys before it can start — add them below.' })
       return
@@ -108,12 +218,26 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
     setFailure(null)
     setConfirmUninstall(null)
     setOpenMenu(null)
-    const result =
-      action === 'uninstall'
+    try {
+      const result = action === 'uninstall'
         ? await window.agentfield.uninstall(name)
-        : await window.agentfield.agentAction(action, name)
+        : action === 'update'
+          ? await updateWithExecutionConfirmation(
+              name,
+              (force) => window.agentfield.update(name, force ? { force: true } : undefined),
+              (message) => window.confirm(message)
+            )
+          : action === 'pause' || action === 'resume'
+            ? await window.agentfield.setPackageAutoUpdate(name, action === 'resume')
+            : await window.agentfield.agentAction(action, name)
+      if (!result.ok) setFailure({ name, message: result.message })
+    } catch (error) {
+      setFailure({
+        name,
+        message: `${error instanceof Error ? error.message : String(error)} Try again after checking the control-plane connection.`
+      })
+    }
     setBusy(null)
-    if (!result.ok) setFailure({ name, message: result.message })
     onChanged()
     loadEnv()
   }
@@ -125,6 +249,14 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
 
   return (
     <ul className="row-list">
+      {/* Bundled nodes first: on a first launch these two rows are the whole
+          view, so the user watches the install stream instead of an empty
+          panel. They leave the list once the registry carries the real row. */}
+      <AnimatePresence initial={false}>
+        {visibleBundled.map((node) => (
+          <BundledRow key={node.name} node={node} />
+        ))}
+      </AnimatePresence>
       {registry.agents.map((agent) => (
         <AgentRow
           key={agent.name}
@@ -147,6 +279,59 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
         />
       ))}
     </ul>
+  )
+}
+
+/**
+ * A bundled node mid-provisioning. Deliberately inert: there is nothing to
+ * start, stop, or configure until the install finishes, and offering buttons
+ * that cannot work would read as a broken agent.
+ */
+function BundledRow({ node }: { node: BundledStatus }) {
+  const reducedMotion = useReducedMotion()
+  const failed = node.phase === 'failed'
+
+  return (
+    <m.li
+      className="row-item"
+      // Row arrival (DESIGN.md §5.2): fade + 4px settle, exit reversed when
+      // the installed row takes over.
+      initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <div className="row">
+        <div className="row-main">
+          <div className="env-row-head">
+            <BundledBadge phase={node.phase} />
+            <span className="row-title">{node.name}</span>
+            {node.language ? <span className="chip lang">{node.language}</span> : null}
+          </div>
+          {node.description && <span className="row-sub">{node.description}</span>}
+          {node.message && (
+            <span
+              className={`row-progress${failed ? ' error-text' : ''}`}
+              aria-live="polite"
+            >
+              {node.message}
+            </span>
+          )}
+        </div>
+      </div>
+    </m.li>
+  )
+}
+
+function BundledBadge({ phase }: { phase: BundledPhase }) {
+  return (
+    <span
+      className={`badge provisioning ${phase}`}
+      title={phase === 'failed' ? BUNDLED_FAILED_TITLE : undefined}
+    >
+      <span className="badge-dot" aria-hidden="true" />
+      {BUNDLED_LABEL[phase]}
+    </span>
   )
 }
 
@@ -182,6 +367,7 @@ function AgentRow({
   const reducedMotion = useReducedMotion()
   const running = agent.badge === 'running'
   const rowBusy = busy !== null
+  const updateChip = agentUpdateChip(agent)
 
   const descParts = [
     agent.description || null,
@@ -199,6 +385,14 @@ function AgentRow({
               <span className="badge warn">
                 <span className="badge-dot" aria-hidden="true" />
                 Needs keys
+              </span>
+            )}
+            {updateChip && (
+              <span
+                className={`chip ${agent.update?.status === 'available' || agent.update?.status === 'failed' ? 'warn' : ''}`}
+                title={agentUpdateChipTitle(agent)}
+              >
+                {updateChip}
               </span>
             )}
           </div>
@@ -273,6 +467,26 @@ function AgentRow({
                     onClick={() => onAction('restart')}
                   >
                     Restart
+                  </button>
+                )}
+                {agentManualUpdateActionVisible(agent) && (
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => onAction('update')}
+                  >
+                    Update from recorded source
+                  </button>
+                )}
+                {agentAutoUpdateActionVisible(agent) && (
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => onAction(agent.autoUpdate === false ? 'resume' : 'pause')}
+                  >
+                    {agent.autoUpdate === false
+                      ? 'Resume automatic updates'
+                      : 'Pause automatic updates'}
                   </button>
                 )}
                 <button

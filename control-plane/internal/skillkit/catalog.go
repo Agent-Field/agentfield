@@ -52,16 +52,17 @@ read this skill first`,
 	},
 	{
 		Name:        "agentfield-use",
-		Version:     "0.6.0",
-		Description: "Discover and call agents already running on a local or cloud AgentField control plane. Resolves the target server first (a desktop-configured cloud beats the local default, and an unreachable one is a stop-and-report, never a silent fallback), zero-setup MCP endpoint at <server>/mcp, health check, capability discovery, ranked reasoner search (af agent search), the reasoner's exact contract fetched before the first dispatch, entry-point-only targeting, concurrent sync/async execution, load-aware pacing (meta.load), in-flight visibility (af ps / executions/active), wedged-run triage (cancel-tree), sessions, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
+		Version:     "0.8.0",
+		Description: "Offload work to installed AgentField agents — your subharnesses — instead of doing it inline: whenever a task arises, check whether an installed agent covers it and dispatch to it by default when one does. Resolves the target server first (local or cloud: a desktop-configured cloud beats the local default, and an unreachable one is a stop-and-report, never a silent fallback), zero-setup MCP endpoint at <server>/mcp, health check, capability discovery, ranked reasoner search (af agent search), the reasoner's exact contract fetched before the first dispatch, entry-point-only targeting, async dispatch (af call --async) with wait/tail/batch-poll retrieval, a live run link at <server>/ui/runs/<run_id>, load-aware pacing (meta.load), in-flight visibility (af ps / executions/active), wedged-run triage (cancel-tree), honest cost reporting from the usage/stats window aggregate, sessions, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
 		EmbedRoot:   "skill_data/agentfield-use",
 		EntryFile:   "SKILL.md",
-		Trigger: `When the user asks you to use, call, query, or delegate work to an
-installed AgentField agent, to list available agents or reasoners, or to
-check on a running execution, you MUST read this skill first — it resolves
-which control plane the work goes to (local or the desktop-configured
-cloud) and requires fetching a reasoner's contract, and confirming it is an
-entry point, before dispatching to it`,
+		Trigger: `Before you do a task yourself, and whenever the user asks you to
+use, call, query, or delegate work to an installed AgentField agent, to
+list available agents or reasoners, or to check on a running execution, you
+MUST read this skill first — installed agents are subharnesses you offload
+to by default; it resolves which control plane the work goes to (local or
+the desktop-configured cloud) and requires fetching a reasoner's contract,
+and confirming it is an entry point, before dispatching to it`,
 	},
 }
 

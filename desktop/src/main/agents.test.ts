@@ -5,8 +5,10 @@ import {
   SERVER_LABEL,
   planControlPlaneLaunch,
   runAgentAction,
+  setAgentPackageAutoUpdate,
   uninstallAgent,
-  startControlPlane
+  startControlPlane,
+  serverSpawnEnv
 } from './agents'
 import { CpApiError, type CpClient } from './cpClient'
 
@@ -129,6 +131,20 @@ describe('HTTP agent management', () => {
       message: 'Could not reach the control plane — start the control plane and try again'
     })
   })
+
+  it('maps a missing package auto-update endpoint to the old-control-plane message', async () => {
+    const client = managementClient({
+      setPackageAutoUpdate: vi.fn(async () => {
+        throw new CpApiError({ status: 404, message: 'route not found' })
+      })
+    })
+
+    await expect(setAgentPackageAutoUpdate('agent', false, { cpClient: client }))
+      .resolves.toEqual({
+        ok: false,
+        message: 'Control plane update required — update AgentField CLI'
+      })
+  })
 })
 
 describe('startControlPlane', () => {
@@ -243,6 +259,19 @@ describe('startControlPlane', () => {
     expect(result).toEqual({
       ok: false,
       message: 'control plane did not become healthy in time'
+    })
+  })
+})
+
+describe('serverSpawnEnv', () => {
+  it('pins the port and tells the server its own URL for the agents it starts', () => {
+    expect(serverSpawnEnv(8080)).toEqual({
+      AGENTFIELD_PORT: '8080',
+      AGENTFIELD_SERVER: 'http://localhost:8080'
+    })
+    expect(serverSpawnEnv(18480)).toEqual({
+      AGENTFIELD_PORT: '18480',
+      AGENTFIELD_SERVER: 'http://localhost:18480'
     })
   })
 })

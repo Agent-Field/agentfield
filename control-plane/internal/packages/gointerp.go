@@ -227,7 +227,15 @@ func InstallGoDependencies(packagePath string, metadata *PackageMetadata) error 
 
 	buildPkg, outBin := metadata.goBuildTarget()
 
-	args := []string{"build"}
+	// The installed package copy is not a git checkout, so there is nothing
+	// truthful for `go build`'s VCS stamping to record — and its repo
+	// auto-detection walks up PAST the package root, so a .git anywhere above
+	// ~/.agentfield/packages (a dotfiles-managed $HOME, a stray /tmp/.git)
+	// either hard-fails the build ("error obtaining VCS status") or stamps an
+	// unrelated repository's revision into the node binary. Stamping is
+	// therefore disabled outright. (`go run` launches are unaffected: the go
+	// tool only stamps VCS info for build/install.)
+	args := []string{"build", "-buildvcs=false"}
 	if hasVendorDir(packagePath) {
 		args = append(args, "-mod=vendor")
 	} else {

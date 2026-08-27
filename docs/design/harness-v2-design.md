@@ -25,7 +25,10 @@ from agentfield import Agent, AIConfig, HarnessConfig
 app = Agent(
     node_id="my-agent",
     ai_config=AIConfig(model="openai/gpt-4o"),
-    harness_config=HarnessConfig(),  # OMP; model comes from CLI configuration
+    harness_config=HarnessConfig(
+        provider="claude-code",   # Optional — defaults to "aforge"
+        model="sonnet",      # Optional — defaults to the provider's own
+    ),
 )
 ```
 
@@ -34,7 +37,10 @@ import { Agent } from '@agentfield/sdk';
 
 const agent = new Agent({
     nodeId: 'my-agent',
-    harnessConfig: {},  // OMP; model comes from CLI configuration
+    harnessConfig: {
+        provider: 'claude-code',  // Optional — defaults to 'aforge'
+        model: 'sonnet',          // Optional — defaults to the provider's own
+    },
 });
 ```
 
@@ -101,10 +107,15 @@ fix = await app.harness(
 ### 2.5 Without Constructor Config
 
 ```python
-# No harness_config on Agent — OMP is selected automatically
+# No harness_config on Agent — the default provider, "aforge", is selected automatically
 app = Agent(node_id="minimal-agent")
 
-result = await app.harness("Fix the bug", cwd="/my/project")
+result = await app.harness(
+    "Fix the bug",
+    provider="gemini",     # Optional — omit to use the default, "aforge"
+    model="flash",
+    cwd="/my/project",
+)
 ```
 
 ### 2.6 Inside a Reasoner (production pattern)
@@ -131,7 +142,7 @@ async def fix_issue(issue: dict) -> dict:
 ```
 Agent
 ├── .ai()      → AIConfig      → LiteLLM     → LLM APIs (100+ providers)
-└── .harness() → HarnessConfig → HarnessRunner → Provider → {Claude Code, Codex, Gemini, OpenCode}
+└── .harness() → HarnessConfig → HarnessRunner → Provider → {Aforge, Claude Code, Codex, Gemini, OpenCode}
 ```
 
 ### 3.2 Component Stack
@@ -340,12 +351,14 @@ Layer 4: Full retry                                      (expensive, last resort
 ```python
 class HarnessConfig(BaseModel):
     """Configuration for coding agent harness calls.
-
-    OMP is the provider default. Every field can be overridden per-call.
+    
+    Provider defaults to "aforge", AgentField's native harness.
+    All fields have sensible defaults that can be overridden per-call.
     """
-    provider: str = "omp"
-    model: Optional[str] = None  # use the selected CLI's configured default
-
+    # Provider selection: explicit > AGENTFIELD_HARNESS_PROVIDER > "aforge"
+    provider: str = "aforge"    # | "claude-code" | "codex" | "gemini" | "opencode" | "pi" | "omp"
+    model: Optional[str] = None  # None → the provider's own default
+    
     # Execution limits
     max_turns: int = 30
     max_budget_usd: Optional[float] = None
@@ -367,6 +380,7 @@ class HarnessConfig(BaseModel):
     env: Dict[str, str] = Field(default_factory=dict)
 
     # Binary paths (for CLI-based providers)
+    aforge_bin: str = "aforge"
     codex_bin: str = "codex"
     gemini_bin: str = "gemini"
     opencode_bin: str = "opencode"
@@ -378,8 +392,8 @@ class HarnessConfig(BaseModel):
 
 ```typescript
 interface HarnessConfig {
-    /** OMP when omitted. */
-    provider?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
+    /** 'aforge' when omitted. */
+    provider?: 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
     /** Omitted uses the selected CLI's configured model. */
     model?: string;
     /** Maximum agent iterations. Default: 30 */
@@ -417,12 +431,11 @@ interface HarnessConfig {
 ### 6.3 Config Resolution (hierarchical, matches .ai pattern)
 
 ```
-1. Per-call overrides passed to `.harness()`
-2. `HarnessConfig` set at agent construction
-3. OMP provider default; the CLI's configured model default
-
-Per-call values win. AgentField never substitutes a provider-specific model
-when the model is omitted.
+1. HarnessConfig defaults (set at agent construction)
+2. Per-call overrides (passed to .harness() method)
+   → Per-call values win over HarnessConfig defaults
+   → If no HarnessConfig AND no per-call provider → AGENTFIELD_HARNESS_PROVIDER,
+     then the default provider "aforge"
 ```
 
 ---

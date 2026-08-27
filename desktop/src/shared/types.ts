@@ -30,8 +30,32 @@ export interface InstalledAgent {
   status: string
   /** Install dir (~/.agentfield/packages/<name>) — where the manifest lives. */
   path: string | null
+  /** installed.yaml source_path; absent when an older control plane omits it. */
+  source?: string
   port: number | null
   pid: number | null
+  /** Resolved git commit recorded when this package was installed. */
+  installedCommit?: string
+  /** Whether the control plane may update this package during maintenance. */
+  autoUpdate?: boolean
+  /** Last package update-check result (absent on older control planes). */
+  update?: PackageUpdateResult
+}
+
+export type PackageUpdateStatus =
+  | 'current'
+  | 'available'
+  | 'pinned'
+  | 'unknown'
+  | 'deferred'
+  | 'failed'
+  | 'error'
+
+export interface PackageUpdateResult {
+  status: PackageUpdateStatus
+  latestCommit: string
+  checkedAt: string
+  message: string
 }
 
 /** Registry read result. Missing file/dir is a graceful empty state, not an error. */
@@ -81,10 +105,29 @@ export interface CatalogEntry {
   language?: string
 }
 
+/** Where a bundled node is in its first-launch provisioning. */
+export type BundledPhase = 'pending' | 'installing' | 'installed' | 'failed'
+
+/**
+ * One bundled node the app is provisioning (see shared/bundled.ts). These are
+ * not registry rows: they describe work in flight, so the Agents view can show
+ * the two nodes that ship with the app arriving before they exist on disk.
+ */
+export interface BundledStatus {
+  name: string
+  description: string
+  language?: string
+  phase: BundledPhase
+  /** Latest progress line, or the error text when phase is 'failed'. '' when none. */
+  message: string
+}
+
 /** Terminal states of an install kicked off from the app. */
 export interface InstallResult {
   ok: boolean
   message: string
+  /** Present when the control plane refused an update because runs are active. */
+  activeExecutions?: number
 }
 
 /** Outcome of a start/stop/restart issued from the app. */
@@ -169,9 +212,38 @@ export interface CliStatus {
  * plane up, starts the agents you selected, and everything is queryable the
  * moment Claude/Codex/anything asks.
  */
+export type CloudAutoUpdateMode = 'off' | 'nightly' | 'weekends' | 'anytime'
+export type CloudAutoUpdateLiveMode = CloudAutoUpdateMode | 'custom' | null
+export type CloudAutoUpdatePolicy = 'disabled' | 'patch' | 'minor' | null
+
+export interface CloudAutoUpdateStateResult {
+  ok: boolean
+  mode: CloudAutoUpdateLiveMode
+  policy: CloudAutoUpdatePolicy
+  serviceId?: string
+  message?: string
+  settingsUrl?: string
+}
+
+export interface CloudAutoUpdateSetResult {
+  ok: boolean
+  message: string
+  settingsUrl?: string
+}
+
 export interface DesktopSettings {
   /** Remote control-plane profile. The API key remains in main-process settings. */
-  cloud: { enabled: boolean; serverUrl: string; apiKey: string }
+  cloud: {
+    enabled: boolean
+    serverUrl: string
+    apiKey: string
+    /** Railway Image Auto Updates maintenance window; null until applied. */
+    autoUpdate: CloudAutoUpdateMode | null
+    /** Railway service identity against which autoUpdate is interpreted. */
+    autoUpdateServiceId: string | null
+    /** Cloud control-plane version dismissed from the update banner. */
+    dismissedUpdateVersion: string | null
+  }
   /** Launch the app when you log in (starts hidden, in the tray). */
   openAtLogin: boolean
   /** Follow the OS appearance, or explicitly force the light/dark palette. */
@@ -202,6 +274,12 @@ export interface DesktopSettings {
   /** Installed agent names to start once the control plane is healthy. */
   autostartAgents: string[]
   /**
+   * Bundled node names this app has already provisioned at least once. A name
+   * recorded here is never auto-installed again, so uninstalling a bundled
+   * node sticks across launches instead of coming back on the next start.
+   */
+  provisionedBundled: string[]
+  /**
    * Keep the AgentField skill catalog (building agents, personal agents,
    * calling installed ones) installed in detected coding agents (Claude
    * Code, Codex, …) via `af skill install` — so they know how to use this.
@@ -225,6 +303,13 @@ export interface DesktopSettings {
   starPrompt: 'pending' | 'done'
   /** ISO timestamp until which the star prompt is snoozed (Later = +7 days). null = not snoozed. */
   starPromptSnoozedUntil: string | null
+  /**
+   * Agent names the app has already warned about over a native notification
+   * after provisioning them without the API keys they require. A name recorded
+   * here is never announced again, so the notice fires once per provisioning
+   * event instead of on every launch (see main/keyNotice.ts).
+   */
+  keyNoticeShown: string[]
 }
 
 export interface CloudTestResult {
@@ -239,10 +324,50 @@ export interface CloudTestResult {
   message: string
 }
 
-export interface CloudImageUpdate {
+export interface ControlPlaneHosting {
+  platform: 'railway' | 'docker' | 'local'
+  project_id?: string
+  environment_id?: string
+  service_id?: string
+  deployment_id?: string
+  region?: string
+}
+
+/** GET /api/v1/version response. Field names intentionally match the API. */
+export interface ControlPlaneVersion {
+  version: string
+  commit: string
+  build_date: string
+  hosting: ControlPlaneHosting
+  features: string[]
+}
+
+export type CloudUpdateCheckStatus = 'current' | 'available' | 'unknown' | 'legacy'
+
+export interface CloudUpdateCheck {
+  status: CloudUpdateCheckStatus
   current: string | null
   latest: string | null
-  updateAvailable: boolean
+  message: string
+}
+
+/** Main-process cloud updater state, sent on its own IPC channel. */
+export interface CloudUpdateStatus extends CloudUpdateCheck {
+  checking: boolean
+  applying: boolean
+  lastCheckedAt: string | null
+  /** Whether Desktop can safely identify a Railway service to update. */
+  canApply: boolean
+  /** Whether Railway service controls can safely target the connected CP. */
+  canManageRailway?: boolean
+  hosting?: ControlPlaneHosting
+}
+
+export interface CloudUpdateApplyResult {
+  ok: boolean
+  target?: string
+  alreadyCurrent?: boolean
+  message: string
 }
 
 export interface RailwayStatus {
@@ -250,6 +375,12 @@ export interface RailwayStatus {
   engineAvailable: boolean
   hasDeployment: boolean
   workspaces: Array<{ id: string; name: string }>
+  /** Workspace recorded in the desktop deployment's tfstate, when present. */
+  deploymentWorkspaceId?: string
+  /** Service recorded in the desktop deployment's tfstate, when present. */
+  deploymentServiceId?: string
+  /** Non-fatal Railway lookup problem; login remains valid. */
+  message?: string
 }
 
 export interface CloudDeployResult {
@@ -257,6 +388,57 @@ export interface CloudDeployResult {
   url?: string
   furrowAddress?: string
   message: string
+  /** Post-deploy Railway Image Auto Updates reconciliation feedback. */
+  autoUpdateOk?: boolean
+  autoUpdateMessage?: string
+  autoUpdateSettingsUrl?: string
+}
+
+export interface PackageUpdateCheckResponse {
+  checked_at: string
+  packages: Array<{
+    id: string
+    name: string
+    installed_commit: string
+    update: {
+      status: PackageUpdateStatus
+      latest_commit: string
+      checked_at: string
+      message: string
+    }
+  }>
+}
+
+export interface PackageMaintenanceRun {
+  started_at: string
+  finished_at: string
+  checked: number
+  updated: string[]
+  restored: string[]
+  skipped: Array<{ name: string; reason: string }>
+  errors: string[]
+}
+
+export interface PackageMaintenanceStatus {
+  enabled: boolean
+  reason: string
+  interval: string
+  /** New control planes expose restore completion before update checks finish. */
+  boot_restore_completed?: boolean
+  boot_pass_completed: boolean
+  hosting: 'railway' | 'docker' | 'local'
+  last_run: PackageMaintenanceRun | null
+  next_run_at: string
+}
+
+export interface LocalControlPlaneRestartStatus {
+  at: string
+  ok: boolean
+  restarted: boolean
+  status: 'not_required' | 'restart_required' | 'restarted' | 'failed'
+  message: string
+  /** Managed CLI version the adopted server must reach before this clears. */
+  targetVersion?: string
 }
 
 /** A newer app release found on GitHub (the desktop app's update channel). */
@@ -355,6 +537,14 @@ export interface AgentFieldSnapshot {
    * existing poll delivers it without a second polling loop in the renderer.
    */
   skillSync: SkillSyncRecord | null
+  /**
+   * Bundled nodes still being provisioned this launch. Empty once each one is
+   * installed or was deliberately uninstalled by the user. Main-process state
+   * like skillSync, riding the existing snapshot poll rather than a second one.
+   */
+  bundled: BundledStatus[]
+  /** Result of checking/restarting an adopted local CP after a managed CLI swap. */
+  localControlPlaneRestart: LocalControlPlaneRestartStatus | null
   /** ISO timestamp of when this snapshot was assembled. */
   fetchedAt: string
 }
@@ -362,10 +552,26 @@ export interface AgentFieldSnapshot {
 /** Surface exposed on window.agentfield by the preload script. */
 export interface AgentFieldApi {
   cloudTest(url: string, apiKey: string): Promise<CloudTestResult>
+  /** Replace only renderer-owned connection fields; main merges cloud state. */
+  setCloudProfile(profile: {
+    enabled: boolean
+    serverUrl: string
+    apiKey: string
+  }): Promise<DesktopSettings>
   /** Open the guided Railway deployment flow for a hosted control plane. */
   cloudDeployRailway(): Promise<boolean>
   railwayStatus(): Promise<RailwayStatus>
-  checkCloudImageUpdate(): Promise<CloudImageUpdate>
+  /** Check the running cloud control plane against Docker Hub's stable release. */
+  checkCloudUpdate(): Promise<CloudUpdateStatus>
+  /** Apply the cloud control-plane update and wait for the target version. */
+  applyCloudUpdate(): Promise<CloudUpdateApplyResult>
+  /** Dismiss exactly one cloud control-plane version in the main process. */
+  dismissCloudUpdate(version: string): Promise<void>
+  /** Read Railway's live Image Auto Updates policy and maintenance window. */
+  getCloudAutoUpdate(): Promise<CloudAutoUpdateStateResult>
+  /** Configure Railway Image Auto Updates for the connected control plane. */
+  setCloudAutoUpdate(mode: CloudAutoUpdateMode): Promise<CloudAutoUpdateSetResult>
+  onCloudUpdateStatus(listener: (status: CloudUpdateStatus) => void): () => void
   railwayLogin(): Promise<{ ok: boolean; message: string; workspaces?: RailwayStatus['workspaces'] }>
   railwayLogout(): Promise<void>
   cloudDeploy(workspaceId: string): Promise<CloudDeployResult>
@@ -385,11 +591,16 @@ export interface AgentFieldApi {
   /** Uninstall an installed agent (stops it first; removes files + secrets). */
   uninstall(name: string): Promise<AgentActionResult>
   /**
-   * Update an installed catalog agent to the latest version of its source
-   * (reinstall in place; secrets survive). A running agent is stopped for
-   * the update and restarted after; a stopped one stays stopped.
+   * Update an installed agent. Catalog agents follow the catalog source;
+   * other agents follow the source recorded by the control plane.
    */
-  update(name: string): Promise<InstallResult>
+  update(name: string, options?: { force?: boolean }): Promise<InstallResult>
+  /** Ask the control plane to refresh package update availability. */
+  checkPackageUpdates(): Promise<PackageUpdateCheckResponse>
+  /** Pause/resume unattended updates for one installed package. */
+  setPackageAutoUpdate(id: string, enabled: boolean): Promise<AgentActionResult>
+  getMaintenanceStatus(): Promise<PackageMaintenanceStatus>
+  runPackageMaintenance(): Promise<{ started: boolean }>
   /** Start / stop / restart an installed agent by its registry name. */
   agentAction(action: 'start' | 'stop' | 'restart', name: string): Promise<AgentActionResult>
   /** Bring up the local AgentField control plane and wait until healthy. */

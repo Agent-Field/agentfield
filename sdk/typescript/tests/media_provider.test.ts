@@ -130,6 +130,7 @@ describe('OpenRouterMediaProvider', () => {
         'HTTP-Referer': 'https://agentfield.ai',
         'X-OpenRouter-Title': 'AgentField AI',
         'X-Title': 'AgentField AI',
+        'X-OpenRouter-Categories': 'cli-agent,programming-app',
       })
     );
   });
@@ -459,14 +460,15 @@ describe('OpenRouterMediaProvider', () => {
         body: { getReader: () => mockReader },
       });
 
-      // mp3 keeps chunks as raw base64 (no wav wrap).
+      // pcm16 is the only format OpenRouter streams (#584); it keeps chunks as
+      // raw base64 (no wav wrap).
       const resp = await provider.generateAudio({
-        text: 'say hello', model: 'openai/gpt-audio-mini', format: 'mp3',
+        text: 'say hello', model: 'openai/gpt-audio-mini', format: 'pcm16',
       });
       expect(resp.text).toBe('Hello');
       expect(resp.audio).not.toBeNull();
       expect(resp.audio!.data).toBe('AAAABBBB');
-      expect(resp.audio!.format).toBe('mp3');
+      expect(resp.audio!.format).toBe('pcm16');
     });
 
     it('processes remaining buffer after stream ends (WR-02)', async () => {
@@ -498,7 +500,7 @@ describe('OpenRouterMediaProvider', () => {
       });
 
       const resp = await provider.generateAudio({
-        text: 'test', model: 'openai/gpt-audio-mini', format: 'mp3',
+        text: 'test', model: 'openai/gpt-audio-mini', format: 'pcm16',
       });
       expect(resp.text).toBe('AB');
     });
@@ -515,7 +517,7 @@ describe('OpenRouterMediaProvider', () => {
 
       await expect(
         provider.generateAudio({
-          text: 'test', model: 'openai/gpt-audio-mini', format: 'mp3',
+          text: 'test', model: 'openai/gpt-audio-mini', format: 'pcm16',
         })
       ).rejects.toThrow(MediaProviderError);
       // Reset mock for second assertion
@@ -526,7 +528,7 @@ describe('OpenRouterMediaProvider', () => {
       });
       await expect(
         provider.generateAudio({
-          text: 'test', model: 'openai/gpt-audio-mini', format: 'mp3',
+          text: 'test', model: 'openai/gpt-audio-mini', format: 'pcm16',
         })
       ).rejects.toThrow('Audio generation failed');
     });
@@ -561,7 +563,7 @@ describe('OpenRouterMediaProvider', () => {
 
       await expect(
         provider.generateAudio({
-          text: 'test', model: 'openai/gpt-audio-mini', format: 'mp3',
+          text: 'test', model: 'openai/gpt-audio-mini', format: 'pcm16',
         })
       ).rejects.toThrow('consecutive SSE parse errors');
     });

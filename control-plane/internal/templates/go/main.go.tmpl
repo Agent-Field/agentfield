@@ -18,10 +18,13 @@ func envOrDefault(key, fallback string) string {
 
 func main() {
 	cfg := agent.Config{
-		NodeID:        "{{.NodeID}}",
+		NodeID:        envOrDefault("AGENT_NODE_ID", "{{.NodeID}}"),
 		Version:       "1.0.0",
 		AgentFieldURL: envOrDefault("AGENTFIELD_SERVER", "http://localhost:8080"),
 		ListenAddress: ":" + envOrDefault("PORT", "{{.AgentPort}}"),
+		// URL the control plane uses to reach this agent. Needed when the
+		// agent is not on the control plane's localhost (e.g. Docker Compose).
+		PublicURL: os.Getenv("AGENT_CALLBACK_URL"),
 
 		// 🔧 Uncomment to enable AI features:
 		// AIConfig: &ai.Config{

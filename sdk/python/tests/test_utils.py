@@ -18,6 +18,9 @@ def test_get_free_port_iterates_until_success(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
+        def setsockopt(self, level, option, value):
+            pass
+
         def bind(self, addr):
             if self._outcome is OSError:
                 raise OSError("port in use")
@@ -43,6 +46,9 @@ def test_get_free_port_raises_when_exhausted(monkeypatch):
 
         def __exit__(self, exc_type, exc, tb):
             return False
+
+        def setsockopt(self, level, option, value):
+            pass
 
         def bind(self, addr):
             raise OSError("busy")

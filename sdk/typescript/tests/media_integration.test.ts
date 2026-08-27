@@ -320,13 +320,13 @@ describe('Integration: OpenRouterMediaProvider', () => {
         text: 'say hello',
         model: 'openai/gpt-audio-mini',
         voice: 'nova',
-        format: 'mp3',
+        format: 'pcm16',
       });
 
       expect(resp.text).toBe('Hello');
       expect(resp.audio).not.toBeNull();
       expect(resp.audio!.data).toBe('AAAABBBB');
-      expect(resp.audio!.format).toBe('mp3');
+      expect(resp.audio!.format).toBe('pcm16');
     });
 
     it('custom format is respected', async () => {
@@ -356,17 +356,19 @@ describe('Integration: OpenRouterMediaProvider', () => {
         body: { getReader: () => mockReader },
       });
 
+      // pcm16 is the only format the chat-completions audio route serves (#584).
       const resp = await provider.generateAudio({
         text: 'test',
         model: 'openai/gpt-audio-mini',
-        format: 'mp3',
+        format: 'pcm16',
       });
 
-      expect(resp.audio!.format).toBe('mp3');
+      expect(resp.audio!.format).toBe('pcm16');
 
-      // Verify format was sent in payload
+      // Verify format was sent in payload, on the streaming transport.
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.audio.format).toBe('mp3');
+      expect(body.audio.format).toBe('pcm16');
+      expect(body.stream).toBe(true);
     });
 
     it('routes TTS-only models to /audio/speech and WAV-wraps PCM', async () => {
@@ -415,7 +417,7 @@ describe('Integration: OpenRouterMediaProvider', () => {
 
       await expect(
         provider.generateAudio({
-          text: 'test', model: 'openai/gpt-audio-mini', format: 'mp3',
+          text: 'test', model: 'openai/gpt-audio-mini', format: 'pcm16',
         })
       ).rejects.toThrow(MediaProviderError);
     });

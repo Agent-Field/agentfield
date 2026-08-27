@@ -1,3 +1,4 @@
+import os
 import socket
 
 from .exceptions import AgentFieldError
@@ -20,6 +21,11 @@ def get_free_port(start_port=8001, end_port=8999):
     for port in range(start_port, end_port + 1):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                # Same semantics as AgentUtils.is_port_available: on POSIX a
+                # port in TIME_WAIT is free for a server that binds with
+                # SO_REUSEADDR; Windows gives the option hijack semantics.
+                if os.name != "nt":
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind(("localhost", port))
                 return port
         except OSError:

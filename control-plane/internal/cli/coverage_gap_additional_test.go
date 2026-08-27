@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,77 @@ import (
 )
 
 func TestStopAgentNodeShutdownPaths(t *testing.T) {
+	t.Run("legacy entry accepts anonymous Go-shaped health and gracefully shuts down", func(t *testing.T) {
+		home := t.TempDir()
+		cmd := exec.Command("sleep", "30")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+		})
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := ln.Addr().(*net.TCPAddr).Port
+		var shutdownRequested atomic.Bool
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/health":
+				_, _ = w.Write([]byte(`{"status":"ok"}`))
+			case "/shutdown":
+				shutdownRequested.Store(true)
+				_ = cmd.Process.Kill()
+				_, _ = cmd.Process.Wait()
+				w.WriteHeader(http.StatusOK)
+			default:
+				http.NotFound(w, r)
+			}
+		})}
+		go func() { _ = server.Serve(ln) }()
+		t.Cleanup(func() { _ = server.Close() })
+
+		pid := cmd.Process.Pid
+		registry := makeRegistry("demo", "running", &port, &pid)
+		entry := registry.Installed["demo"]
+		entry.Runtime.StartTime = ""
+		registry.Installed["demo"] = entry
+		stopper := &AgentNodeStopper{AgentFieldHome: home, Force: true}
+		require.NoError(t, stopper.saveRegistry(registry))
+		require.NoError(t, stopper.StopAgentNode("demo"))
+		require.True(t, shutdownRequested.Load())
+		updated, err := stopper.loadRegistry()
+		require.NoError(t, err)
+		require.Equal(t, "stopped", updated.Installed["demo"].Status)
+		require.Nil(t, updated.Installed["demo"].Runtime.PID)
+	})
+
+	t.Run("legacy entry without identity and with a silent port is left untouched", func(t *testing.T) {
+		home := t.TempDir()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := ln.Addr().(*net.TCPAddr).Port
+		require.NoError(t, ln.Close())
+		cmd := exec.Command("sleep", "30")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+		})
+		pid := cmd.Process.Pid
+		registry := makeRegistry("demo", "running", &port, &pid)
+		entry := registry.Installed["demo"]
+		entry.Runtime.StartTime = ""
+		registry.Installed["demo"] = entry
+		stopper := &AgentNodeStopper{AgentFieldHome: home, Force: true}
+		require.NoError(t, stopper.saveRegistry(registry))
+		require.ErrorContains(t, stopper.StopAgentNode("demo"), "could not verify that process")
+		require.True(t, packages.RuntimePIDAlive(packages.RuntimeInfo{PID: &pid}))
+		updated, err := stopper.loadRegistry()
+		require.NoError(t, err)
+		require.Equal(t, "running", updated.Installed["demo"].Status)
+		require.NotNil(t, updated.Installed["demo"].Runtime.PID)
+		require.Equal(t, pid, *updated.Installed["demo"].Runtime.PID)
+	})
+
 	t.Run("http shutdown success updates registry", func(t *testing.T) {
 		home := t.TempDir()
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -65,7 +137,8 @@ func TestStopAgentNodeShutdownPaths(t *testing.T) {
 		registry, err := stopper.loadRegistry()
 		require.NoError(t, err)
 		require.Equal(t, "stopped", registry.Installed["demo"].Status)
-		require.Nil(t, registry.Installed["demo"].Runtime.Port)
+		require.NotNil(t, registry.Installed["demo"].Runtime.Port)
+		require.Equal(t, port, *registry.Installed["demo"].Runtime.Port)
 		require.Nil(t, registry.Installed["demo"].Runtime.PID)
 	})
 
@@ -129,7 +202,8 @@ func TestStopAgentNodeShutdownPaths(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "stopped", registry.Installed["demo"].Status)
 		require.Nil(t, registry.Installed["demo"].Runtime.PID)
-		require.Nil(t, registry.Installed["demo"].Runtime.Port)
+		require.NotNil(t, registry.Installed["demo"].Runtime.Port)
+		require.Equal(t, port, *registry.Installed["demo"].Runtime.Port)
 	})
 
 	t.Run("port owned by a different node is never signalled", func(t *testing.T) {
@@ -165,8 +239,91 @@ func TestStopAgentNodeShutdownPaths(t *testing.T) {
 		registry, err := stopper.loadRegistry()
 		require.NoError(t, err)
 		require.Equal(t, "stopped", registry.Installed["demo"].Status)
-		require.True(t, isProcessAlive(cmd.Process), "stale-record stop must not kill a process it cannot identify as its own")
+		require.True(t, packages.RuntimePIDAlive(packages.RuntimeInfo{PID: &pid}), "stale-record stop must not kill a process it cannot identify as its own")
 	})
+}
+
+func TestCLIStopShutdownCompatibilityAndEquivalentIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		installName   string
+		manifest      string
+		health        string
+		shutdownCode  int
+		wantShutdowns int32
+	}{
+		{
+			name:          "404 shutdown on equivalent folded node id falls back to interrupt",
+			installName:   "demo-node",
+			manifest:      "name: demo-node\nversion: 1.0.0\nlanguage: python\nagent_node:\n  node_id: demo-node\n",
+			health:        `{"node_id":"DEMO_NODE"}`,
+			shutdownCode:  http.StatusNotFound,
+			wantShutdowns: 1,
+		},
+		{
+			name:         "Go manifest skips unsupported shutdown route",
+			installName:  "demo",
+			manifest:     "name: demo\nversion: 1.0.0\nlanguage: go\nagent_node:\n  node_id: demo\n",
+			health:       `{"node_id":"demo"}`,
+			shutdownCode: http.StatusNotFound,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			pkgDir := filepath.Join(home, "packages", test.installName)
+			require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"), []byte(test.manifest), 0o600))
+
+			cmd := exec.Command("sh", "-c", "trap 'exit 0' INT; while :; do sleep 1; done")
+			require.NoError(t, cmd.Start())
+			done := make(chan struct{})
+			go func() { _, _ = cmd.Process.Wait(); close(done) }()
+			t.Cleanup(func() {
+				select {
+				case <-done:
+				default:
+					_ = cmd.Process.Kill()
+					<-done
+				}
+			})
+
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			port := listener.Addr().(*net.TCPAddr).Port
+			var shutdowns atomic.Int32
+			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/health" {
+					_, _ = w.Write([]byte(test.health))
+					return
+				}
+				shutdowns.Add(1)
+				w.WriteHeader(test.shutdownCode)
+			})}
+			go func() { _ = server.Serve(listener) }()
+			t.Cleanup(func() { _ = server.Close() })
+
+			pid := cmd.Process.Pid
+			registry := makeRegistry(test.installName, "running", &port, &pid)
+			entry := registry.Installed[test.installName]
+			entry.Path = pkgDir
+			registry.Installed[test.installName] = entry
+			stopper := &AgentNodeStopper{AgentFieldHome: home, Force: true}
+			require.NoError(t, stopper.saveRegistry(registry))
+			output := captureOutput(t, func() {
+				require.NoError(t, stopper.StopAgentNode(test.installName))
+			})
+			require.Equal(t, test.wantShutdowns, shutdowns.Load())
+			require.Contains(t, output, "Falling back to process signal shutdown")
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("owned node was not interrupted")
+			}
+			updated, err := stopper.loadRegistry()
+			require.NoError(t, err)
+			require.Equal(t, "stopped", updated.Installed[test.installName].Status)
+		})
+	}
 }
 
 func TestConfigPromptRetryAndVerifyProvenance(t *testing.T) {

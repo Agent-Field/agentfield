@@ -188,7 +188,8 @@ fi
 		require.NoError(t, err)
 		assert.False(t, raw.IsError)
 		assert.Contains(t, raw.Result, dir)
-		assert.Contains(t, raw.Result, "--sandbox")
+		assert.Contains(t, raw.Result, "--yolo")
+		assert.NotContains(t, raw.Result, "-C")
 		assert.Contains(t, raw.Result, "-m gemini-model")
 	})
 

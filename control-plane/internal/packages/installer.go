@@ -188,15 +188,53 @@ type InstallationRegistry struct {
 
 // InstalledPackage represents an installed package entry
 type InstalledPackage struct {
-	Name        string      `yaml:"name"`
-	Version     string      `yaml:"version"`
-	Description string      `yaml:"description"`
-	Path        string      `yaml:"path"`
-	Source      string      `yaml:"source"`
-	SourcePath  string      `yaml:"source_path"`
-	InstalledAt string      `yaml:"installed_at"`
-	Status      string      `yaml:"status"`
-	Runtime     RuntimeInfo `yaml:"runtime"`
+	Name         string      `yaml:"name"`
+	Version      string      `yaml:"version"`
+	Description  string      `yaml:"description"`
+	Path         string      `yaml:"path"`
+	Source       string      `yaml:"source"`
+	SourcePath   string      `yaml:"source_path"`
+	InstalledAt  string      `yaml:"installed_at"`
+	Commit       string      `yaml:"commit,omitempty"`
+	Ref          string      `yaml:"ref,omitempty"`
+	AutoUpdate   *bool       `yaml:"auto_update,omitempty"`
+	UpdatedAt    string      `yaml:"updated_at,omitempty"`
+	Status       string      `yaml:"status"`
+	DesiredState string      `yaml:"desired_state,omitempty"`
+	Runtime      RuntimeInfo `yaml:"runtime"`
+}
+
+const (
+	DesiredStateRunning = "running"
+	DesiredStateStopped = "stopped"
+)
+
+// AutoUpdateEnabled implements the registry contract that an omitted
+// auto_update value means enabled while retaining an explicit false value.
+func (p InstalledPackage) AutoUpdateEnabled() bool {
+	return p.AutoUpdate == nil || *p.AutoUpdate
+}
+
+// EffectiveDesiredState upgrades legacy entries in memory: before
+// desired_state existed, status was the only persisted indication of whether
+// the user expected a node to be running.
+func (p InstalledPackage) EffectiveDesiredState() string {
+	if p.DesiredState != "" {
+		return p.DesiredState
+	}
+	if p.Status == "running" {
+		return DesiredStateRunning
+	}
+	return DesiredStateStopped
+}
+
+// EnsureDesiredState performs the one-time legacy derivation before callers
+// mutate observed status.
+func (p *InstalledPackage) EnsureDesiredState() string {
+	if p.DesiredState == "" {
+		p.DesiredState = p.EffectiveDesiredState()
+	}
+	return p.DesiredState
 }
 
 // RuntimeInfo represents runtime information for a package
@@ -205,6 +243,8 @@ type RuntimeInfo struct {
 	PID       *int    `yaml:"pid"`
 	StartedAt *string `yaml:"started_at"`
 	LogFile   string  `yaml:"log_file"`
+	BootID    string  `yaml:"boot_id,omitempty"`
+	StartTime string  `yaml:"start_time,omitempty"`
 }
 
 // PackageInstaller handles package installation
@@ -504,8 +544,10 @@ func (pu *PackageUninstaller) UninstallPackage(packageName string) error {
 	}
 
 	// 8. Update registry
-	delete(registry.Installed, packageName)
-	if err := pu.saveRegistry(registry); err != nil {
+	if err := UpdateInstallationRegistry(filepath.Join(pu.AgentFieldHome, "installed.yaml"), func(latest *InstallationRegistry) error {
+		delete(latest.Installed, packageName)
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
@@ -535,30 +577,14 @@ func (pu *PackageUninstaller) stopAgentNode(agentNode *InstalledPackage) error {
 // loadRegistry loads the installation registry
 func (pu *PackageUninstaller) loadRegistry() (*InstallationRegistry, error) {
 	registryPath := filepath.Join(pu.AgentFieldHome, "installed.yaml")
-
-	registry := &InstallationRegistry{
-		Installed: make(map[string]InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return nil, fmt.Errorf("failed to parse registry: %w", err)
-		}
-	}
-
-	return registry, nil
+	return LoadInstallationRegistry(registryPath)
 }
 
 // saveRegistry saves the installation registry
 func (pu *PackageUninstaller) saveRegistry(registry *InstallationRegistry) error {
 	registryPath := filepath.Join(pu.AgentFieldHome, "installed.yaml")
 
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	if err := os.WriteFile(registryPath, data, 0644); err != nil {
+	if err := WriteInstallationRegistry(registryPath, registry); err != nil {
 		return fmt.Errorf("failed to write registry: %w", err)
 	}
 
@@ -1090,17 +1116,6 @@ func (pi *PackageInstaller) hasRequirementsFile(packagePath string) bool {
 func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath, destPath string) error {
 	registryPath := filepath.Join(pi.AgentFieldHome, "installed.yaml")
 
-	// Load existing registry or create new one
-	registry := &InstallationRegistry{
-		Installed: make(map[string]InstalledPackage),
-	}
-
-	if data, err := os.ReadFile(registryPath); err == nil {
-		if err := yaml.Unmarshal(data, registry); err != nil {
-			return fmt.Errorf("failed to parse registry: %w", err)
-		}
-	}
-
 	// Ensure logs directory exists before setting LogFile path
 	logsDir := filepath.Join(pi.AgentFieldHome, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
@@ -1108,36 +1123,20 @@ func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath
 	}
 	fmt.Printf("📁 Created logs directory: %s\n", logsDir)
 
-	// Add/update package entry
-	registry.Installed[metadata.Name] = InstalledPackage{
-		Name:        metadata.Name,
-		Version:     metadata.Version,
-		Description: metadata.Description,
-		Path:        destPath,
-		Source:      "local",
-		SourcePath:  sourcePath,
-		InstalledAt: time.Now().Format(time.RFC3339),
-		Status:      "stopped",
-		Runtime: RuntimeInfo{
-			Port:      nil,
-			PID:       nil,
-			StartedAt: nil,
-			LogFile:   filepath.Join(pi.AgentFieldHome, "logs", metadata.Name+".log"),
-		},
-	}
-
-	// Save registry
-	data, err := yaml.Marshal(registry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry: %w", err)
-	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(registryPath), 0755); err != nil {
-		return fmt.Errorf("failed to create registry directory: %w", err)
-	}
-
-	if err := os.WriteFile(registryPath, data, 0644); err != nil {
+	if err := UpdateInstallationRegistry(registryPath, func(registry *InstallationRegistry) error {
+		previous := registry.Installed[metadata.Name]
+		// A reinstall replaces observed process state while retaining user intent
+		// and the previous preferred port.
+		registry.Installed[metadata.Name] = InstalledPackage{
+			Name: metadata.Name, Version: metadata.Version, Description: metadata.Description,
+			Path: destPath, Source: "local", SourcePath: sourcePath,
+			InstalledAt: time.Now().Format(time.RFC3339), Commit: previous.Commit, Ref: previous.Ref,
+			AutoUpdate: previous.AutoUpdate, UpdatedAt: previous.UpdatedAt,
+			Status: "stopped", DesiredState: previous.EffectiveDesiredState(),
+			Runtime: RuntimeInfo{Port: previous.Runtime.Port, LogFile: filepath.Join(pi.AgentFieldHome, "logs", metadata.Name+".log")},
+		}
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to write registry: %w", err)
 	}
 

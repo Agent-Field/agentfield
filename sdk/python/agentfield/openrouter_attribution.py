@@ -11,6 +11,7 @@ from typing import Dict, Mapping, MutableMapping, Optional
 
 DEFAULT_OPENROUTER_SITE_URL = "https://agentfield.ai"
 DEFAULT_OPENROUTER_APP_NAME = "AgentField AI"
+DEFAULT_OPENROUTER_CATEGORIES = "cli-agent,programming-app"
 
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
@@ -58,10 +59,25 @@ def resolve_attribution(
     return resolved_site, resolved_name
 
 
+def _resolve_categories(
+    *,
+    categories: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> str:
+    source = env if env is not None else os.environ
+    return (
+        _clean(categories)
+        or _clean(source.get("AGENTFIELD_OPENROUTER_CATEGORIES"))
+        or _clean(source.get("OR_CATEGORIES"))
+        or DEFAULT_OPENROUTER_CATEGORIES
+    )
+
+
 def attribution_headers(
     *,
     site_url: Optional[str] = None,
     app_name: Optional[str] = None,
+    categories: Optional[str] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, str]:
     if not attribution_enabled(env):
@@ -70,12 +86,15 @@ def attribution_headers(
     resolved_site, resolved_name = resolve_attribution(
         site_url=site_url, app_name=app_name, env=env
     )
+    resolved_categories = _resolve_categories(categories=categories, env=env)
     headers: Dict[str, str] = {}
     if resolved_site:
         headers["HTTP-Referer"] = resolved_site
     if resolved_name:
         headers["X-OpenRouter-Title"] = resolved_name
         headers["X-Title"] = resolved_name
+    if resolved_categories:
+        headers["X-OpenRouter-Categories"] = resolved_categories
     return headers
 
 
@@ -84,12 +103,13 @@ def merge_attribution_headers(
     *,
     site_url: Optional[str] = None,
     app_name: Optional[str] = None,
+    categories: Optional[str] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, str]:
     merged = dict(existing or {})
     lower_keys = {key.lower() for key in merged}
     for key, value in attribution_headers(
-        site_url=site_url, app_name=app_name, env=env
+        site_url=site_url, app_name=app_name, categories=categories, env=env
     ).items():
         if key.lower() not in lower_keys:
             merged[key] = value
@@ -102,6 +122,7 @@ def apply_litellm_attribution(
     *,
     site_url: Optional[str] = None,
     app_name: Optional[str] = None,
+    categories: Optional[str] = None,
 ) -> None:
     if not is_openrouter_request(
         model=str(params.get("model") or ""),
@@ -114,11 +135,13 @@ def apply_litellm_attribution(
         _string_dict(params.get("headers")),
         site_url=site_url,
         app_name=app_name,
+        categories=categories,
     )
     params["extra_headers"] = merge_attribution_headers(
         _string_dict(params.get("extra_headers")),
         site_url=site_url,
         app_name=app_name,
+        categories=categories,
     )
 
 
@@ -156,6 +179,7 @@ def attribution_env(env: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
         return {}
 
     site_url, app_name = resolve_attribution(env=source)
+    categories = _resolve_categories(env=source)
     result: Dict[str, str] = {}
     if site_url:
         result["AGENTFIELD_OPENROUTER_SITE_URL"] = site_url
@@ -163,6 +187,9 @@ def attribution_env(env: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
     if app_name:
         result["AGENTFIELD_OPENROUTER_APP_NAME"] = app_name
         result["OR_APP_NAME"] = app_name
+    if categories:
+        result["AGENTFIELD_OPENROUTER_CATEGORIES"] = categories
+        result["OR_CATEGORIES"] = categories
     return result
 
 
@@ -171,8 +198,10 @@ def apply_subprocess_env(env: MutableMapping[str, str]) -> None:
         for key in (
             "AGENTFIELD_OPENROUTER_SITE_URL",
             "AGENTFIELD_OPENROUTER_APP_NAME",
+            "AGENTFIELD_OPENROUTER_CATEGORIES",
             "OR_SITE_URL",
             "OR_APP_NAME",
+            "OR_CATEGORIES",
         ):
             env.pop(key, None)
         return

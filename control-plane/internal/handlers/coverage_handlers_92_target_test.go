@@ -66,15 +66,15 @@ func (s *executionVCStoreStub) ListExecutionVCs(_ context.Context, _ types.VCFil
 
 type cancelHandlerErrorStorage struct {
 	storage.StorageProvider
-	exec               *types.Execution
-	wfExec             *types.WorkflowExecution
-	getExecErr         error
-	getWorkflowErr     error
-	updateExecErr      error
-	updateWorkflowErr  error
-	storeEventErr      error
-	updatedExecStatus  string
-	updatedReason      *string
+	exec                *types.Execution
+	wfExec              *types.WorkflowExecution
+	getExecErr          error
+	getWorkflowErr      error
+	updateExecErr       error
+	updateWorkflowErr   error
+	storeEventErr       error
+	updatedExecStatus   string
+	updatedReason       *string
 	storedWorkflowEvent *types.WorkflowExecutionEvent
 }
 
@@ -168,6 +168,8 @@ type workflowEventStoreStub struct {
 	createErr         error
 	updateErr         error
 	storeWorkflowErr  error
+	updateWorkflowErr error
+	workflow          *types.WorkflowExecution
 	createdExec       *types.Execution
 	storedWorkflow    *types.WorkflowExecution
 	updatedExecution  *types.Execution
@@ -206,7 +208,23 @@ func (s *workflowEventStoreStub) CreateExecutionRecord(_ context.Context, execut
 
 func (s *workflowEventStoreStub) StoreWorkflowExecution(_ context.Context, execution *types.WorkflowExecution) error {
 	s.storedWorkflow = execution
+	s.workflow = execution
 	return s.storeWorkflowErr
+}
+
+func (s *workflowEventStoreStub) UpdateWorkflowExecution(_ context.Context, _ string, update func(*types.WorkflowExecution) (*types.WorkflowExecution, error)) error {
+	if s.updateWorkflowErr != nil {
+		return s.updateWorkflowErr
+	}
+	if s.workflow == nil {
+		return errors.New("workflow execution not found")
+	}
+	updated, err := update(s.workflow)
+	if err != nil {
+		return err
+	}
+	s.workflow = updated
+	return nil
 }
 
 func (s *workflowEventStoreStub) UpdateExecutionRecord(_ context.Context, _ string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
@@ -273,11 +291,11 @@ func TestExecutionControllerSavePayload(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		store       services.PayloadStore
-		data        []byte
-		wantURI     *string
-		wantSaves   int
+		name      string
+		store     services.PayloadStore
+		data      []byte
+		wantURI   *string
+		wantSaves int
 	}{
 		{
 			name:      "nil store returns nil",
@@ -649,7 +667,7 @@ func TestWorkflowExecutionEventHandlerAdditionalBranches(t *testing.T) {
 		router.ServeHTTP(resp, req)
 
 		require.Equal(t, http.StatusInternalServerError, resp.Code)
-		assert.Contains(t, resp.Body.String(), "failed to create execution")
+		assert.Contains(t, resp.Body.String(), "failed to persist execution event")
 	})
 
 	t.Run("workflow execution store failure is non fatal on create", func(t *testing.T) {
@@ -683,6 +701,31 @@ func TestWorkflowExecutionEventHandlerAdditionalBranches(t *testing.T) {
 
 		require.Equal(t, http.StatusInternalServerError, resp.Code)
 		assert.Contains(t, resp.Body.String(), "failed to update execution")
+	})
+
+	t.Run("workflow projection update failure returns 500", func(t *testing.T) {
+		router := gin.New()
+		store := &workflowEventStoreStub{exec: &types.Execution{ExecutionID: "exec-5", Status: types.ExecutionStatusRunning}, updateWorkflowErr: errors.New("workflow update failed")}
+		router.POST("/events", WorkflowExecutionEventHandler(store))
+		req := httptest.NewRequest(http.MethodPost, "/events", strings.NewReader(`{"execution_id":"exec-5","status":"succeeded"}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		require.Equal(t, http.StatusInternalServerError, resp.Code)
+		assert.Contains(t, resp.Body.String(), "failed to update workflow execution")
+	})
+
+	t.Run("missing workflow projection is recreated", func(t *testing.T) {
+		router := gin.New()
+		store := &workflowEventStoreStub{exec: &types.Execution{ExecutionID: "exec-6", Status: types.ExecutionStatusRunning}}
+		router.POST("/events", WorkflowExecutionEventHandler(store))
+		req := httptest.NewRequest(http.MethodPost, "/events", strings.NewReader(`{"execution_id":"exec-6","status":"succeeded"}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		require.Equal(t, http.StatusOK, resp.Code)
+		require.NotNil(t, store.storedWorkflow)
+		assert.Equal(t, string(types.ExecutionStatusSucceeded), store.storedWorkflow.Status)
 	})
 }
 

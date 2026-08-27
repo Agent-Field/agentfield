@@ -40,15 +40,17 @@ export function runCli(
     const [bin, ...args] = cmd;
     const env = { ...process.env, ...options?.env };
     applyOpenRouterAttributionEnv(env);
+    const hasInput = options?.inputText !== undefined;
     // 'ignore' on stdin gives the child an immediate EOF instead of an open
-    // pipe that never closes (a hang risk if the child probes stdin).
+    // pipe that never closes (a hang risk if the child probes stdin). Providers
+    // with large or sensitive prompts can explicitly pipe text over stdin.
     const proc = spawn(bin, args, {
       env,
       cwd: options?.cwd,
-      stdio: [options?.inputText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      stdio: [hasInput ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
 
-    if (options?.inputText !== undefined) {
+    if (hasInput) {
       proc.stdin?.end(options.inputText);
     }
 

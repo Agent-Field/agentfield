@@ -9,6 +9,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/apicatalog"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services/packagemaint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,6 +34,7 @@ func newPrivilegedRoutesTestServer(t *testing.T, apiKey string) *AgentFieldServe
 			API: config.APIConfig{Auth: config.AuthConfig{APIKey: apiKey}},
 		},
 	}
+	srv.packageMaintenance = packagemaint.New(packagemaint.Config{AgentFieldHome: srv.agentfieldHome})
 	srv.setupRoutes()
 	return srv
 }
@@ -62,7 +64,7 @@ func concreteParams(routePath string) string {
 // privilegedPathPattern matches the UI-API surface that installs code or
 // handles credentials. Driving the test off the live route table means a new
 // route in these areas is covered the moment it is registered.
-var privilegedPathPattern = regexp.MustCompile(`^/api/ui/v1/(secrets|agents/(packages/install|packages/[^/]+/(uninstall|update)|[^/]+/(secrets|env|config)))`)
+var privilegedPathPattern = regexp.MustCompile(`^/api/ui/v1/(secrets|agents/(packages/(install|check-updates|maintenance/run)|packages/[^/]+/(uninstall|update|auto-update)|[^/]+/(secrets|env|config)))`)
 
 // A route that matches the privileged pattern but is deliberately public.
 func isPrivilegedExempt(routePath string) bool {

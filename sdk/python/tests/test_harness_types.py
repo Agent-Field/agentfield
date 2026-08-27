@@ -1,16 +1,14 @@
 # pyright: reportMissingImports=false
 
 import pytest
-
 from agentfield.harness._result import HarnessResult, Metrics, RawResult
 from agentfield.harness.providers._factory import build_provider
 from agentfield.types import HarnessConfig
 
 
-def test_harness_config_defaults_to_omp():
-    cfg = HarnessConfig()
-    assert cfg.provider == "omp"
-    assert cfg.model is None
+def test_harness_config_provider_defaults_to_aforge(monkeypatch):
+    monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
+    assert HarnessConfig().provider == "aforge"
 
 
 def test_harness_config_defaults():

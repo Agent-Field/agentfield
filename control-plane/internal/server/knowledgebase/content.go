@@ -76,7 +76,7 @@ When in doubt, use .harness(). Reserve .ai() for gates and classifiers.
 
 	kb.Add(Article{
 		ID: "building/memory-scopes", Topic: "building", Title: "Memory Scopes and Usage",
-		Summary:    "Understanding global, agent, session, and run memory scopes",
+		Summary:    "Understanding global, session, actor, and workflow memory scopes",
 		Difficulty: "beginner",
 		Tags:       []string{"memory", "scopes", "state", "persistence"},
 		Content: `# Memory Scopes
@@ -85,15 +85,17 @@ AgentField provides four memory scopes:
 
 | Scope | Shared Across | Use Case |
 |-------|---------------|----------|
-| global | All agents, all sessions | Shared knowledge base |
-| agent | One agent, all sessions | Agent-specific config |
-| session | One session | Multi-turn conversation state |
-| run | Single execution run | Workflow-scoped data |
+| global | All agents, all sessions (fixed id "global") | Shared knowledge base |
+| session | One conversation (X-Session-ID) | Multi-turn conversation state |
+| actor | One actor, all its sessions (X-Actor-ID) | Actor-specific config and learned data |
+| workflow | One workflow run (X-Workflow-ID) | Workflow-scoped intermediate results |
+
+session, actor, and workflow are sibling dimensions, not a nested chain. A read with no explicit scope walks workflow -> session -> actor -> global and returns the first hit. Values persist until explicitly deleted; there is no TTL or automatic cleanup.
 
 ## Usage (Python SDK)
 ` + "```python" + `
-await agent.memory.set("session", session_id, "user_preference", "dark_mode")
-value = await agent.memory.get("session", session_id, "user_preference")
+await agent.memory.set("user_preference", "dark_mode", scope="session")
+value = await agent.memory.get("user_preference", scope="session")
 ` + "```" + `
 
 ## API Endpoints

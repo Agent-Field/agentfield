@@ -1,5 +1,4 @@
 from agentfield import AgentRouter
-from pydantic import BaseModel, Field
 
 # Group related reasoners with a router
 reasoners_router = AgentRouter(prefix="demo", tags=["example"])
@@ -22,7 +21,10 @@ async def echo(message: str) -> dict:
     }
 
 
-# 🔧 Uncomment when AI is configured in main.py:
+# 🔧 Uncomment when an AI provider key is set (ai_config is enabled in main.py):
+# from pydantic import BaseModel, Field  # noqa: E402
+#
+#
 # class SentimentAnalysis(BaseModel):
 #     """Structured output for sentiment analysis."""
 #     sentiment: str = Field(description="positive, negative, or neutral")

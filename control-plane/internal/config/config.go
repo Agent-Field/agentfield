@@ -81,6 +81,7 @@ type AgentFieldConfig struct {
 	Approval         ApprovalConfig         `yaml:"approval" mapstructure:"approval"`
 	NodeLogProxy     NodeLogProxyConfig     `yaml:"node_log_proxy" mapstructure:"node_log_proxy"`
 	ExecutionLogs    ExecutionLogsConfig    `yaml:"execution_logs" mapstructure:"execution_logs"`
+	RateLimit        RateLimitConfig        `yaml:"rate_limit" mapstructure:"rate_limit"`
 }
 
 // ARDConfig controls Agentic Resource Discovery exposure. Config/env values are
@@ -202,6 +203,12 @@ type NodeHealthConfig struct {
 	ConsecutiveFailures     int           `yaml:"consecutive_failures" mapstructure:"consecutive_failures"`           // Failures before marking inactive (0 = default 3; set 1 for instant)
 	RecoveryDebounce        time.Duration `yaml:"recovery_debounce" mapstructure:"recovery_debounce"`                 // Wait before allowing inactive->active (0 = default 5s)
 	HeartbeatStaleThreshold time.Duration `yaml:"heartbeat_stale_threshold" mapstructure:"heartbeat_stale_threshold"` // Heartbeat age before marking stale (0 = default 60s)
+	// AgentRestartGrace is how long a dispatch waits for a long-running agent
+	// node to come back after the connection is refused, before failing the
+	// execution. This absorbs the edit-restart loop, where the node is down
+	// for a few seconds but the control plane has not noticed yet.
+	// 0 = default 15s. Set to a negative duration to disable the wait.
+	AgentRestartGrace time.Duration `yaml:"agent_restart_grace" mapstructure:"agent_restart_grace"`
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
@@ -224,6 +231,28 @@ type ExecutionQueueConfig struct {
 	WebhookMaxAttempts     int           `yaml:"webhook_max_attempts" mapstructure:"webhook_max_attempts"`
 	WebhookRetryBackoff    time.Duration `yaml:"webhook_retry_backoff" mapstructure:"webhook_retry_backoff"`
 	WebhookMaxRetryBackoff time.Duration `yaml:"webhook_max_retry_backoff" mapstructure:"webhook_max_retry_backoff"`
+}
+
+// RateLimitConfig configures per-endpoint rate limiting.
+type RateLimitConfig struct {
+	// Enabled controls whether rate limiting is active globally.
+	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
+	// ExecuteRPS is the sustained requests-per-second for execute endpoints.
+	ExecuteRPS float64 `yaml:"execute_rps" mapstructure:"execute_rps"`
+	// ExecuteBurst is the burst size for execute endpoints.
+	ExecuteBurst int `yaml:"execute_burst" mapstructure:"execute_burst"`
+	// DiscoveryRPS is the sustained requests-per-second for discovery endpoints.
+	DiscoveryRPS float64 `yaml:"discovery_rps" mapstructure:"discovery_rps"`
+	// DiscoveryBurst is the burst size for discovery endpoints.
+	DiscoveryBurst int `yaml:"discovery_burst" mapstructure:"discovery_burst"`
+	// BulkStatusRPS is the sustained requests-per-second for bulk-status endpoints.
+	BulkStatusRPS float64 `yaml:"bulk_status_rps" mapstructure:"bulk_status_rps"`
+	// BulkStatusBurst is the burst size for bulk-status endpoints.
+	BulkStatusBurst int `yaml:"bulk_status_burst" mapstructure:"bulk_status_burst"`
+	// GlobalRPS is the fallback per-IP rate for unauthenticated paths.
+	GlobalRPS float64 `yaml:"global_rps" mapstructure:"global_rps"`
+	// GlobalBurst is the burst size for the global rate limiter.
+	GlobalBurst int `yaml:"global_burst" mapstructure:"global_burst"`
 }
 
 // LLMHealthConfig configures LLM backend health monitoring with circuit breaker.
@@ -634,6 +663,11 @@ func ApplyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("AGENTFIELD_HEARTBEAT_STALE_THRESHOLD"); val != "" {
 		if d, err := time.ParseDuration(val); err == nil {
 			cfg.AgentField.NodeHealth.HeartbeatStaleThreshold = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_AGENT_RESTART_GRACE"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.AgentRestartGrace = d
 		}
 	}
 

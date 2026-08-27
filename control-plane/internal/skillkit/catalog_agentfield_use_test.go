@@ -89,8 +89,8 @@ func TestAgentfieldUseSourceFallbackContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse source frontmatter: %v", err)
 	}
-	if frontmatter.Name != "agentfield-use" || frontmatter.Version != "0.6.0" {
-		t.Fatalf("source frontmatter = %+v, want name=agentfield-use version=0.6.0", frontmatter)
+	if frontmatter.Name != "agentfield-use" || frontmatter.Version != "0.8.0" {
+		t.Fatalf("source frontmatter = %+v, want name=agentfield-use version=0.8.0", frontmatter)
 	}
 
 	// The offer is available only after coverage is conclusively checked, it
@@ -143,6 +143,102 @@ func TestAgentfieldUseDispatchPreconditions(t *testing.T) {
 	} {
 		if !strings.Contains(content, needle) {
 			t.Fatalf("agentfield-use SKILL.md is missing dispatch-precondition text %q", needle)
+		}
+	}
+}
+
+// Contract for 0.7.0: an installed-but-unstarted node is the DEFAULT first-run
+// state (the desktop ships swe-planner/pr-af provisioned but not started), so
+// the skill must start the node before dispatching and must treat the resulting
+// missing-key error as a blocking handoff. Without this the agent only ever
+// sees "agent 'X' not found" and silently substitutes something else.
+func TestAgentfieldUseMissingKeyHandoffContract(t *testing.T) {
+	content := string(skillSource(t, "agentfield-use"))
+	for _, needle := range []string{
+		// Start before dispatch, and why the start attempt is the diagnostic.
+		"### Start it before you dispatch — the start attempt is the diagnostic",
+		"run `af run <name>` BEFORE dispatching",
+		"missing required environment variables: OPENROUTER_API_KEY",
+		// The store-blind commands must stay called out by name.
+		"Do not use `af doctor` or `af config <pkg> --list` to decide",
+		// Blocking handoff, never a workaround.
+		"A missing key is a blocking handoff, not a problem to route around.",
+		"AgentField Desktop → Agents → <node> →",
+		"do NOT substitute a",
+		"Never ask the user to paste the secret value into the conversation",
+		// The observed not-found responses must be recognizable.
+		"agent 'X' not found",
+		"target \"X.y\" not found",
+	} {
+		if !strings.Contains(content, needle) {
+			t.Fatalf("agentfield-use SKILL.md is missing missing-key handoff text %q", needle)
+		}
+	}
+}
+
+// Contract for 0.8.0: installed agents are subharnesses a coding harness
+// offloads to, and offloading is the DEFAULT path rather than an option to
+// offer. Each clause below exists because dropping it turns the offload back
+// into inline work the user never hears about — the failure this release was
+// written to prevent.
+func TestAgentfieldUseOffloadDoctrineContract(t *testing.T) {
+	content := string(skillSource(t, "agentfield-use"))
+	for _, needle := range []string{
+		// Offload by default — coverage decides, not the task's size, and the
+		// fleet is discovered at runtime rather than listed here.
+		"## Offload by default",
+		"default path, not an option to offer",
+		"**Coverage is the test, not size.**",
+		"**The check is cheap — that is the whole design.**",
+		"**Default-offload.**",
+		// Announce the offload, with the run's live UI link for the user.
+		"**Announce it, with a link.**",
+		"<server>/ui/runs/<run_id>",
+		"The link is **for the user** to watch in parallel.",
+		// The user keeps the override.
+		"**The user can always override.**",
+		// Never silent-wash: a failed or stalled run is reported, never redone
+		// inline and presented as the subharness's work.
+		"**Never silent-wash the offload.**",
+		"Do NOT quietly redo the work inline",
+		// The user-facing vocabulary rule.
+		"**Vocabulary rule.**",
+		"your AgentField subharnesses",
+		"subharnesses",
+	} {
+		if !strings.Contains(content, needle) {
+			t.Fatalf("agentfield-use SKILL.md is missing offload-doctrine text %q", needle)
+		}
+	}
+	// The doctrine must not re-introduce a size gate or a hardcoded list of
+	// offloadable roles: coverage is the only test, and the fleet is open-ended.
+	for _, forbidden := range []string{"substantial, multi-step work", "A security audit → "} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("agentfield-use SKILL.md re-introduced retired offload gate %q", forbidden)
+		}
+	}
+}
+
+// Contract for 0.8.0: the async golden path the harness actually drives —
+// client-side-validated dispatch, then a retrieval mode chosen deliberately.
+// `af wait`'s exit 2 is a timeout, not a failure; a harness must never wait on
+// a webhook it has no listener for; and cost is a window aggregate, never a
+// per-run figure to invent.
+func TestAgentfieldUseAsyncGoldenPathContract(t *testing.T) {
+	content := string(skillSource(t, "agentfield-use"))
+	for _, needle := range []string{
+		"af call <node>.<reasoner> --schema",
+		"--async",
+		"af wait <run_id>",
+		"af tail <run_id>",
+		"**Exit code 2 means TIMEOUT, not failure**",
+		"**Webhooks are not for you.**",
+		"/api/ui/v1/usage/stats",
+		"There is **no per-run cost endpoint today.**",
+		"**Duration is per-run truth; cost is window truth.**",
+	} {
+		if !strings.Contains(content, needle) {
+			t.Fatalf("agentfield-use SKILL.md is missing golden-path text %q", needle)
 		}
 	}
 }

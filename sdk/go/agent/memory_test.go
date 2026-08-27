@@ -15,56 +15,56 @@ func TestInMemoryBackend(t *testing.T) {
 	backend := NewInMemoryBackend()
 
 	t.Run("Set and Get", func(t *testing.T) {
-		err := backend.Set(ScopeSession, "session-1", "key1", "value1")
+		err := backend.Set(context.Background(), ScopeSession, "session-1", "key1", "value1")
 		require.NoError(t, err)
 
-		val, found, err := backend.Get(ScopeSession, "session-1", "key1")
+		val, found, err := backend.Get(context.Background(), ScopeSession, "session-1", "key1")
 		require.NoError(t, err)
 		assert.True(t, found)
 		assert.Equal(t, "value1", val)
 	})
 
 	t.Run("Get non-existent key", func(t *testing.T) {
-		val, found, err := backend.Get(ScopeSession, "session-1", "nonexistent")
+		val, found, err := backend.Get(context.Background(), ScopeSession, "session-1", "nonexistent")
 		require.NoError(t, err)
 		assert.False(t, found)
 		assert.Nil(t, val)
 	})
 
 	t.Run("Get from non-existent scope", func(t *testing.T) {
-		val, found, err := backend.Get(ScopeSession, "nonexistent-session", "key1")
+		val, found, err := backend.Get(context.Background(), ScopeSession, "nonexistent-session", "key1")
 		require.NoError(t, err)
 		assert.False(t, found)
 		assert.Nil(t, val)
 	})
 
 	t.Run("Delete key", func(t *testing.T) {
-		err := backend.Set(ScopeSession, "session-1", "to-delete", "value")
+		err := backend.Set(context.Background(), ScopeSession, "session-1", "to-delete", "value")
 		require.NoError(t, err)
 
-		err = backend.Delete(ScopeSession, "session-1", "to-delete")
+		err = backend.Delete(context.Background(), ScopeSession, "session-1", "to-delete")
 		require.NoError(t, err)
 
-		val, found, err := backend.Get(ScopeSession, "session-1", "to-delete")
+		val, found, err := backend.Get(context.Background(), ScopeSession, "session-1", "to-delete")
 		require.NoError(t, err)
 		assert.False(t, found)
 		assert.Nil(t, val)
 	})
 
 	t.Run("Delete non-existent key (no error)", func(t *testing.T) {
-		err := backend.Delete(ScopeSession, "session-1", "nonexistent")
+		err := backend.Delete(context.Background(), ScopeSession, "session-1", "nonexistent")
 		require.NoError(t, err)
 	})
 
 	t.Run("List keys", func(t *testing.T) {
 		// Clear and set up fresh data
 		backend.ClearScope(ScopeWorkflow, "workflow-1")
-		err := backend.Set(ScopeWorkflow, "workflow-1", "key-a", "value-a")
+		err := backend.Set(context.Background(), ScopeWorkflow, "workflow-1", "key-a", "value-a")
 		require.NoError(t, err)
-		err = backend.Set(ScopeWorkflow, "workflow-1", "key-b", "value-b")
+		err = backend.Set(context.Background(), ScopeWorkflow, "workflow-1", "key-b", "value-b")
 		require.NoError(t, err)
 
-		keys, err := backend.List(ScopeWorkflow, "workflow-1")
+		keys, err := backend.List(context.Background(), ScopeWorkflow, "workflow-1")
 		require.NoError(t, err)
 		assert.Len(t, keys, 2)
 		assert.Contains(t, keys, "key-a")
@@ -72,20 +72,20 @@ func TestInMemoryBackend(t *testing.T) {
 	})
 
 	t.Run("List empty scope", func(t *testing.T) {
-		keys, err := backend.List(ScopeGlobal, "nonexistent")
+		keys, err := backend.List(context.Background(), ScopeGlobal, "nonexistent")
 		require.NoError(t, err)
 		assert.Nil(t, keys)
 	})
 
 	t.Run("Scope isolation", func(t *testing.T) {
 		// Set same key in different scopes
-		err := backend.Set(ScopeSession, "id-1", "shared-key", "session-value")
+		err := backend.Set(context.Background(), ScopeSession, "id-1", "shared-key", "session-value")
 		require.NoError(t, err)
-		err = backend.Set(ScopeWorkflow, "id-1", "shared-key", "workflow-value")
+		err = backend.Set(context.Background(), ScopeWorkflow, "id-1", "shared-key", "workflow-value")
 		require.NoError(t, err)
 
-		sessionVal, _, _ := backend.Get(ScopeSession, "id-1", "shared-key")
-		workflowVal, _, _ := backend.Get(ScopeWorkflow, "id-1", "shared-key")
+		sessionVal, _, _ := backend.Get(context.Background(), ScopeSession, "id-1", "shared-key")
+		workflowVal, _, _ := backend.Get(context.Background(), ScopeWorkflow, "id-1", "shared-key")
 
 		assert.Equal(t, "session-value", sessionVal)
 		assert.Equal(t, "workflow-value", workflowVal)
@@ -93,25 +93,25 @@ func TestInMemoryBackend(t *testing.T) {
 
 	t.Run("ScopeID isolation", func(t *testing.T) {
 		// Same scope, different IDs
-		err := backend.Set(ScopeSession, "session-a", "key", "value-a")
+		err := backend.Set(context.Background(), ScopeSession, "session-a", "key", "value-a")
 		require.NoError(t, err)
-		err = backend.Set(ScopeSession, "session-b", "key", "value-b")
+		err = backend.Set(context.Background(), ScopeSession, "session-b", "key", "value-b")
 		require.NoError(t, err)
 
-		valA, _, _ := backend.Get(ScopeSession, "session-a", "key")
-		valB, _, _ := backend.Get(ScopeSession, "session-b", "key")
+		valA, _, _ := backend.Get(context.Background(), ScopeSession, "session-a", "key")
+		valB, _, _ := backend.Get(context.Background(), ScopeSession, "session-b", "key")
 
 		assert.Equal(t, "value-a", valA)
 		assert.Equal(t, "value-b", valB)
 	})
 
 	t.Run("Clear all data", func(t *testing.T) {
-		err := backend.Set(ScopeGlobal, "global", "test", "value")
+		err := backend.Set(context.Background(), ScopeGlobal, "global", "test", "value")
 		require.NoError(t, err)
 
 		backend.Clear()
 
-		val, found, _ := backend.Get(ScopeGlobal, "global", "test")
+		val, found, _ := backend.Get(context.Background(), ScopeGlobal, "global", "test")
 		assert.False(t, found)
 		assert.Nil(t, val)
 	})
@@ -122,10 +122,10 @@ func TestInMemoryBackend(t *testing.T) {
 			"count":  42,
 			"nested": map[string]any{"key": "value"},
 		}
-		err := backend.Set(ScopeSession, "session-1", "complex", complexData)
+		err := backend.Set(context.Background(), ScopeSession, "session-1", "complex", complexData)
 		require.NoError(t, err)
 
-		val, found, err := backend.Get(ScopeSession, "session-1", "complex")
+		val, found, err := backend.Get(context.Background(), ScopeSession, "session-1", "complex")
 		require.NoError(t, err)
 		assert.True(t, found)
 		assert.Equal(t, complexData, val)
@@ -347,7 +347,7 @@ func TestMemory_FallbackToRunID(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify it was stored under RunID
-		val, found, _ := backend.Get(ScopeSession, "run-123", "key")
+		val, found, _ := backend.Get(context.Background(), ScopeSession, "run-123", "key")
 		assert.True(t, found)
 		assert.Equal(t, "value", val)
 	})
@@ -356,7 +356,7 @@ func TestMemory_FallbackToRunID(t *testing.T) {
 		err := memory.WorkflowScope().Set(ctx, "wf-key", "wf-value")
 		require.NoError(t, err)
 
-		val, found, _ := backend.Get(ScopeWorkflow, "run-123", "wf-key")
+		val, found, _ := backend.Get(context.Background(), ScopeWorkflow, "run-123", "wf-key")
 		assert.True(t, found)
 		assert.Equal(t, "wf-value", val)
 	})
@@ -491,7 +491,7 @@ func TestAgentWithCustomMemoryBackend(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify directly on backend
-	val, found, _ := customBackend.Get(ScopeSession, "test-session", "custom-key")
+	val, found, _ := customBackend.Get(context.Background(), ScopeSession, "test-session", "custom-key")
 	assert.True(t, found)
 	assert.Equal(t, "custom-value", val)
 }
@@ -501,7 +501,7 @@ func TestInMemoryBackend_DeepCopy(t *testing.T) {
 
 	t.Run("Set deep-copies map - mutation does not affect stored value", func(t *testing.T) {
 		input := map[string]any{"key": "original", "nested": map[string]any{"a": 1}}
-		err := backend.Set(ScopeSession, "s1", "map-key", input)
+		err := backend.Set(context.Background(), ScopeSession, "s1", "map-key", input)
 		require.NoError(t, err)
 
 		input["key"] = "mutated"
@@ -510,7 +510,7 @@ func TestInMemoryBackend_DeepCopy(t *testing.T) {
 			nested["a"] = 999
 		}
 
-		val, found, err := backend.Get(ScopeSession, "s1", "map-key")
+		val, found, err := backend.Get(context.Background(), ScopeSession, "s1", "map-key")
 		require.NoError(t, err)
 		require.True(t, found)
 
@@ -526,10 +526,10 @@ func TestInMemoryBackend_DeepCopy(t *testing.T) {
 	})
 
 	t.Run("Get deep-copies map - mutation does not affect stored value", func(t *testing.T) {
-		err := backend.Set(ScopeSession, "s2", "map2", map[string]any{"x": "y", "inner": map[string]any{"z": "w"}})
+		err := backend.Set(context.Background(), ScopeSession, "s2", "map2", map[string]any{"x": "y", "inner": map[string]any{"z": "w"}})
 		require.NoError(t, err)
 
-		val1, found, err := backend.Get(ScopeSession, "s2", "map2")
+		val1, found, err := backend.Get(context.Background(), ScopeSession, "s2", "map2")
 		require.NoError(t, err)
 		require.True(t, found)
 
@@ -541,7 +541,7 @@ func TestInMemoryBackend_DeepCopy(t *testing.T) {
 		}
 		m1["new-key"] = "new-value"
 
-		val2, found, err := backend.Get(ScopeSession, "s2", "map2")
+		val2, found, err := backend.Get(context.Background(), ScopeSession, "s2", "map2")
 		require.NoError(t, err)
 		require.True(t, found)
 
@@ -560,7 +560,7 @@ func TestInMemoryBackend_DeepCopy(t *testing.T) {
 		embedding := []float64{1.0, 2.0, 3.0}
 		metadata := map[string]any{"kind": "original", "tags": map[string]any{"env": "dev"}}
 
-		err := backend.SetVector(ScopeSession, "s3", "vec1", embedding, metadata)
+		err := backend.SetVector(context.Background(), ScopeSession, "s3", "vec1", embedding, metadata)
 		require.NoError(t, err)
 
 		embedding[0] = 999.0
@@ -571,7 +571,7 @@ func TestInMemoryBackend_DeepCopy(t *testing.T) {
 		metadata["added"] = "extra"
 		embedding = append(embedding, 4.0)
 
-		retrievedEmb, retrievedMeta, found, err := backend.GetVector(ScopeSession, "s3", "vec1")
+		retrievedEmb, retrievedMeta, found, err := backend.GetVector(context.Background(), ScopeSession, "s3", "vec1")
 		require.NoError(t, err)
 		require.True(t, found)
 
@@ -586,17 +586,17 @@ func TestInMemoryBackend_DeepCopy(t *testing.T) {
 	})
 
 	t.Run("GetVector deep-copies embedding and metadata", func(t *testing.T) {
-		err := backend.SetVector(ScopeSession, "s4", "vec2", []float64{0.1, 0.2}, map[string]any{"meta": "orig"})
+		err := backend.SetVector(context.Background(), ScopeSession, "s4", "vec2", []float64{0.1, 0.2}, map[string]any{"meta": "orig"})
 		require.NoError(t, err)
 
-		emb1, meta1, found, err := backend.GetVector(ScopeSession, "s4", "vec2")
+		emb1, meta1, found, err := backend.GetVector(context.Background(), ScopeSession, "s4", "vec2")
 		require.NoError(t, err)
 		require.True(t, found)
 
 		emb1[0] = 555.0
 		meta1["meta"] = "changed"
 
-		emb2, meta2, found, err := backend.GetVector(ScopeSession, "s4", "vec2")
+		emb2, meta2, found, err := backend.GetVector(context.Background(), ScopeSession, "s4", "vec2")
 		require.NoError(t, err)
 		require.True(t, found)
 
@@ -608,7 +608,7 @@ func TestInMemoryBackend_DeepCopy(t *testing.T) {
 func TestInMemoryBackend_DeepCopyConcurrent(t *testing.T) {
 	backend := NewInMemoryBackend()
 
-	err := backend.Set(ScopeSession, "s1", "shared", map[string]any{"counter": 0})
+	err := backend.Set(context.Background(), ScopeSession, "s1", "shared", map[string]any{"counter": 0})
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -617,7 +617,7 @@ func TestInMemoryBackend_DeepCopyConcurrent(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 1000; i++ {
-			val, found, _ := backend.Get(ScopeSession, "s1", "shared")
+			val, found, _ := backend.Get(context.Background(), ScopeSession, "s1", "shared")
 			if found {
 				if m, ok := val.(map[string]any); ok {
 					m["counter"] = i
@@ -629,7 +629,7 @@ func TestInMemoryBackend_DeepCopyConcurrent(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 1000; i++ {
-			val, found, _ := backend.Get(ScopeSession, "s1", "shared")
+			val, found, _ := backend.Get(context.Background(), ScopeSession, "s1", "shared")
 			if found {
 				if m, ok := val.(map[string]any); ok {
 					_ = m["counter"]
@@ -723,10 +723,10 @@ func TestInMemoryBackendRejectsCyclicValues(t *testing.T) {
 	cycle := map[string]any{}
 	cycle["self"] = cycle
 
-	err := backend.Set(ScopeSession, "session", "key", cycle)
+	err := backend.Set(context.Background(), ScopeSession, "session", "key", cycle)
 	require.ErrorIs(t, err, ErrCyclicMemoryValue)
 
-	_, found, err := backend.Get(ScopeSession, "session", "key")
+	_, found, err := backend.Get(context.Background(), ScopeSession, "session", "key")
 	require.NoError(t, err)
 	assert.False(t, found)
 }
@@ -736,10 +736,10 @@ func TestInMemoryBackendRejectsCyclicVectorMetadata(t *testing.T) {
 	cycle := []any{nil}
 	cycle[0] = cycle
 
-	err := backend.SetVector(ScopeSession, "session", "key", []float64{1}, map[string]any{"cycle": cycle})
+	err := backend.SetVector(context.Background(), ScopeSession, "session", "key", []float64{1}, map[string]any{"cycle": cycle})
 	require.ErrorIs(t, err, ErrCyclicMemoryValue)
 
-	_, _, found, err := backend.GetVector(ScopeSession, "session", "key")
+	_, _, found, err := backend.GetVector(context.Background(), ScopeSession, "session", "key")
 	require.NoError(t, err)
 	assert.False(t, found)
 }

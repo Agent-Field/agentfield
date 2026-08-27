@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { KeyRound, Loader2, ShieldCheck } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { setGlobalApiKey } from "../services/api";
 import { Button } from "@/components/ui/button";
@@ -11,9 +11,8 @@ import logoLight from "@/assets/logos/logo-short-light-v2.svg";
 import logoDark from "@/assets/logos/logo-short-dark-v2.svg";
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { apiKey, setApiKey, setAdminToken, isAuthenticated, authRequired } = useAuth();
+  const { apiKey, setApiKey, isAuthenticated, authRequired } = useAuth();
   const [inputKey, setInputKey] = useState("");
-  const [inputAdminToken, setInputAdminToken] = useState("");
   const [error, setError] = useState("");
   const [validating, setValidating] = useState(false);
 
@@ -34,9 +33,6 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       if (response.ok) {
         setApiKey(inputKey);
         setGlobalApiKey(inputKey);
-        if (inputAdminToken.trim()) {
-          setAdminToken(inputAdminToken.trim());
-        }
       } else {
         setError("Invalid API key. Check the key and try again.");
       }
@@ -91,24 +87,6 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                     className="pl-9"
                     disabled={validating}
                     autoFocus
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label htmlFor="admin-token" className="text-sm font-medium leading-none text-muted-foreground">
-                  Admin Token <span className="font-normal">(optional)</span>
-                </label>
-                <div className="relative">
-                  <ShieldCheck className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="admin-token"
-                    type="password"
-                    value={inputAdminToken}
-                    onChange={(e) => setInputAdminToken(e.target.value)}
-                    placeholder="For permission management"
-                    className="pl-9"
-                    disabled={validating}
                   />
                 </div>
               </div>

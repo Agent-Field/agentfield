@@ -18,9 +18,10 @@ PROVIDER_SPECS = {
     "aforge": ProviderSpec(
         binary="aforge",
         version_args=("version",),
-        install_command=(
-            "go build -o aforge ./cmd/aforge (https://github.com/Agent-Field/aforge-v2)"
-        ),
+        # `af` installs aforge beside itself in ~/.agentfield/bin (see
+        # control-plane/internal/aforge); the curl installer, the desktop app
+        # and the agent images all converge on that one command.
+        install_command="af aforge ensure",
         auth_env_vars=("OPENROUTER_API_KEY",),
     ),
     "codex": ProviderSpec(

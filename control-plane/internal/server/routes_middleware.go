@@ -11,9 +11,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// applyGlobalMiddleware installs CORS, request logging, request timeouts, API
-// key auth, and (when enabled) DID auth on the router. It must run before any
-// route is registered so that every subsequent route inherits the stack.
+// applyGlobalMiddleware installs CORS, request timeouts, API key auth, and
+// (when enabled) DID auth on the router. It must run before any route is
+// registered so that every subsequent route inherits the stack.
+//
+// Structured request logging is deliberately NOT installed here: newRouter
+// attaches it when the engine is created, so it is outermost and observes even
+// the requests CORS rejects before they reach anything else.
 func (s *AgentFieldServer) applyGlobalMiddleware() {
 	corsConfig := cors.Config{
 		AllowOrigins:     s.config.API.CORS.AllowedOrigins,
@@ -34,11 +38,10 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 		corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization", "X-API-Key", "X-Admin-Token"}
 	}
 
+	// CORS runs inside the request logger installed by newRouter, so a
+	// request this middleware rejects (a disallowed Origin aborts with 403)
+	// is still recorded as a structured http_request line.
 	s.Router.Use(cors.New(corsConfig))
-
-	// Structured request logging via the control-plane's zerolog logger,
-	// replacing gin's verbose stdout [GIN] lines (see middleware.GinLogger).
-	s.Router.Use(middleware.GinLogger())
 
 	// Request timeout middleware (1 hour for long-running executions)
 	s.Router.Use(func(c *gin.Context) {
@@ -110,6 +113,18 @@ func (s *AgentFieldServer) noteOwnershipEnforced() bool {
 		return true
 	}
 	return s.config.Features.DID.Enabled && s.config.Features.DID.Authorization.DIDAuthEnabled && s.didWebService != nil
+}
+
+// useStructuredRequestLogging installs GinLogger then Recovery. Gin runs
+// middleware in registration order, so the logger ends up outermost and wraps
+// recovery: a panicking handler still produces a structured http_request at
+// error/500. newRouter calls this on the bare engine, which also puts the
+// logger ahead of every middleware applyGlobalMiddleware adds — including the
+// ones that abort. Production and tests share this helper so the order cannot
+// drift.
+func useStructuredRequestLogging(router *gin.Engine) {
+	router.Use(middleware.GinLogger())
+	router.Use(gin.Recovery())
 }
 
 func streamingQueryAPIKeyAllowedPaths() []string {

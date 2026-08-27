@@ -162,12 +162,8 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 	}
 
 	// Check for errors
-	if httpResp.StatusCode >= 400 {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err != nil {
-			return nil, fmt.Errorf("API error (%d): %s", httpResp.StatusCode, string(respBody))
-		}
-		return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
+	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+		return nil, newAPIError(httpResp.StatusCode, respBody)
 	}
 
 	// Parse response
@@ -258,9 +254,9 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 		defer httpResp.Body.Close()
 
 		// Check for errors
-		if httpResp.StatusCode >= 400 {
+		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 			respBody, _ := io.ReadAll(httpResp.Body)
-			errCh <- fmt.Errorf("API error (%d): %s", httpResp.StatusCode, string(respBody))
+			errCh <- newAPIError(httpResp.StatusCode, respBody)
 			return
 		}
 

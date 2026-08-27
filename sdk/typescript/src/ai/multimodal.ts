@@ -348,6 +348,22 @@ function guessMimeType(filePath: string): string | null {
   return documentMimeTypes[ext] || null;
 }
 
+/** Get the declared MIME type from a base64 data URL. */
+function getDataUrlMimeType(url: string): string | null {
+  const match = /^data:([^;,]+)(?:;[^,]*)?,/i.exec(url);
+  return match?.[1] || null;
+}
+
+/** Infer a MIME type from a URL's data prefix or pathname extension. */
+export function guessUrlMimeType(url: string): string | null {
+  return getDataUrlMimeType(url) ?? guessMimeType(url.split(/[?#]/, 1)[0]);
+}
+
+/** Canonical IANA media type for an audio format (e.g. 'mp3' -> 'audio/mpeg'). */
+export function audioMediaType(format: string): string {
+  return AUDIO_MIME_TYPES[`.${format.toLowerCase()}`] ?? `audio/${format}`;
+}
+
 // Convenience factory functions
 
 /**
