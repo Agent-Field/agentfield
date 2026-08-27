@@ -5,6 +5,7 @@ import {
   generateText,
   streamText
 } from 'ai';
+import type { ModelMessage, UserContent } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -22,7 +23,11 @@ import {
 } from './openrouterAttribution.js';
 import { withOpenRouterUsageInclude } from './openrouterUsage.js';
 import { recordAiSdkUsage } from '../usage/aiUsage.js';
-import type { MultimodalContent } from './multimodal.js';
+import {
+  audioMediaType,
+  guessUrlMimeType,
+  type MultimodalContent,
+} from './multimodal.js';
 
 export type ZodSchema<T> = z.Schema<T, z.ZodTypeDef, any>;
 
@@ -301,22 +306,40 @@ export class AIClient {
     }
   }
 
-  private buildPrompt(prompt: string, content?: MultimodalContent[]) {
+  private buildPrompt(prompt: string, content?: MultimodalContent[]): string | ModelMessage[] {
     if (!content?.length) return prompt;
 
-    return [{
+    const messageContent: Exclude<UserContent, string> = [
+      { type: 'text', text: prompt },
+      ...content.map((part) => {
+        if (part.type === 'text') return { type: 'text' as const, text: part.text };
+        if (part.type === 'image_url') return { type: 'image' as const, image: part.imageUrl.url };
+        if (part.type === 'video_url') {
+          return {
+            type: 'file' as const,
+            data: part.videoUrl.url,
+            mediaType: guessUrlMimeType(part.videoUrl.url) ?? 'video/mp4',
+          };
+        }
+        if (part.type === 'input_audio') {
+          return {
+            type: 'file' as const,
+            data: part.audio.data,
+            mediaType: audioMediaType(part.audio.format),
+          };
+        }
+        return {
+          type: 'file' as const,
+          data: part.file.url,
+          mediaType: part.file.mimeType ?? guessUrlMimeType(part.file.url) ?? 'application/octet-stream',
+        };
+      })
+    ];
+    const messages: ModelMessage[] = [{
       role: 'user' as const,
-      content: [
-        { type: 'text' as const, text: prompt },
-        ...content.map((part) => {
-          if (part.type === 'text') return { type: 'text' as const, text: part.text };
-          if (part.type === 'image_url') return { type: 'image' as const, image: part.imageUrl.url };
-          if (part.type === 'video_url') return { type: 'file' as const, data: part.videoUrl.url, mimeType: 'video/*' };
-          if (part.type === 'input_audio') return { type: 'file' as const, data: part.audio.data, mimeType: `audio/${part.audio.format}` };
-          return { type: 'file' as const, data: part.file.url, mimeType: part.file.mimeType };
-        })
-      ]
-    }] as any;
+      content: messageContent
+    }];
+    return messages;
   }
 
   private buildEmbeddingModel(options: AIEmbeddingOptions) {
