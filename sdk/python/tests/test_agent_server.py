@@ -596,7 +596,7 @@ async def test_logs_endpoint_success():
 
     with patch("agentfield.node_logs.logs_enabled", return_value=True), \
          patch("agentfield.node_logs.verify_internal_bearer", return_value=True), \
-         patch("agentfield.node_logs.iter_tail_ndjson", side_effect=fake_iter):
+         patch("agentfield.node_logs.async_iter_tail_ndjson", side_effect=fake_iter):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
