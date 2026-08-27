@@ -34,10 +34,43 @@ func TestClassifyProbe(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyProbe(tc.exitCode, tc.stdout, tc.timedOut); got != tc.want {
+			if got := classifyProbe(tc.exitCode, tc.stdout, tc.timedOut, false); got != tc.want {
 				t.Errorf("classifyProbe(%d, %q, %v) = %q, want %q", tc.exitCode, tc.stdout, tc.timedOut, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestClassifyProbe_JSONLStream(t *testing.T) {
+	cases := []struct {
+		name   string
+		stdout string
+		want   string
+	}{
+		{"session only", `{"type":"session","id":"s1"}`, "empty"},
+		{"assistant text", "{\"type\":\"session\",\"id\":\"s1\"}\n{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":\"OK\",\"stopReason\":\"stop\"}}", "ok"},
+		{"provider error", `{"type":"message_end","message":{"role":"assistant","content":"partial","stopReason":"error","errorMessage":"provider failed"}}`, "error"},
+		{"recovered", "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":\"partial\",\"stopReason\":\"error\"}}\n{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"OK\"}],\"stopReason\":\"stop\"}}", "ok"},
+		{"empty text part", `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":""}],"stopReason":"stop"}}`, "empty"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyProbe(0, tc.stdout, false, true); got != tc.want {
+				t.Errorf("classifyProbe JSONL = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHarnessProviders_JSONLStream(t *testing.T) {
+	var got []string
+	for _, provider := range harnessProviders {
+		if provider.JSONLStream {
+			got = append(got, provider.Name)
+		}
+	}
+	if want := []string{"pi", "omp"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("JSONLStream providers = %v, want %v", got, want)
 	}
 }
 
@@ -91,7 +124,7 @@ func TestProbeHarnessProvider_RealProcesses(t *testing.T) {
 			if _, err := exec.LookPath(tc.bin); err != nil {
 				t.Skipf("%s not available: %v", tc.bin, err)
 			}
-			res := probeHarnessProvider("prov-"+tc.name, tc.bin, tc.args, tc.stdin, tc.timeout)
+			res := probeHarnessProvider("prov-"+tc.name, tc.bin, tc.args, tc.stdin, tc.timeout, false)
 			if res.Status != tc.want {
 				t.Errorf("status = %q, want %q (detail=%q)", res.Status, tc.want, res.Detail)
 			}
