@@ -58,6 +58,9 @@ func TestHarnessProviders_ProbeInputContract(t *testing.T) {
 				}
 			}
 		default:
+			if provider.Name == "aforge" && (len(provider.ProbeArgs) != 0 || provider.ProbeStdin != "") {
+				t.Errorf("aforge must not declare probe input")
+			}
 			if provider.ProbeStdin != "" {
 				t.Errorf("positional-prompt provider %s ProbeStdin = %q, want empty", provider.Name, provider.ProbeStdin)
 			}
@@ -99,11 +102,47 @@ func TestProbeHarnessProvider_RealProcesses(t *testing.T) {
 	}
 }
 
+// Contract: aforge is surveyed by doctor but never smoke-tested — its only
+// one-shot is a full coding-agent run, so it deliberately declares no ProbeArgs.
+func TestHarnessProviders_AforgeIsSurveyedButNotProbed(t *testing.T) {
+	if harnessProviders[0].Name != "aforge" {
+		t.Fatalf("aforge must lead the provider list, got %q", harnessProviders[0].Name)
+	}
+	if len(harnessProviders[0].ProbeArgs) != 0 || harnessProviders[0].ProbeStdin != "" {
+		t.Errorf("aforge must declare no probe input, got %+v", harnessProviders[0])
+	}
+}
+
+// Contract: a provider with no ProbeArgs is skipped by --probe even when
+// detected, while a provider that declares them is still probed. The registry
+// is swapped for synthetic entries so no real coding-agent CLI is invoked.
+func TestRunHarnessProbes_SkipsProvidersWithoutProbeArgs(t *testing.T) {
+	original := harnessProviders
+	t.Cleanup(func() { harnessProviders = original })
+	harnessProviders = []doctorHarnessProvider{
+		{Name: "no-probe", Binary: "agentfield-absent-no-probe"},
+		{Name: "with-probe", Binary: "agentfield-absent-with-probe", ProbeArgs: []string{"--version"}},
+	}
+
+	report := DoctorReport{HarnessProviders: map[string]ToolStatus{
+		"no-probe":   {Available: true},
+		"with-probe": {Available: true},
+	}}
+	got := runHarnessProbes(report)
+	if _, ok := got["no-probe"]; ok {
+		t.Error("a provider without ProbeArgs must be skipped even when available")
+	}
+	if _, ok := got["with-probe"]; !ok {
+		t.Error("an available provider with ProbeArgs must produce a result")
+	}
+}
+
 // Contract: probes run ONLY for providers doctor already detected — unavailable
 // providers are never invoked.
 func TestRunHarnessProbes_SkipsUndetected(t *testing.T) {
 	report := DoctorReport{
 		HarnessProviders: map[string]ToolStatus{
+			"aforge":      {Available: false},
 			"claude-code": {Available: false},
 			"codex":       {Available: false},
 			"gemini":      {Available: false},

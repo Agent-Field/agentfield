@@ -79,13 +79,20 @@ var providerEnvVars = []struct {
 	{Name: "google", EnvVar: "GOOGLE_API_KEY", Model: "gemini-1.5-pro"},
 }
 
-// harnessProviders is the canonical list of CLIs `app.harness()` knows how to drive.
-var harnessProviders = []struct {
+// doctorHarnessProvider describes one CLI `app.harness()` knows how to drive,
+// as `af doctor` surveys it.
+type doctorHarnessProvider struct {
 	Name       string   // value passed to provider= in app.harness()
 	Binary     string   // executable name to look up on PATH
-	ProbeArgs  []string // minimal one-shot invocation used by `--probe`
+	ProbeArgs  []string // minimal one-shot invocation used by `--probe`; empty means "never probe"
 	ProbeStdin string   // prompt fed over stdin, mirroring how the SDK adapters invoke this CLI
-}{
+}
+
+// harnessProviders is the canonical list of CLIs `app.harness()` knows how to
+// drive. aforge leads it: it is the SDK's default provider and ships with `af`.
+var harnessProviders = []doctorHarnessProvider{
+	// aforge declares no ProbeArgs on purpose — see runHarnessProbes.
+	{Name: "aforge", Binary: "aforge"},
 	{Name: "claude-code", Binary: "claude", ProbeArgs: []string{"-p", "Say OK"}},
 	{Name: "codex", Binary: "codex", ProbeArgs: []string{"exec", "Say OK"}},
 	{Name: "gemini", Binary: "gemini", ProbeArgs: []string{"-p", "Say OK"}},
@@ -123,7 +130,7 @@ func NewDoctorCommand() *cobra.Command {
 		Long: `Doctor inspects the local environment and reports what's available for
 building AgentField multi-reasoner systems:
 
-  • Available harness provider CLIs (claude-code, codex, gemini, opencode, pi, omp)
+  • Available harness provider CLIs (aforge, claude-code, codex, gemini, opencode, pi, omp)
   • Provider API keys set in the environment (without leaking values)
   • Docker availability and whether the control-plane image is locally cached
   • Whether a local control plane is reachable
@@ -177,6 +184,12 @@ func runHarnessProbes(report DoctorReport) map[string]HarnessProbeResult {
 	results := map[string]HarnessProbeResult{}
 	for _, h := range harnessProviders {
 		if !report.HarnessProviders[h.Name].Available {
+			continue
+		}
+		// Every other probe is one trivial completion. Aforge's only one-shot is
+		// a full coding-agent run with working-directory write access, so `af
+		// doctor` must not start it; `af harness doctor` reports its health.
+		if len(h.ProbeArgs) == 0 {
 			continue
 		}
 		results[h.Name] = probeHarnessProvider(h.Name, h.Binary, h.ProbeArgs, h.ProbeStdin, harnessProbeTimeout)
@@ -286,7 +299,20 @@ func buildDoctorReport(controlPlaneURL string) DoctorReport {
 	// Harness CLIs
 	availableHarness := []string{}
 	for _, h := range harnessProviders {
-		status := checkTool(h.Binary, "--version")
+		// Share the harness doctor's provider-specific version arguments and its
+		// $AGENTFIELD_HOME/bin fallback wherever a binary-backed spec exists, so
+		// both doctors agree on what "installed" means. aforge in particular
+		// answers `version`, not `--version`, and `af aforge ensure` puts it in
+		// AgentField's own bin directory rather than on PATH. claude-code has no
+		// binary in that table (it is the pip-package wrapper), so it keeps the
+		// plain PATH check.
+		spec := findHarnessProviderSpec(h.Name)
+		var status ToolStatus
+		if spec != nil && spec.Binary != "" {
+			status = probeHarnessBinary(*spec)
+		} else {
+			status = checkTool(h.Binary, "--version")
+		}
 		report.HarnessProviders[h.Name] = status
 		if status.Available {
 			availableHarness = append(availableHarness, h.Name)
