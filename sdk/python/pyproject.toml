@@ -52,6 +52,9 @@ where = ["."]
 include = ["agentfield*"]
 exclude = ["tests*", "examples*"]
 
+[tool.setuptools.package-data]
+agentfield = ["py.typed"]
+
 [project.optional-dependencies]
 harness-claude = [
     "claude-agent-sdk>=0.1",
