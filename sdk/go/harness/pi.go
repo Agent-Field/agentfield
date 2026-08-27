@@ -91,12 +91,13 @@ func (p *piFamilyProvider) execute(ctx context.Context, prompt string, options O
 		}
 		cmd = append(cmd, resumeFlag, options.ResumeSessionID)
 	}
+	// --tools is the enforced, vendor-documented read-only allowlist. Pi has no
+	// approval flag (unknown options fail); OMP auto-approves read-only tiers even
+	// under always-ask.
 	if options.PermissionMode == "auto" {
-		permissionFlag := "--approve"
 		if p.flavor == piFlavorOMP {
-			permissionFlag = "--auto-approve"
+			cmd = append(cmd, "--auto-approve")
 		}
-		cmd = append(cmd, permissionFlag)
 	}
 
 	tools := normalizePiTools(options.Tools, p.flavor)

@@ -137,7 +137,7 @@ describe.each([
     name: 'pi',
     provider: new PiProvider('/opt/pi'),
     prefix: ['/opt/pi', '--print', '--mode', 'json'],
-    permissionFlag: '--approve',
+    permissionFlag: undefined,
     globTool: 'find',
   },
   {
@@ -166,7 +166,10 @@ describe.each([
 
     const [cmd, options] = vi.mocked(cli.runCli).mock.calls[0];
     expect(cmd.slice(0, prefix.length)).toEqual(prefix);
-    expect(cmd).toContain(permissionFlag);
+    if (permissionFlag) {
+      expect(cmd).toContain(permissionFlag);
+    }
+    expectApprovalFlags(cmd, permissionFlag);
     expect(cmd.slice(cmd.indexOf('--model'), cmd.indexOf('--model') + 2)).toEqual([
       '--model',
       'openrouter/google/gemini-2.5-flash',
@@ -218,7 +221,20 @@ it.each([
   const cmd = vi.mocked(cli.runCli).mock.calls[0][0];
   expect(cmd[cmd.indexOf('--tools') + 1]).toBe(tools);
   expect(cmd[cmd.indexOf(resumeFlag) + 1]).toBe('abc123');
+  expectApprovalFlags(cmd);
 });
+
+function expectApprovalFlags(cmd: string[], allowed?: string): void {
+  const approvalFlags = [
+    '--approve',
+    '--auto-approve',
+    '--yolo',
+    '-y',
+    '--approval-mode',
+    '--permission-mode',
+  ];
+  expect(approvalFlags.filter((flag) => cmd.includes(flag))).toEqual(allowed ? [allowed] : []);
+}
 
 it.each([
   { provider: new PiProvider('pi-missing'), installHint: '@earendil-works/pi-coding-agent' },

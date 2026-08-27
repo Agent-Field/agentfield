@@ -168,8 +168,12 @@ class _PiFamilyProvider:
             cmd.extend(["--resume" if self._omp else "--session", resume_session_id])
 
         permission_mode = options.get("permission_mode")
+        # --tools is the enforced, vendor-documented read-only allowlist. Pi has
+        # no approval flag (unknown options fail); OMP read-only tiers are
+        # auto-approved even under always-ask.
         if permission_mode == "auto":
-            cmd.append("--auto-approve" if self._omp else "--approve")
+            if self._omp:
+                cmd.append("--auto-approve")
 
         tools_value = options.get("tools")
         tools = (

@@ -31,7 +31,7 @@ func TestPiFamilyCommandAndMetrics(t *testing.T) {
 				provider := NewPiProvider("/opt/pi")
 				return provider, provider.piFamilyProvider
 			},
-			permissionFlag: "--approve",
+			permissionFlag: "",
 			globTool:       "find",
 			wantPrefix:     []string{"/opt/pi", "--print", "--mode", "json"},
 		},
@@ -74,7 +74,10 @@ func TestPiFamilyCommandAndMetrics(t *testing.T) {
 			require.NoError(t, err)
 			require.GreaterOrEqual(t, len(gotCmd), len(tc.wantPrefix))
 			assert.Equal(t, tc.wantPrefix, gotCmd[:len(tc.wantPrefix)])
-			assert.Contains(t, gotCmd, tc.permissionFlag)
+			if tc.permissionFlag != "" {
+				assert.Contains(t, gotCmd, tc.permissionFlag)
+			}
+			assertNoApprovalFlags(t, gotCmd, tc.permissionFlag)
 			assertFlagValue(t, gotCmd, "--model", "openrouter/google/gemini-2.5-flash")
 			assertFlagValue(t, gotCmd, "--thinking", "high")
 			assertFlagValue(t, gotCmd, "--tools", "read,write,edit,bash,"+tc.globTool+",grep")
@@ -161,7 +164,17 @@ func TestPiFamilyPlanModeIsReadOnlyAndResumes(t *testing.T) {
 			require.NoError(t, err)
 			assertFlagValue(t, gotCmd, "--tools", tc.tools)
 			assertFlagValue(t, gotCmd, tc.resumeFlag, "abc123")
+			assertNoApprovalFlags(t, gotCmd, "")
 		})
+	}
+}
+
+func assertNoApprovalFlags(t *testing.T, cmd []string, allowed string) {
+	t.Helper()
+	for _, flag := range []string{"--approve", "--auto-approve", "--yolo", "-y", "--approval-mode", "--permission-mode"} {
+		if flag != allowed {
+			assert.NotContains(t, cmd, flag)
+		}
 	}
 }
 

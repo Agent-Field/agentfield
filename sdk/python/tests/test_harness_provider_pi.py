@@ -50,7 +50,7 @@ def _event_stream(text: str) -> str:
 @pytest.mark.parametrize(
     ("provider", "bin_path", "permission_flag", "glob_tool"),
     [
-        (PiProvider, "/opt/pi", "--approve", "find"),
+        (PiProvider, "/opt/pi", None, "find"),
         (OMPProvider, "/opt/omp", "--auto-approve", "glob"),
     ],
 )
@@ -58,7 +58,7 @@ async def test_pi_family_command_and_metrics(
     monkeypatch: pytest.MonkeyPatch,
     provider,
     bin_path: str,
-    permission_flag: str,
+    permission_flag: str | None,
     glob_tool: str,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -91,7 +91,9 @@ async def test_pi_family_command_and_metrics(
     assert ["--thinking", "high"] == captured["cmd"][
         captured["cmd"].index("--thinking") : captured["cmd"].index("--thinking") + 2
     ]
-    assert permission_flag in captured["cmd"]
+    if permission_flag is not None:
+        assert permission_flag in captured["cmd"]
+    _assert_no_approval_flags(captured["cmd"], allowed=permission_flag)
     assert captured["cmd"][captured["cmd"].index("--tools") + 1] == (
         f"read,write,edit,bash,{glob_tool},grep"
     )
@@ -143,6 +145,19 @@ async def test_pi_family_plan_mode_is_read_only_and_resumes(
 
     assert captured["cmd"][captured["cmd"].index("--tools") + 1] == expected_tools
     assert captured["cmd"][captured["cmd"].index(resume_flag) + 1] == "abc123"
+    _assert_no_approval_flags(captured["cmd"])
+
+
+def _assert_no_approval_flags(cmd: list[str], allowed: str | None = None) -> None:
+    approval_flags = {
+        "--approve",
+        "--auto-approve",
+        "--yolo",
+        "-y",
+        "--approval-mode",
+        "--permission-mode",
+    }
+    assert approval_flags.intersection(cmd) <= ({allowed} if allowed else set())
 
 
 @pytest.mark.asyncio

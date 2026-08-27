@@ -164,18 +164,20 @@ CLI-specific command construction to application code.
 | One-shot machine output | JSON output | stdin + JSON event stream | stdin + JSON event stream |
 | System prompt | Native prompt option | Native prompt option | Native prompt option |
 | Tool allowlist | Native tool flags | Normalized Pi tool names | Normalized OMP tool names |
-| Plan / auto permissions | Native permission flags | Read-only tools / `--approve` | Read-only tools / `--auto-approve` |
+| Plan / auto permissions | Native permission flags | Read-only tools / no approval flag | Read-only tools / `--auto-approve` |
 | Session resume | Native session option | `--session` | `--resume` |
 | Structured output | Isolated schema file protocol | Same protocol | Same protocol |
 | Metrics | Sessions, turns, tokens, cost, duration | Same normalized fields | Same normalized fields |
 | Runtime controls | Env, timeout, retries, binary override | Same | Same |
 
 The contract is equivalent, not flag-identical. Pi calls its filesystem search
-tool `find`, OMP calls it `glob`, and each CLI has its own resume and approval
-flags. These differences stay inside the provider adapters. Unsupported native
-concepts are handled consistently: plan mode removes mutating tools, explicit
-model variants override `#variant`, and provider-reported metrics are normalized
-into the shared result type.
+tool `find`, OMP calls it `glob`, and each CLI has its own resume flag. Only OMP
+has an approval flag: `--tools` is Pi's documented read-only mechanism and it has
+no approval flag at all, so `permission_mode="auto"` adds nothing for Pi. These
+differences stay inside the provider adapters. Unsupported native concepts are
+handled consistently: plan mode removes mutating tools, explicit model variants
+override `#variant`, and provider-reported metrics are normalized into the shared
+result type.
 
 ## Model selection and reasoning-effort variants
 

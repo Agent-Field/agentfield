@@ -150,8 +150,13 @@ class PiFamilyProvider implements HarnessProvider {
       cmd.push(this.flavor === 'omp' ? '--resume' : '--session', options.resumeSessionId);
     }
 
+    // --tools is the enforced, vendor-documented read-only allowlist. Pi has no
+    // approval flag (unknown options fail); OMP read-only tiers are auto-approved
+    // even under always-ask.
     if (options.permissionMode === 'auto') {
-      cmd.push(this.flavor === 'omp' ? '--auto-approve' : '--approve');
+      if (this.flavor === 'omp') {
+        cmd.push('--auto-approve');
+      }
     }
 
     const explicitTools = Array.isArray(options.tools);
