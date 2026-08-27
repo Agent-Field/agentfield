@@ -237,7 +237,7 @@ func StopRecordedProcessWithAssessment(ctx context.Context, name string, entry I
 		result.HTTPAttempted = true
 		result.HTTPAccepted, result.HTTPTimedOut = requestHTTPShutdown(ctx, *entry.Runtime.Port)
 		if result.HTTPAccepted {
-			if waitForProcessExit(*entry.Runtime.PID, gracefulExitWait) {
+			if waitForProcessExit(*entry.Runtime.PID, agentShutdownBudget(entry)) {
 				return result, nil
 			}
 		}
@@ -269,6 +269,39 @@ func StopRecordedProcessWithAssessment(ctx context.Context, name string, entry I
 		return result, err
 	}
 	return result, nil
+}
+
+const defaultAgentShutdownBudget = 30 * time.Second
+
+func agentShutdownBudget(entry InstalledPackage) time.Duration {
+	return agentShutdownBudgetWith(entry, processEnvironment)
+}
+
+func agentShutdownBudgetWith(entry InstalledPackage, environment func(int) []string) time.Duration {
+	if entry.Runtime.PID == nil || *entry.Runtime.PID <= 0 {
+		return defaultAgentShutdownBudget
+	}
+	for _, item := range environment(*entry.Runtime.PID) {
+		key, value, found := strings.Cut(item, "=")
+		if found && key == "AGENTFIELD_SHUTDOWN_TIMEOUT" {
+			if seconds, err := time.ParseDuration(value); err == nil && seconds >= 0 {
+				return seconds
+			}
+			if seconds, err := time.ParseDuration(value + "s"); err == nil && seconds >= 0 {
+				return seconds
+			}
+			return defaultAgentShutdownBudget
+		}
+	}
+	return defaultAgentShutdownBudget
+}
+
+func processEnvironment(pid int) []string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	if err != nil {
+		return nil
+	}
+	return strings.Split(string(data), "\x00")
 }
 
 func stopProcessWith(
