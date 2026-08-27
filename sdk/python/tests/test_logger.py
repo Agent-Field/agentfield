@@ -5,11 +5,31 @@ import pytest
 
 import agentfield.logger as logger_module
 from agentfield.logger import (
+    AgentFieldLogger,
     get_logger,
     log_info,
     set_cp_client,
     set_log_level,
 )
+
+
+@pytest.mark.unit
+def test_structured_stdout_can_be_disabled(monkeypatch, capsys):
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", "false")
+    logger = AgentFieldLogger("structured.stdout.disabled")
+
+    logger._emit_structured_record({"event_type": "test"})
+
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.unit
+def test_structured_stdout_is_enabled_by_default(capsys):
+    logger = AgentFieldLogger("structured.stdout.default")
+
+    logger._emit_structured_record({"event_type": "test"})
+
+    assert '"event_type":"test"' in capsys.readouterr().out
 
 
 @pytest.fixture(autouse=True)

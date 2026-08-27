@@ -68,6 +68,9 @@ class AgentFieldLogger:
             os.getenv("AGENTFIELD_LOG_TRACKING", "false").lower() == "true"
         )
         self.show_fire = os.getenv("AGENTFIELD_LOG_FIRE", "false").lower() == "true"
+        self.emit_structured_stdout = (
+            os.getenv("AGENTFIELD_LOG_STDOUT", "true").strip().lower() == "true"
+        )
 
         # Set logger level based on configuration
         self.logger.setLevel(_LEVEL_TO_LOGGING.get(self.log_level, logging.WARNING))
@@ -179,7 +182,8 @@ class AgentFieldLogger:
         line = json.dumps(
             record, ensure_ascii=False, separators=(",", ":"), default=str
         )
-        print(line, file=sys.stdout, flush=True)
+        if self.emit_structured_stdout:
+            print(line, file=sys.stdout, flush=True)
         self._dispatch_to_cp(record)
         return record
 
