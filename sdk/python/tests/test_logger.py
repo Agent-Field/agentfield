@@ -32,6 +32,42 @@ def test_structured_stdout_is_enabled_by_default(capsys):
     assert '"event_type":"test"' in capsys.readouterr().out
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["false", "FALSE", "  False  ", "0", "no", "off"])
+def test_structured_stdout_disabled_for_every_falsy_spelling(
+    monkeypatch, capsys, value
+):
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", value)
+    logger = AgentFieldLogger(f"structured.stdout.off.{value.strip().lower()}")
+
+    logger._emit_structured_record({"event_type": "test"})
+
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value", ["true", "TRUE", "  True  ", "1", "yes", "on", "", "ture"]
+)
+def test_structured_stdout_stays_on_unless_explicitly_disabled(
+    monkeypatch, capsys, value
+):
+    """Only the documented falsy values silence the mirror.
+
+    ``1``/``yes``/``on`` are truthy everywhere else in the SDK, and a
+    set-but-empty or misspelt value must not silently drop log output -- the
+    default has to fail towards keeping records visible.
+    """
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", value)
+    logger = AgentFieldLogger(
+        f"structured.stdout.on.{value.strip().lower() or 'empty'}"
+    )
+
+    logger._emit_structured_record({"event_type": "test"})
+
+    assert '"event_type":"test"' in capsys.readouterr().out
+
+
 @pytest.fixture(autouse=True)
 def reset_logger_state():
     """Isolate each test from global logger state.
