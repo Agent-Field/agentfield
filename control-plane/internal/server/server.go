@@ -782,19 +782,6 @@ func (s *AgentFieldServer) getHTTPServer() *http.Server {
 	return s.httpServer
 }
 
-func (s *AgentFieldServer) shutdownHTTPServer() error {
-	var shutdownTimeout time.Duration
-	if s.config != nil {
-		shutdownTimeout = s.config.AgentField.ShutdownTimeout
-	}
-	if shutdownTimeout <= 0 {
-		shutdownTimeout = 30 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	return s.shutdownHTTPServerWithContext(ctx)
-}
-
 func (s *AgentFieldServer) shutdownHTTPServerWithContext(ctx context.Context) error {
 	httpServer := s.getHTTPServer()
 	if httpServer == nil {
