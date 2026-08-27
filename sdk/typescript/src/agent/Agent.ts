@@ -127,7 +127,7 @@ export class Agent {
   private server?: http.Server;
   private heartbeatTimer?: NodeJS.Timeout;
   private shutdownPromise?: Promise<void>;
-  private readonly inFlightExecutions = new Set<Promise<void>>();
+  private readonly inFlightExecutions = new Map<string, Promise<void>>();
   private signalHandlers?: { SIGTERM: () => void; SIGINT: () => void };
   private readonly aiClient: AIClient;
   private readonly agentFieldClient: AgentFieldClient;
@@ -695,11 +695,13 @@ export class Agent {
     const timeoutMs = parseShutdownTimeout(process.env.AGENTFIELD_SHUTDOWN_TIMEOUT);
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), timeoutMs); });
-    const drained = Promise.allSettled([...this.inFlightExecutions]).then(() => 'drained' as const);
+    const drained = Promise.allSettled([...this.inFlightExecutions.values()]).then(() => 'drained' as const);
     if (await Promise.race([drained, timeout]) === 'timeout') {
-      for (const executionId of this.pauseClocks.keys()) this.cancelRegistry.cancel(executionId, 'shutdown_timeout');
+      for (const executionId of this.inFlightExecutions.keys()) {
+        this.cancelRegistry.cancel(executionId, 'shutdown_timeout');
+      }
       this.pauseManager.cancelAll();
-      await Promise.allSettled([...this.inFlightExecutions]);
+      await Promise.allSettled([...this.inFlightExecutions.values()]);
     }
     if (timer) clearTimeout(timer);
     this.memoryEventClient.stop();
@@ -1227,8 +1229,8 @@ export class Agent {
       res.status(202).json({ status: 'processing', execution_id: metadata.executionId });
       // Detached — do not await; runReasonerAsync reports its own terminal status.
       const execution = this.runReasonerAsync(reasoner, { targetName: name, input: req.body, metadata });
-      this.inFlightExecutions.add(execution);
-      void execution.finally(() => this.inFlightExecutions.delete(execution));
+      this.inFlightExecutions.set(metadata.executionId, execution);
+      void execution.finally(() => this.inFlightExecutions.delete(metadata.executionId));
       return;
     }
 
