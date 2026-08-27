@@ -1,5 +1,9 @@
 # AgentField Go SDK
 
+## Graceful shutdown
+
+Server agents notify the control plane, stop accepting requests, and drain in-flight executions on SIGTERM, SIGINT, or `POST /shutdown`. Set `AGENTFIELD_SHUTDOWN_TIMEOUT` to bare seconds (`30`) or a duration (`30s`, `5m`); the default is 30 seconds. `Config.ShutdownTimeout` takes precedence. In Kubernetes, set `terminationGracePeriodSeconds` higher than the drain timeout.
+
 The AgentField Go SDK provides idiomatic Go bindings for interacting with the AgentField control plane.
 
 ## Installation
