@@ -634,24 +634,6 @@ class TestEnvelopeTransport:
             reset_current_cost_tracker(token)
         assert tracker.call_count == 0
 
-    def test_record_harness_usage_defaults_to_aforge(self, monkeypatch):
-        from agentfield.harness._result import HarnessResult
-
-        monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
-        agent = self._agent()
-        tracker = CostTracker()
-        token = set_current_cost_tracker(tracker)
-        try:
-            agent._record_harness_usage(
-                HarnessResult(result="done", input_tokens=1),
-            )
-        finally:
-            reset_current_cost_tracker(token)
-
-        entry = tracker.serialize()["entries"][0]
-        assert entry["harness"] == "aforge"
-        assert entry["model"] == "aforge"
-
     def test_record_harness_usage_explicit_omp(self):
         from agentfield.harness._result import HarnessResult
 

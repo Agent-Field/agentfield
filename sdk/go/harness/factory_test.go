@@ -44,5 +44,5 @@ func TestBuildProvider_RejectsUnknownName(t *testing.T) {
 	assert.Nil(t, provider)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nope")
-	assert.True(t, strings.Contains(err.Error(), "supported: aforge, claude-code, codex, gemini, opencode"))
+	assert.True(t, strings.Contains(err.Error(), "supported: aforge, claude-code, codex, gemini, opencode, pi, omp"))
 }

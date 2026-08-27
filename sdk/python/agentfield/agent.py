@@ -3953,7 +3953,7 @@ class Agent(FastAPI):
 
     def _harness_provider_name(self) -> Optional[str]:
         cfg = getattr(self, "harness_config", None)
-        return (getattr(cfg, "provider", None) if cfg else None) or "omp"
+        return getattr(cfg, "provider", None) if cfg else None
 
     def _harness_model_name(self) -> Optional[str]:
         cfg = getattr(self, "harness_config", None)

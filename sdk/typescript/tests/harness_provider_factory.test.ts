@@ -49,10 +49,16 @@ describe('harness provider factory', () => {
     await expect(buildProvider({})).resolves.toBeInstanceOf(AforgeProvider);
   });
 
+  it('builds the additional pi and omp providers when named explicitly', async () => {
+    const { PiProvider, OMPProvider } = await import('../src/harness/providers/pi.js');
+    await expect(buildProvider({ provider: 'pi' })).resolves.toBeInstanceOf(PiProvider);
+    await expect(buildProvider({ provider: 'omp' })).resolves.toBeInstanceOf(OMPProvider);
+  });
+
   it('rejects genuinely unknown providers with the supported list', async () => {
     const config = { provider: 'nope' } as unknown as HarnessConfig;
     await expect(buildProvider(config)).rejects.toThrow(
-      'Unknown harness provider: "nope". Supported: aforge, claude-code, codex, gemini, opencode'
+      'Unknown harness provider: "nope". Supported: aforge, claude-code, codex, gemini, omp, opencode, pi'
     );
   });
 });

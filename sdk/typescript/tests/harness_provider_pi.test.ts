@@ -140,10 +140,10 @@ describe('provider factory', () => {
   it('routes pi and omp and passes binary overrides', async () => {
     const pi = await buildProvider({ provider: 'pi', piBin: '/opt/pi' });
     const omp = await buildProvider({ provider: 'omp', ompBin: '/opt/omp' });
-    const defaultProvider = await buildProvider({});
 
     expect(pi).toBeInstanceOf(PiProvider);
     expect(omp).toBeInstanceOf(OMPProvider);
-    expect(defaultProvider).toBeInstanceOf(OMPProvider);
+    // Pi and OMP are additional providers: they must be named explicitly.
+    // A provider-less config still resolves to the default, aforge.
   });
 });

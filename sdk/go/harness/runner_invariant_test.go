@@ -199,6 +199,9 @@ func TestInvariant_Runner_ProviderFactoryExhaustiveness(t *testing.T) {
 // TestInvariant_Runner_ProviderFactoryDefaultSelection verifies that an
 // empty provider name selects DefaultProvider instead of erroring.
 func TestInvariant_Runner_ProviderFactoryDefaultSelection(t *testing.T) {
+	// An ambient AGENTFIELD_HARNESS_PROVIDER would legitimately win over the
+	// built-in default; this invariant is about the no-configuration case.
+	t.Setenv(ProviderEnvVar, "")
 	prov, err := BuildProvider("", "")
 	require.NoError(t, err, "BuildProvider must not error for empty provider (selects default)")
 	require.NotNil(t, prov, "BuildProvider must return non-nil for empty provider (selects default)")
