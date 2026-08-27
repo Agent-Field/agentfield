@@ -2835,10 +2835,20 @@ class Agent(FastAPI):
                 # External cooperative cancel arrived (cancel dispatcher or
                 # outer task cancellation). Report cancelled status so the
                 # control plane sees a clean terminal transition.
+                shutdown_cancel = getattr(self, "_shutdown_cancelling", False)
                 payload = {
                     "status": "cancelled",
-                    "error": "cancelled_by_control_plane",
-                    "error_details": {"reason": "cancelled"},
+                    "error": (
+                        "cancelled during graceful shutdown"
+                        if shutdown_cancel
+                        else "cancelled_by_control_plane"
+                    ),
+                    "status_reason": (
+                        "shutdown timeout exceeded" if shutdown_cancel else "cancelled"
+                    ),
+                    "error_details": {
+                        "reason": "shutdown" if shutdown_cancel else "cancelled"
+                    },
                     "duration_ms": int((time.time() - start_time) * 1000),
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                     "execution_id": execution_id,

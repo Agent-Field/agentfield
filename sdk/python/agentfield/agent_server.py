@@ -15,6 +15,31 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 
+DEFAULT_SHUTDOWN_TIMEOUT = 30.0
+
+
+def parse_shutdown_timeout(value: object, default: float = DEFAULT_SHUTDOWN_TIMEOUT) -> float:
+    """Parse a shutdown budget expressed as seconds, ``Ns``, or ``Nm``."""
+    if value is None:
+        return default
+    raw = str(value).strip().lower()
+    multiplier = 1.0
+    if raw.endswith("s"):
+        raw = raw[:-1]
+    elif raw.endswith("m"):
+        raw = raw[:-1]
+        multiplier = 60.0
+    try:
+        parsed = float(raw) * multiplier
+        if parsed < 0:
+            raise ValueError
+        return parsed
+    except (TypeError, ValueError):
+        log_warn(
+            f"Invalid AGENTFIELD_SHUTDOWN_TIMEOUT={value!r}; using {default:g}s"
+        )
+        return default
+
 
 class AgentServer:
     """Server management functionality for AgentField Agent"""
@@ -28,6 +53,8 @@ class AgentServer:
         """
         self.agent = agent_instance
         self._in_flight_tasks: set[asyncio.Task] = set()
+        self._shutdown_timeout = DEFAULT_SHUTDOWN_TIMEOUT
+        self._uvicorn_server = None
 
     def _track_task(self, task: asyncio.Task) -> asyncio.Task:
         """Track an in-flight task until completion."""
@@ -403,7 +430,9 @@ class AgentServer:
                 if self.agent.dev_mode:
                     log_error(f"Registry clear error: {e}")
 
-            # Drain in-flight tasks, then force-cancel anything that misses the deadline.
+            await self._drain_reasoner_tasks(timeout_seconds)
+
+            # Drain server-owned housekeeping tasks too.
             tracked_tasks: set[asyncio.Task] = set(self._in_flight_tasks)
 
             current_task = asyncio.current_task()
@@ -445,6 +474,46 @@ class AgentServer:
                 log_error(f"Graceful shutdown error: {e}")
             # Fallback to immediate shutdown
             await self._immediate_shutdown()
+
+    async def _drain_reasoner_tasks(self, timeout_seconds: float) -> None:
+        """Wait for dispatched reasoners, then cancel and await terminal callbacks."""
+        current = asyncio.current_task()
+        tasks = {
+            task
+            for task in getattr(self.agent, "_background_tasks", set())
+            if task is not current and not task.done()
+        }
+        if not tasks:
+            return
+
+        done, pending = await asyncio.wait(tasks, timeout=max(0, timeout_seconds))
+        if pending:
+            self.agent._shutdown_cancelling = True
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        if self.agent.dev_mode:
+            log_debug(
+                f"Reasoner shutdown drain: done={len(done)} pending={len(pending)}"
+            )
+
+    def _begin_signal_shutdown(self, signum: int) -> None:
+        """Mark the node stopping before asking uvicorn to begin its drain."""
+        from agentfield.agent import AgentStatus
+
+        if not self.agent._shutdown_requested:
+            self.agent._shutdown_requested = True
+            self.agent._current_status = AgentStatus.OFFLINE
+            try:
+                self.agent.agentfield_handler.stop_heartbeat()
+            except Exception as exc:
+                log_warn(f"Failed to stop heartbeat during shutdown: {exc}")
+            try:
+                self.agent.client.notify_graceful_shutdown_sync(self.agent.node_id)
+            except Exception as exc:
+                log_warn(f"Failed to notify AgentField of shutdown: {exc}")
+        if self._uvicorn_server is not None:
+            self._uvicorn_server.handle_exit(signum, None)
 
     async def _immediate_shutdown(self):
         """
@@ -807,11 +876,26 @@ class AgentServer:
         async def internal_lifespan(app: FastAPI):
             # Add startup event handler for resilient lifecycle
             await startup_resilient_lifecycle()
+            loop = asyncio.get_running_loop()
+            installed_signals = []
+            if hasattr(loop, "add_signal_handler"):
+                for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
+                    try:
+                        loop.add_signal_handler(
+                            shutdown_signal,
+                            self._begin_signal_shutdown,
+                            shutdown_signal,
+                        )
+                        installed_signals.append(shutdown_signal)
+                    except (NotImplementedError, RuntimeError):
+                        pass
             try:
                 yield
             finally:
                 # Add shutdown event handler for cleanup
                 await shutdown_cleanup()
+                for shutdown_signal in installed_signals:
+                    loop.remove_signal_handler(shutdown_signal)
 
         existing_lifespan = self.agent.router.lifespan_context
 
@@ -910,6 +994,8 @@ class AgentServer:
         async def shutdown_cleanup():
             """Cleanup all resources when FastAPI shuts down"""
 
+            await self._drain_reasoner_tasks(self._shutdown_timeout)
+
             # Stop connection manager
             if self.agent.connection_manager:
                 await self.agent.connection_manager.stop()
@@ -931,6 +1017,14 @@ class AgentServer:
             clear_current_agent()
 
         # Configure uvicorn parameters based on environment and requirements
+        env_timeout = os.getenv("AGENTFIELD_SHUTDOWN_TIMEOUT")
+        configured_timeout = parse_shutdown_timeout(env_timeout)
+        explicit_timeout = kwargs.get("timeout_graceful_shutdown")
+        self._shutdown_timeout = (
+            configured_timeout
+            if env_timeout is not None
+            else parse_shutdown_timeout(explicit_timeout, configured_timeout)
+        )
         uvicorn_config = {
             "host": host,
             "port": port,
@@ -939,7 +1033,7 @@ class AgentServer:
             "access_log": access_log,
             "log_level": log_level,
             "ws": "websockets-sansio",
-            "timeout_graceful_shutdown": 30,  # Allow 30 seconds for graceful shutdown
+            "timeout_graceful_shutdown": configured_timeout,
             **kwargs,
         }
 
@@ -1012,7 +1106,23 @@ class AgentServer:
 
         try:
             # Start FastAPI server with production-ready configuration
-            uvicorn.run(self.agent, **uvicorn_config)
+            original_server = uvicorn.run.__globals__.get("Server")
+
+            if original_server is None:
+                uvicorn.run(self.agent, **uvicorn_config)
+            else:
+                owner = self
+
+                class CapturedServer(original_server):
+                    def __init__(captured_self, *args, **server_kwargs):
+                        super().__init__(*args, **server_kwargs)
+                        owner._uvicorn_server = captured_self
+
+                uvicorn.run.__globals__["Server"] = CapturedServer
+                try:
+                    uvicorn.run(self.agent, **uvicorn_config)
+                finally:
+                    uvicorn.run.__globals__["Server"] = original_server
         except OSError as e:
             if "Address already in use" in str(e):
                 log_error(
