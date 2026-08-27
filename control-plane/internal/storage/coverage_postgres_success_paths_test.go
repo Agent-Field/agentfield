@@ -637,6 +637,7 @@ func TestWorkflowCleanupAndTxInsertCoverage(t *testing.T) {
 
 func workflowExecutionDriverRow(executionID, status string, now time.Time) []driver.Value {
 	return []driver.Value{
+		int64(42),
 		"wf-scripted",
 		executionID,
 		"req-scripted",
@@ -684,7 +685,7 @@ func workflowExecutionDriverRow(executionID, status string, now time.Time) []dri
 }
 
 func workflowExecutionDriverResponse(executionID, status string, now time.Time) scriptedQueryResponse {
-	columns := append([]string(nil), workflowExecutionLifecycleColumns...)
+	columns := append([]string{"id"}, workflowExecutionLifecycleColumns...)
 	return scriptedQueryResponse{
 		columns: columns,
 		rows:    [][]driver.Value{workflowExecutionDriverRow(executionID, status, now)},

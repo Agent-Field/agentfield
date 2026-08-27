@@ -71,7 +71,7 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 // transaction will write the row back, "" for plain reads.
 func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DBTX, executionID string, suffix string) (*types.WorkflowExecution, error) {
 	query := `
-		SELECT workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
+		SELECT id, workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
 		       agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
 		       reasoner_id, input_data, output_data, input_size, output_size,
 		       status, started_at, completed_at, duration_ms,
@@ -96,7 +96,7 @@ func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DB
 	var approvalRequestID, approvalRequestURL, approvalStatus, approvalResponse, approvalCallbackURL sql.NullString
 	var approvalRequestedAt, approvalRespondedAt, approvalExpiresAt sql.NullTime
 	err := row.Scan(
-		&execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
+		&execution.ID, &execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
 		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID,
 		&execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID, &execution.WorkflowDepth,
 		&execution.ReasonerID, &inputData, &outputData,
