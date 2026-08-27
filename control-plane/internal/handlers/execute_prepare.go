@@ -17,22 +17,35 @@ import (
 )
 
 func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
+	return c.prepareExecutionWithAdmission(ctx, ginCtx, false)
+}
+
+func (c *executionController) prepareAsyncExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
+	return c.prepareExecutionWithAdmission(ctx, ginCtx, true)
+}
+
+func (c *executionController) prepareExecutionWithAdmission(ctx context.Context, ginCtx *gin.Context, acquireSlot bool) (*preparedExecution, error) {
 	targetParam := ginCtx.Param("target")
 	var req ExecuteRequest
 	if err := ginCtx.ShouldBindJSON(&req); err != nil {
 		return nil, fmt.Errorf("invalid request body: %w", err)
 	}
-	return c.prepareExecutionForTarget(
+	return c.prepareExecutionForTargetWithAdmission(
 		ctx,
 		targetParam,
 		req,
 		readExecutionHeaders(ginCtx),
 		middleware.GetVerifiedCallerDID(ginCtx),
 		middleware.GetTargetDID(ginCtx),
+		acquireSlot,
 	)
 }
 
 func (c *executionController) prepareExecutionForTarget(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string) (*preparedExecution, error) {
+	return c.prepareExecutionForTargetWithAdmission(ctx, targetParam, req, headers, callerDID, targetDID, false)
+}
+
+func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string, acquireSlot bool) (_ *preparedExecution, retErr error) {
 	target, err := parseTarget(targetParam)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
@@ -125,6 +138,20 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 		return nil, err
 	}
 	target.TargetType = targetType
+
+	llmEndpoint := extractRequestedLLMEndpoint(req)
+	slotAcquired := false
+	if acquireSlot {
+		if err := CheckExecutionPreconditions(target.NodeID, llmEndpoint); err != nil {
+			return nil, err
+		}
+		slotAcquired = true
+		defer func() {
+			if retErr != nil && slotAcquired {
+				ReleaseExecutionSlot(target.NodeID)
+			}
+		}()
+	}
 
 	runID := headers.runID
 	if runID == "" {
@@ -229,7 +256,7 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 		agent:                   agent,
 		target:                  target,
 		targetType:              targetType,
-		llmEndpoint:             extractRequestedLLMEndpoint(req),
+		llmEndpoint:             llmEndpoint,
 		webhookRegistered:       webhookRegistered,
 		webhookError:            webhookError,
 		callerDID:               callerDID,
