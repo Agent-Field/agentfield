@@ -672,7 +672,7 @@ export class Agent {
     if (options.handleSignals !== false) this.installSignalHandlers();
   }
 
-  async shutdown(): Promise<void> {
+  shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shutdownPromise = this.performShutdown();
     return this.shutdownPromise;
