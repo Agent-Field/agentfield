@@ -241,3 +241,19 @@ When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution valu
   harness session. The SDKs set it to `1` for a first-level child and increment
   an inherited numeric value for nested sessions. An explicit per-call `env`
   value wins over the derived depth.
+
+### Tracing (control plane)
+
+- `AGENTFIELD_TRACING_ENABLED`: Set to `true` or `1` to enable tracing. Setting any of the endpoint variables below also enables it.
+- `AGENTFIELD_TRACING_EXPORTER`: `otlp-http` (default) or `otlp-grpc`. Any other value is rejected at startup.
+- `AGENTFIELD_TRACING_ENDPOINT`: AgentField-native endpoint setting (the env equivalent of `features.tracing.endpoint` in YAML).
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: Standard generic OTLP endpoint.
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`: Standard trace-specific OTLP endpoint.
+- `AGENTFIELD_TRACING_INSECURE`: Set to `true` or `1` to force plaintext transport for a bare `host:port` endpoint. An explicit `http://` URL is already plaintext; `https://` retains TLS.
+- `OTEL_SERVICE_NAME`: Service name attached to exported spans (default `agentfield`).
+
+Endpoint precedence, highest first: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`, then `AGENTFIELD_TRACING_ENDPOINT`. The default when none is set is `localhost:4318`.
+
+Each endpoint accepts either a bare `host:port` or a full `http://` / `https://` URL; any other scheme is rejected at startup. For HTTP export a URL without a path sends the trace signal to `/v1/traces`.
+
+For a local OpenTelemetry Collector, use `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. For Langfuse through an OTel Collector, point this variable at the collector's OTLP/HTTP listener and configure the collector's authenticated Langfuse export pipeline; use `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces` when specifying the trace signal URL directly.
