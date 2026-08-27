@@ -263,12 +263,17 @@ func resolveExecutionNoteAgentIDByDID(ctx context.Context, storageProvider Execu
 	return "", nil
 }
 
-func ensureExecutionNoteReadOwnership(callerAgentID string, execution *types.Execution) error {
+func ensureExecutionNoteReadOwnership(callerAgentID string, apiKeyOperator bool, execution *types.Execution) error {
 	ownerAgentID := strings.TrimSpace(execution.AgentNodeID)
 	if ownerAgentID == "" {
 		return &executionNoteAuthorizationError{message: "execution owner is required to read notes"}
 	}
 
+	// An authenticated API-key caller without an agent identity is an operator.
+	// When an agent identity is present, retain owner scoping.
+	if callerAgentID == "" && apiKeyOperator {
+		return nil
+	}
 	if callerAgentID == "" {
 		return &executionNoteAuthorizationError{message: "caller agent identity is required to read notes for this execution"}
 	}
@@ -314,13 +319,6 @@ func GetExecutionNotesHandler(storageProvider ExecutionNoteStorage, ownershipEnf
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to resolve caller identity: %v", resolveErr)})
 				return
 			}
-			if callerAgentID == "" {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":   "execution_ownership_mismatch",
-					"message": "caller agent identity is required to read notes for this execution",
-				})
-				return
-			}
 		}
 
 		// Get the execution
@@ -336,7 +334,8 @@ func GetExecutionNotesHandler(storageProvider ExecutionNoteStorage, ownershipEnf
 		}
 
 		if ownershipEnforced {
-			if err := ensureExecutionNoteReadOwnership(callerAgentID, execution); err != nil {
+			authLevel, _ := c.Get("auth_level")
+			if err := ensureExecutionNoteReadOwnership(callerAgentID, authLevel == "api_key", execution); err != nil {
 				var authzErr *executionNoteAuthorizationError
 				if errors.As(err, &authzErr) {
 					c.JSON(http.StatusForbidden, gin.H{
