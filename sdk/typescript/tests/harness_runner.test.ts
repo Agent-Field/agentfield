@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import type { HarnessConfig, RawResult } from '../src/harness/types.js';
+import type { HarnessConfig, HarnessOptions, RawResult } from '../src/harness/types.js';
 import type { HarnessProvider } from '../src/harness/providers/base.js';
 import { createMetrics, createRawResult } from '../src/harness/types.js';
 import { getOutputPath } from '../src/harness/schema.js';
@@ -99,6 +99,29 @@ describe('harness runner', () => {
       expect(projectDir).not.toBe(cwd);
     }
   );
+
+  it('uses snake_case project_dir for schema instructions and codex execution', async () => {
+    const projectDir = makeTempDir();
+    const cwd = makeTempDir();
+    vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+    const runner = new HarnessRunner();
+    await runner.run('do it', {
+      schema: z.object({ answer: z.string() }),
+      provider: 'codex',
+      project_dir: projectDir,
+      cwd,
+    } as unknown as HarnessOptions);
+
+    const [cmd, runOptions] = vi.mocked(cli.runCli).mock.calls[0];
+    const prompt = cmd[cmd.length - 1];
+    const outputPath = prompt?.match(/(\S*\.agentfield_output\.json)/)?.[1];
+
+    expect(outputPath).toBeDefined();
+    expect(path.relative(projectDir, outputPath as string)).not.toMatch(/^\.\.(?:[/\\]|$)/);
+    expect(runOptions?.cwd).toBe(projectDir);
+    expect(projectDir).not.toBe(cwd);
+  });
 
   it('resolveOptions merges config with per-call overrides', () => {
     const cfg: HarnessConfig = {
