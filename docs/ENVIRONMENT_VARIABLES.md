@@ -112,8 +112,9 @@ The telemetry payload does not include prompts, inputs, outputs, logs, secrets, 
 ### Miscellaneous control-plane knobs
 
 - `AGENTFIELD_MAX_CONCURRENT_PER_AGENT` (default: `0`): Maximum concurrent executions dispatched to one agent; `0` means unlimited.
-- `AGENTFIELD_EXEC_ASYNC_WORKERS` (default: number of CPUs): Worker count for asynchronous execution and restart jobs; non-positive values use the default.
-- `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): In-memory asynchronous execution queue capacity; non-positive values use the default.
+- `AGENTFIELD_EXEC_ASYNC_WORKERS` (default: the greater of the available CPU count and `16`): Worker count for asynchronous execution and restart jobs, which are I/O-bound; non-positive values use the default.
+- `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): Maximum number of asynchronous executions waiting for a worker; non-positive values use the default. Requests arriving once the queue is saturated are rejected with `503`, a `Retry-After` header and a `retry_after` field, and no execution row is persisted for them.
+- `AGENTFIELD_MAX_EXECUTE_BODY_BYTES` (default: `33554432`, 32 MiB): Maximum request body size, in bytes, for POST routes under `/api/v1/execute`. Oversize requests are rejected with `413` before any execution is persisted; other routes are not capped by this setting.
 - `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control plane HTTP server during shutdown.
 - `AGENTFIELD_AGENT_RESTART_GRACE` (default: `15s`): How long an execution waits for an agent process to return during a coordinated restart; a negative duration disables the wait.
 
