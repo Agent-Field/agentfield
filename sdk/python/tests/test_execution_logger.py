@@ -1,4 +1,8 @@
 import json
+import io
+import sys
+from unittest.mock import AsyncMock, Mock
+
 import pytest
 
 from agentfield.execution_context import (
@@ -7,6 +11,8 @@ from agentfield.execution_context import (
     set_execution_context,
 )
 from agentfield.logger import log_execution, log_info, AgentFieldLogger
+from agentfield.lock_utils import LockTimeoutError
+from agentfield.node_logs import _TeeTextIO
 
 
 @pytest.mark.unit
@@ -155,10 +161,35 @@ async def test_workflow_lifecycle_logs_emit_execution_events(monkeypatch):
     assert captured[1]["attributes"]["result"] == {"ok": True}
     assert captured[2]["attributes"]["error"] == "boom"
 
+
+@pytest.mark.asyncio
+async def test_notify_call_start_continues_when_capture_ring_lock_fails(monkeypatch):
+    from agentfield.agent_workflow import AgentWorkflow
+    from tests.helpers import StubAgent
+
+    ring = Mock()
+    ring.append.side_effect = LockTimeoutError("node_logs", 30)
+    tee = _TeeTextIO("stdout", io.StringIO(), ring, max_line_bytes=1024)
+    monkeypatch.setattr(sys, "stdout", tee)
+    workflow = AgentWorkflow(StubAgent())
+    workflow.fire_and_forget_update = AsyncMock()
+    context = ExecutionContext.create_new(workflow.agent.node_id, "root")
+    context.reasoner_name = "sample_reasoner"
+
+    await workflow.notify_call_start(
+        context.execution_id,
+        context,
+        "sample_reasoner",
+        {"value": 1},
+    )
+
+    workflow.fire_and_forget_update.assert_awaited_once()
+
+
 @pytest.fixture
 def base_logger(monkeypatch):
     """
-    Initializes an AgentFieldLogger with environment overrides to validate 
+    Initializes an AgentFieldLogger with environment overrides to validate
     core observability and data-handling logic.
     """
     monkeypatch.setenv("AGENTFIELD_LOG_LEVEL", "DEBUG")
@@ -166,40 +197,47 @@ def base_logger(monkeypatch):
     monkeypatch.setenv("AGENTFIELD_LOG_TRUNCATE", "50")
     monkeypatch.setenv("AGENTFIELD_LOG_TRACKING", "true")
     monkeypatch.setenv("AGENTFIELD_LOG_FIRE", "true")
-    
+
     logger = AgentFieldLogger(name="telemetry")
     logger.logger.propagate = True
     return logger
+
 
 @pytest.mark.unit
 def test_heartbeat_event(base_logger, caplog):
     base_logger.heartbeat("Agent pulsing", status="nominal")
     assert "Agent pulsing" in caplog.text
 
+
 @pytest.mark.unit
 def test_logger_track_output(base_logger, caplog):
     base_logger.track("token_usage", count=500)
     assert "token_usage" in caplog.text
+
 
 @pytest.mark.unit
 def test_logger_fire_output(base_logger, caplog):
     base_logger.fire("node_transition", target="reasoning_node")
     assert "node_transition" in caplog.text
 
+
 @pytest.mark.unit
 def test_logger_debug_output(base_logger, caplog):
     base_logger.debug("Debugging logic")
     assert "Debugging" in caplog.text
+
 
 @pytest.mark.unit
 def test_logger_security_output(base_logger, caplog):
     base_logger.security("Sanitized keys", level="HIGH")
     assert "Sanitized" in caplog.text
 
+
 @pytest.mark.unit
 def test_logger_network_output(base_logger, caplog):
     base_logger.network("GET https://api.openai.com", method="GET")
     assert "api.openai.com" in caplog.text
+
 
 @pytest.mark.unit
 def test_logger_severity_levels(base_logger, caplog):
@@ -209,7 +247,8 @@ def test_logger_severity_levels(base_logger, caplog):
     out = caplog.text
     assert "Warning" in out
     assert "Error" in out
-    assert "Failure" in out 
+    assert "Failure" in out
+
 
 @pytest.mark.unit
 def test_logger_success_and_setup(base_logger, caplog):
@@ -218,7 +257,9 @@ def test_logger_success_and_setup(base_logger, caplog):
     out = caplog.text
     assert "Operation" in out and "Environment" in out
 
+
 # --- FORMATTING & PAYLOAD EDGE CASES ---
+
 
 @pytest.mark.unit
 def test_truncate_message_at_limit(base_logger):
@@ -228,11 +269,13 @@ def test_truncate_message_at_limit(base_logger):
     assert len(truncated) == 53
     assert truncated.endswith("...")
 
+
 @pytest.mark.unit
 def test_logger_short_message_handling(base_logger):
     """Verifies that messages under the truncate limit are untouched"""
     msg = "Short"
     assert base_logger._truncate_message(msg) == "Short"
+
 
 @pytest.mark.unit
 def test_format_payload_hides_by_default(monkeypatch):
@@ -243,6 +286,7 @@ def test_format_payload_hides_by_default(monkeypatch):
     formatted = logger._format_payload(test_data)
     assert formatted == "[payload hidden - set AGENTFIELD_LOG_PAYLOADS=true to show]"
 
+
 @pytest.mark.unit
 def test_format_payload_shows_when_enabled(base_logger):
     """Verifies AGENTFIELD_LOG_PAYLOADS=true -> JSON string"""
@@ -250,6 +294,7 @@ def test_format_payload_shows_when_enabled(base_logger):
     formatted = base_logger._format_payload(test_data)
     decoded = json.loads(formatted)
     assert decoded["id"] == "123"
+
 
 @pytest.mark.unit
 def test_format_payload_handles_non_serializable(base_logger):
