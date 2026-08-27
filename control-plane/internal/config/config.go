@@ -209,6 +209,10 @@ type NodeHealthConfig struct {
 	// for a few seconds but the control plane has not noticed yet.
 	// 0 = default 15s. Set to a negative duration to disable the wait.
 	AgentRestartGrace time.Duration `yaml:"agent_restart_grace" mapstructure:"agent_restart_grace"`
+	// AgentDrainGrace delays instance-scoped orphan cleanup after a replacement
+	// registers, allowing the departing process to finish accepted work.
+	// 0 = default 60s. Set to a negative duration to disable deferred cleanup.
+	AgentDrainGrace time.Duration `yaml:"agent_drain_grace" mapstructure:"agent_drain_grace"`
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
@@ -668,6 +672,11 @@ func ApplyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("AGENTFIELD_AGENT_RESTART_GRACE"); val != "" {
 		if d, err := time.ParseDuration(val); err == nil {
 			cfg.AgentField.NodeHealth.AgentRestartGrace = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_AGENT_DRAIN_GRACE"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.AgentDrainGrace = d
 		}
 	}
 

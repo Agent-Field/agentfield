@@ -652,3 +652,12 @@ func TestAgentRestartGrace(t *testing.T) {
 		}
 	})
 }
+
+func TestAgentDrainGraceFromEnvironment(t *testing.T) {
+	t.Setenv("AGENTFIELD_AGENT_DRAIN_GRACE", "75s")
+	cfg := Config{}
+	ApplyEnvOverrides(&cfg)
+	if cfg.AgentField.NodeHealth.AgentDrainGrace != 75*time.Second {
+		t.Fatalf("expected 75s drain grace, got %s", cfg.AgentField.NodeHealth.AgentDrainGrace)
+	}
+}

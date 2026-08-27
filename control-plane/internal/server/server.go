@@ -168,6 +168,13 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	if grace := cfg.AgentField.NodeHealth.AgentRestartGrace; grace != 0 {
 		handlers.SetAgentRestartGrace(grace)
 	}
+	if grace := cfg.AgentField.NodeHealth.AgentDrainGrace; grace != 0 {
+		handlers.SetAgentDrainGrace(grace)
+	}
+	logger.Logger.Info().
+		Dur("agent_restart_grace", handlers.AgentRestartGrace()).
+		Dur("agent_drain_grace", handlers.AgentDrainGrace()).
+		Msg("configured agent restart and drain grace windows")
 
 	Router := newRouter()
 
