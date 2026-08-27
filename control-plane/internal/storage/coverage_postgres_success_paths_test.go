@@ -150,9 +150,13 @@ func (scriptedDriver) Open(name string) (driver.Conn, error) {
 	return &scriptedConn{state: raw.(*scriptedSQLState)}, nil
 }
 
-func (c *scriptedConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("prepare not supported") }
-func (c *scriptedConn) Close() error                        { return nil }
-func (c *scriptedConn) Begin() (driver.Tx, error)          { return c.BeginTx(context.Background(), driver.TxOptions{}) }
+func (c *scriptedConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not supported")
+}
+func (c *scriptedConn) Close() error { return nil }
+func (c *scriptedConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
 
 func (c *scriptedConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
 	if err := c.state.nextBegin(); err != nil {
@@ -384,7 +388,7 @@ func TestPostgresVectorStoreSuccessPaths(t *testing.T) {
 				name: "bad embedding element",
 				response: scriptedQueryResponse{
 					columns: []string{"embedding", "metadata", "created_at", "updated_at"},
-					rows: [][]driver.Value{{"[bad]", []byte(`{}`), now, now}},
+					rows:    [][]driver.Value{{"[bad]", []byte(`{}`), now, now}},
 				},
 				wantErr: "parse embedding element",
 			},
@@ -392,7 +396,7 @@ func TestPostgresVectorStoreSuccessPaths(t *testing.T) {
 				name: "bad metadata",
 				response: scriptedQueryResponse{
 					columns: []string{"embedding", "metadata", "created_at", "updated_at"},
-					rows: [][]driver.Value{{"[1,2]", []byte(`{`), now, now}},
+					rows:    [][]driver.Value{{"[1,2]", []byte(`{`), now, now}},
 				},
 				wantErr: "unmarshal metadata",
 			},
@@ -714,8 +718,8 @@ func TestWorkflowExecutionRetryCoverage(t *testing.T) {
 					queries: []scriptedQueryResponse{
 						{err: sql.ErrNoRows},
 					},
-					execs:   []scriptedExecResponse{{}},
-					commit:  []error{errors.New("database is locked")},
+					execs:  []scriptedExecResponse{{}},
+					commit: []error{errors.New("database is locked")},
 				},
 				wantErr: "failed to commit workflow execution transaction",
 			},
