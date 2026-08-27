@@ -307,3 +307,55 @@ func TestLocalStorageCleanupOldExecutions(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, removed)
 }
+
+func TestCleanupOldExecutionsRetentionContract(t *testing.T) {
+	ctx := context.Background()
+	ls := NewLocalStorage(LocalStorageConfig{})
+	cfg := StorageConfig{Mode: "local", Local: LocalStorageConfig{DatabasePath: filepath.Join(t.TempDir(), "retention.db"), KVStorePath: filepath.Join(t.TempDir(), "retention.bolt")}}
+	require.NoError(t, ls.Initialize(ctx, cfg))
+	t.Cleanup(func() { _ = ls.Close(ctx) })
+	old := time.Now().UTC().Add(-96 * time.Hour)
+	terminal := []string{"succeeded", "failed", "cancelled", "timeout", "completed"}
+	active := []string{"running", "pending", "queued", "waiting", "paused"}
+	all := append(append([]string{}, terminal...), active...)
+	for _, status := range all {
+		id := "record-" + status
+		input, result := "payload://input-"+status, "payload://result-"+status
+		exec := &types.Execution{ExecutionID: id, RunID: "run-" + status, AgentNodeID: "agent", ReasonerID: "reasoner", NodeID: "node", Status: status, StartedAt: old, CompletedAt: &old, CreatedAt: old, UpdatedAt: old, InputURI: &input, ResultURI: &result}
+		require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
+		wf := &types.WorkflowExecution{WorkflowID: "wf-" + status, ExecutionID: "workflow-" + status, AgentFieldRequestID: "request-" + status, AgentNodeID: "agent", ReasonerID: "reasoner", Status: status, StartedAt: old, CompletedAt: &old, CreatedAt: old, UpdatedAt: old, WorkflowTags: []string{}}
+		require.NoError(t, ls.StoreWorkflowExecution(ctx, wf))
+	}
+
+	deleted, err := ls.CleanupOldExecutions(ctx, 0, 100)
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+	for _, table := range []string{"executions", "workflow_executions", "workflow_runs", "workflow_steps"} {
+		var count int
+		require.NoError(t, ls.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count))
+		if table == "executions" || table == "workflow_executions" {
+			require.Equal(t, len(all), count)
+		}
+	}
+
+	uris, err := ls.ListExpiredExecutionPayloadURIs(ctx, 72*time.Hour, 100)
+	require.NoError(t, err)
+	require.Len(t, uris, len(terminal)*2)
+	deleted, err = ls.CleanupOldExecutions(ctx, 72*time.Hour, 100)
+	require.NoError(t, err)
+	require.Equal(t, len(terminal)*2, deleted)
+	for _, status := range terminal {
+		var count int
+		require.NoError(t, ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM executions WHERE execution_id = ?`, "record-"+status).Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_executions WHERE execution_id = ?`, "workflow-"+status).Scan(&count))
+		require.Zero(t, count)
+	}
+	for _, status := range active {
+		var count int
+		require.NoError(t, ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM executions WHERE execution_id = ?`, "record-"+status).Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_executions WHERE execution_id = ?`, "workflow-"+status).Scan(&count))
+		require.Equal(t, 1, count)
+	}
+}
