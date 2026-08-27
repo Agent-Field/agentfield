@@ -8,7 +8,7 @@ import pytest
 
 from agentfield.agent import Agent
 from agentfield.agent_field_handler import AgentFieldHandler
-from agentfield.agent_server import AgentServer
+from agentfield.agent_server import AgentServer, parse_shutdown_timeout
 from agentfield.types import AgentStatus
 from tests.helpers import DummyAgentFieldClient, StubAgent
 
@@ -83,7 +83,23 @@ async def test_agent_stop_skips_shutdown_notification_when_not_connected():
     agent._cleanup_async_resources.assert_awaited_once()
 
 
-def test_fast_lifecycle_signal_handler_marks_shutdown_and_notifies(monkeypatch):
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("45", 45.0), ("45s", 45.0), ("2m", 120.0)],
+)
+def test_shutdown_timeout_parses_seconds_and_minutes(value, expected):
+    assert parse_shutdown_timeout(value) == expected
+
+
+def test_shutdown_timeout_invalid_uses_default_and_warns(monkeypatch):
+    warning = Mock()
+    monkeypatch.setattr("agentfield.agent_server.log_warn", warning)
+
+    assert parse_shutdown_timeout("eventually") == 30.0
+    warning.assert_called_once()
+
+
+def test_legacy_fast_lifecycle_signal_handler_marks_shutdown_and_notifies(monkeypatch):
     agent = make_shutdown_agent()
     handler = AgentFieldHandler(agent)
     registered = {}
@@ -189,6 +205,56 @@ async def test_graceful_shutdown_cancels_in_flight_tasks_within_deadline(monkeyp
         await server._graceful_shutdown(timeout_seconds=0)
 
     assert all(task.done() for task in tasks)
+
+
+@pytest.mark.asyncio
+async def test_reasoner_background_task_completes_and_callback_precedes_cleanup():
+    agent = make_shutdown_agent()
+    agent._background_tasks = set()
+    server = AgentServer(agent)
+    events = []
+
+    async def dispatched_reasoner():
+        await asyncio.sleep(0)
+        events.append("callback:succeeded")
+
+    task = asyncio.create_task(dispatched_reasoner())
+    agent._background_tasks.add(task)
+    task.add_done_callback(agent._background_tasks.discard)
+
+    await server._drain_reasoner_tasks(1)
+    events.append("client:close")
+
+    assert events == ["callback:succeeded", "client:close"]
+
+
+@pytest.mark.asyncio
+async def test_reasoner_background_task_cancelled_at_budget_reports_shutdown():
+    agent = make_shutdown_agent()
+    agent._background_tasks = set()
+    agent._shutdown_cancelling = False
+    server = AgentServer(agent)
+    terminal = asyncio.Event()
+    payload = {}
+
+    async def dispatched_reasoner():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            payload.update(status="cancelled", error="cancelled during shutdown")
+            terminal.set()
+            raise
+
+    task = asyncio.create_task(dispatched_reasoner())
+    agent._background_tasks.add(task)
+    task.add_done_callback(agent._background_tasks.discard)
+    await asyncio.sleep(0)
+
+    await server._drain_reasoner_tasks(0)
+
+    assert agent._shutdown_cancelling is True
+    assert terminal.is_set()
+    assert payload == {"status": "cancelled", "error": "cancelled during shutdown"}
 
 
 @pytest.mark.asyncio

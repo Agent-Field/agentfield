@@ -334,6 +334,29 @@ func TestAssessRecordedProcessUnknownIdentityMatrix(t *testing.T) {
 	}
 }
 
+func TestAgentShutdownBudgetUsesConfiguredProcessEnvironment(t *testing.T) {
+	pid := 123
+	entry := InstalledPackage{Runtime: RuntimeInfo{PID: &pid}}
+
+	got := agentShutdownBudgetWith(entry, func(int) []string {
+		return []string{"OTHER=value", "AGENTFIELD_SHUTDOWN_TIMEOUT=2m"}
+	})
+
+	if got != 2*time.Minute {
+		t.Fatalf("budget=%s, want 2m", got)
+	}
+}
+
+func TestAgentShutdownBudgetDefaultsForMissingOrInvalidValue(t *testing.T) {
+	pid := 123
+	entry := InstalledPackage{Runtime: RuntimeInfo{PID: &pid}}
+	for _, env := range [][]string{nil, {"AGENTFIELD_SHUTDOWN_TIMEOUT=eventually"}} {
+		if got := agentShutdownBudgetWith(entry, func(int) []string { return env }); got != 30*time.Second {
+			t.Fatalf("budget=%s, want 30s for env %v", got, env)
+		}
+	}
+}
+
 func TestWindowsStopLadderWithInjectedProcessPrimitives(t *testing.T) {
 	t.Run("graceful taskkill succeeds without force", func(t *testing.T) {
 		forced := false
