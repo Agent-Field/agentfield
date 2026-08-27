@@ -81,16 +81,18 @@ var providerEnvVars = []struct {
 
 // harnessProviders is the canonical list of CLIs `app.harness()` knows how to drive.
 var harnessProviders = []struct {
-	Name      string   // value passed to provider= in app.harness()
-	Binary    string   // executable name to look up on PATH
-	ProbeArgs []string // minimal one-shot invocation used by `--probe`
+	Name       string   // value passed to provider= in app.harness()
+	Binary     string   // executable name to look up on PATH
+	ProbeArgs  []string // minimal one-shot invocation used by `--probe`
+	ProbeStdin string   // prompt fed over stdin, mirroring how the SDK adapters invoke this CLI
 }{
 	{Name: "claude-code", Binary: "claude", ProbeArgs: []string{"-p", "Say OK"}},
 	{Name: "codex", Binary: "codex", ProbeArgs: []string{"exec", "Say OK"}},
 	{Name: "gemini", Binary: "gemini", ProbeArgs: []string{"-p", "Say OK"}},
 	{Name: "opencode", Binary: "opencode", ProbeArgs: []string{"run", "Say OK"}},
-	{Name: "pi", Binary: "pi", ProbeArgs: []string{"--print", "Say OK"}},
-	{Name: "omp", Binary: "omp", ProbeArgs: []string{"--print", "Say OK"}},
+	// Keep pi/omp stdin prompt delivery coupled to the SDK adapters.
+	{Name: "pi", Binary: "pi", ProbeArgs: []string{"--print", "--mode", "json"}, ProbeStdin: "Say OK"},
+	{Name: "omp", Binary: "omp", ProbeArgs: []string{"--print", "--mode", "json"}, ProbeStdin: "Say OK"},
 }
 
 // harnessProbeTimeout bounds a single provider smoke test. Coding-agent CLIs
@@ -177,16 +179,16 @@ func runHarnessProbes(report DoctorReport) map[string]HarnessProbeResult {
 		if !report.HarnessProviders[h.Name].Available {
 			continue
 		}
-		results[h.Name] = probeHarnessProvider(h.Name, h.Binary, h.ProbeArgs, harnessProbeTimeout)
+		results[h.Name] = probeHarnessProvider(h.Name, h.Binary, h.ProbeArgs, h.ProbeStdin, harnessProbeTimeout)
 	}
 	return results
 }
 
 // probeHarnessProvider runs one provider CLI's minimal one-shot invocation and
 // classifies the outcome.
-func probeHarnessProvider(name, binary string, args []string, timeout time.Duration) HarnessProbeResult {
+func probeHarnessProvider(name, binary string, args []string, stdin string, timeout time.Duration) HarnessProbeResult {
 	start := time.Now()
-	stdout, stderr, exitCode, timedOut := runProbeCommand(binary, args, timeout)
+	stdout, stderr, exitCode, timedOut := runProbeCommand(binary, args, stdin, timeout)
 	status := classifyProbe(exitCode, stdout, timedOut)
 
 	result := HarnessProbeResult{
@@ -209,11 +211,14 @@ func probeHarnessProvider(name, binary string, args []string, timeout time.Durat
 // runProbeCommand executes bin with args under a timeout, returning stdout,
 // stderr, the process exit code, and whether the timeout fired. A timeout is
 // reported distinctly so it is never misclassified as a plain error.
-func runProbeCommand(bin string, args []string, timeout time.Duration) (stdout, stderr string, exitCode int, timedOut bool) {
+func runProbeCommand(bin string, args []string, stdin string, timeout time.Duration) (stdout, stderr string, exitCode int, timedOut bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, args...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	var outBuf, errBuf strings.Builder
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf

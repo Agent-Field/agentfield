@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -40,6 +41,30 @@ func TestClassifyProbe(t *testing.T) {
 	}
 }
 
+func TestHarnessProviders_ProbeInputContract(t *testing.T) {
+	wantStdinArgs := []string{"--print", "--mode", "json"}
+	for _, provider := range harnessProviders {
+		switch provider.Name {
+		case "pi", "omp":
+			if !reflect.DeepEqual(provider.ProbeArgs, wantStdinArgs) {
+				t.Errorf("%s ProbeArgs = %v, want %v", provider.Name, provider.ProbeArgs, wantStdinArgs)
+			}
+			if provider.ProbeStdin == "" {
+				t.Errorf("%s ProbeStdin must be non-empty", provider.Name)
+			}
+			for _, arg := range provider.ProbeArgs {
+				if arg == provider.ProbeStdin {
+					t.Errorf("%s prompt %q must not appear in ProbeArgs", provider.Name, provider.ProbeStdin)
+				}
+			}
+		default:
+			if provider.ProbeStdin != "" {
+				t.Errorf("positional-prompt provider %s ProbeStdin = %q, want empty", provider.Name, provider.ProbeStdin)
+			}
+		}
+	}
+}
+
 // End-to-end wiring of runProbeCommand -> classifyProbe over real processes, so
 // each classification path is exercised through the actual command runner.
 func TestProbeHarnessProvider_RealProcesses(t *testing.T) {
@@ -47,20 +72,23 @@ func TestProbeHarnessProvider_RealProcesses(t *testing.T) {
 		name    string
 		bin     string
 		args    []string
+		stdin   string
 		timeout time.Duration
 		want    string
 	}{
-		{"ok", "echo", []string{"OK"}, 5 * time.Second, "ok"},
-		{"empty", "true", nil, 5 * time.Second, "empty"},
-		{"error", "false", nil, 5 * time.Second, "error"},
-		{"timeout", "sleep", []string{"5"}, 200 * time.Millisecond, "timeout"},
+		{"ok", "echo", []string{"OK"}, "", 5 * time.Second, "ok"},
+		{"empty", "true", nil, "", 5 * time.Second, "empty"},
+		{"error", "false", nil, "", 5 * time.Second, "error"},
+		{"timeout", "sleep", []string{"5"}, "", 200 * time.Millisecond, "timeout"},
+		{"stdin", "cat", nil, "Say OK", 5 * time.Second, "ok"},
+		{"empty stdin", "cat", nil, "", 5 * time.Second, "empty"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := exec.LookPath(tc.bin); err != nil {
 				t.Skipf("%s not available: %v", tc.bin, err)
 			}
-			res := probeHarnessProvider("prov-"+tc.name, tc.bin, tc.args, tc.timeout)
+			res := probeHarnessProvider("prov-"+tc.name, tc.bin, tc.args, tc.stdin, tc.timeout)
 			if res.Status != tc.want {
 				t.Errorf("status = %q, want %q (detail=%q)", res.Status, tc.want, res.Detail)
 			}
