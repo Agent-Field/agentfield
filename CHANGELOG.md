@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.135] - 2026-08-27
+
+## [0.1.135-rc.7] - 2026-08-27
+
+
+### Fixed
+
+- Fix(control-plane): complete a synchronous execute from the stored record when no terminal event arrives (#976)
+
+POST /api/v1/execute/<node>.<reasoner> could block for the full 90 s and
+then fail with "execution timeout" while the execution had already
+succeeded and its result was stored.
+
+When the agent acknowledges with 202, the sync handler waits on the
+execution event bus. Two SDK callbacks then race: the reasoner.completed
+workflow event, which WorkflowExecutionEventHandler persists as the
+terminal status without publishing a lifecycle event, and the /status
+callback, which does publish one. If the workflow event lands first, the
+/status callback becomes an idempotent terminal->terminal update and the
+event the waiter is listening for is never published. The pre-subscribe
+store check cannot help: the record is still running at that instant.
+
+Poll the store as a fallback (completionPollInterval, 500 ms) so the wait
+is bounded by the interval rather than by callback ordering. The event
+bus remains the fast path; no new events are published, so nothing
+double-fires.
+
+The waiter is byte-identical back to v0.1.134 and the hang reproduces
+with that SDK against today's control plane; found during the
+post-merge regression sweep, unrelated to the merged changes.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a485abd)
+
 ## [0.1.135-rc.6] - 2026-08-26
 
 

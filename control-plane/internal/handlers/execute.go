@@ -1357,9 +1357,24 @@ func (c *executionController) publishExecutionStartedEvent(plan *preparedExecuti
 	)
 }
 
+// completionPollInterval is how often waitForExecutionCompletion re-reads the
+// execution record while it waits on the event bus. Var, not const, so tests
+// can shrink it.
+var completionPollInterval = 500 * time.Millisecond
+
 // waitForExecutionCompletion waits for an execution to complete by subscribing to the event bus.
 // It returns the completed execution record or an error if the execution fails or times out.
 // This is used when agents return HTTP 202 (async acknowledgment) but the sync endpoint needs to wait for completion.
+//
+// The event bus is the fast path, but not every writer of a terminal status
+// publishes a lifecycle event: the SDK's reasoner.completed workflow event
+// persists the terminal state through WorkflowExecutionEventHandler without
+// one, and when the authoritative /status callback lands afterwards it is an
+// idempotent terminal->terminal update. If that ordering wins the race, the
+// only signal a synchronous caller would ever get was the timeout, ninety
+// seconds after its result had been stored. The store is therefore polled as
+// a fallback, so the wait is bounded by completionPollInterval rather than by
+// whichever callback happened to arrive first.
 func (c *executionController) waitForExecutionCompletion(ctx context.Context, executionID string, timeout time.Duration) (*types.Execution, error) {
 	if c.eventBus == nil {
 		return nil, fmt.Errorf("event bus not available")
@@ -1375,6 +1390,10 @@ func (c *executionController) waitForExecutionCompletion(ctx context.Context, ex
 	// Create timeout timer
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+
+	// Fallback for terminal states that reach the store without an event.
+	poll := time.NewTicker(completionPollInterval)
+	defer poll.Stop()
 
 	logger.Logger.Debug().
 		Str("execution_id", executionID).
@@ -1404,6 +1423,17 @@ func (c *executionController) waitForExecutionCompletion(ctx context.Context, ex
 				Dur("timeout", timeout).
 				Msg("execution completion timeout")
 			return nil, fmt.Errorf("execution timeout after %v", timeout)
+
+		case <-poll.C:
+			existing, err := c.store.GetExecutionRecord(ctx, executionID)
+			if err != nil || existing == nil || !types.IsTerminalExecutionStatus(existing.Status) {
+				continue
+			}
+			logger.Logger.Debug().
+				Str("execution_id", executionID).
+				Str("status", existing.Status).
+				Msg("execution reached a terminal state without a terminal event; completing from the stored record")
+			return existing, nil
 
 		case event := <-eventChan:
 			// Only process events for this specific execution

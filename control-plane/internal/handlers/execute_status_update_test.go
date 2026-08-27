@@ -768,3 +768,59 @@ func TestUpdateExecutionStatusHandler_WebhookTriggeredFromStore(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &statusResp))
 	require.True(t, statusResp.WebhookRegistered, "GET status must report webhook_registered=true from the webhooks table")
 }
+
+// A terminal status can reach the store without a lifecycle event on the bus
+// (the SDK's reasoner.completed workflow event takes that path, and the
+// /status callback that follows is then an idempotent no-op). The waiter must
+// still return promptly rather than sit out the full timeout.
+func TestWaitForExecutionCompletion_TerminalStatusWithoutEvent(t *testing.T) {
+	store := newTestExecutionStorage(nil)
+	controller := newExecutionController(store, nil, nil, 90*time.Second, "")
+
+	previousInterval := completionPollInterval
+	completionPollInterval = 50 * time.Millisecond
+	defer func() { completionPollInterval = previousInterval }()
+
+	execution := &types.Execution{
+		ExecutionID: "exec-1",
+		RunID:       "run-1",
+		Status:      types.ExecutionStatusRunning,
+		StartedAt:   time.Now().UTC(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	done := make(chan struct{})
+	var result *types.Execution
+	var err error
+	started := time.Now()
+	go func() {
+		result, err = controller.waitForExecutionCompletion(context.Background(), "exec-1", 5*time.Second)
+		close(done)
+	}()
+
+	// Let the waiter subscribe and run its pre-subscribe check while the
+	// record is still running, then store the terminal state with NO event.
+	time.Sleep(100 * time.Millisecond)
+	_, updateErr := store.UpdateExecutionRecord(context.Background(), "exec-1", func(current *types.Execution) (*types.Execution, error) {
+		if current == nil {
+			return nil, nil
+		}
+		now := time.Now().UTC()
+		current.Status = types.ExecutionStatusSucceeded
+		current.CompletedAt = &now
+		return current, nil
+	})
+	require.NoError(t, updateErr)
+
+	select {
+	case <-done:
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, types.ExecutionStatusSucceeded, result.Status)
+		require.Less(t, time.Since(started), 2*time.Second, "waiter should complete from the poll, not the timeout")
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForExecutionCompletion never noticed the stored terminal status")
+	}
+}
