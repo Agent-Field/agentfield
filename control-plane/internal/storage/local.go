@@ -2638,11 +2638,27 @@ func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPerio
 	if err != nil {
 		return 0, fmt.Errorf("select expired workflow executions: %w", err)
 	}
+	var runIDs []string
 	if len(workflowIDs) > 0 {
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(workflowIDs)), ",")
 		args := make([]interface{}, len(workflowIDs))
 		for i := range workflowIDs {
 			args[i] = workflowIDs[i]
+		}
+		rows, err := tx.QueryContext(ctx, fmt.Sprintf("SELECT DISTINCT run_id FROM workflow_executions WHERE execution_id IN (%s) AND run_id IS NOT NULL", placeholders), args...)
+		if err != nil {
+			return 0, fmt.Errorf("select cleanup workflow runs: %w", err)
+		}
+		for rows.Next() {
+			var runID string
+			if err := rows.Scan(&runID); err != nil {
+				rows.Close()
+				return 0, fmt.Errorf("scan cleanup workflow run: %w", err)
+			}
+			runIDs = append(runIDs, runID)
+		}
+		if err := rows.Close(); err != nil {
+			return 0, fmt.Errorf("close cleanup workflow runs: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM workflow_steps WHERE execution_id IN (%s)", placeholders), args...); err != nil {
 			return 0, fmt.Errorf("delete workflow steps: %w", err)
@@ -2656,8 +2672,15 @@ func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPerio
 	if err != nil {
 		return 0, fmt.Errorf("delete workflow executions: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM workflow_runs WHERE NOT EXISTS (SELECT 1 FROM workflow_executions WHERE workflow_executions.run_id = workflow_runs.run_id)`); err != nil {
-		return 0, fmt.Errorf("delete empty workflow runs: %w", err)
+	if len(runIDs) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(runIDs)), ",")
+		args := make([]interface{}, len(runIDs))
+		for i := range runIDs {
+			args[i] = runIDs[i]
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM workflow_runs WHERE run_id IN (%s) AND NOT EXISTS (SELECT 1 FROM workflow_executions WHERE workflow_executions.run_id = workflow_runs.run_id)`, placeholders), args...); err != nil {
+			return 0, fmt.Errorf("delete empty workflow runs: %w", err)
+		}
 	}
 
 	// Commit transaction
