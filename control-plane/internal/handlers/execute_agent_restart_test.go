@@ -176,6 +176,35 @@ func TestC17InactiveNodeWithoutUpdateIsRejectedAsUnavailable(t *testing.T) {
 	assert.Equal(t, "node_unavailable", precondition.ErrorCode())
 }
 
+func TestWaitForDrainingAgentDispatchesToReplacement(t *testing.T) {
+	withRestartGrace(t, time.Second)
+	old := &types.AgentNode{ID: "demo-node", DeploymentType: "long_running", InstanceID: "old", LifecycleStatus: types.AgentStatusOffline}
+	replacement := *old
+	replacement.InstanceID = "new"
+	replacement.LifecycleStatus = types.AgentStatusReady
+	replacement.HealthStatus = types.HealthStatusActive
+	store := &restartingStore{testExecutionStorage: newTestExecutionStorage(old), after: &replacement, readsAt: 1}
+	controller := newExecutionController(store, nil, nil, 0, "")
+
+	got, err := controller.waitForDrainingAgent(context.Background(), old, old.ID)
+	require.NoError(t, err)
+	require.Equal(t, "new", got.InstanceID)
+	assert.Empty(t, store.executionRecords, "drain admission must not create an execution row")
+}
+
+func TestWaitForDrainingAgentTimesOutWithoutExecution(t *testing.T) {
+	withRestartGrace(t, 10*time.Millisecond)
+	old := &types.AgentNode{ID: "demo-node", DeploymentType: "long_running", InstanceID: "old", LifecycleStatus: types.AgentStatusOffline}
+	store := &restartingStore{testExecutionStorage: newTestExecutionStorage(old), after: old, readsAt: 1 << 20}
+	controller := newExecutionController(store, nil, nil, 0, "")
+
+	_, err := controller.waitForDrainingAgent(context.Background(), old, old.ID)
+	var precondition *executionPreconditionError
+	require.ErrorAs(t, err, &precondition)
+	assert.Equal(t, "node_unavailable", precondition.ErrorCode())
+	assert.Empty(t, store.executionRecords)
+}
+
 func TestE11ConfiguredTenMinuteGraceDoesNotImplyAnUpdate(t *testing.T) {
 	withRestartGrace(t, 10*time.Minute)
 	agent := &types.AgentNode{ID: "demo-node", HealthStatus: types.HealthStatusInactive, LifecycleStatus: types.AgentStatusOffline}
