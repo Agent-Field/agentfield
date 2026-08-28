@@ -252,7 +252,7 @@ When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution valu
 - `AGENTFIELD_TRACING_INSECURE`: Set to `true` or `1` to force plaintext transport for a bare `host:port` endpoint. An explicit `http://` URL is already plaintext; `https://` retains TLS.
 - `OTEL_SERVICE_NAME`: Service name attached to exported spans (default `agentfield`).
 
-Endpoint precedence, highest first: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`, then `AGENTFIELD_TRACING_ENDPOINT`. The default when none is set is `localhost:4318`.
+Endpoint precedence, highest first: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`, then `AGENTFIELD_TRACING_ENDPOINT`. When none is set, the default is `localhost:4318` for `otlp-http` and `localhost:4317` for `otlp-grpc`.
 
 Each endpoint accepts either a bare `host:port` or a full `http://` / `https://` URL; any other scheme is rejected at startup. For HTTP export a URL without a path sends the trace signal to `/v1/traces`.
 

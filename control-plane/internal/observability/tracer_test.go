@@ -44,6 +44,11 @@ func TestInitTracer_EndpointAndExporterValidation(t *testing.T) {
 	require.NoError(t, shutdown(context.Background()))
 }
 
+func TestResolveTraceEndpoint_DefaultsByExporter(t *testing.T) {
+	assert.Equal(t, "localhost:4318", resolveTraceEndpoint("otlp-http", ""))
+	assert.Equal(t, "localhost:4317", resolveTraceEndpoint("otlp-grpc", ""))
+}
+
 func TestInitTracer_Disabled(t *testing.T) {
 	cfg := TracerConfig{Enabled: false}
 	tracer, shutdown, err := InitTracer(context.Background(), cfg)

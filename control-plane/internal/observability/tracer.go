@@ -47,10 +47,7 @@ func InitTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Co
 		serviceName = "agentfield"
 	}
 
-	endpoint := cfg.Endpoint
-	if endpoint == "" {
-		endpoint = "localhost:4318"
-	}
+	endpoint := resolveTraceEndpoint(cfg.Exporter, cfg.Endpoint)
 
 	exporter, err := newTraceExporter(ctx, cfg.Exporter, endpoint, cfg.Insecure)
 	if err != nil {
@@ -82,6 +79,16 @@ func InitTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Co
 	}
 
 	return t, provider.Shutdown, nil
+}
+
+func resolveTraceEndpoint(exporterName, endpoint string) string {
+	if endpoint != "" {
+		return endpoint
+	}
+	if exporterName == "otlp-grpc" {
+		return "localhost:4317"
+	}
+	return "localhost:4318"
 }
 
 func newTraceExporter(ctx context.Context, exporterName, endpoint string, insecure bool) (sdktrace.SpanExporter, error) {
