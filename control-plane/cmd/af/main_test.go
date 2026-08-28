@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -115,4 +116,43 @@ func TestServerConfigLoadWithoutLoggingSectionStaysAtInfo(t *testing.T) {
 	require.Equal(t, 7001, cfg.AgentField.Port, "the config file must actually have been read")
 	require.True(t, logger.Logger.Info().Enabled(), "info stays on when nothing is configured")
 	require.False(t, logger.Logger.Debug().Enabled(), "debug stays off when nothing is configured")
+}
+
+func TestDrainOnShutdownRunsStopAfterSignalAndRestoresSignals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	restored := false
+	stops := 0
+	done := make(chan error, 1)
+	go func() {
+		done <- drainOnShutdown(ctx, func() { restored = true }, func() error { stops++; return nil })
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("drainOnShutdown returned before the context was cancelled: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("drainOnShutdown did not return after cancellation")
+	}
+	if !restored {
+		t.Fatal("signal handling was not restored before draining")
+	}
+	if stops != 1 {
+		t.Fatalf("stop called %d times, want 1", stops)
+	}
+}
+
+func TestDrainOnShutdownPropagatesStopError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	want := errors.New("drain failed")
+	if err := drainOnShutdown(ctx, nil, func() error { return want }); !errors.Is(err, want) {
+		t.Fatalf("got %v, want %v", err, want)
+	}
 }

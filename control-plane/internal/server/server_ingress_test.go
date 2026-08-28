@@ -93,3 +93,59 @@ func TestMaxRequestBodyHandlerAllowsNormalRegistration(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.Code)
 	require.Equal(t, "normal", resp.Body.String())
 }
+
+func TestNewHTTPServerHonoursRegisterBodyCapEnv(t *testing.T) {
+	t.Setenv("AGENTFIELD_MAX_REGISTER_BODY_BYTES", "4")
+	router := gin.New()
+	called := false
+	router.POST("/api/v1/nodes/register", func(c *gin.Context) { called = true; c.Status(http.StatusOK) })
+	s := &AgentFieldServer{Router: router}
+	httpServer := s.newHTTPServer(":0")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/register", strings.NewReader("12345"))
+	resp := httptest.NewRecorder()
+	httpServer.Handler.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+	require.JSONEq(t, `{"error":"request body too large"}`, resp.Body.String())
+	require.False(t, called)
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nodes/register", strings.NewReader("ok"))
+	resp = httptest.NewRecorder()
+	httpServer.Handler.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.True(t, called)
+}
+
+func TestNewHTTPServerFallsBackToDefaultRegisterCapOnInvalidEnv(t *testing.T) {
+	t.Setenv("AGENTFIELD_MAX_REGISTER_BODY_BYTES", "not-a-number")
+	router := gin.New()
+	called := false
+	router.POST("/api/v1/nodes", func(c *gin.Context) { called = true; c.Status(http.StatusOK) })
+	s := &AgentFieldServer{Router: router}
+	httpServer := s.newHTTPServer(":0")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes", strings.NewReader(strings.Repeat("x", 1024)))
+	resp := httptest.NewRecorder()
+	httpServer.Handler.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code, "an invalid cap must fall back to the 8 MiB default, not reject")
+	require.True(t, called)
+}
+
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (failingBody) Close() error             { return nil }
+
+func TestMaxRequestBodyHandlerRejectsUnreadableRegistrationBody(t *testing.T) {
+	called := false
+	handler := maxRequestBodyHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}), 32, 32)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/register", nil)
+	req.Body = failingBody{}
+	req.ContentLength = -1
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.False(t, called)
+}
