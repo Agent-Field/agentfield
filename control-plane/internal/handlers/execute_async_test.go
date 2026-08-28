@@ -153,6 +153,36 @@ func TestExecuteAsyncHandler_ConcurrencyRejectionHasNoPersistence(t *testing.T) 
 	require.Empty(t, files)
 }
 
+func TestExecuteAsyncHandler_ChunkedOversizeBodyHasNoPersistence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldPool, oldOnce := asyncPool, asyncPoolOnce
+	asyncPool = newAsyncWorkerPool(0, 1)
+	asyncPoolOnce = sync.Once{}
+	asyncPoolOnce.Do(func() {})
+	defer func() { asyncPool, asyncPoolOnce = oldPool, oldOnce }()
+
+	agent := &types.AgentNode{ID: "node-1", BaseURL: "http://agent.example", Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}}}
+	store := newTestExecutionStorage(agent)
+	router := gin.New()
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{"value":"oversize"}}`))
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	req.Body = http.MaxBytesReader(resp, req.Body, 8)
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+	require.JSONEq(t, `{"error":"request body too large"}`, resp.Body.String())
+	records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Empty(t, records)
+	workflows, err := store.QueryWorkflowExecutions(context.Background(), types.WorkflowExecutionFilters{})
+	require.NoError(t, err)
+	require.Empty(t, workflows)
+}
+
 func TestExecuteAsyncHandler_QueueFullHasNoPersistence(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	oldPool, oldOnce := asyncPool, asyncPoolOnce

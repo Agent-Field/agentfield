@@ -528,6 +528,12 @@ func writeExecutionError(ctx *gin.Context, err error) {
 		return
 	}
 
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+		return
+	}
+
 	var ce *callError
 	if errors.As(err, &ce) {
 		category := classifyCallError(ce, err)

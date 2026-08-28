@@ -31,6 +31,7 @@ func TestMaxExecuteBodyHandlerRejectsOversizeBeforeHandler(t *testing.T) {
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 	require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+	require.JSONEq(t, `{"error":"request body too large"}`, resp.Body.String())
 	require.False(t, called)
 }
 

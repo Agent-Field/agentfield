@@ -757,7 +757,9 @@ func maxExecuteBodyHandler(next http.Handler, limit int64) http.Handler {
 		isExecuteRoute := r.URL.Path == "/api/v1/execute" || strings.HasPrefix(r.URL.Path, "/api/v1/execute/")
 		if r.Method == http.MethodPost && isExecuteRoute {
 			if r.ContentLength > limit {
-				http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_, _ = w.Write([]byte(`{"error":"request body too large"}`))
 				return
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
