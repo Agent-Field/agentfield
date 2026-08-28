@@ -150,7 +150,13 @@ type asyncExecutionJob struct {
 }
 
 type asyncWorkerPool struct {
-	queue chan asyncExecutionJob
+	queue         chan asyncExecutionJob
+	reservations  chan struct{}
+	workerCtx     context.Context
+	cancelWorkers context.CancelFunc
+	mu            sync.RWMutex
+	stopped       bool
+	jobs          sync.WaitGroup
 }
 
 type completionJob struct {
@@ -431,7 +437,21 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 
 func (c *executionController) handleAsync(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
-	plan, err := c.prepareExecution(reqCtx, ctx)
+	pool := getAsyncWorkerPool()
+	// A reservation covers both preparation and time waiting in the queue. The
+	// worker releases it on dequeue so only not-yet-started work consumes capacity.
+	if !pool.reserve() {
+		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue is full; retry later")
+		return
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			pool.releaseReservation()
+		}
+	}()
+
+	plan, err := c.prepareAsyncExecution(reqCtx, ctx)
 	if err != nil {
 		writeExecutionError(ctx, err)
 		return
@@ -439,6 +459,7 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 	plan.executionMode = "async"
 
 	if plan.replayHit != nil {
+		ReleaseExecutionSlot(plan.target.NodeID)
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
 			writeExecutionError(ctx, err)
 			return
@@ -467,38 +488,23 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 		return
 	}
 
-	// Check LLM health and per-agent concurrency limits before proceeding
-	if err := CheckExecutionPreconditions(plan.target.NodeID, plan.llmEndpoint); err != nil {
-		_ = c.failExecution(reqCtx, plan, err, 0, nil)
-		writeExecutionError(ctx, err)
-		return
-	}
-	// Note: slot is released in asyncExecutionJob.process() after completion
+	// The slot was acquired before persistence. process releases it when the
+	// agent call returns (including an HTTP 202 acknowledgement).
 
 	// Emit execution started event with full reasoner context
 	c.publishExecutionStartedEvent(plan)
 
-	pool := getAsyncWorkerPool()
 	job := asyncExecutionJob{
 		controller: c,
 		plan:       *plan,
 	}
 
-	if ok := pool.submit(job); !ok {
+	if ok := pool.submitReserved(job); !ok {
 		ReleaseExecutionSlot(plan.target.NodeID) // Release since process() won't run
-		queueErr := errors.New("async execution queue is full; retry later")
-		if updateErr := c.failExecution(reqCtx, plan, queueErr, 0, nil); updateErr != nil {
-			logger.Logger.Error().
-				Err(updateErr).
-				Str("execution_id", plan.exec.ExecutionID).
-				Msg("failed to persist execution failure after queue saturation")
-		}
-		logger.Logger.Warn().
-			Str("execution_id", plan.exec.ExecutionID).
-			Msg("async execution rejected due to queue saturation")
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": queueErr.Error(), "error_category": "concurrency_limit"})
+		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue stopped; retry later")
 		return
 	}
+	reserved = false
 
 	createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)
 	targetLabel := fmt.Sprintf("%s.%s", plan.target.NodeID, plan.target.TargetName)

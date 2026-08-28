@@ -17,22 +17,35 @@ import (
 )
 
 func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
+	return c.prepareExecutionWithAdmission(ctx, ginCtx, false)
+}
+
+func (c *executionController) prepareAsyncExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
+	return c.prepareExecutionWithAdmission(ctx, ginCtx, true)
+}
+
+func (c *executionController) prepareExecutionWithAdmission(ctx context.Context, ginCtx *gin.Context, acquireSlot bool) (*preparedExecution, error) {
 	targetParam := ginCtx.Param("target")
 	var req ExecuteRequest
 	if err := ginCtx.ShouldBindJSON(&req); err != nil {
 		return nil, fmt.Errorf("invalid request body: %w", err)
 	}
-	return c.prepareExecutionForTarget(
+	return c.prepareExecutionForTargetWithAdmission(
 		ctx,
 		targetParam,
 		req,
 		readExecutionHeaders(ginCtx),
 		middleware.GetVerifiedCallerDID(ginCtx),
 		middleware.GetTargetDID(ginCtx),
+		acquireSlot,
 	)
 }
 
 func (c *executionController) prepareExecutionForTarget(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string) (*preparedExecution, error) {
+	return c.prepareExecutionForTargetWithAdmission(ctx, targetParam, req, headers, callerDID, targetDID, false)
+}
+
+func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string, acquireSlot bool) (_ *preparedExecution, retErr error) {
 	target, err := parseTarget(targetParam)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
@@ -109,6 +122,12 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 	// contacting the agent, so the node being down must not reject it (a
 	// replay miss simply dials and fails exactly as it did before this gate).
 	if agent.DeploymentType != "serverless" && strings.TrimSpace(headers.replaySourceRunID) == "" {
+		if agentIsDraining(agent) {
+			agent, err = c.waitForDrainingAgent(ctx, agent, target.NodeID)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if err := ensureAgentDispatchable(agent, target.NodeID); err != nil {
 			return nil, err
 		}
@@ -125,6 +144,20 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 		return nil, err
 	}
 	target.TargetType = targetType
+
+	llmEndpoint := extractRequestedLLMEndpoint(req)
+	slotAcquired := false
+	if acquireSlot {
+		if err := CheckExecutionPreconditions(target.NodeID, llmEndpoint); err != nil {
+			return nil, err
+		}
+		slotAcquired = true
+		defer func() {
+			if retErr != nil && slotAcquired {
+				ReleaseExecutionSlot(target.NodeID)
+			}
+		}()
+	}
 
 	runID := headers.runID
 	if runID == "" {
@@ -151,6 +184,7 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 		RunID:             runID,
 		ParentExecutionID: headers.parentExecutionID,
 		AgentNodeID:       agent.ID,
+		InstanceID:        agent.InstanceID,
 		ReasonerID:        target.TargetName,
 		NodeID:            target.NodeID,
 		Status:            types.ExecutionStatusRunning,
@@ -229,7 +263,7 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 		agent:                   agent,
 		target:                  target,
 		targetType:              targetType,
-		llmEndpoint:             extractRequestedLLMEndpoint(req),
+		llmEndpoint:             llmEndpoint,
 		webhookRegistered:       webhookRegistered,
 		webhookError:            webhookError,
 		callerDID:               callerDID,

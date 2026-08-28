@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
@@ -26,12 +27,18 @@ type orphanReapStorageStub struct {
 
 type orphanReapCall struct {
 	agentNodeID string
+	instanceID  string
 	reason      string
 }
 
 func (s *orphanReapStorageStub) MarkAgentExecutionsOrphaned(_ context.Context, agentNodeID, reasonMessage string) (int, error) {
 	s.orphanCalls = append(s.orphanCalls, orphanReapCall{agentNodeID: agentNodeID, reason: reasonMessage})
 	return len(s.orphanCalls), nil // pretend we reaped one row per call
+}
+
+func (s *orphanReapStorageStub) MarkAgentInstanceExecutionsOrphaned(_ context.Context, agentNodeID, instanceID, reasonMessage string) (int, error) {
+	s.orphanCalls = append(s.orphanCalls, orphanReapCall{agentNodeID: agentNodeID, instanceID: instanceID, reason: reasonMessage})
+	return len(s.orphanCalls), nil
 }
 
 // registerNodeWithBody is a tiny test helper to keep the body construction out
@@ -61,6 +68,9 @@ func registerNodeWithBody(t *testing.T, router *gin.Engine, body string) *httpte
 // instance comparison would silently restore the "stuck reasoner" bug, and the
 // bug only surfaces in production after a redeploy lands during real traffic.
 func TestRegisterNodeHandler_ReapsOrphansOnInstanceChange(t *testing.T) {
+	previous := AgentDrainGrace()
+	SetAgentDrainGrace(20 * time.Millisecond)
+	t.Cleanup(func() { SetAgentDrainGrace(previous) })
 	gin.SetMode(gin.TestMode)
 	store := &orphanReapStorageStub{
 		nodeRESTStorageStub: nodeRESTStorageStub{
@@ -90,16 +100,17 @@ func TestRegisterNodeHandler_ReapsOrphansOnInstanceChange(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code,
 		"re-registration with new instance must succeed; instance mismatch is signal, not error")
 
-	require.Len(t, store.orphanCalls, 1,
+	assert.Empty(t, store.orphanCalls, "registration must return before deferred cleanup")
+	require.Eventually(t, func() bool { return len(store.orphanCalls) == 1 }, time.Second, 5*time.Millisecond,
 		"exactly one orphan-reap must fire when stored instance differs from incoming")
 	assert.Equal(t, "github-buddy", store.orphanCalls[0].agentNodeID,
 		"reap must target the re-registering agent only")
+	assert.Equal(t, "alpha", store.orphanCalls[0].instanceID)
 	assert.Contains(t, store.orphanCalls[0].reason, "agent_restart_orphaned",
 		"reason must lead with the audit token operators grep for")
 	assert.Contains(t, store.orphanCalls[0].reason, "alpha",
 		"reason must record the old instance for forensics")
-	assert.Contains(t, store.orphanCalls[0].reason, "beta",
-		"reason must record the new instance for forensics")
+	assert.NotContains(t, store.orphanCalls[0].reason, "cannot be revived")
 }
 
 // TestRegisterNodeHandler_NoReapOnSameInstance pins that an idempotent
@@ -229,6 +240,9 @@ func TestRegisterNodeHandler_PersistsInstanceID(t *testing.T) {
 // case, the most common production trace — restart of an idle agent — would
 // be uncovered.
 func TestRegisterNodeHandler_InstanceChangeWithNothingToReap(t *testing.T) {
+	previous := AgentDrainGrace()
+	SetAgentDrainGrace(time.Millisecond)
+	t.Cleanup(func() { SetAgentDrainGrace(previous) })
 	gin.SetMode(gin.TestMode)
 	store := &zeroReapStorageStub{
 		orphanReapStorageStub: orphanReapStorageStub{
@@ -256,7 +270,7 @@ func TestRegisterNodeHandler_InstanceChangeWithNothingToReap(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code,
 		"instance change with nothing to reap is the common idle-agent "+
 			"restart case; registration must complete normally")
-	require.Len(t, store.orphanCalls, 1,
+	require.Eventually(t, func() bool { return len(store.orphanCalls) == 1 }, time.Second, time.Millisecond,
 		"the reap is still invoked — the handler can't know in advance "+
 			"whether there's anything to reap")
 	require.NotNil(t, store.registeredAgent)
@@ -271,6 +285,11 @@ type zeroReapStorageStub struct {
 
 func (s *zeroReapStorageStub) MarkAgentExecutionsOrphaned(_ context.Context, agentNodeID, reasonMessage string) (int, error) {
 	s.orphanCalls = append(s.orphanCalls, orphanReapCall{agentNodeID: agentNodeID, reason: reasonMessage})
+	return 0, nil
+}
+
+func (s *zeroReapStorageStub) MarkAgentInstanceExecutionsOrphaned(_ context.Context, agentNodeID, instanceID, reasonMessage string) (int, error) {
+	s.orphanCalls = append(s.orphanCalls, orphanReapCall{agentNodeID: agentNodeID, instanceID: instanceID, reason: reasonMessage})
 	return 0, nil
 }
 
@@ -321,6 +340,10 @@ type reapFailingStorageStub struct {
 }
 
 func (s *reapFailingStorageStub) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID, reasonMessage string) (int, error) {
+	return 0, assertErrFakeReapFailure
+}
+
+func (s *reapFailingStorageStub) MarkAgentInstanceExecutionsOrphaned(context.Context, string, string, string) (int, error) {
 	return 0, assertErrFakeReapFailure
 }
 

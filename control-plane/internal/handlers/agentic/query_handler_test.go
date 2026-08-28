@@ -168,6 +168,40 @@ func TestQueryHandler_ExecutionsInvalidSinceUntil(t *testing.T) {
 	store.AssertExpectations(t)
 }
 
+func TestQueryHandler_ExecutionsFilterByExecutionIDComposes(t *testing.T) {
+	store := &handlerTestStorage{mockStatusStorage: &mockStatusStorage{}}
+	store.On("QueryExecutionRecords", mock.Anything, mock.MatchedBy(func(filter types.ExecutionFilter) bool {
+		return filter.ExecutionID != nil && *filter.ExecutionID == "exec-wanted" &&
+			filter.Status != nil && *filter.Status == "succeeded"
+	})).Return([]*types.Execution{{ExecutionID: "exec-wanted"}}, nil)
+
+	router := gin.New()
+	router.POST("/query", QueryHandler(store))
+	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewBufferString(
+		`{"resource":"executions","filters":{"execution_id":" exec-wanted ","status":"succeeded"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	data := decodeEnvelope(t, rec.Body).Data.(map[string]interface{})
+	require.Len(t, data["results"], 1)
+	store.AssertExpectations(t)
+}
+
+func TestQueryHandler_RejectsExecutionIDForUnsupportedResource(t *testing.T) {
+	router := gin.New()
+	router.POST("/query", QueryHandler(&handlerTestStorage{mockStatusStorage: &mockStatusStorage{}}))
+	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewBufferString(
+		`{"resource":"agents","filters":{"execution_id":"exec-1"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "filters.execution_id")
+}
+
 func TestQueryHandler_AgentOffsetOutOfBounds(t *testing.T) {
 	store := &handlerTestStorage{mockStatusStorage: &mockStatusStorage{}}
 	store.On("ListAgents", mock.Anything, mock.Anything).Return([]*types.AgentNode{

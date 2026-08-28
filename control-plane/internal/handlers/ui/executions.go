@@ -783,7 +783,7 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		DurationMS:          durationPtr,
 		ErrorMessage:        exec.ErrorMessage,
 		RetryCount:          0,
-		CreatedAt:           exec.StartedAt.Format(time.RFC3339),
+		CreatedAt:           exec.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:           &updated,
 		Notes:               notes,
 		NotesCount:          len(notes),
@@ -795,6 +795,8 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 	// Enrich with approval fields from workflow execution (if available)
 	if h.storage != nil {
 		if wfExec, err := h.storage.GetWorkflowExecution(ctx, exec.ExecutionID); err == nil && wfExec != nil {
+			resp.ID = wfExec.ID
+			resp.RetryCount = wfExec.RetryCount
 			resp.ApprovalRequestID = wfExec.ApprovalRequestID
 			resp.ApprovalRequestURL = wfExec.ApprovalRequestURL
 			resp.ApprovalStatus = wfExec.ApprovalStatus

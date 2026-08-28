@@ -209,6 +209,10 @@ type NodeHealthConfig struct {
 	// for a few seconds but the control plane has not noticed yet.
 	// 0 = default 15s. Set to a negative duration to disable the wait.
 	AgentRestartGrace time.Duration `yaml:"agent_restart_grace" mapstructure:"agent_restart_grace"`
+	// AgentDrainGrace delays instance-scoped orphan cleanup after a replacement
+	// registers, allowing the departing process to finish accepted work.
+	// 0 = default 60s. Set to a negative duration to disable deferred cleanup.
+	AgentDrainGrace time.Duration `yaml:"agent_drain_grace" mapstructure:"agent_drain_grace"`
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
@@ -670,6 +674,11 @@ func ApplyEnvOverrides(cfg *Config) {
 			cfg.AgentField.NodeHealth.AgentRestartGrace = d
 		}
 	}
+	if val := os.Getenv("AGENTFIELD_AGENT_DRAIN_GRACE"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.AgentDrainGrace = d
+		}
+	}
 
 	// LLM health monitoring overrides
 	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_ENABLED"); val != "" {
@@ -809,7 +818,18 @@ func ApplyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("AGENTFIELD_TRACING_ENABLED"); val != "" {
 		cfg.Features.Tracing.Enabled = val == "true" || val == "1"
 	}
+	if val := os.Getenv("AGENTFIELD_TRACING_EXPORTER"); val != "" {
+		cfg.Features.Tracing.Exporter = val
+	}
+	if val := os.Getenv("AGENTFIELD_TRACING_ENDPOINT"); val != "" {
+		cfg.Features.Tracing.Endpoint = val
+		cfg.Features.Tracing.Enabled = true
+	}
 	if val := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); val != "" {
+		cfg.Features.Tracing.Endpoint = val
+		cfg.Features.Tracing.Enabled = true
+	}
+	if val := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"); val != "" {
 		cfg.Features.Tracing.Endpoint = val
 		cfg.Features.Tracing.Enabled = true
 	}

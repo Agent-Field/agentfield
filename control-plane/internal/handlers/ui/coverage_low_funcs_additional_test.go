@@ -538,6 +538,8 @@ func TestExecutionHandlerLowCoveragePaths(t *testing.T) {
 		require.NoError(t, err)
 
 		details := handler.toExecutionDetails(ctx, exec)
+		require.Positive(t, details.ID)
+		require.Equal(t, 3, details.RetryCount)
 		require.NotNil(t, details.ApprovalRequestID)
 		require.Equal(t, "approval-1", *details.ApprovalRequestID)
 		require.NotNil(t, details.ApprovalRequestURL)

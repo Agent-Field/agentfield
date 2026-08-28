@@ -33,8 +33,13 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Check dependency lock
+      # Advisory until the release workflow regenerates uv.lock when it bumps
+      # pyproject.toml: every "chore(release)" commit changes the project
+      # version without touching the lock, so a blocking check fails on every
+      # open PR after each release candidate.
+      - name: Check dependency lock (advisory)
         working-directory: sdk/python
+        continue-on-error: true
         run: uv lock --check
 
       - name: Install dependencies

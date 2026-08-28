@@ -3,9 +3,12 @@ package observability
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -20,10 +23,10 @@ const (
 // TracerConfig holds configuration for the OTel tracer.
 type TracerConfig struct {
 	Enabled     bool   `yaml:"enabled" mapstructure:"enabled"`
-	Exporter    string `yaml:"exporter" mapstructure:"exporter"`       // "otlp-http" or "otlp-grpc"
-	Endpoint    string `yaml:"endpoint" mapstructure:"endpoint"`       // e.g. "localhost:4318"
+	Exporter    string `yaml:"exporter" mapstructure:"exporter"`         // "otlp-http" or "otlp-grpc"
+	Endpoint    string `yaml:"endpoint" mapstructure:"endpoint"`         // e.g. "localhost:4318"
 	ServiceName string `yaml:"service_name" mapstructure:"service_name"` // defaults to "agentfield"
-	Insecure    bool   `yaml:"insecure" mapstructure:"insecure"`       // skip TLS verification
+	Insecure    bool   `yaml:"insecure" mapstructure:"insecure"`         // skip TLS verification
 }
 
 // Tracer wraps the OTel tracer and provides AgentField-specific span helpers.
@@ -44,19 +47,9 @@ func InitTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Co
 		serviceName = "agentfield"
 	}
 
-	endpoint := cfg.Endpoint
-	if endpoint == "" {
-		endpoint = "localhost:4318"
-	}
+	endpoint := resolveTraceEndpoint(cfg.Exporter, cfg.Endpoint)
 
-	opts := []otlptracehttp.Option{
-		otlptracehttp.WithEndpoint(endpoint),
-	}
-	if cfg.Insecure {
-		opts = append(opts, otlptracehttp.WithInsecure())
-	}
-
-	exporter, err := otlptracehttp.New(ctx, opts...)
+	exporter, err := newTraceExporter(ctx, cfg.Exporter, endpoint, cfg.Insecure)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create OTLP trace exporter: %w", err)
 	}
@@ -86,6 +79,53 @@ func InitTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Co
 	}
 
 	return t, provider.Shutdown, nil
+}
+
+func resolveTraceEndpoint(exporterName, endpoint string) string {
+	if endpoint != "" {
+		return endpoint
+	}
+	if exporterName == "otlp-grpc" {
+		return "localhost:4317"
+	}
+	return "localhost:4318"
+}
+
+func newTraceExporter(ctx context.Context, exporterName, endpoint string, insecure bool) (sdktrace.SpanExporter, error) {
+	hasScheme := strings.Contains(endpoint, "://")
+	if hasScheme {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return nil, fmt.Errorf("invalid OTLP endpoint %q", endpoint)
+		}
+	}
+
+	if exporterName == "otlp-grpc" {
+		opts := []otlptracegrpc.Option{}
+		if hasScheme {
+			opts = append(opts, otlptracegrpc.WithEndpointURL(endpoint))
+		} else {
+			opts = append(opts, otlptracegrpc.WithEndpoint(endpoint))
+		}
+		if insecure || strings.HasPrefix(endpoint, "http://") {
+			opts = append(opts, otlptracegrpc.WithInsecure())
+		}
+		return otlptracegrpc.New(ctx, opts...)
+	}
+	if exporterName != "" && exporterName != "otlp-http" {
+		return nil, fmt.Errorf("unsupported OTLP trace exporter %q", exporterName)
+	}
+
+	opts := []otlptracehttp.Option{}
+	if hasScheme {
+		opts = append(opts, otlptracehttp.WithEndpointURL(endpoint))
+	} else {
+		opts = append(opts, otlptracehttp.WithEndpoint(endpoint))
+	}
+	if insecure {
+		opts = append(opts, otlptracehttp.WithInsecure())
+	}
+	return otlptracehttp.New(ctx, opts...)
 }
 
 // StartExecutionSpan creates a root span for an execution workflow.

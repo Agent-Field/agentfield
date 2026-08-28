@@ -114,6 +114,7 @@ func seedWorkflowExecutions(t *testing.T, ls *storage.LocalStorage, ctx context.
 		ApprovalRequestID:   &approvalID,
 		ApprovalRequestURL:  &approvalURL,
 		ApprovalStatus:      &approvalStatus,
+		RetryCount:          3,
 		CreatedAt:           now,
 		UpdatedAt:           rootCompleted,
 		Notes: []types.ExecutionNote{

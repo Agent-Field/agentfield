@@ -112,10 +112,14 @@ The telemetry payload does not include prompts, inputs, outputs, logs, secrets, 
 ### Miscellaneous control-plane knobs
 
 - `AGENTFIELD_MAX_CONCURRENT_PER_AGENT` (default: `0`): Maximum concurrent executions dispatched to one agent; `0` means unlimited.
-- `AGENTFIELD_EXEC_ASYNC_WORKERS` (default: number of CPUs): Worker count for asynchronous execution and restart jobs; non-positive values use the default.
-- `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): In-memory asynchronous execution queue capacity; non-positive values use the default.
+- `AGENTFIELD_EXEC_ASYNC_WORKERS` (default: the greater of the available CPU count and `16`): Worker count for asynchronous execution and restart jobs, which are I/O-bound; non-positive values use the default.
+- `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): Maximum number of asynchronous executions waiting for a worker; non-positive values use the default. Requests arriving once the queue is saturated are rejected with `503`, a `Retry-After` header and a `retry_after` field, and no execution row is persisted for them.
+- `AGENTFIELD_MAX_EXECUTE_BODY_BYTES` (default: `33554432`, 32 MiB): Maximum request body size, in bytes, for POST routes under `/api/v1/execute`. Oversize requests are rejected with `413` before any execution is persisted; other routes are not capped by this setting.
 - `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control plane HTTP server during shutdown.
 - `AGENTFIELD_AGENT_RESTART_GRACE` (default: `15s`): How long an execution waits for an agent process to return during a coordinated restart; a negative duration disables the wait.
+- `AGENTFIELD_AGENT_DRAIN_GRACE` (default: `60s`): How long instance-scoped non-terminal work may keep completing after a replacement agent instance registers, before it is marked `agent_restart_orphaned`. The deferred in-memory timer is lost on a control-plane restart; the stale-execution sweep configured by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` is the backstop. Equivalent YAML: `agentfield.node_health.agent_drain_grace`.
+
+For Kubernetes, set `terminationGracePeriodSeconds` above the SDK drain window so the departing pod can return accepted work. Keep the agent `version` stable across rolling updates: changing it creates a separate versioned registration, so its work is recovered only by the stale sweep rather than this re-registration drain timer.
 
 Rate limiting is off by default and has no dedicated environment-variable overrides. Configure the YAML-only `agentfield.rate_limit` block with `enabled`, `execute_rps`, `execute_burst`, `discovery_rps`, `discovery_burst`, `bulk_status_rps`, `bulk_status_burst`, `global_rps`, and `global_burst`.
 
@@ -263,3 +267,19 @@ When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution valu
   harness session. The SDKs set it to `1` for a first-level child and increment
   an inherited numeric value for nested sessions. An explicit per-call `env`
   value wins over the derived depth.
+
+### Tracing (control plane)
+
+- `AGENTFIELD_TRACING_ENABLED`: Set to `true` or `1` to enable tracing. Setting any of the endpoint variables below also enables it.
+- `AGENTFIELD_TRACING_EXPORTER`: `otlp-http` (default) or `otlp-grpc`. For any other value, the control plane logs a startup warning, continues running, and leaves tracing disabled.
+- `AGENTFIELD_TRACING_ENDPOINT`: AgentField-native endpoint setting (the env equivalent of `features.tracing.endpoint` in YAML).
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: Standard generic OTLP endpoint.
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`: Standard trace-specific OTLP endpoint.
+- `AGENTFIELD_TRACING_INSECURE`: Set to `true` or `1` to force plaintext transport for a bare `host:port` endpoint. An explicit `http://` URL is already plaintext; `https://` retains TLS.
+- `OTEL_SERVICE_NAME`: Service name attached to exported spans (default `agentfield`).
+
+Endpoint precedence, highest first: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`, then `AGENTFIELD_TRACING_ENDPOINT`. When none is set, the default is `localhost:4318` for `otlp-http` and `localhost:4317` for `otlp-grpc`.
+
+Each endpoint accepts either a bare `host:port` or a full `http://` / `https://` URL. For an invalid endpoint or unsupported scheme, the control plane logs a startup warning, continues running, and leaves tracing disabled. For HTTP export a URL without a path sends the trace signal to `/v1/traces`.
+
+For a local OpenTelemetry Collector, use `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. For Langfuse through an OTel Collector, point this variable at the collector's OTLP/HTTP listener and configure the collector's authenticated Langfuse export pipeline; use `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces` when specifying the trace signal URL directly.
