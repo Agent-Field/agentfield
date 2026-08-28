@@ -2932,14 +2932,17 @@ class Agent(FastAPI):
             return
 
         safe_payload = jsonable_encoder(payload)
-        for attempt in range(max_retries):
+        shutting_down = getattr(self, "_shutdown_cancelling", False)
+        attempts = 1 if shutting_down else max_retries
+        request_timeout = 5.0 if shutting_down else 30.0
+        for attempt in range(attempts):
             try:
                 response = await self.client._async_request(
                     "POST",
                     callback_url,
                     json=safe_payload,
                     headers={"Content-Type": "application/json"},
-                    timeout=30.0,  # longer timeout for critical status callbacks
+                    timeout=request_timeout,
                 )
                 if 200 <= response.status_code < 300:
                     if self.dev_mode:
@@ -2954,9 +2957,15 @@ class Agent(FastAPI):
                 log_warn(
                     f"Async status update attempt {attempt + 1} failed for {execution_id}: {exc}"
                 )
-            if attempt < max_retries - 1:
+            if attempt < attempts - 1:
                 await asyncio.sleep(2**attempt)
-        log_error(f"Failed to deliver async status for {execution_id} after retries")
+        if shutting_down:
+            log_error(
+                f"Abandoning async status for {execution_id} during shutdown "
+                f"after {request_timeout:g}s attempt"
+            )
+        else:
+            log_error(f"Failed to deliver async status for {execution_id} after retries")
 
     def _build_execution_callback_url(self, execution_id: str) -> Optional[str]:
         if not self.agentfield_server or not execution_id:

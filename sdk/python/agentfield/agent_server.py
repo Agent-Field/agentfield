@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 
 DEFAULT_SHUTDOWN_TIMEOUT = 30.0
+SHUTDOWN_SETTLEMENT_SECONDS = 5.0
 
 
 def parse_shutdown_timeout(value: object, default: float = DEFAULT_SHUTDOWN_TIMEOUT) -> float:
@@ -458,7 +459,17 @@ class AgentServer:
                 if pending:
                     for task in list(pending):
                         task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
+                    settled, abandoned = await asyncio.wait(
+                        pending, timeout=SHUTDOWN_SETTLEMENT_SECONDS
+                    )
+                    if settled:
+                        await asyncio.gather(*settled, return_exceptions=True)
+                    if abandoned:
+                        log_warn(
+                            "Abandoning "
+                            f"{len(abandoned)} server task(s) after "
+                            f"{SHUTDOWN_SETTLEMENT_SECONDS:g}s shutdown settlement"
+                        )
 
             # Clear tracked registries after drain/cancel pass.
             self._in_flight_tasks.clear()
@@ -494,7 +505,17 @@ class AgentServer:
             self.agent._shutdown_cancelling = True
             for task in pending:
                 task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            settled, abandoned = await asyncio.wait(
+                pending, timeout=SHUTDOWN_SETTLEMENT_SECONDS
+            )
+            if settled:
+                await asyncio.gather(*settled, return_exceptions=True)
+            if abandoned:
+                log_warn(
+                    "Abandoning "
+                    f"{len(abandoned)} reasoner task(s) after "
+                    f"{SHUTDOWN_SETTLEMENT_SECONDS:g}s shutdown settlement"
+                )
         if self.agent.dev_mode:
             log_debug(
                 f"Reasoner shutdown drain: done={len(done)} pending={len(pending)}"
