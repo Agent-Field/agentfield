@@ -268,6 +268,75 @@ func TestAcceptedReasonerRequestAfterShutdownBeginsReturnsUnavailable(t *testing
 	assert.Contains(t, recorder.Body.String(), "agent is shutting down")
 }
 
+func TestAsyncReasonerDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T) {
+	testDispatchDuringShutdownNotifyReturnsUnavailable(t, "/reasoners/echo", true, false)
+}
+
+func TestSyncReasonerDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T) {
+	testDispatchDuringShutdownNotifyReturnsUnavailable(t, "/reasoners/echo", false, false)
+}
+
+func TestSkillDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T) {
+	testDispatchDuringShutdownNotifyReturnsUnavailable(t, "/skills/echo", false, true)
+}
+
+func TestExecuteDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T) {
+	testDispatchDuringShutdownNotifyReturnsUnavailable(t, "/execute/echo", false, false)
+}
+
+func testDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T, path string, async, skill bool) {
+	t.Helper()
+	notifyStarted := make(chan struct{})
+	releaseNotify := make(chan struct{})
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/nodes/node-1/shutdown", r.URL.Path)
+		close(notifyStarted)
+		select {
+		case <-releaseNotify:
+		case <-time.After(time.Second):
+		}
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer cp.Close()
+
+	a, err := New(Config{
+		NodeID: "node-1", Version: "1", AgentFieldURL: cp.URL,
+		Logger: log.New(io.Discard, "", 0),
+	})
+	require.NoError(t, err)
+	handlerCalled := false
+	handler := func(context.Context, map[string]any) (any, error) {
+		handlerCalled = true
+		return map[string]any{"ok": true}, nil
+	}
+	if skill {
+		require.NoError(t, a.RegisterSkill("echo", handler))
+	} else {
+		a.RegisterReasoner("echo", handler)
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- a.shutdownWithOptions(context.Background(), true, time.Second) }()
+	select {
+	case <-notifyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown notification did not start")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	if async {
+		req.Header.Set("X-Execution-ID", "exec-during-shutdown")
+	}
+	recorder := httptest.NewRecorder()
+	a.Handler().ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	assert.Equal(t, "agent is shutting down\n", recorder.Body.String())
+	assert.False(t, handlerCalled)
+	close(releaseNotify)
+	require.NoError(t, <-shutdownDone)
+}
+
 func TestServeReturnsAfterRemoteImmediateShutdown(t *testing.T) {
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

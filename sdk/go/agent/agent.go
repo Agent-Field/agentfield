@@ -1201,6 +1201,9 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if a.rejectDispatchDuringShutdown(w) {
+		return
+	}
 
 	targetName := strings.TrimPrefix(r.URL.Path, "/execute")
 	targetName = strings.TrimPrefix(targetName, "/")
@@ -1399,6 +1402,9 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if a.rejectDispatchDuringShutdown(w) {
+		return
+	}
 
 	name := strings.TrimPrefix(r.URL.Path, "/reasoners/")
 	if name == "" {
@@ -1560,6 +1566,9 @@ func (a *Agent) handleSkill(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if a.rejectDispatchDuringShutdown(w) {
+		return
+	}
 
 	name := strings.TrimPrefix(r.URL.Path, "/skills/")
 	if name == "" {
@@ -1597,6 +1606,16 @@ func (a *Agent) handleSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, wrapSyncResultWithUsage(result, tracker))
+}
+
+func (a *Agent) rejectDispatchDuringShutdown(w http.ResponseWriter) bool {
+	a.shutdownMu.Lock()
+	defer a.shutdownMu.Unlock()
+	if !a.shuttingDown {
+		return false
+	}
+	http.Error(w, "agent is shutting down", http.StatusServiceUnavailable)
+	return true
 }
 
 func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, execCtx ExecutionContext) {
