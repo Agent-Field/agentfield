@@ -219,7 +219,7 @@ async def test_shutdown_graceful():
             json={"graceful": True, "timeout_seconds": 5},
             headers={"content-type": "application/json"},
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     data = resp.json()
     assert data["graceful"] is True
     assert data["status"] == "shutting_down"
@@ -238,7 +238,7 @@ async def test_shutdown_immediate():
     with patch.object(AgentServer, "_immediate_shutdown", fake_immediate):
         resp = await _post(app, "/shutdown", json={"graceful": False})
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     assert resp.json()["graceful"] is False
     await asyncio.sleep(0)
     assert triggered.get("called") is True
@@ -260,7 +260,7 @@ async def test_shutdown_notification_failure():
             json={"graceful": True},
             headers={"content-type": "application/json"},
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
 
 
 @pytest.mark.asyncio

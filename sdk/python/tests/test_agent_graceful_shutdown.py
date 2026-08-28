@@ -1,11 +1,13 @@
 import asyncio
 import os
 import signal
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
 from agentfield.agent import Agent
 from agentfield.agent_field_handler import AgentFieldHandler
@@ -282,6 +284,107 @@ async def test_reasoner_background_task_cancelled_at_budget_reports_shutdown():
     assert agent._shutdown_cancelling is True
     assert terminal.is_set()
     assert payload == {"status": "cancelled", "error": "cancelled during shutdown"}
+
+
+@pytest.mark.asyncio
+async def test_cancellation_resistant_reasoner_is_abandoned_after_settlement(monkeypatch):
+    agent = make_shutdown_agent()
+    agent._background_tasks = set()
+    server = AgentServer(agent)
+    release = asyncio.Event()
+
+    async def cancellation_resistant_reasoner():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            await release.wait()
+
+    task = asyncio.create_task(cancellation_resistant_reasoner())
+    agent._background_tasks.add(task)
+    await asyncio.sleep(0)
+    monkeypatch.setattr("agentfield.agent_server.SHUTDOWN_SETTLEMENT_SECONDS", 0.02)
+
+    started = time.monotonic()
+    await server._drain_reasoner_tasks(0.01)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.1
+    assert not task.done()
+    release.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_hanging_terminal_callback_is_abandoned_after_settlement(monkeypatch):
+    agent = Agent(
+        node_id="shutdown-callback",
+        agentfield_server="http://control",
+        auto_register=False,
+        enable_mcp=False,
+        enable_did=False,
+    )
+    agent._background_tasks = set()
+    callback_started = asyncio.Event()
+    release_callback = asyncio.Event()
+
+    async def hanging_request(*args, **kwargs):
+        callback_started.set()
+        await release_callback.wait()
+
+    agent.client._async_request = hanging_request
+    server = AgentServer(agent)
+
+    async def reasoner_with_terminal_callback():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            await agent._post_execution_status(
+                "/executions/exec/status", {"status": "cancelled"}, "exec"
+            )
+
+    task = asyncio.create_task(reasoner_with_terminal_callback())
+    agent._background_tasks.add(task)
+    await asyncio.sleep(0)
+    monkeypatch.setattr("agentfield.agent_server.SHUTDOWN_SETTLEMENT_SECONDS", 0.02)
+
+    await server._drain_reasoner_tasks(0)
+
+    assert callback_started.is_set()
+    assert not task.done()
+    release_callback.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_repeated_http_shutdown_sends_one_notice_and_schedules_one_task():
+    agent = FastAPI()
+    agent.node_id = "shutdown-http"
+    agent.version = "1.0.0"
+    agent.reasoners = []
+    agent.skills = []
+    agent.dev_mode = False
+    agent.agentfield_server = "http://control"
+    agent.base_url = "http://agent"
+    agent._shutdown_requested = False
+    agent.client = SimpleNamespace(notify_graceful_shutdown_sync=Mock(return_value=True))
+    server = AgentServer(agent)
+    server._graceful_shutdown = AsyncMock()
+    server.setup_agentfield_routes()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=agent), base_url="http://agent"
+    ) as client:
+        responses = await asyncio.gather(
+            client.post("/shutdown", json={"timeout_seconds": 1}),
+            client.post("/shutdown", json={"timeout_seconds": 1}),
+        )
+    await asyncio.sleep(0)
+
+    assert [response.status_code for response in responses] == [202, 202]
+    agent.client.notify_graceful_shutdown_sync.assert_called_once_with(
+        agent.node_id, reason="http", timeout_seconds=1
+    )
+    server._graceful_shutdown.assert_awaited_once_with(1)
 
 
 @pytest.mark.asyncio

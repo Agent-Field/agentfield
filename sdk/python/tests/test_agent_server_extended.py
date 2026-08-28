@@ -154,7 +154,7 @@ async def test_shutdown_graceful_sets_shutdown_requested():
         headers={"content-type": "application/json"},
     )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     data = resp.json()
     assert data["graceful"] is True
     assert app._shutdown_requested is True
@@ -174,7 +174,7 @@ async def test_shutdown_immediate_sets_shutdown_requested(monkeypatch):
 
     resp = await _post(app, "/shutdown", json={"graceful": False})
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     assert app._shutdown_requested is True
     await asyncio.sleep(0)
     assert triggered.get("called") is True
