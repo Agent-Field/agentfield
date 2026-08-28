@@ -17,7 +17,7 @@ AgentField is a Kubernetes-style control plane for AI agents. It provides produc
 - Go 1.23+
 - Python 3.8+
 - Node.js 20+
-- PostgreSQL 15+ (for cloud mode)
+- PostgreSQL 15+ (for PostgreSQL storage mode)
 
 ### Initial Setup
 ```bash
@@ -225,7 +225,6 @@ agent.Run(context.Background())
 ### Storage Modes
 - **Local mode:** SQLite (relational) + BoltDB (key-value). No external dependencies. Good for dev/testing.
 - **PostgreSQL mode:** Full PostgreSQL backend. Requires running migrations. Production-ready.
-- **Cloud mode:** PostgreSQL backend. Used in distributed deployments.
 
 Storage interface is unified—services call storage layer methods, storage layer switches backends based on config.
 
@@ -316,7 +315,6 @@ Releases are automated via `.github/workflows/release.yml` and `.goreleaser.yml`
 
 See `control-plane/.env.example` for comprehensive list. Key vars:
 - `AGENTFIELD_PORT` - HTTP server port (default: 8080)
-- `AGENTFIELD_MODE` - `local` or `cloud`
 - `AGENTFIELD_STORAGE_MODE` - `local` or `postgres`
 - `AGENTFIELD_DATABASE_URL` - PostgreSQL connection string
 - `AGENTFIELD_UI_ENABLED` - Enable/disable web UI
