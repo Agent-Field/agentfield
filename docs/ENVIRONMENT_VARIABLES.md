@@ -178,7 +178,7 @@ AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT=false
 - `AGENTFIELD_LOG_STDOUT` (default: `true`): Mirrors structured execution records to stdout in the Python and Go SDKs. Set to `false`, `0`, `no`, or `off` to disable the mirror without disabling full-record dispatch to the control plane.
 - `AGENTFIELD_LOG_TRUNCATE` (Python default: `200` characters): Truncates human-readable plain log messages and visible plain-log payloads. It does not truncate structured records.
 - `AGENTFIELD_LOG_PAYLOADS` (Python default: `false`): Shows payloads in human-readable plain logs when `true`. Structured execution attributes are unaffected.
-- `AGENTFIELD_LOG_MAX_LINE_BYTES` (default: `16384`): Maximum captured process-log line size. The Python structured stdout mirror first replaces attribute values with byte-counted elision markers so its complete JSON line fits this budget and remains valid JSON.
+- `AGENTFIELD_LOG_MAX_LINE_BYTES` (default: `16384`): Maximum emitted process-log line size in bytes. The Python structured stdout mirror elides attributes, then the message or entire record as needed, so every emitted line—including the complete JSON envelope—is valid JSON and fits this cap.
 - `AGENTFIELD_LOG_BUFFER_BYTES` (default: `4194304`): Approximate total byte capacity of the in-memory process-log capture ring; oldest entries are discarded when full.
 
 Agent nodes run as separate processes/pods and register with the control plane. The most important Kubernetes-specific concept is:
