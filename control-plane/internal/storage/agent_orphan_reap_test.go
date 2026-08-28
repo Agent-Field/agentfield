@@ -162,6 +162,12 @@ func TestExecutionRecordsPersistServingInstance(t *testing.T) {
 		require.NoError(t, ls.requireSQLDB().QueryRowContext(ctx, "SELECT COALESCE(instance_id, '') FROM "+table+" WHERE execution_id = ?", "exec-stamped").Scan(&instanceID))
 		require.Equal(t, "instance-current", instanceID, table)
 	}
+	got, err := ls.GetWorkflowExecution(ctx, "exec-stamped")
+	require.NoError(t, err)
+	require.Equal(t, "instance-current", got.InstanceID)
+	gotList, err := ls.QueryWorkflowExecutions(ctx, types.WorkflowExecutionFilters{})
+	require.NoError(t, err)
+	require.Equal(t, "instance-current", gotList[0].InstanceID)
 }
 
 // TestMarkAgentExecutionsOrphaned_ReapsAllNonTerminalStatuses ensures we don't

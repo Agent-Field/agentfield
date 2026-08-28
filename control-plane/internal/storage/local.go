@@ -72,7 +72,7 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DBTX, executionID string, suffix string) (*types.WorkflowExecution, error) {
 	query := `
 		SELECT id, workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
-		       agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
+		       agent_node_id, COALESCE(instance_id, ''), parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
 		       reasoner_id, input_data, output_data, input_size, output_size,
 		       status, started_at, completed_at, duration_ms,
 		       state_version, last_event_sequence, active_children, pending_children,
@@ -97,7 +97,7 @@ func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DB
 	var approvalRequestedAt, approvalRespondedAt, approvalExpiresAt sql.NullTime
 	err := row.Scan(
 		&execution.ID, &execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
-		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID,
+		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID, &execution.InstanceID,
 		&execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID, &execution.WorkflowDepth,
 		&execution.ReasonerID, &inputData, &outputData,
 		&execution.InputSize, &execution.OutputSize, &execution.Status,
@@ -2139,7 +2139,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		SELECT
 			workflow_executions.id, workflow_executions.workflow_id, workflow_executions.execution_id,
 			workflow_executions.agentfield_request_id, workflow_executions.run_id, workflow_executions.session_id, workflow_executions.actor_id,
-			workflow_executions.agent_node_id, workflow_executions.parent_workflow_id, workflow_executions.parent_execution_id,
+			workflow_executions.agent_node_id, COALESCE(workflow_executions.instance_id, ''), workflow_executions.parent_workflow_id, workflow_executions.parent_execution_id,
 			workflow_executions.root_workflow_id, workflow_executions.workflow_depth,
 			workflow_executions.reasoner_id, workflow_executions.input_data, workflow_executions.output_data,
 			workflow_executions.input_size, workflow_executions.output_size,
@@ -2286,7 +2286,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		err := rows.Scan(
 			&execution.ID, &execution.WorkflowID, &execution.ExecutionID,
 			&execution.AgentFieldRequestID, &runID, &execution.SessionID, &execution.ActorID,
-			&execution.AgentNodeID, &execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID,
+			&execution.AgentNodeID, &execution.InstanceID, &execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID,
 			&execution.WorkflowDepth, &execution.ReasonerID, &inputData,
 			&outputData, &execution.InputSize, &execution.OutputSize,
 			&execution.Status, &execution.StartedAt, &execution.CompletedAt,
