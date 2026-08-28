@@ -191,7 +191,7 @@ af init my-agent --defaults --language typescript && cd my-agent && npm install 
 docker run -p 8080:8080 agentfield/control-plane:latest
 ```
 
-[Deployment guide →](https://agentfield.ai/docs/reference/deploy?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deploy) for Docker Compose, Kubernetes, and production setups.
+[Deployment guide →](https://agentfield.ai/docs/reference/deploy?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deploy) for Docker Compose and production setups, or use the repository's [Kubernetes deployment guide](docs/deploying-on-kubernetes.md).
 
 </details>
 

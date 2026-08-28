@@ -67,4 +67,27 @@ If webhook registration failed, the response may include `webhook_error`.
 
 Poll `GET /api/v1/executions/{execution_id}`. Its response contains `execution_id`, `run_id`, `status`, `started_at`, and `webhook_registered`, plus applicable `status_reason`, `result`, `error`, `error_details`, `completed_at`, `duration_ms`, `webhook_events`, and approval fields.
 
+This polling route is a thin status view. To retrieve the full stored execution, including input, result, status, notes, and timestamps, use `POST /api/v1/agentic/query`:
+
+```json
+{
+  "resource": "executions",
+  "filters": {"execution_id": "exec_..."}
+}
+```
+
+The embedded UI's `GET /api/ui/v1/executions/{execution_id}/details` route is another full-record view. It accepts the API key and adds payload sizes, retry count, and approval details.
+
+## Rejections
+
+Execute requests can be rejected before dispatch:
+
+| HTTP status | Condition | Headers and body |
+| --- | --- | --- |
+| `429` | Concurrency limit | `Retry-After: 1` and `{"error":"...","error_category":"concurrency_limit","retry_after":1}` |
+| `503` | Dispatch queue full | `Retry-After: 1` and `{"error":"...","error_category":"queue_full","retry_after":1}` |
+| `503` | Control plane shutting down | `Retry-After: 1` and `{"error":"...","error_category":"control_plane_shutdown","retry_after":1}` |
+| `503` | Required LLM unavailable | `{"error":"...","error_category":"llm_unavailable"}` with no `Retry-After` header |
+| `413` | Body exceeds `AGENTFIELD_MAX_EXECUTE_BODY_BYTES` (default 32 MiB) | `{"error":"request body too large"}` |
+
 The execute routes do not accept an idempotency key. Retrying a request can create another execution; use the [restart/replay API](EXECUTION_RESTART.md) when replaying an existing run.
