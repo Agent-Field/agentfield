@@ -215,45 +215,57 @@ class AgentServer:
                 # Set shutdown status
                 from agentfield.agent import AgentStatus
 
+                first_shutdown_request = not getattr(
+                    self.agent, "_shutdown_requested", False
+                )
                 self.agent._shutdown_requested = True
                 self.agent._current_status = AgentStatus.OFFLINE
 
-                # Notify AgentField server of shutdown initiation
-                try:
-                    success = self.agent.client.notify_graceful_shutdown_sync(
-                        self.agent.node_id,
-                        reason="http",
-                        timeout_seconds=timeout_seconds,
-                    )
-                    if self.agent.dev_mode:
-                        state = "sent" if success else "failed"
-                        log_info(f"Shutdown notification {state}")
-                except Exception as e:
-                    if self.agent.dev_mode:
-                        log_error(f"Shutdown notification error: {e}")
+                if first_shutdown_request:
+                    # Notify AgentField server of shutdown initiation
+                    try:
+                        success = self.agent.client.notify_graceful_shutdown_sync(
+                            self.agent.node_id,
+                            reason="http",
+                            timeout_seconds=timeout_seconds,
+                        )
+                        if self.agent.dev_mode:
+                            state = "sent" if success else "failed"
+                            log_info(f"Shutdown notification {state}")
+                    except Exception as e:
+                        if self.agent.dev_mode:
+                            log_error(f"Shutdown notification error: {e}")
 
                 # Schedule graceful shutdown
                 if graceful:
-                    self._track_task(
-                        asyncio.create_task(self._graceful_shutdown(timeout_seconds))
-                    )
+                    if first_shutdown_request:
+                        self._track_task(
+                            asyncio.create_task(self._graceful_shutdown(timeout_seconds))
+                        )
 
-                    return {
-                        "status": "shutting_down",
-                        "graceful": True,
-                        "timeout_seconds": timeout_seconds,
-                        "estimated_shutdown_time": datetime.now().isoformat(),
-                        "message": "Graceful shutdown initiated",
-                    }
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "status": "shutting_down",
+                            "graceful": True,
+                            "timeout_seconds": timeout_seconds,
+                            "estimated_shutdown_time": datetime.now().isoformat(),
+                            "message": "Graceful shutdown initiated",
+                        },
+                    )
                 else:
                     # Immediate shutdown
-                    self._track_task(asyncio.create_task(self._immediate_shutdown()))
+                    if first_shutdown_request:
+                        self._track_task(asyncio.create_task(self._immediate_shutdown()))
 
-                    return {
-                        "status": "shutting_down",
-                        "graceful": False,
-                        "message": "Immediate shutdown initiated",
-                    }
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "status": "shutting_down",
+                            "graceful": False,
+                            "message": "Immediate shutdown initiated",
+                        },
+                    )
 
             except Exception as e:
                 if self.agent.dev_mode:
