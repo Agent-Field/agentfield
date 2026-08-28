@@ -315,7 +315,7 @@ func TestCleanupOldExecutionsRetentionContract(t *testing.T) {
 	require.NoError(t, ls.Initialize(ctx, cfg))
 	t.Cleanup(func() { _ = ls.Close(ctx) })
 	old := time.Now().UTC().Add(-96 * time.Hour)
-	terminal := []string{"succeeded", "failed", "cancelled", "timeout", "completed"}
+	terminal := []string{"succeeded", "failed", "cancelled", "timeout", "completed", "revoked"}
 	active := []string{"running", "pending", "queued", "waiting", "paused"}
 	all := append(append([]string{}, terminal...), active...)
 	for _, status := range all {

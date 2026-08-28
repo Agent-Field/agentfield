@@ -2526,7 +2526,7 @@ func (ls *LocalStorage) ListExpiredExecutionPayloadURIs(ctx context.Context, ret
 	cutoff := time.Now().UTC().Add(-retentionPeriod)
 	rows, err := ls.db.QueryContext(ctx, `
 		SELECT input_uri, result_uri FROM executions
-		WHERE status IN ('succeeded','failed','cancelled','timeout','completed')
+		WHERE status IN ('succeeded','failed','cancelled','timeout','completed','revoked')
 		  AND completed_at IS NOT NULL AND completed_at < ?
 		ORDER BY completed_at ASC LIMIT ?`, cutoff, batchSize)
 	if err != nil {
@@ -2612,7 +2612,7 @@ func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPerio
 
 	selectIDs := func(table string, limit int) ([]string, error) {
 		rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT execution_id FROM %s
-			WHERE status IN ('succeeded','failed','cancelled','timeout','completed')
+			WHERE status IN ('succeeded','failed','cancelled','timeout','completed','revoked')
 			AND completed_at IS NOT NULL AND completed_at < ? ORDER BY completed_at ASC LIMIT ?`, table), cutoffTime, limit)
 		if err != nil {
 			return nil, err
