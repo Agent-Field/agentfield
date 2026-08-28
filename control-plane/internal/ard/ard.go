@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -802,7 +803,7 @@ func buildPublicationView(cfg EffectiveConfig, agent *types.AgentNode, kind, tar
 		pub.DisplayName = targetID
 	}
 	if pub.Description == "" {
-		pub.Description = fmt.Sprintf("%s %s from AgentField node %s", strings.Title(kind), targetID, agent.ID)
+		pub.Description = fmt.Sprintf("%s %s from AgentField node %s", capitalizeFirstRune(kind), targetID, agent.ID)
 	}
 	pub.ValidationErrors = ValidatePublication(pub, cfg)
 	pub.ValidationStatus = "valid"
@@ -846,6 +847,14 @@ func buildPublicationView(cfg EffectiveConfig, agent *types.AgentNode, kind, tar
 		ArtifactURL: artifactURL,
 		InputSchema: inputSchema,
 	}
+}
+
+func capitalizeFirstRune(value string) string {
+	runes := []rune(value)
+	if len(runes) > 0 {
+		runes[0] = unicode.ToUpper(runes[0])
+	}
+	return string(runes)
 }
 
 func defaultPublication(kind, nodeID, targetID string, tags []string, description string) Publication {

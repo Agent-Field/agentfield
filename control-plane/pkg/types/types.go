@@ -566,14 +566,6 @@ func (as *AgentStatus) CompleteTransition() {
 	}
 }
 
-// min helper function
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // AgentFeatures holds feature flags for an agent node.
 type AgentFeatures struct {
 	ABTesting       bool            `json:"ab_testing"`

@@ -536,13 +536,6 @@ func (s *mcpServer) startAsyncRun(ctx context.Context, target string, input map[
 	return plan.exec.RunID, plan.exec.ExecutionID, nil
 }
 
-// buildRunView aggregates all executions for a run into the shape get_run and
-// wait_run return. terminal reports whether every execution has reached a
-// terminal state; found reports whether the run exists at all.
-func (s *mcpServer) buildRunView(ctx context.Context, runID string) (view map[string]interface{}, terminal, found bool, err error) {
-	return s.buildRunViewForCaller(ctx, runID, "")
-}
-
 // buildRunViewForCaller limits DID-authenticated callers to runs they own. MCP
 // executions record that ownership in ActorID when started; old or non-MCP runs
 // without the matching owner are intentionally indistinguishable from missing.

@@ -428,7 +428,7 @@ func TestGetAuthLevel_Default(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	var body map[string]string
-	json.Unmarshal(rec.Body.Bytes(), &body)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "public", body["level"])
 }
 
@@ -448,7 +448,7 @@ func TestGetAuthLevel_FromContext(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	var body map[string]string
-	json.Unmarshal(rec.Body.Bytes(), &body)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "api_key", body["level"])
 }
 
@@ -465,7 +465,7 @@ func TestGetAuthLevel_FromHeader(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	var body map[string]string
-	json.Unmarshal(rec.Body.Bytes(), &body)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "api_key", body["level"])
 }
 
@@ -492,7 +492,7 @@ func TestGetIntQuery(t *testing.T) {
 		router.ServeHTTP(rec, req)
 
 		var body map[string]float64
-		json.Unmarshal(rec.Body.Bytes(), &body)
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 		assert.Equal(t, tt.expected, body["v"], "query=%s", tt.query)
 	}
 }
@@ -540,17 +540,4 @@ func TestRespondError(t *testing.T) {
 	require.NotNil(t, resp.Error)
 	assert.Equal(t, "bad_input", resp.Error.Code)
 	assert.Equal(t, "missing field", resp.Error.Message)
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsLower(s, substr))
-}
-
-func containsLower(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

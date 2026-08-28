@@ -496,15 +496,7 @@ type usageGroupJSON struct {
 func toUsageGroups(in []usageGroupJSON) []usageGroup {
 	out := make([]usageGroup, 0, len(in))
 	for _, g := range in {
-		out = append(out, usageGroup{
-			Key:          g.Key,
-			Provider:     g.Provider,
-			CostUSD:      g.CostUSD,
-			InputTokens:  g.InputTokens,
-			OutputTokens: g.OutputTokens,
-			TotalTokens:  g.TotalTokens,
-			Entries:      g.Entries,
-		})
+		out = append(out, usageGroup(g))
 	}
 	return out
 }
@@ -771,10 +763,6 @@ func parseTimePtr(s *string) *time.Time {
 // degrades silently: a missing token, a failed request, or an unexpected shape
 // simply hides the rows. The token is never logged, persisted, or sent anywhere
 // except api.anthropic.com.
-
-// claudeUsageURL is Anthropic's OAuth usage endpoint. It is queried with a
-// bearer token and the oauth beta header.
-const claudeUsageURL = "https://api.anthropic.com/api/oauth/usage"
 
 // claudeOAuthBetaHeader is the beta gate the usage endpoint requires.
 const claudeOAuthBetaHeader = "oauth-2025-04-20"

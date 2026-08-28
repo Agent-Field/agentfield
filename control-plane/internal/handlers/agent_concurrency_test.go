@@ -3,6 +3,8 @@ package handlers
 import (
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestAgentConcurrencyLimiter_AcquireRelease(t *testing.T) {
@@ -129,9 +131,9 @@ func TestAgentConcurrencyLimiter_ReleaseUnderflowProtection(t *testing.T) {
 func TestAgentConcurrencyLimiter_GetAllCounts(t *testing.T) {
 	limiter := &AgentConcurrencyLimiter{maxPerAgent: 10}
 
-	limiter.Acquire("agent-a")
-	limiter.Acquire("agent-a")
-	limiter.Acquire("agent-b")
+	require.NoError(t, limiter.Acquire("agent-a"))
+	require.NoError(t, limiter.Acquire("agent-a"))
+	require.NoError(t, limiter.Acquire("agent-b"))
 
 	counts := limiter.GetAllCounts()
 	if counts["agent-a"] != 2 {

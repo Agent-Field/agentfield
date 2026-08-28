@@ -13,9 +13,8 @@ import (
 // Package-level reference to LLM health monitor for execution guards.
 // Set during server startup via SetLLMHealthMonitor.
 var (
-	llmHealthMonitor     *services.LLMHealthMonitor
-	llmHealthMonitorOnce sync.Once
-	llmHealthMonitorMu   sync.RWMutex
+	llmHealthMonitor   *services.LLMHealthMonitor
+	llmHealthMonitorMu sync.RWMutex
 )
 
 // SetLLMHealthMonitor registers the LLM health monitor for execution guards.

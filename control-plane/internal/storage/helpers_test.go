@@ -28,10 +28,6 @@ func ptrTime(t time.Time) *time.Time {
 	return &t
 }
 
-func ptrInt64(i int64) *int64 {
-	return &i
-}
-
 func TestSQLDatabaseHelpers(t *testing.T) {
 	t.Run("nil database guards and rebinding", func(t *testing.T) {
 		var nilDB *sqlDatabase

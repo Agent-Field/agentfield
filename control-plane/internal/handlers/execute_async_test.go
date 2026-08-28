@@ -21,13 +21,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	oldPool, oldOnce := asyncPool, asyncPoolOnce
-	asyncPool = newAsyncWorkerPool(1, 1)
+func useAsyncPoolForTest(t *testing.T, pool *asyncWorkerPool) {
+	t.Helper()
+	oldPool := asyncPool
+	asyncPool = pool
 	asyncPoolOnce = sync.Once{}
 	asyncPoolOnce.Do(func() {})
-	defer func() { asyncPool, asyncPoolOnce = oldPool, oldOnce }()
+	t.Cleanup(func() {
+		asyncPool = oldPool
+		asyncPoolOnce = sync.Once{}
+		if oldPool != nil {
+			asyncPoolOnce.Do(func() {})
+		}
+	})
+}
+
+func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	useAsyncPoolForTest(t, newAsyncWorkerPool(1, 1))
 
 	workerStarted := make(chan struct{})
 	releaseWorker := make(chan struct{})
@@ -124,12 +135,7 @@ func TestExecuteAsyncHandler_ConcurrencyRejectionHasNoPersistence(t *testing.T) 
 	require.NoError(t, concurrencyLimiter.Acquire("node-1"))
 	defer func() { concurrencyLimiter = oldLimiter }()
 
-	oldPool := asyncPool
-	oldOnce := asyncPoolOnce
-	asyncPool = newAsyncWorkerPool(1, 2)
-	asyncPoolOnce = sync.Once{}
-	asyncPoolOnce.Do(func() {})
-	defer func() { asyncPool, asyncPoolOnce = oldPool, oldOnce }()
+	useAsyncPoolForTest(t, newAsyncWorkerPool(1, 2))
 
 	agent := &types.AgentNode{ID: "node-1", BaseURL: "http://agent.example", Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}}}
 	store := newTestExecutionStorage(agent)
@@ -160,11 +166,7 @@ func TestExecuteAsyncHandler_ConcurrencyRejectionHasNoPersistence(t *testing.T) 
 
 func TestExecuteAsyncHandler_ChunkedOversizeBodyHasNoPersistence(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	oldPool, oldOnce := asyncPool, asyncPoolOnce
-	asyncPool = newAsyncWorkerPool(0, 1)
-	asyncPoolOnce = sync.Once{}
-	asyncPoolOnce.Do(func() {})
-	defer func() { asyncPool, asyncPoolOnce = oldPool, oldOnce }()
+	useAsyncPoolForTest(t, newAsyncWorkerPool(0, 1))
 
 	agent := &types.AgentNode{ID: "node-1", BaseURL: "http://agent.example", Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}}}
 	store := newTestExecutionStorage(agent)
@@ -190,12 +192,9 @@ func TestExecuteAsyncHandler_ChunkedOversizeBodyHasNoPersistence(t *testing.T) {
 
 func TestExecuteAsyncHandler_QueueFullHasNoPersistence(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	oldPool, oldOnce := asyncPool, asyncPoolOnce
-	asyncPool = newAsyncWorkerPool(0, 1)
+	pool := newAsyncWorkerPool(0, 1)
+	useAsyncPoolForTest(t, pool)
 	require.True(t, asyncPool.reserve())
-	asyncPoolOnce = sync.Once{}
-	asyncPoolOnce.Do(func() {})
-	defer func() { asyncPool, asyncPoolOnce = oldPool, oldOnce }()
 
 	agent := &types.AgentNode{ID: "node-1", BaseURL: "http://agent.example", Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}}}
 	store := newTestExecutionStorage(agent)

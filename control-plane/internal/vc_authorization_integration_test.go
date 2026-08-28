@@ -738,7 +738,7 @@ func TestVCAuth_Phase3_Middleware_DIDAuth(t *testing.T) {
 		assert.Equal(t, 200, w.Code)
 
 		var response map[string]string
-		json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 		assert.Equal(t, did, response["verified_did"])
 	})
 
@@ -846,7 +846,7 @@ func TestVCAuth_Phase5_EndToEnd_DIDAuthentication(t *testing.T) {
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
-	tc.storage.StoreDIDDocument(tc.ctx, record)
+	require.NoError(t, tc.storage.StoreDIDDocument(tc.ctx, record))
 
 	// Helper to create signed requests
 	signAndSend := func(router *gin.Engine, method, path string, body []byte) *httptest.ResponseRecorder {
@@ -886,7 +886,7 @@ func TestVCAuth_Phase5_EndToEnd_DIDAuthentication(t *testing.T) {
 		assert.Equal(t, 200, w.Code)
 
 		var response map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 		assert.True(t, response["success"].(bool))
 		assert.Equal(t, did, response["verified_did"])
 	})
@@ -982,7 +982,7 @@ func TestVCAuth_Phase6_SDK_GoClientDIDAuth(t *testing.T) {
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 		}
-		tc.storage.StoreDIDDocument(tc.ctx, record)
+		require.NoError(t, tc.storage.StoreDIDDocument(tc.ctx, record))
 
 		// Create private key JWK for SDK
 		privateKeyJWK := fmt.Sprintf(`{"kty":"OKP","crv":"Ed25519","d":"%s","x":"%s"}`,
@@ -1021,7 +1021,7 @@ func TestVCAuth_Phase6_SDK_GoClientDIDAuth(t *testing.T) {
 		assert.Equal(t, 200, w.Code)
 
 		var response map[string]string
-		json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 		assert.Equal(t, did, response["verified_did"])
 
 		t.Logf("SDK signature verification successful for DID: %s", did)

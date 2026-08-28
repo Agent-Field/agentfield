@@ -30,14 +30,6 @@ var terminalStatuses = []string{
 	types.ExecutionStatusCancelled,
 }
 
-// semiTerminalStatuses lists states that are terminal-like but allow specific
-// recovery transitions. For example, timeout allows transitions to running
-// (stale execution reaper may timeout executions that are still active, e.g.
-// waiting for HITL approval) and cancelled.
-var semiTerminalStatuses = []string{
-	types.ExecutionStatusTimeout,
-}
-
 // ---------------------------------------------------------------------------
 // Terminal irreversibility
 // ---------------------------------------------------------------------------

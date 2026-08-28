@@ -10,8 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func strp(s string) *string { return &s }
-
 func testWorkflow(id, sessionID, actorID, status string, started time.Time) *types.Workflow {
 	name := "workflow-" + id
 	return &types.Workflow{

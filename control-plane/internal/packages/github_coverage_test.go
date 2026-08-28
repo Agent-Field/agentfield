@@ -90,7 +90,7 @@ func TestGitHubInstallerErrorCasesFinal(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Length", "100")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("short body"))
+			_, _ = w.Write([]byte("short body"))
 		}))
 		defer server.Close()
 

@@ -93,7 +93,7 @@ func TestDefaultProcessManager_Start_Extended(t *testing.T) {
 		logDir := filepath.Join(tempDir, "readonly")
 		err := os.Mkdir(logDir, 0555) // Read-only directory
 		require.NoError(t, err)
-		defer os.Chmod(logDir, 0755)
+		defer func() { require.NoError(t, os.Chmod(logDir, 0755)) }()
 
 		logFile := filepath.Join(logDir, "test.log")
 		cfg := interfaces.ProcessConfig{

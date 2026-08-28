@@ -17,19 +17,18 @@ import (
 )
 
 type callOptions struct {
-	inputSource    string
-	printSchema    bool
-	async          bool
-	noInteractive  bool
-	interactive    bool
-	outputFormat   string
-	fieldPath      string
-	stdinTTY       bool
-	stdoutTTY      bool
-	stdin          io.Reader
-	stderr         io.Writer
-	stdout         io.Writer
-	promptAnswered bool
+	inputSource   string
+	printSchema   bool
+	async         bool
+	noInteractive bool
+	interactive   bool
+	outputFormat  string
+	fieldPath     string
+	stdinTTY      bool
+	stdoutTTY     bool
+	stdin         io.Reader
+	stderr        io.Writer
+	stdout        io.Writer
 }
 
 type callResponse struct {
