@@ -5475,17 +5475,6 @@ class Agent(FastAPI):
             if self.dev_mode:
                 log_warn(f"Failed to emit workflow event for {component_id}: {exc}")
 
-    def _setup_signal_handlers(
-        self,
-    ) -> None:  # pragma: no cover - requires signal integration
-        """Delegate to server handler for signal setup"""
-        return self.server_handler.setup_signal_handlers()
-
-    def _signal_handler(
-        self, signum: int, frame
-    ) -> None:  # pragma: no cover - runtime signal handling
-        """Delegate to server handler for signal handling"""
-        return self.server_handler.signal_handler(signum, frame)
 
     def __del__(self) -> None:  # pragma: no cover - destructor best effort
         """
