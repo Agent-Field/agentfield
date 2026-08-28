@@ -114,7 +114,7 @@ The telemetry payload does not include prompts, inputs, outputs, logs, secrets, 
 - `AGENTFIELD_MAX_CONCURRENT_PER_AGENT` (default: `0`): Maximum concurrent executions dispatched to one agent; `0` means unlimited.
 - `AGENTFIELD_EXEC_ASYNC_WORKERS` (default: number of CPUs): Worker count for asynchronous execution and restart jobs; non-positive values use the default.
 - `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): In-memory asynchronous execution queue capacity; non-positive values use the default.
-- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control plane HTTP server during shutdown. Go and TypeScript agent nodes read the same variable name for their own execution drain, which is a separate setting on a separate process (see "Graceful shutdown (Go & TypeScript SDK agents)" under Agent Nodes).
+- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control plane HTTP server during shutdown.
 - `AGENTFIELD_AGENT_RESTART_GRACE` (default: `15s`): How long an execution waits for an agent process to return during a coordinated restart; a negative duration disables the wait.
 
 Rate limiting is off by default and has no dedicated environment-variable overrides. Configure the YAML-only `agentfield.rate_limit` block with `enabled`, `execute_rps`, `execute_burst`, `discovery_rps`, `discovery_burst`, `bulk_status_rps`, `bulk_status_burst`, `global_rps`, and `global_burst`.
@@ -182,6 +182,18 @@ The same concept applies to **Docker**:
 - If the control plane runs in a container and the agent runs on your host, set the agent’s callback/public URL to `host.docker.internal` (or the Docker host gateway on Linux).
 - If both run in the same Docker network/Compose project, set the callback/public URL to the agent service name (for example `http://demo-go-agent:8001`).
 
+### Graceful shutdown (Go & TypeScript SDK agents)
+
+- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): How long a Go or TypeScript **agent node** waits for its in-flight executions to drain during graceful shutdown, triggered by SIGTERM, SIGINT, or `POST /shutdown`. Accepts bare seconds (`30`) or a duration string (`30s`, `5m`); an invalid value logs a warning and falls back to the default. In the Go SDK, `Config.ShutdownTimeout` takes precedence over this variable.
+
+When the deadline expires the agent cancels whatever is still running and reports a terminal status for it, so the control plane is not left waiting on work that will never return.
+
+Note that this is the **agent-node** meaning of the variable. The control plane reads the same variable name for a different purpose — the grace period for draining its own HTTP server (see "Miscellaneous control-plane knobs" above). They are separate processes, so one exported value applies to each independently; give them different values by setting the variable per process rather than globally.
+
+The Python SDK's equivalent setting is documented under "Python SDK agents" below.
+
+In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` higher than this timeout so the agent can report terminal execution statuses before the container is killed.
+
 ### Go SDK agents (example: `examples/go_agent_nodes`)
 
 - `AGENTFIELD_URL` (optional): Control plane base URL (example: `http://agentfield:8080`).
@@ -241,15 +253,3 @@ When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution valu
   harness session. The SDKs set it to `1` for a first-level child and increment
   an inherited numeric value for nested sessions. An explicit per-call `env`
   value wins over the derived depth.
-
-### Graceful shutdown (Go & TypeScript SDK agents)
-
-- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): How long a Go or TypeScript **agent node** waits for its in-flight executions to drain during graceful shutdown, triggered by SIGTERM, SIGINT, or `POST /shutdown`. Accepts bare seconds (`30`) or a duration string (`30s`, `5m`); an invalid value logs a warning and falls back to the default. In the Go SDK, `Config.ShutdownTimeout` takes precedence over this variable.
-
-When the deadline expires the agent cancels whatever is still running and reports a terminal status for it, so the control plane is not left waiting on work that will never return.
-
-Note that this is the **agent-node** meaning of the variable. The control plane reads the same variable name for a different purpose — the grace period for draining its own HTTP server (see "Miscellaneous control-plane knobs" above). They are separate processes, so one exported value applies to each independently; give them different values by setting the variable per process rather than globally.
-
-The Python SDK performs the same graceful drain on shutdown, but with a fixed 30-second budget — it does not read this variable.
-
-In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` higher than this timeout so the agent can report terminal execution statuses before the container is killed.
