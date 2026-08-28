@@ -5,6 +5,7 @@ Tests for agentfield.agent_server — AgentServer route registration and utility
 from __future__ import annotations
 
 import asyncio
+import signal
 import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -142,6 +143,8 @@ async def test_info_endpoint():
 
 def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
     events = []
+    installed_signals = []
+    removed_signals = []
 
     @asynccontextmanager
     async def existing_lifespan(app):
@@ -163,7 +166,19 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
     )
     app.connection_manager = None
     app.memory_event_client = None
-    app.client = SimpleNamespace(aclose=AsyncMock())
+    app._background_tasks = set()
+
+    async def close_client():
+        events.append("client-close")
+
+    app.client = SimpleNamespace(aclose=AsyncMock(side_effect=close_client))
+
+    class SignalLoop:
+        def add_signal_handler(self, signum, callback, *args):
+            installed_signals.append((signum, callback, args))
+
+        def remove_signal_handler(self, signum):
+            removed_signals.append(signum)
 
     class FakeConfig:
         def __init__(self, served_app, **config):
@@ -180,6 +195,14 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
                 async with app.router.lifespan_context(app):
                     events.append("serving")
 
+                    async def dispatched_reasoner():
+                        await asyncio.sleep(0)
+                        events.append("terminal-callback")
+
+                    task = asyncio.create_task(dispatched_reasoner())
+                    app._background_tasks.add(task)
+                    task.add_done_callback(app._background_tasks.discard)
+
             asyncio.run(exercise_lifespan())
 
     monkeypatch.setattr(
@@ -187,6 +210,9 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
     )
     monkeypatch.setattr("agentfield.agent_server.uvicorn.Config", FakeConfig)
     monkeypatch.setattr("agentfield.agent_server.uvicorn.Server", FakeServer)
+    monkeypatch.setattr(
+        "agentfield.agent_server.asyncio.get_running_loop", lambda: SignalLoop()
+    )
 
     AgentServer(app).serve(port=8001)
 
@@ -197,10 +223,48 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
         "caller-start",
         "serving",
         "caller-stop",
+        "terminal-callback",
         "agentfield-stop",
+        "client-close",
         "heartbeat-stop",
     ]
+    assert [item[0] for item in installed_signals] == [signal.SIGTERM, signal.SIGINT]
+    assert all(
+        item[1].__name__ == "_begin_signal_shutdown" for item in installed_signals
+    )
+    assert removed_signals == [signal.SIGTERM, signal.SIGINT]
     app.client.aclose.assert_awaited_once()
+
+
+def test_serve_applies_shutdown_timeout_from_environment(monkeypatch):
+    app = make_agent_app()
+    app.agentfield_handler = SimpleNamespace(
+        start_heartbeat=MagicMock(),
+        setup_fast_lifecycle_signal_handlers=MagicMock(),
+        stop_heartbeat=MagicMock(),
+    )
+    captured = {}
+
+    class FakeConfig:
+        def __init__(self, served_app, **config):
+            captured.update(config)
+
+    class FakeServer:
+        def __init__(self, config):
+            pass
+
+        def run(self):
+            pass
+
+    monkeypatch.setenv("AGENTFIELD_SHUTDOWN_TIMEOUT", "17s")
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Config", FakeConfig)
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Server", FakeServer)
+
+    server = AgentServer(app)
+    server.serve(port=8001)
+
+    assert server._shutdown_timeout == 17.0
+    assert captured["timeout_graceful_shutdown"] == 17.0
 
 
 # ---------------------------------------------------------------------------

@@ -19,7 +19,9 @@ DEFAULT_SHUTDOWN_TIMEOUT = 30.0
 SHUTDOWN_SETTLEMENT_SECONDS = 5.0
 
 
-def parse_shutdown_timeout(value: object, default: float = DEFAULT_SHUTDOWN_TIMEOUT) -> float:
+def parse_shutdown_timeout(
+    value: object, default: float = DEFAULT_SHUTDOWN_TIMEOUT
+) -> float:
     """Parse a shutdown budget expressed as seconds, ``Ns``, or ``Nm``."""
     if value is None:
         return default
@@ -36,9 +38,7 @@ def parse_shutdown_timeout(value: object, default: float = DEFAULT_SHUTDOWN_TIME
             raise ValueError
         return parsed
     except (TypeError, ValueError):
-        log_warn(
-            f"Invalid AGENTFIELD_SHUTDOWN_TIMEOUT={value!r}; using {default:g}s"
-        )
+        log_warn(f"Invalid AGENTFIELD_SHUTDOWN_TIMEOUT={value!r}; using {default:g}s")
         return default
 
 
@@ -240,7 +240,9 @@ class AgentServer:
                 if graceful:
                     if first_shutdown_request:
                         self._track_task(
-                            asyncio.create_task(self._graceful_shutdown(timeout_seconds))
+                            asyncio.create_task(
+                                self._graceful_shutdown(timeout_seconds)
+                            )
                         )
 
                     return JSONResponse(
@@ -256,7 +258,9 @@ class AgentServer:
                 else:
                     # Immediate shutdown
                     if first_shutdown_request:
-                        self._track_task(asyncio.create_task(self._immediate_shutdown()))
+                        self._track_task(
+                            asyncio.create_task(self._immediate_shutdown())
+                        )
 
                     return JSONResponse(
                         status_code=202,
@@ -704,42 +708,6 @@ class AgentServer:
             deps["orjson"] = True
 
         return deps
-
-    def setup_signal_handlers(self) -> None:
-        """
-        Setup signal handlers for graceful shutdown.
-
-        This method registers signal handlers for SIGTERM and SIGINT
-        to ensure proper cleanup when the agent shuts down.
-        """
-        try:
-            # Register signal handlers for graceful shutdown
-            signal.signal(signal.SIGTERM, self.signal_handler)
-            signal.signal(signal.SIGINT, self.signal_handler)
-
-            if self.agent.dev_mode:
-                log_debug("Signal handlers registered for graceful shutdown")
-
-        except Exception as e:
-            if self.agent.dev_mode:
-                log_error(f"Failed to setup signal handlers: {e}")
-            # Continue without signal handlers - not critical
-
-    def signal_handler(self, signum: int, frame) -> None:
-        """
-        Handle shutdown signals gracefully.
-
-        Args:
-            signum: Signal number
-            frame: Current stack frame
-        """
-        signal_name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
-
-        if self.agent.dev_mode:
-            log_warn(f"{signal_name} received, shutting down gracefully...")
-
-        # Exit gracefully
-        os._exit(0)
 
     def serve(
         self,
