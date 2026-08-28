@@ -307,3 +307,110 @@ func TestLocalStorageCleanupOldExecutions(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, removed)
 }
+
+func TestCleanupOldExecutionsRetentionContract(t *testing.T) {
+	ctx := context.Background()
+	ls := NewLocalStorage(LocalStorageConfig{})
+	cfg := StorageConfig{Mode: "local", Local: LocalStorageConfig{DatabasePath: filepath.Join(t.TempDir(), "retention.db"), KVStorePath: filepath.Join(t.TempDir(), "retention.bolt")}}
+	require.NoError(t, ls.Initialize(ctx, cfg))
+	t.Cleanup(func() { _ = ls.Close(ctx) })
+	old := time.Now().UTC().Add(-96 * time.Hour)
+	terminal := []string{"succeeded", "failed", "cancelled", "timeout", "completed", "revoked"}
+	active := []string{"running", "pending", "queued", "waiting", "paused"}
+	all := append(append([]string{}, terminal...), active...)
+	for _, status := range all {
+		id := "record-" + status
+		input, result := "payload://input-"+status, "payload://result-"+status
+		exec := &types.Execution{ExecutionID: id, RunID: "run-" + status, AgentNodeID: "agent", ReasonerID: "reasoner", NodeID: "node", Status: status, StartedAt: old, CompletedAt: &old, CreatedAt: old, UpdatedAt: old, InputURI: &input, ResultURI: &result}
+		require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
+		wf := &types.WorkflowExecution{WorkflowID: "wf-" + status, ExecutionID: "workflow-" + status, AgentFieldRequestID: "request-" + status, AgentNodeID: "agent", ReasonerID: "reasoner", Status: status, StartedAt: old, CompletedAt: &old, CreatedAt: old, UpdatedAt: old, WorkflowTags: []string{}}
+		require.NoError(t, ls.StoreWorkflowExecution(ctx, wf))
+	}
+
+	deleted, err := ls.CleanupOldExecutions(ctx, 0, 100)
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+	for _, table := range []string{"executions", "workflow_executions", "workflow_runs", "workflow_steps"} {
+		var count int
+		require.NoError(t, ls.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count))
+		if table == "executions" || table == "workflow_executions" {
+			require.Equal(t, len(all), count)
+		}
+	}
+	preserved, err := ls.CleanupOldExecutions(ctx, EffectiveExecutionRetention(72*time.Hour, 120*time.Hour), 100)
+	require.NoError(t, err)
+	require.Zero(t, preserved, "preserve-recent window must outlast the shorter retention period")
+
+	uris, err := ls.ListExpiredExecutionPayloadURIs(ctx, 72*time.Hour, 100)
+	require.NoError(t, err)
+	require.Len(t, uris, len(terminal)*2)
+	deleted, err = ls.CleanupOldExecutions(ctx, 72*time.Hour, 100)
+	require.NoError(t, err)
+	require.Equal(t, len(terminal)*2, deleted)
+	for _, status := range terminal {
+		var count int
+		require.NoError(t, ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM executions WHERE execution_id = ?`, "record-"+status).Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_executions WHERE execution_id = ?`, "workflow-"+status).Scan(&count))
+		require.Zero(t, count)
+	}
+	for _, status := range active {
+		var count int
+		require.NoError(t, ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM executions WHERE execution_id = ?`, "record-"+status).Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_executions WHERE execution_id = ?`, "workflow-"+status).Scan(&count))
+		require.Equal(t, 1, count)
+	}
+}
+
+func TestPayloadURIListingsHandleEmptyNullAndErrors(t *testing.T) {
+	ctx := context.Background()
+	rawDB, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "payload-uris.db"))
+	require.NoError(t, err)
+	_, err = rawDB.Exec(`CREATE TABLE executions (
+		execution_id TEXT PRIMARY KEY, run_id TEXT, agent_node_id TEXT, reasoner_id TEXT,
+		node_id TEXT, status TEXT, started_at TIMESTAMP, completed_at TIMESTAMP,
+		created_at TIMESTAMP, updated_at TIMESTAMP, input_uri TEXT, result_uri TEXT
+	)`)
+	require.NoError(t, err)
+	ls := &LocalStorage{db: newSQLDatabase(rawDB, "local"), mode: "local"}
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	rows := []struct {
+		id     string
+		input  interface{}
+		result interface{}
+	}{
+		{"nulls", nil, nil},
+		{"empty", "", ""},
+		{"values", "payload://input", "payload://result"},
+	}
+	for _, row := range rows {
+		_, err := ls.db.ExecContext(ctx, `INSERT INTO executions
+			(execution_id, run_id, agent_node_id, reasoner_id, node_id, status, started_at, completed_at, created_at, updated_at, input_uri, result_uri)
+			VALUES (?, ?, 'agent', 'reasoner', 'node', 'completed', ?, ?, ?, ?, ?, ?)`, row.id, "run-"+row.id, old, old, old, old, row.input, row.result)
+		require.NoError(t, err)
+	}
+
+	uris, err := ls.ListExpiredExecutionPayloadURIs(ctx, 0, 10)
+	require.NoError(t, err)
+	require.Nil(t, uris)
+	uris, err = ls.ListExpiredExecutionPayloadURIs(ctx, time.Hour, 10)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"payload://input", "payload://result"}, uris)
+	refs, err := ls.ListPayloadURIs(ctx)
+	require.NoError(t, err)
+	require.Equal(t, map[string]struct{}{"payload://input": {}, "payload://result": {}}, refs)
+
+	require.NoError(t, rawDB.Close())
+	_, err = ls.ListExpiredExecutionPayloadURIs(ctx, time.Hour, 10)
+	require.ErrorContains(t, err, "query expired execution payload URIs")
+	_, err = ls.ListPayloadURIs(ctx)
+	require.ErrorContains(t, err, "query payload URIs")
+}
+
+func TestCleanupOldExecutionsBatchSizeGuard(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+	deleted, err := ls.CleanupOldExecutions(ctx, time.Hour, 0)
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+}

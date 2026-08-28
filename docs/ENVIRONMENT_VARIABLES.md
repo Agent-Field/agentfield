@@ -125,6 +125,19 @@ Rate limiting is off by default and has no dedicated environment-variable overri
 
 Execution cleanup also has YAML keys `agentfield.execution_cleanup.max_retries` (default `0`) and `retry_backoff` (default `30s`), with environment overrides `AGENTFIELD_EXECUTION_MAX_RETRIES` and `AGENTFIELD_EXECUTION_RETRY_BACKOFF`. Despite its name, `max_retries` only rewinds stale workflow rows to `pending`; nothing re-dispatches those rows, so do not rely on it for execution retries.
 
+### Execution cleanup and retention (control plane)
+
+- `AGENTFIELD_EXECUTION_CLEANUP_ENABLED` (default: `true`): Runs stale-execution maintenance, terminal-row retention and payload garbage collection. Cleanup is on unless `agentfield.execution_cleanup.enabled` is set explicitly to `false`.
+- `AGENTFIELD_EXECUTION_CLEANUP_INTERVAL` (default: `5m`): Interval between cleanup passes. Zero or negative values fall back to the default rather than spinning the ticker.
+- `AGENTFIELD_EXECUTION_STALE_TIMEOUT` (default: `30m`): Age after which an inactive running execution is marked timed out.
+- `AGENTFIELD_EXECUTION_RETENTION_PERIOD` (default: `0s`): How long finished execution rows are kept. `0s` keeps them forever — deletion is opt-in; `72h` prunes finished rows older than three days.
+- `AGENTFIELD_EXECUTION_CLEANUP_BATCH_SIZE` (default: `200`): Maximum finished execution rows removed in one database transaction.
+- `AGENTFIELD_EXECUTION_PRESERVE_RECENT` (default: `1h`): Window of recent executions that retention never deletes.
+- `AGENTFIELD_PAYLOAD_ORPHAN_GRACE` (default: `1h`): Minimum age before an unreferenced payload file may be swept, so in-flight writes are not removed.
+- `AGENTFIELD_AGENT_CALL_TIMEOUT` (default: `90s`): Timeout for HTTP calls from the control plane to agent nodes. Set to `0s` or a negative duration such as `-1s` to disable the timeout through the dispatch layer. Equivalent YAML: `agentfield.execution_queue.agent_call_timeout`.
+
+All durations use Go duration syntax (`30s`, `5m`, `72h`). The same settings are available in YAML under `agentfield.execution_cleanup`; environment variables take precedence. `AGENTFIELD_EXECUTION_MAX_RETRIES` and `AGENTFIELD_EXECUTION_RETRY_BACKOFF` are described under Miscellaneous control-plane knobs above. The effective values are logged once at startup.
+
 ### CORS (HTTP API)
 
 These map to `api.cors.*` in config. When set via env, use comma-separated values.
@@ -175,6 +188,14 @@ AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT=false
 ```
 
 ## Agent Nodes
+
+### Structured logging (SDKs)
+
+- `AGENTFIELD_LOGS_ENABLED` (default: `true`): Enables Python agent-node stdout/stderr capture and the `/agentfield/v1/logs` endpoint. This controls capture, not control-plane execution-log dispatch.
+- `AGENTFIELD_LOG_TRUNCATE` (Python default: `200` characters): Truncates human-readable plain log messages and visible plain-log payloads. It does not truncate structured records.
+- `AGENTFIELD_LOG_PAYLOADS` (Python default: `false`): Shows payloads in human-readable plain logs when `true`. Structured execution attributes are unaffected.
+- `AGENTFIELD_LOG_MAX_LINE_BYTES` (default: `16384`): Maximum emitted process-log line size in bytes. The Python structured stdout mirror elides attributes, then the message or entire record as needed, so every emitted line—including the complete JSON envelope—is valid JSON and fits this cap.
+- `AGENTFIELD_LOG_BUFFER_BYTES` (default: `4194304`): Approximate total byte capacity of the in-memory process-log capture ring; oldest entries are discarded when full.
 
 Agent nodes run as separate processes/pods and register with the control plane. The most important Kubernetes-specific concept is:
 

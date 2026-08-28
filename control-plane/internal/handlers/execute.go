@@ -235,10 +235,6 @@ func UpdateExecutionStatusHandler(store ExecutionStore, payloads services.Payloa
 }
 
 func newExecutionController(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string, readARDConfig ...func() config.ARDConfig) *executionController {
-	// Use default timeout if not provided (0 or negative)
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
 	var ardConfigReader func() config.ARDConfig
 	if len(readARDConfig) > 0 {
 		ardConfigReader = readARDConfig[0]

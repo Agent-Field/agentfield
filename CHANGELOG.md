@@ -6,6 +6,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.10] - 2026-08-28
+
+
+### CI
+
+- Ci(sdk/python): make the uv lock drift check advisory (#1008)
+
+The release workflow bumps sdk/python/pyproject.toml on every release
+candidate without regenerating uv.lock, so the blocking check added in
+#999 fails on every open Python PR as soon as the next rc is cut
+(main is at 0.1.137-rc.7 while uv.lock records rc3). Keep the signal
+but stop it from blocking until the release step also runs uv lock.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1e591af)
+
+
+
+### Fixed
+
+- Fix(control-plane): safe execution-cleanup defaults, terminal-row retention, and payload GC (#1007)
+
+* fix(control-plane): default execution cleanup safely
+
+* fix(control-plane): prune terminal execution records
+
+* fix(control-plane): garbage collect payload files
+
+* fix(control-plane): scope empty run cleanup
+
+* test(control-plane): align cleanup closed-store error
+
+* fix(control-plane): preserve cleanup enabled presence
+
+* fix(control-plane): isolate payload garbage collection store
+
+* fix(control-plane): defer orphan sweep until cleanup loop
+
+* docs(control-plane): note orphan scan memory cost
+
+* refactor(control-plane): extract cleanup presence marker helper
+
+Both CLI entry points duplicated the same viper.IsSet guard around
+MarkExecutionCleanupEnabledConfigured. Move it behind
+config.MarkExecutionCleanupEnabledIfSet so the presence-tracking rule
+lives next to the flag it guards and can be exercised by a unit test —
+the guard previously sat only in package main, where it was unreachable
+from tests. Behavior is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover cleanup config, store and GC error branches
+
+Adds coverage for the error and guard paths introduced by this branch:
+presence marking from a viper instance, the payload sweep's nil-store /
+missing-directory / cancelled-context / limit-zero guards, the cleanup
+service's payload-remove, reference-list and sweep failure logging plus
+its capability probes, and the local storage payload URI listings over
+NULL, empty and closed-database cases along with the batch-size guard.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(control-plane): move the .env.example block into its section
+
+Keeps this PR's example variables next to the section they belong to
+instead of appending at end-of-file, so sibling PRs that also extend
+.env.example merge in any order.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(config): preserve disabled agent call timeout
+
+* fix(cleanup): avoid shutdown mutex deadlock
+
+* fix(cleanup): preserve recent execution window
+
+* fix(storage): prune revoked executions
+
+* fix(payloads): scan beyond referenced sweep entries
+
+* fix(cleanup): report payload listing errors
+
+* fix(control-plane): honor disabled agent call timeout
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (da1e214)
+
 ## [0.1.137-rc.9] - 2026-08-28
 
 

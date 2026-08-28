@@ -4,6 +4,7 @@ Tests for agentfield.node_logs — ProcessLogRing and related helpers.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import queue
@@ -16,6 +17,7 @@ from agentfield.node_logs import (
     LogEntry,
     ProcessLogRing,
     _TeeTextIO,
+    async_iter_tail_ndjson,
     get_ring,
     install_stdio_tee,
     iter_tail_ndjson,
@@ -297,7 +299,49 @@ class TestIterTailNdjson:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+async def test_async_idle_follower_cancels_without_a_log_or_worker_thread(monkeypatch):
+    import agentfield.node_logs as nl
+
+    monkeypatch.setattr(nl, "_global_ring", ProcessLogRing(max_bytes=1024 * 1024))
+    stream = async_iter_tail_ndjson(tail_lines=0, since_seq=0, follow=True)
+    pending = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(pending, timeout=1)
+    await stream.aclose()
+
+
 class TestTeeTextIO:
+    def test_concurrent_complete_lines_are_not_interleaved_or_duplicated(self):
+        original = io.StringIO()
+        ring = ProcessLogRing(max_bytes=16 * 1024 * 1024)
+        tee = _TeeTextIO("stdout", original, ring, max_line_bytes=1024)
+        thread_count = 8
+        lines_per_thread = 800
+
+        def write_lines(worker):
+            for index in range(lines_per_thread):
+                tee.write(f"{worker}:{index}\n")
+
+        threads = [
+            threading.Thread(target=write_lines, args=(n,)) for n in range(thread_count)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        lines = [entry.line for entry in ring.tail(thread_count * lines_per_thread)]
+        assert len(lines) == thread_count * lines_per_thread
+        assert set(lines) == {
+            f"{worker}:{index}"
+            for worker in range(thread_count)
+            for index in range(lines_per_thread)
+        }
+
     def test_tee_text_io_writes_to_original(self):
         original = io.StringIO()
         ring = ProcessLogRing(max_bytes=1024 * 1024)

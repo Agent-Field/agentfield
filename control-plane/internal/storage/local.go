@@ -2517,50 +2517,91 @@ func (ls *LocalStorage) QueryWorkflowDAG(ctx context.Context, rootWorkflowID str
 	return executions, nil
 }
 
-// CleanupOldExecutions removes old completed workflow executions based on retention period
+// ListExpiredExecutionPayloadURIs returns only payload references for the next
+// retention batch. It intentionally does not load inline payload columns.
+func (ls *LocalStorage) ListExpiredExecutionPayloadURIs(ctx context.Context, retentionPeriod time.Duration, batchSize int) ([]string, error) {
+	if retentionPeriod <= 0 {
+		return nil, nil
+	}
+	cutoff := time.Now().UTC().Add(-retentionPeriod)
+	rows, err := ls.db.QueryContext(ctx, `
+		SELECT input_uri, result_uri FROM executions
+		WHERE status IN ('succeeded','failed','cancelled','timeout','completed','revoked')
+		  AND completed_at IS NOT NULL AND completed_at < ?
+		ORDER BY completed_at ASC LIMIT ?`, cutoff, batchSize)
+	if err != nil {
+		return nil, fmt.Errorf("query expired execution payload URIs: %w", err)
+	}
+	defer rows.Close()
+	var uris []string
+	for rows.Next() {
+		var input, result sql.NullString
+		if err := rows.Scan(&input, &result); err != nil {
+			return nil, fmt.Errorf("scan expired execution payload URIs: %w", err)
+		}
+		if input.Valid && input.String != "" {
+			uris = append(uris, input.String)
+		}
+		if result.Valid && result.String != "" {
+			uris = append(uris, result.String)
+		}
+	}
+	return uris, rows.Err()
+}
+
+// ListPayloadURIs returns all live file references without loading payload data.
+// The orphan sweep materializes every referenced URI in memory once per pass;
+// keep its call frequency bounded because this cost grows with executions.
+func (ls *LocalStorage) ListPayloadURIs(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := ls.db.QueryContext(ctx, `SELECT input_uri, result_uri FROM executions WHERE input_uri IS NOT NULL OR result_uri IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("query payload URIs: %w", err)
+	}
+	defer rows.Close()
+	refs := make(map[string]struct{})
+	for rows.Next() {
+		var input, result sql.NullString
+		if err := rows.Scan(&input, &result); err != nil {
+			return nil, fmt.Errorf("scan payload URIs: %w", err)
+		}
+		if input.Valid && input.String != "" {
+			refs[input.String] = struct{}{}
+		}
+		if result.Valid && result.String != "" {
+			refs[result.String] = struct{}{}
+		}
+	}
+	return refs, rows.Err()
+}
+
+// EffectiveExecutionRetention returns the age an execution must reach before
+// pruning. Both retention and the preserve-recent window must have elapsed.
+func EffectiveExecutionRetention(retentionPeriod, preserveRecent time.Duration) time.Duration {
+	if retentionPeriod <= 0 {
+		return retentionPeriod
+	}
+	if preserveRecent > retentionPeriod {
+		return preserveRecent
+	}
+	return retentionPeriod
+}
+
+// CleanupOldExecutions removes old finished executions based on retention period.
 func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPeriod time.Duration, batchSize int) (int, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("context cancelled during cleanup old executions: %w", err)
 	}
 
-	// Calculate cutoff time
-	cutoffTime := time.Now().UTC().Add(-retentionPeriod)
-
-	// Query to find old completed executions to delete
-	// Only delete executions that are completed or failed and older than retention period
-	query := `
-		SELECT execution_id
-		FROM workflow_executions
-		WHERE (status = 'completed' OR status = 'failed')
-		  AND completed_at IS NOT NULL
-		  AND completed_at < ?
-		ORDER BY completed_at ASC
-		LIMIT ?`
-
-	rows, err := ls.db.QueryContext(ctx, query, cutoffTime, batchSize)
-	if err != nil {
-		return 0, fmt.Errorf("failed to query old executions for cleanup: %w", err)
-	}
-	defer rows.Close()
-
-	var executionIDs []string
-	for rows.Next() {
-		var executionID string
-		if err := rows.Scan(&executionID); err != nil {
-			return 0, fmt.Errorf("failed to scan execution ID for cleanup: %w", err)
-		}
-		executionIDs = append(executionIDs, executionID)
-	}
-
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("error after querying old executions for cleanup: %w", err)
-	}
-
-	// If no executions to clean up, return early
-	if len(executionIDs) == 0 {
+	if retentionPeriod <= 0 {
 		return 0, nil
 	}
+	if batchSize <= 0 {
+		return 0, nil
+	}
+
+	// Calculate cutoff time
+	cutoffTime := time.Now().UTC().Add(-retentionPeriod)
 
 	// Begin transaction for atomic cleanup
 	tx, err := ls.db.BeginTx(ctx, nil)
@@ -2569,27 +2610,91 @@ func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPerio
 	}
 	defer rollbackTx(tx, "cleanupOldExecutions")
 
-	// Delete executions in batch
-	// Use placeholders for safe deletion
-	placeholders := make([]string, len(executionIDs))
-	args := make([]interface{}, len(executionIDs))
-	for i, id := range executionIDs {
-		placeholders[i] = "?"
-		args[i] = id
+	selectIDs := func(table string, limit int) ([]string, error) {
+		rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT execution_id FROM %s
+			WHERE status IN ('succeeded','failed','cancelled','timeout','completed','revoked')
+			AND completed_at IS NOT NULL AND completed_at < ? ORDER BY completed_at ASC LIMIT ?`, table), cutoffTime, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		return ids, rows.Err()
 	}
-
-	deleteQuery := fmt.Sprintf(`
-		DELETE FROM workflow_executions
-		WHERE execution_id IN (%s)`, strings.Join(placeholders, ","))
-
-	result, err := tx.ExecContext(ctx, deleteQuery, args...)
-	if err != nil {
-		return 0, fmt.Errorf("failed to delete old executions: %w", err)
+	deleteIDs := func(table string, ids []string) (int64, error) {
+		if len(ids) == 0 {
+			return 0, nil
+		}
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+		args := make([]interface{}, len(ids))
+		for i := range ids {
+			args[i] = ids[i]
+		}
+		result, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE execution_id IN (%s)", table, placeholders), args...)
+		if err != nil {
+			return 0, err
+		}
+		return result.RowsAffected()
 	}
-
-	deletedCount, err := result.RowsAffected()
+	executionIDs, err := selectIDs("executions", batchSize)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get deleted rows count: %w", err)
+		return 0, fmt.Errorf("select expired executions: %w", err)
+	}
+	remaining := batchSize - len(executionIDs)
+	workflowIDs, err := selectIDs("workflow_executions", remaining)
+	if err != nil {
+		return 0, fmt.Errorf("select expired workflow executions: %w", err)
+	}
+	var runIDs []string
+	if len(workflowIDs) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(workflowIDs)), ",")
+		args := make([]interface{}, len(workflowIDs))
+		for i := range workflowIDs {
+			args[i] = workflowIDs[i]
+		}
+		rows, err := tx.QueryContext(ctx, fmt.Sprintf("SELECT DISTINCT run_id FROM workflow_executions WHERE execution_id IN (%s) AND run_id IS NOT NULL", placeholders), args...)
+		if err != nil {
+			return 0, fmt.Errorf("select cleanup workflow runs: %w", err)
+		}
+		for rows.Next() {
+			var runID string
+			if err := rows.Scan(&runID); err != nil {
+				rows.Close()
+				return 0, fmt.Errorf("scan cleanup workflow run: %w", err)
+			}
+			runIDs = append(runIDs, runID)
+		}
+		if err := rows.Close(); err != nil {
+			return 0, fmt.Errorf("close cleanup workflow runs: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM workflow_steps WHERE execution_id IN (%s)", placeholders), args...); err != nil {
+			return 0, fmt.Errorf("delete workflow steps: %w", err)
+		}
+	}
+	deletedExecutions, err := deleteIDs("executions", executionIDs)
+	if err != nil {
+		return 0, fmt.Errorf("delete executions: %w", err)
+	}
+	deletedWorkflows, err := deleteIDs("workflow_executions", workflowIDs)
+	if err != nil {
+		return 0, fmt.Errorf("delete workflow executions: %w", err)
+	}
+	if len(runIDs) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(runIDs)), ",")
+		args := make([]interface{}, len(runIDs))
+		for i := range runIDs {
+			args[i] = runIDs[i]
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM workflow_runs WHERE run_id IN (%s) AND NOT EXISTS (SELECT 1 FROM workflow_executions WHERE workflow_executions.run_id = workflow_runs.run_id)`, placeholders), args...); err != nil {
+			return 0, fmt.Errorf("delete empty workflow runs: %w", err)
+		}
 	}
 
 	// Commit transaction
@@ -2597,7 +2702,7 @@ func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPerio
 		return 0, fmt.Errorf("failed to commit cleanup transaction: %w", err)
 	}
 
-	return int(deletedCount), nil
+	return int(deletedExecutions + deletedWorkflows), nil
 }
 
 // CleanupWorkflow deletes all data related to a specific workflow ID or workflow run identifier

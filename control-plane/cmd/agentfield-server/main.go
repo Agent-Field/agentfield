@@ -322,6 +322,7 @@ func loadConfig(configFile string) (*config.Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	config.MarkExecutionCleanupEnabledIfSet(viper.GetViper(), &cfg)
 
 	config.ApplyDefaults(&cfg)
 

@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +43,92 @@ func TestFilePayloadStoreLifecycle(t *testing.T) {
 
 	_, err = store.Open(ctx, record.URI)
 	require.Error(t, err)
+}
+
+func TestFilePayloadStoreSweepPreservesReferencesAndGrace(t *testing.T) {
+	ctx := context.Background()
+	store := NewFilePayloadStore(t.TempDir())
+	referenced, err := store.SaveBytes(ctx, []byte("referenced"))
+	require.NoError(t, err)
+	orphan, err := store.SaveBytes(ctx, []byte("orphan"))
+	require.NoError(t, err)
+	recent, err := store.SaveBytes(ctx, []byte("recent"))
+	require.NoError(t, err)
+	old := time.Now().Add(-2 * time.Hour)
+	for _, uri := range []string{referenced.URI, orphan.URI} {
+		path, err := store.resolvePath(uri)
+		require.NoError(t, err)
+		require.NoError(t, os.Chtimes(path, old, old))
+	}
+	inspected, removed, err := store.Sweep(ctx, map[string]struct{}{referenced.URI: {}}, time.Hour, 10000)
+	require.NoError(t, err)
+	require.Equal(t, 3, inspected)
+	require.Equal(t, 1, removed)
+	reader, err := store.Open(ctx, referenced.URI)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	reader, err = store.Open(ctx, recent.URI)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	_, err = store.Open(ctx, orphan.URI)
+	require.Error(t, err)
+}
+
+func TestFilePayloadStoreSweepDeletionCapDoesNotLimitInspection(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFilePayloadStore(dir)
+	old := time.Now().Add(-2 * time.Hour)
+	references := make(map[string]struct{})
+	for _, name := range []string{"aaa", "aab", "aac"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("referenced"), 0o600))
+		require.NoError(t, os.Chtimes(filepath.Join(dir, name), old, old))
+		references[payloadURIPrefix+name] = struct{}{}
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "zzz"), []byte("orphan"), 0o600))
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "zzz"), old, old))
+
+	inspected, removed, err := store.Sweep(context.Background(), references, time.Hour, 2)
+	require.NoError(t, err)
+	require.Equal(t, 4, inspected)
+	require.Equal(t, 1, removed)
+	_, err = os.Stat(filepath.Join(dir, "zzz"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestFilePayloadStoreSweepGuardAndEntryBranches(t *testing.T) {
+	ctx := context.Background()
+	var nilStore *FilePayloadStore
+	inspected, removed, err := nilStore.Sweep(ctx, nil, 0, 10)
+	require.NoError(t, err)
+	require.Zero(t, inspected)
+	require.Zero(t, removed)
+
+	store := NewFilePayloadStore(filepath.Join(t.TempDir(), "missing"))
+	inspected, removed, err = store.Sweep(ctx, nil, 0, 0)
+	require.NoError(t, err)
+	require.Zero(t, inspected)
+	require.Zero(t, removed)
+	inspected, removed, err = store.Sweep(ctx, nil, 0, 10)
+	require.NoError(t, err)
+	require.Zero(t, inspected)
+	require.Zero(t, removed)
+
+	dir := t.TempDir()
+	store = NewFilePayloadStore(dir)
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "payload-temporary"), []byte("temp"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "orphan"), []byte("old"), 0o600))
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	inspected, removed, err = store.Sweep(cancelled, nil, 0, 10)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, inspected)
+	require.Zero(t, removed)
+
+	inspected, removed, err = store.Sweep(ctx, nil, -time.Hour, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, inspected)
+	require.Equal(t, 1, removed)
 }
 
 func TestFilePayloadStoreSaveBytes(t *testing.T) {

@@ -1,12 +1,15 @@
 package config
 
 import (
-	"fmt"           // Added for fmt.Errorf
+	"fmt" // Added for fmt.Errorf
+	"log"
 	"os"            // Added for os.Stat, os.ReadFile
 	"path/filepath" // Added for filepath.Join
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spf13/viper"
 
 	"gopkg.in/yaml.v3" // Added for yaml.Unmarshal
 
@@ -218,6 +221,7 @@ type NodeHealthConfig struct {
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
 type ExecutionCleanupConfig struct {
 	Enabled                bool          `yaml:"enabled" mapstructure:"enabled" default:"true"`
+	enabledSet             bool          `yaml:"-" mapstructure:"-"`
 	RetentionPeriod        time.Duration `yaml:"retention_period" mapstructure:"retention_period" default:"24h"`
 	CleanupInterval        time.Duration `yaml:"cleanup_interval" mapstructure:"cleanup_interval" default:"1h"`
 	BatchSize              int           `yaml:"batch_size" mapstructure:"batch_size" default:"100"`
@@ -225,16 +229,72 @@ type ExecutionCleanupConfig struct {
 	StaleExecutionTimeout  time.Duration `yaml:"stale_execution_timeout" mapstructure:"stale_execution_timeout" default:"30m"`
 	MaxRetries             int           `yaml:"max_retries" mapstructure:"max_retries" default:"0"`
 	RetryBackoff           time.Duration `yaml:"retry_backoff" mapstructure:"retry_backoff" default:"30s"`
+	PayloadOrphanGrace     time.Duration `yaml:"payload_orphan_grace" mapstructure:"payload_orphan_grace"`
 }
+
+// UnmarshalYAML records whether enabled was explicitly configured, including
+// the otherwise indistinguishable enabled: false value.
+func (c *ExecutionCleanupConfig) UnmarshalYAML(node *yaml.Node) error {
+	type plain ExecutionCleanupConfig
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*c = ExecutionCleanupConfig(decoded)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == "enabled" {
+			c.enabledSet = true
+			break
+		}
+	}
+	return nil
+}
+
+// MarkExecutionCleanupEnabledConfigured preserves presence information for
+// loaders such as Viper whose struct unmarshalling cannot retain it.
+func MarkExecutionCleanupEnabledConfigured(cfg *Config) {
+	cfg.AgentField.ExecutionCleanup.enabledSet = true
+}
+
+// MarkExecutionCleanupEnabledIfSet preserves Viper's key-presence information.
+func MarkExecutionCleanupEnabledIfSet(v *viper.Viper, cfg *Config) {
+	if v.IsSet("agentfield.execution_cleanup.enabled") {
+		MarkExecutionCleanupEnabledConfigured(cfg)
+	}
+}
+
+const (
+	DefaultExecutionCleanupInterval = 5 * time.Minute
+	DefaultAgentCallTimeout         = 90 * time.Second
+)
 
 // ExecutionQueueConfig configures execution and webhook settings.
 type ExecutionQueueConfig struct {
 	AgentCallTimeout       time.Duration `yaml:"agent_call_timeout" mapstructure:"agent_call_timeout"`
+	agentCallTimeoutSet    bool          `yaml:"-" mapstructure:"-"`
 	MaxConcurrentPerAgent  int           `yaml:"max_concurrent_per_agent" mapstructure:"max_concurrent_per_agent"` // 0 = unlimited
 	WebhookTimeout         time.Duration `yaml:"webhook_timeout" mapstructure:"webhook_timeout"`
 	WebhookMaxAttempts     int           `yaml:"webhook_max_attempts" mapstructure:"webhook_max_attempts"`
 	WebhookRetryBackoff    time.Duration `yaml:"webhook_retry_backoff" mapstructure:"webhook_retry_backoff"`
 	WebhookMaxRetryBackoff time.Duration `yaml:"webhook_max_retry_backoff" mapstructure:"webhook_max_retry_backoff"`
+}
+
+// UnmarshalYAML records whether agent_call_timeout was explicitly configured,
+// including zero and negative values that disable the timeout.
+func (c *ExecutionQueueConfig) UnmarshalYAML(node *yaml.Node) error {
+	type plain ExecutionQueueConfig
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*c = ExecutionQueueConfig(decoded)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == "agent_call_timeout" {
+			c.agentCallTimeoutSet = true
+			break
+		}
+	}
+	return nil
 }
 
 // RateLimitConfig configures per-endpoint rate limiting.
@@ -520,6 +580,37 @@ func LoadConfig(configPath string) (*Config, error) {
 
 // ApplyDefaults fills values that should be stable across config loaders.
 func ApplyDefaults(cfg *Config) {
+	cleanup := &cfg.AgentField.ExecutionCleanup
+	// Cleanup is enabled by default so stale executions are still swept even
+	// when retention is disabled. A zero retention period intentionally means
+	// that finished rows are kept forever.
+	if !cleanup.enabledSet && !cleanup.Enabled {
+		cleanup.Enabled = true
+	}
+	if cleanup.CleanupInterval <= 0 {
+		if cleanup.CleanupInterval < 0 {
+			log.Printf("warning: execution cleanup interval %s is invalid; using %s", cleanup.CleanupInterval, DefaultExecutionCleanupInterval)
+		}
+		cleanup.CleanupInterval = DefaultExecutionCleanupInterval
+	}
+	if cleanup.StaleExecutionTimeout == 0 {
+		cleanup.StaleExecutionTimeout = 30 * time.Minute
+	}
+	if cleanup.BatchSize <= 0 {
+		cleanup.BatchSize = 200
+	}
+	if cleanup.PreserveRecentDuration == 0 {
+		cleanup.PreserveRecentDuration = time.Hour
+	}
+	if cleanup.RetryBackoff == 0 {
+		cleanup.RetryBackoff = 30 * time.Second
+	}
+	if cleanup.PayloadOrphanGrace <= 0 {
+		cleanup.PayloadOrphanGrace = time.Hour
+	}
+	if !cfg.AgentField.ExecutionQueue.agentCallTimeoutSet && cfg.AgentField.ExecutionQueue.AgentCallTimeout == 0 {
+		cfg.AgentField.ExecutionQueue.AgentCallTimeout = DefaultAgentCallTimeout
+	}
 	if cfg.AgentField.ARD.Publish.DefaultType == "" {
 		cfg.AgentField.ARD.Publish.DefaultType = "application/openapi+json"
 	}
@@ -724,6 +815,20 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 
 	// Execution retry overrides
+	if applyBoolEnv("AGENTFIELD_EXECUTION_CLEANUP_ENABLED", &cfg.AgentField.ExecutionCleanup.Enabled) {
+		cfg.AgentField.ExecutionCleanup.enabledSet = true
+	}
+	applyDurationEnv("AGENTFIELD_EXECUTION_RETENTION_PERIOD", &cfg.AgentField.ExecutionCleanup.RetentionPeriod)
+	applyDurationEnv("AGENTFIELD_EXECUTION_CLEANUP_INTERVAL", &cfg.AgentField.ExecutionCleanup.CleanupInterval)
+	if cfg.AgentField.ExecutionCleanup.CleanupInterval <= 0 {
+		log.Printf("warning: execution cleanup interval %s is invalid; using %s", cfg.AgentField.ExecutionCleanup.CleanupInterval, DefaultExecutionCleanupInterval)
+		cfg.AgentField.ExecutionCleanup.CleanupInterval = DefaultExecutionCleanupInterval
+	}
+	applyDurationEnv("AGENTFIELD_EXECUTION_STALE_TIMEOUT", &cfg.AgentField.ExecutionCleanup.StaleExecutionTimeout)
+	applyIntEnv("AGENTFIELD_EXECUTION_CLEANUP_BATCH_SIZE", &cfg.AgentField.ExecutionCleanup.BatchSize)
+	applyDurationEnv("AGENTFIELD_EXECUTION_PRESERVE_RECENT", &cfg.AgentField.ExecutionCleanup.PreserveRecentDuration)
+	applyDurationEnv("AGENTFIELD_PAYLOAD_ORPHAN_GRACE", &cfg.AgentField.ExecutionCleanup.PayloadOrphanGrace)
+	applyDurationEnv("AGENTFIELD_AGENT_CALL_TIMEOUT", &cfg.AgentField.ExecutionQueue.AgentCallTimeout)
 	if val := os.Getenv("AGENTFIELD_EXECUTION_MAX_RETRIES"); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.AgentField.ExecutionCleanup.MaxRetries = i
@@ -901,6 +1006,41 @@ func ApplyEnvOverrides(cfg *Config) {
 		b := parseEnvBool(val)
 		cfg.Logging.RedactPayloads = &b
 	}
+}
+
+func applyDurationEnv(name string, target *time.Duration) {
+	if value := os.Getenv(name); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			log.Printf("warning: invalid %s=%q: %v; keeping %s", name, value, err, *target)
+			return
+		}
+		*target = parsed
+	}
+}
+
+func applyIntEnv(name string, target *int) {
+	if value := os.Getenv(name); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			log.Printf("warning: invalid %s=%q: %v; keeping %d", name, value, err, *target)
+			return
+		}
+		*target = parsed
+	}
+}
+
+func applyBoolEnv(name string, target *bool) bool {
+	if value := os.Getenv(name); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			log.Printf("warning: invalid %s=%q: %v; keeping %t", name, value, err, *target)
+			return true
+		}
+		*target = parsed
+		return true
+	}
+	return false
 }
 
 func parseEnvBool(value string) bool {

@@ -10,6 +10,17 @@ import (
 )
 
 func TestExecutionLogger_AdditionalBranches(t *testing.T) {
+	t.Run("stdout mirror can be disabled", func(t *testing.T) {
+		t.Setenv("AGENTFIELD_LOG_STDOUT", "false")
+		a := &Agent{cfg: Config{NodeID: "node-logs"}}
+		stdout, _, err := captureOutput(t, func() error {
+			a.ExecutionLogger(context.Background()).Info("event", "message", nil)
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Empty(t, stdout)
+	})
+
 	t.Run("nil agent and nil logger paths are safe", func(t *testing.T) {
 		var a *Agent
 		logger := a.executionLogger(context.Background(), " sdk.user ")

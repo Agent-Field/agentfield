@@ -2,6 +2,13 @@
 
 Agent nodes MAY expose process stdout/stderr for the control plane UI to proxy.
 
+Capture is enabled by default and bounded by `AGENTFIELD_LOG_BUFFER_BYTES`
+(default 4194304 bytes) and `AGENTFIELD_LOG_MAX_LINE_BYTES` (default 16384
+bytes). Set `AGENTFIELD_LOGS_ENABLED=false` to disable capture and this API.
+Structured SDK records are mirrored to stdout by default; set
+`AGENTFIELD_LOG_STDOUT=false` to disable that mirror while retaining delivery
+to the control plane.
+
 ## Agent endpoint
 
 `GET {agent_base_url}/agentfield/v1/logs`

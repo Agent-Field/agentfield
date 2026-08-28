@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/rs/zerolog"
 )
@@ -49,9 +51,72 @@ type cleanupStoreMock struct {
 	retryStaleCalls []markStaleCall
 	retryStaleIDs   [][]string
 	retryStaleErrs  []error
+	cleanupCalled   chan struct{}
+	cleanupRelease  chan struct{}
 }
 
+type payloadCleanupStore struct {
+	*cleanupStoreMock
+	expired    []string
+	expiredErr error
+	refs       map[string]struct{}
+	refsErr    error
+}
+
+type blockingOrphanStore struct {
+	*cleanupStoreMock
+	release <-chan struct{}
+}
+
+func (s *blockingOrphanStore) ListPayloadURIs(context.Context) (map[string]struct{}, error) {
+	<-s.release
+	return nil, nil
+}
+
+func (s *payloadCleanupStore) ListExpiredExecutionPayloadURIs(context.Context, time.Duration, int) ([]string, error) {
+	return s.expired, s.expiredErr
+}
+func (s *payloadCleanupStore) ListPayloadURIs(context.Context) (map[string]struct{}, error) {
+	return s.refs, s.refsErr
+}
+
+type cleanupPayloadStore struct {
+	removed   []string
+	swept     bool
+	removeErr error
+	sweepErr  error
+}
+
+func (s *cleanupPayloadStore) SaveFromReader(context.Context, io.Reader) (*services.PayloadRecord, error) {
+	return nil, nil
+}
+func (s *cleanupPayloadStore) SaveBytes(context.Context, []byte) (*services.PayloadRecord, error) {
+	return nil, nil
+}
+func (s *cleanupPayloadStore) Open(context.Context, string) (io.ReadCloser, error) {
+	return nil, errors.New("unused")
+}
+func (s *cleanupPayloadStore) Remove(_ context.Context, uri string) error {
+	s.removed = append(s.removed, uri)
+	return s.removeErr
+}
+func (s *cleanupPayloadStore) Sweep(context.Context, map[string]struct{}, time.Duration, int) (int, int, error) {
+	s.swept = true
+	return 2, 1, s.sweepErr
+}
+
+type noSweepPayloadStore struct{ services.PayloadStore }
+
 func (m *cleanupStoreMock) CleanupOldExecutions(ctx context.Context, retentionPeriod time.Duration, batchSize int) (int, error) {
+	if m.cleanupCalled != nil {
+		select {
+		case m.cleanupCalled <- struct{}{}:
+		default:
+		}
+	}
+	if m.cleanupRelease != nil {
+		<-m.cleanupRelease
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -67,6 +132,38 @@ func (m *cleanupStoreMock) CleanupOldExecutions(ctx context.Context, retentionPe
 	}
 
 	return 0, nil
+}
+
+func TestExecutionCleanupStopDoesNotDeadlockOnCleanupError(t *testing.T) {
+	store := &cleanupStoreMock{
+		cleanupResponses: []cleanupResponse{{err: errors.New("cleanup failed")}},
+		cleanupCalled:    make(chan struct{}, 1),
+		cleanupRelease:   make(chan struct{}),
+	}
+	service := NewExecutionCleanupService(store, config.ExecutionCleanupConfig{
+		Enabled: true, CleanupInterval: time.Hour, BatchSize: 10,
+	})
+	service.initialDelay = time.Millisecond
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatalf("start cleanup service: %v", err)
+	}
+	select {
+	case <-store.cleanupCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup pass did not start")
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- service.Stop() }()
+	close(store.cleanupRelease)
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("stop cleanup service: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop deadlocked waiting for cleanup error path")
+	}
 }
 
 func (m *cleanupStoreMock) MarkStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
@@ -259,6 +356,109 @@ func TestExecutionCleanupService_PerformCleanup_CleansStaleExecutionsInBatches(t
 	}
 	if !strings.Contains(logs, "Execution cleanup completed") {
 		t.Fatalf("expected completion log to be present, got logs: %s", logs)
+	}
+}
+
+func TestExecutionCleanupService_RemovesDeletedPayloadsAndSweepsOrphans(t *testing.T) {
+	setupExecutionCleanupTestLogger(t)
+	store := &payloadCleanupStore{cleanupStoreMock: &cleanupStoreMock{cleanupResponses: []cleanupResponse{{count: 1}}}, expired: []string{"payload://input", "payload://result"}, refs: map[string]struct{}{"payload://live": {}}}
+	var writePayloads services.PayloadStore
+	gcPayloads := &cleanupPayloadStore{}
+	service := NewExecutionCleanupService(store, testExecutionCleanupConfig(10), gcPayloads)
+	service.performCleanup(context.Background())
+	if writePayloads != nil {
+		t.Fatal("test requires a nil execution write store")
+	}
+	if !gcPayloads.swept {
+		t.Fatal("expected orphan sweep on cleanup pass")
+	}
+	if strings.Join(gcPayloads.removed, ",") != "payload://input,payload://result" {
+		t.Fatalf("unexpected removed payloads: %v", gcPayloads.removed)
+	}
+}
+
+func TestExecutionCleanupService_ReportsExpiredPayloadListingErrors(t *testing.T) {
+	logs := setupExecutionCleanupTestLogger(t)
+	store := &payloadCleanupStore{
+		cleanupStoreMock: &cleanupStoreMock{},
+		expiredErr:       errors.New("payload query failed"),
+	}
+	service := NewExecutionCleanupService(store, testExecutionCleanupConfig(10), &cleanupPayloadStore{})
+	service.performCleanup(context.Background())
+
+	output := logs.String()
+	if !strings.Contains(output, "failed to list expired execution payload URIs") ||
+		!strings.Contains(output, "payload query failed") ||
+		!strings.Contains(output, `"payload_uri_list_errors":1`) {
+		t.Fatalf("missing payload listing error summary: %s", output)
+	}
+}
+
+func TestExecutionCleanupServicePayloadErrorAndCapabilityBranches(t *testing.T) {
+	t.Run("remove failure is logged and cleanup continues", func(t *testing.T) {
+		logs := setupExecutionCleanupTestLogger(t)
+		store := &payloadCleanupStore{cleanupStoreMock: &cleanupStoreMock{cleanupResponses: []cleanupResponse{{count: 1}}}, expired: []string{"payload://old"}}
+		payloads := &cleanupPayloadStore{removeErr: errors.New("remove denied")}
+		NewExecutionCleanupService(store, testExecutionCleanupConfig(10), payloads).performCleanup(context.Background())
+		if !strings.Contains(logs.String(), "failed to remove retained execution payload") {
+			t.Fatalf("missing remove warning: %s", logs.String())
+		}
+	})
+
+	t.Run("orphan sweep requires both capabilities", func(t *testing.T) {
+		setupExecutionCleanupTestLogger(t)
+		NewExecutionCleanupService(&cleanupStoreMock{}, testExecutionCleanupConfig(10), &noSweepPayloadStore{}).sweepOrphans(context.Background())
+		NewExecutionCleanupService(&cleanupStoreMock{}, testExecutionCleanupConfig(10), &cleanupPayloadStore{}).sweepOrphans(context.Background())
+	})
+
+	t.Run("orphan errors return without panic", func(t *testing.T) {
+		logs := setupExecutionCleanupTestLogger(t)
+		listErrStore := &payloadCleanupStore{cleanupStoreMock: &cleanupStoreMock{}, refsErr: errors.New("list failed")}
+		NewExecutionCleanupService(listErrStore, testExecutionCleanupConfig(10), &cleanupPayloadStore{}).sweepOrphans(context.Background())
+		sweepErrStore := &payloadCleanupStore{cleanupStoreMock: &cleanupStoreMock{}, refs: map[string]struct{}{}}
+		NewExecutionCleanupService(sweepErrStore, testExecutionCleanupConfig(10), &cleanupPayloadStore{sweepErr: errors.New("sweep failed")}).sweepOrphans(context.Background())
+		if !strings.Contains(logs.String(), "failed to list payload references") || !strings.Contains(logs.String(), "payload orphan sweep failed") {
+			t.Fatalf("missing orphan error logs: %s", logs.String())
+		}
+	})
+}
+
+func TestExecutionCleanupService_StartClampsInvalidTickerInterval(t *testing.T) {
+	setupExecutionCleanupTestLogger(t)
+	service := NewExecutionCleanupService(&cleanupStoreMock{}, config.ExecutionCleanupConfig{Enabled: true, CleanupInterval: -time.Second})
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if service.config.CleanupInterval != config.DefaultExecutionCleanupInterval {
+		t.Fatalf("interval was not clamped: %s", service.config.CleanupInterval)
+	}
+	if err := service.Stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionCleanupService_StartDoesNotWaitForOrphanSweep(t *testing.T) {
+	setupExecutionCleanupTestLogger(t)
+	release := make(chan struct{})
+	store := &blockingOrphanStore{cleanupStoreMock: &cleanupStoreMock{}, release: release}
+	service := NewExecutionCleanupService(store, testExecutionCleanupConfig(10), &cleanupPayloadStore{})
+	service.initialDelay = time.Hour
+
+	started := make(chan error, 1)
+	go func() { started <- service.Start(context.Background()) }()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		close(release)
+		t.Fatal("Start blocked on orphan sweep")
+	}
+
+	close(release)
+	if err := service.Stop(); err != nil {
+		t.Fatal(err)
 	}
 }
 
