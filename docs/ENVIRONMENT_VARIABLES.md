@@ -184,15 +184,15 @@ The same concept applies to **Docker**:
 
 ### Graceful shutdown (Go & TypeScript SDK agents)
 
-- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): How long a Go or TypeScript **agent node** waits for its in-flight executions to drain during graceful shutdown, triggered by SIGTERM, SIGINT, or `POST /shutdown`. Accepts bare seconds (`30`) or a duration string (`30s`, `5m`); an invalid value logs a warning and falls back to the default. In the Go SDK, `Config.ShutdownTimeout` takes precedence over this variable.
+- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): How long a Go or TypeScript **agent node** waits for its in-flight executions to drain during graceful shutdown, triggered by SIGTERM or SIGINT. The Go SDK also exposes `POST /shutdown`; this is not a TypeScript SDK route. The setting accepts bare seconds (`30`) or a duration string (`30s`, `5m`); an invalid value logs a warning and falls back to the default. In the Go SDK, `Config.ShutdownTimeout` takes precedence over this variable.
 
-When the deadline expires the agent cancels whatever is still running and reports a terminal status for it, so the control plane is not left waiting on work that will never return.
+When the deadline expires the agent cancels whatever is still running and allows up to 5 additional seconds for those executions to settle and report terminal status. Total shutdown time is therefore the configured timeout, plus up to 5 seconds of post-cancel settlement, plus the time required to notify the control plane.
 
 Note that this is the **agent-node** meaning of the variable. The control plane reads the same variable name for a different purpose — the grace period for draining its own HTTP server (see "Miscellaneous control-plane knobs" above). They are separate processes, so one exported value applies to each independently; give them different values by setting the variable per process rather than globally.
 
 The Python SDK's equivalent setting is documented under "Python SDK agents" below.
 
-In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` higher than this timeout so the agent can report terminal execution statuses before the container is killed.
+In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` at least 10 seconds higher than `AGENTFIELD_SHUTDOWN_TIMEOUT` to leave room for post-cancel settlement and the control-plane notification before the container is killed.
 
 ### Go SDK agents (example: `examples/go_agent_nodes`)
 
