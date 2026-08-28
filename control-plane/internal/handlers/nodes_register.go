@@ -662,7 +662,9 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 
 		if shouldReapOrphans {
 			// Detach cleanup from the registration request. The departing pod may
-			// still complete work during its termination grace period.
+			// still complete work during its termination grace period. This timer is
+			// in-memory and is lost if the control plane restarts; the stale-execution
+			// sweep is the backstop for any executions left non-terminal.
 			nodeID, newInstanceID := newNode.ID, newNode.InstanceID
 			go func() {
 				grace := AgentDrainGrace()

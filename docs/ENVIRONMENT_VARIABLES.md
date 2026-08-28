@@ -116,7 +116,7 @@ The telemetry payload does not include prompts, inputs, outputs, logs, secrets, 
 - `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): In-memory asynchronous execution queue capacity; non-positive values use the default.
 - `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control plane HTTP server during shutdown.
 - `AGENTFIELD_AGENT_RESTART_GRACE` (default: `15s`): How long an execution waits for an agent process to return during a coordinated restart; a negative duration disables the wait.
-- `AGENTFIELD_AGENT_DRAIN_GRACE` (default: `60s`): How long instance-scoped non-terminal work may keep completing after a replacement agent instance registers, before it is marked `agent_restart_orphaned`. The deferred in-memory timer can be lost on a control-plane restart; the stale-execution sweep remains the backstop. Equivalent YAML: `agentfield.node_health.agent_drain_grace`.
+- `AGENTFIELD_AGENT_DRAIN_GRACE` (default: `60s`): How long instance-scoped non-terminal work may keep completing after a replacement agent instance registers, before it is marked `agent_restart_orphaned`. The deferred in-memory timer is lost on a control-plane restart; the stale-execution sweep configured by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` is the backstop. Equivalent YAML: `agentfield.node_health.agent_drain_grace`.
 
 For Kubernetes, set `terminationGracePeriodSeconds` above the SDK drain window so the departing pod can return accepted work. Keep the agent `version` stable across rolling updates: changing it creates a separate versioned registration, so its work is recovered only by the stale sweep rather than this re-registration drain timer.
 
