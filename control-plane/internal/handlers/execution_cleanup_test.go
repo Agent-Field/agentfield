@@ -57,9 +57,10 @@ type cleanupStoreMock struct {
 
 type payloadCleanupStore struct {
 	*cleanupStoreMock
-	expired []string
-	refs    map[string]struct{}
-	refsErr error
+	expired    []string
+	expiredErr error
+	refs       map[string]struct{}
+	refsErr    error
 }
 
 type blockingOrphanStore struct {
@@ -73,7 +74,7 @@ func (s *blockingOrphanStore) ListPayloadURIs(context.Context) (map[string]struc
 }
 
 func (s *payloadCleanupStore) ListExpiredExecutionPayloadURIs(context.Context, time.Duration, int) ([]string, error) {
-	return s.expired, nil
+	return s.expired, s.expiredErr
 }
 func (s *payloadCleanupStore) ListPayloadURIs(context.Context) (map[string]struct{}, error) {
 	return s.refs, s.refsErr
@@ -373,6 +374,23 @@ func TestExecutionCleanupService_RemovesDeletedPayloadsAndSweepsOrphans(t *testi
 	}
 	if strings.Join(gcPayloads.removed, ",") != "payload://input,payload://result" {
 		t.Fatalf("unexpected removed payloads: %v", gcPayloads.removed)
+	}
+}
+
+func TestExecutionCleanupService_ReportsExpiredPayloadListingErrors(t *testing.T) {
+	logs := setupExecutionCleanupTestLogger(t)
+	store := &payloadCleanupStore{
+		cleanupStoreMock: &cleanupStoreMock{},
+		expiredErr:       errors.New("payload query failed"),
+	}
+	service := NewExecutionCleanupService(store, testExecutionCleanupConfig(10), &cleanupPayloadStore{})
+	service.performCleanup(context.Background())
+
+	output := logs.String()
+	if !strings.Contains(output, "failed to list expired execution payload URIs") ||
+		!strings.Contains(output, "payload query failed") ||
+		!strings.Contains(output, `"payload_uri_list_errors":1`) {
+		t.Fatalf("missing payload listing error summary: %s", output)
 	}
 }
 

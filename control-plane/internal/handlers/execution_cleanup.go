@@ -156,6 +156,7 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 
 	// Perform cleanup in batches until no more executions to clean
 	totalCleaned := 0
+	payloadURIListErrors := 0
 	effectiveRetention := storage.EffectiveExecutionRetention(ecs.config.RetentionPeriod, ecs.config.PreserveRecentDuration)
 	if ecs.config.StaleExecutionTimeout > 0 {
 		// Retry eligible workflow executions before marking anything as timed out
@@ -202,7 +203,12 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 			if source, ok := ecs.storage.(interface {
 				ListExpiredExecutionPayloadURIs(context.Context, time.Duration, int) ([]string, error)
 			}); ok {
-				payloadURIs, _ = source.ListExpiredExecutionPayloadURIs(cleanupCtx, effectiveRetention, ecs.config.BatchSize)
+				var err error
+				payloadURIs, err = source.ListExpiredExecutionPayloadURIs(cleanupCtx, effectiveRetention, ecs.config.BatchSize)
+				if err != nil {
+					payloadURIListErrors++
+					logger.Logger.Warn().Err(err).Msg("failed to list expired execution payload URIs")
+				}
 			}
 		}
 		cleaned, err := ecs.storage.CleanupOldExecutions(cleanupCtx, effectiveRetention, ecs.config.BatchSize)
@@ -256,10 +262,12 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 	if totalCleaned > 0 {
 		logger.Logger.Debug().
 			Int("cleaned_count", totalCleaned).
+			Int("payload_uri_list_errors", payloadURIListErrors).
 			Dur("duration", duration).
 			Msg("Execution cleanup completed")
 	} else {
 		logger.Logger.Debug().
+			Int("payload_uri_list_errors", payloadURIListErrors).
 			Dur("duration", duration).
 			Msg("Execution cleanup completed - no executions to clean")
 	}
