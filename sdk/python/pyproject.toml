@@ -31,6 +31,10 @@ dependencies = [
     "pydantic>=2.0",
     # LiteLLM 1.97.0 crashes on Python 3.10 building ModelResponse, and
     # 1.98.0 imports typing.NotRequired (only available in Python 3.11+).
+    # The 3.10 cap can be lifted once upstream guards that import the way
+    # litellm/types/compression.py does. The 3.11+ branch floats on purpose;
+    # .github/workflows/litellm-canary.yml tests it weekly against the
+    # latest release so a break is caught before users hit it.
     "litellm!=1.97.0,<1.98.0; python_version < '3.11'",
     "litellm; python_version >= '3.11'",
     "psutil",
