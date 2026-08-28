@@ -74,6 +74,27 @@ func TestFilePayloadStoreSweepPreservesReferencesAndGrace(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestFilePayloadStoreSweepDeletionCapDoesNotLimitInspection(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFilePayloadStore(dir)
+	old := time.Now().Add(-2 * time.Hour)
+	references := make(map[string]struct{})
+	for _, name := range []string{"aaa", "aab", "aac"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("referenced"), 0o600))
+		require.NoError(t, os.Chtimes(filepath.Join(dir, name), old, old))
+		references[payloadURIPrefix+name] = struct{}{}
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "zzz"), []byte("orphan"), 0o600))
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "zzz"), old, old))
+
+	inspected, removed, err := store.Sweep(context.Background(), references, time.Hour, 2)
+	require.NoError(t, err)
+	require.Equal(t, 4, inspected)
+	require.Equal(t, 1, removed)
+	_, err = os.Stat(filepath.Join(dir, "zzz"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestFilePayloadStoreSweepGuardAndEntryBranches(t *testing.T) {
 	ctx := context.Background()
 	var nilStore *FilePayloadStore

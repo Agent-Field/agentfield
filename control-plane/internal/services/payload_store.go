@@ -56,41 +56,51 @@ func (s *FilePayloadStore) Sweep(ctx context.Context, referenced map[string]stru
 	if s == nil || limit <= 0 {
 		return 0, 0, nil
 	}
-	entries, err := os.ReadDir(s.baseDir)
+	dir, err := os.Open(s.baseDir)
 	if os.IsNotExist(err) {
 		return 0, 0, nil
 	}
 	if err != nil {
-		return 0, 0, fmt.Errorf("read payload directory: %w", err)
+		return 0, 0, fmt.Errorf("open payload directory: %w", err)
 	}
+	defer dir.Close()
 	cutoff := time.Now().Add(-grace)
 	inspected, removed := 0, 0
-	for _, entry := range entries {
-		if inspected >= limit {
+	for removed < limit {
+		entries, readErr := dir.ReadDir(256)
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return inspected, removed, err
+			}
+			if entry.IsDir() || strings.HasPrefix(entry.Name(), "payload-") {
+				continue
+			}
+			inspected++
+			uri := payloadURIPrefix + entry.Name()
+			if _, ok := referenced[uri]; ok {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return inspected, removed, fmt.Errorf("stat payload orphan: %w", err)
+			}
+			if info.ModTime().After(cutoff) {
+				continue
+			}
+			if err := s.Remove(ctx, uri); err != nil {
+				return inspected, removed, err
+			}
+			removed++
+			if removed >= limit {
+				break
+			}
+		}
+		if readErr == io.EOF {
 			break
 		}
-		if err := ctx.Err(); err != nil {
-			return inspected, removed, err
+		if readErr != nil {
+			return inspected, removed, fmt.Errorf("read payload directory: %w", readErr)
 		}
-		if entry.IsDir() || strings.HasPrefix(entry.Name(), "payload-") {
-			continue
-		}
-		inspected++
-		uri := payloadURIPrefix + entry.Name()
-		if _, ok := referenced[uri]; ok {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return inspected, removed, fmt.Errorf("stat payload orphan: %w", err)
-		}
-		if info.ModTime().After(cutoff) {
-			continue
-		}
-		if err := s.Remove(ctx, uri); err != nil {
-			return inspected, removed, err
-		}
-		removed++
 	}
 	return inspected, removed, nil
 }
