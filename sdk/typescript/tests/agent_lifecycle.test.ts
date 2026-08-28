@@ -283,6 +283,29 @@ describe('Agent lifecycle', () => {
     delete process.env.AGENTFIELD_SHUTDOWN_TIMEOUT;
   });
 
+  it('bounds settlement after cancelling an execution that ignores abort', async () => {
+    process.env.AGENTFIELD_SHUTDOWN_TIMEOUT = '0.01s';
+    const agent = new Agent({
+      nodeId: 'agent-1', agentFieldUrl: 'http://control-plane.local', didEnabled: false
+    });
+    const internals = agent as any;
+    internals.server = createFakeServer();
+    internals.inFlightExecutions.set('exec-stuck', new Promise<void>(() => {}));
+    const cancel = vi.spyOn(internals.cancelRegistry, 'cancel');
+
+    let completed = false;
+    const shutdown = agent.shutdown().then(() => { completed = true; });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(cancel).toHaveBeenCalledWith('exec-stuck', 'shutdown_timeout');
+    expect(completed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(completed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await shutdown;
+    expect(completed).toBe(true);
+  });
+
   it('returns the same promise when shutdown is called twice', () => {
     const agent = new Agent({
       nodeId: 'agent-1', agentFieldUrl: 'http://control-plane.local', didEnabled: false

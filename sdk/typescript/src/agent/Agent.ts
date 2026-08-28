@@ -85,6 +85,7 @@ interface WildcardParams extends ParamsDictionary {
 class TargetNotFoundError extends Error {}
 
 const AGENTFIELD_TS_SDK_VERSION = '0.1.82';
+const POST_CANCEL_SETTLEMENT_MS = 5000;
 
 const harnessRunners = new WeakMap<object, HarnessRunner>();
 
@@ -701,7 +702,15 @@ export class Agent {
         this.cancelRegistry.cancel(executionId, 'shutdown_timeout');
       }
       this.pauseManager.cancelAll();
-      await Promise.allSettled([...this.inFlightExecutions.values()]);
+      let settlementTimer: NodeJS.Timeout | undefined;
+      const settlementTimeout = new Promise<void>(resolve => {
+        settlementTimer = setTimeout(resolve, POST_CANCEL_SETTLEMENT_MS);
+      });
+      await Promise.race([
+        Promise.allSettled([...this.inFlightExecutions.values()]),
+        settlementTimeout
+      ]);
+      if (settlementTimer) clearTimeout(settlementTimer);
     }
     if (timer) clearTimeout(timer);
     this.memoryEventClient.stop();
