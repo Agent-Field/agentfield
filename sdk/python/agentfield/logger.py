@@ -237,26 +237,69 @@ class AgentFieldLogger:
         # payload is exactly the cost this view exists to avoid.
         view = dict(record)
         attributes = view.get("attributes")
-        if not isinstance(attributes, dict):
-            return line
-        attributes = dict(attributes)
-        view["attributes"] = attributes
-        attributes_size = len(self._json_line(attributes).encode("utf-8"))
+        if isinstance(attributes, dict):
+            attributes = dict(attributes)
+            view["attributes"] = attributes
+            attributes_size = len(self._json_line(attributes).encode("utf-8"))
+            sizes = sorted(
+                (
+                    (len(self._json_line(value).encode("utf-8")), key)
+                    for key, value in attributes.items()
+                ),
+                reverse=True,
+            )
+            for size, key in sizes:
+                attributes[key] = f"<{size} bytes elided>"
+                line = self._json_line(view)
+                if len(line.encode("utf-8")) <= budget:
+                    return line
+            view["attributes"] = {"_elided": f"<{attributes_size} bytes elided>"}
+        else:
+            size = len(self._json_line(attributes).encode("utf-8"))
+            view["attributes"] = f"<{size} bytes elided>"
 
-        sizes = sorted(
-            (
-                (len(self._json_line(value).encode("utf-8")), key)
-                for key, value in attributes.items()
-            ),
-            reverse=True,
-        )
-        for size, key in sizes:
-            attributes[key] = f"<{size} bytes elided>"
+        line = self._json_line(view)
+        if len(line.encode("utf-8")) <= budget:
+            return line
+
+        message = str(view.get("message", ""))
+        message_bytes = message.encode("utf-8")
+        low, high = 0, len(message)
+        while low <= high:
+            keep = (low + high) // 2
+            elided = len(message_bytes) - len(message[:keep].encode("utf-8"))
+            view["message"] = f"{message[:keep]}…[{elided} bytes elided]"
+            line = self._json_line(view)
+            if len(line.encode("utf-8")) <= budget:
+                low = keep + 1
+            else:
+                high = keep - 1
+        if high >= 0:
+            kept = message[:high]
+            elided = len(message_bytes) - len(kept.encode("utf-8"))
+            view["message"] = f"{kept}…[{elided} bytes elided]"
             line = self._json_line(view)
             if len(line.encode("utf-8")) <= budget:
                 return line
-        view["attributes"] = {"_elided": f"<{attributes_size} bytes elided>"}
-        line = self._json_line(view)
+
+        original_size = len(self._json_line(record).encode("utf-8"))
+
+        def bounded_scalar(value: Any) -> Any:
+            return (
+                value
+                if len(self._json_line(value).encode("utf-8")) <= 32
+                else "<elided>"
+            )
+
+        minimal = {
+            "timestamp": bounded_scalar(record.get("ts")),
+            "level": bounded_scalar(record.get("level")),
+            "logger": bounded_scalar(self.logger.name),
+            "message": f"<record elided: {original_size} bytes>",
+        }
+        line = self._json_line(minimal)
+        # max_line_bytes() has a 256-byte floor; this fixed envelope is smaller.
+        assert len(line.encode("utf-8")) <= budget
         return line
 
     def _dispatch_to_cp(self, record: Dict[str, Any]) -> None:
