@@ -129,6 +129,7 @@ export class Agent {
   private heartbeatTimer?: NodeJS.Timeout;
   private shutdownPromise?: Promise<void>;
   private readonly inFlightExecutions = new Map<string, Promise<void>>();
+  private shuttingDown = false;
   private signalHandlers?: { SIGTERM: () => void; SIGINT: () => void };
   private readonly aiClient: AIClient;
   private readonly agentFieldClient: AgentFieldClient;
@@ -675,24 +676,25 @@ export class Agent {
 
   shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
+    this.shuttingDown = true;
     this.shutdownPromise = this.performShutdown();
     return this.shutdownPromise;
   }
 
   private async performShutdown(): Promise<void> {
-    // Notification intentionally precedes listener close and execution drain.
-    try { await this.agentFieldClient.shutdown(this.config.nodeId); }
-    catch (err) { console.warn('[Agent] Failed to notify control plane of shutdown:', err); }
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-    }
-    await new Promise<void>((resolve, reject) => {
+    const listenerClosed = new Promise<void>((resolve, reject) => {
       if (!this.server) return resolve();
       this.server.close((err) => {
         if (err) reject(err);
         else resolve();
       });
     });
+    try { await this.agentFieldClient.shutdown(this.config.nodeId); }
+    catch (err) { console.warn('[Agent] Failed to notify control plane of shutdown:', err); }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+    }
+    await listenerClosed;
     const timeoutMs = parseShutdownTimeout(process.env.AGENTFIELD_SHUTDOWN_TIMEOUT);
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), timeoutMs); });
@@ -1224,6 +1226,10 @@ export class Agent {
   }
 
   private async executeReasoner(req: express.Request, res: express.Response, name: string) {
+    if (this.shuttingDown) {
+      res.status(503).json({ error: 'agent shutting down' });
+      return;
+    }
     const metadata = this.buildMetadata(req);
     const reasoner = this.reasoners.get(name);
 
@@ -1295,6 +1301,10 @@ export class Agent {
   }
 
   private async executeServerlessHttp(req: express.Request, res: express.Response, explicitName?: string) {
+    if (this.shuttingDown) {
+      res.status(503).json({ error: 'agent shutting down' });
+      return;
+    }
     const invocation = this.extractInvocationDetails({
       path: req.path,
       explicitTarget: explicitName,

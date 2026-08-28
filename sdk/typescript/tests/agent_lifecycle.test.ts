@@ -196,7 +196,7 @@ describe('Agent lifecycle', () => {
     expect(heartbeat).not.toHaveBeenCalled();
   });
 
-  it('notifies before closing the server and waits for in-flight executions to settle', async () => {
+  it('stops accepting before notifying and waits for in-flight executions to settle', async () => {
     const order: string[] = [];
     let settleExecution!: () => void;
     const execution = new Promise<void>(resolve => { settleExecution = resolve; })
@@ -220,10 +220,48 @@ describe('Agent lifecycle', () => {
 
     const shutdown = agent.shutdown();
     await vi.advanceTimersByTimeAsync(0);
-    expect(order).toEqual(['notified', 'closed']);
+    expect(order).toEqual(['closed', 'notified']);
     settleExecution();
     await shutdown;
-    expect(order).toEqual(['notified', 'closed', 'settled']);
+    expect(order).toEqual(['closed', 'notified', 'settled']);
+  });
+
+  it('refuses executions that arrive after shutdown begins without tracking them', async () => {
+    let finishNotification!: () => void;
+    vi.spyOn(AgentFieldClient.prototype, 'shutdown').mockImplementation(
+      () => new Promise(resolve => { finishNotification = () => resolve({}); })
+    );
+    const agent = new Agent({
+      nodeId: 'agent-1', agentFieldUrl: 'http://control-plane.local', didEnabled: false
+    });
+    agent.reasoner('blocked', async () => ({ ok: true }));
+    (agent as any).server = createFakeServer();
+
+    const shutdown = agent.shutdown();
+    const invoke = (method: 'executeReasoner' | 'executeServerlessHttp', url: string) =>
+      new Promise<{ status: number; body: any }>(resolve => {
+      const req = {
+        method: 'POST',
+        url,
+        headers: { 'content-type': 'application/json', 'x-execution-id': 'exec-too-late' }
+      } as any;
+      const res = {
+        statusCode: 200,
+        status(code: number) { this.statusCode = code; return this; },
+        json(body: any) { resolve({ status: this.statusCode, body }); return this; }
+      } as any;
+      (agent as any)[method](req, res, 'blocked');
+    });
+
+    await expect(invoke('executeReasoner', '/reasoners/blocked')).resolves.toEqual({
+      status: 503, body: { error: 'agent shutting down' }
+    });
+    await expect(invoke('executeServerlessHttp', '/execute/blocked')).resolves.toEqual({
+      status: 503, body: { error: 'agent shutting down' }
+    });
+    expect([...(agent as any).inFlightExecutions.keys()]).not.toContain('exec-too-late');
+    finishNotification();
+    await shutdown;
   });
 
   it('serve signal handling is opt-out and shutdown removes default listeners', async () => {
