@@ -87,8 +87,32 @@ func agentRestartGrace() time.Duration {
 }
 
 func SetAgentDrainGrace(d time.Duration) { agentDrainGraceNanos.Store(int64(d)) }
-func AgentDrainGrace() time.Duration     { return time.Duration(agentDrainGraceNanos.Load()) }
-func AgentRestartGrace() time.Duration   { return agentRestartGrace() }
+
+// agentIsDraining reports whether an offline node should be treated as
+// draining: it went quiet recently enough that a replacement instance is
+// still expected, so a dispatch is worth holding for the restart grace. The
+// window is the same drain grace that defers the orphan reap, so "hold the
+// dispatch" and "keep its executions alive" agree on what "recently" means.
+//
+// Health is deliberately not consulted. Every node-announced offline
+// transition (POST /nodes/{id}/shutdown, the lifecycle/status route, a
+// status PATCH) records health as inactive, and so does the health monitor's
+// own demotion — so health cannot tell a draining pod from a dead one. The
+// last heartbeat can: a pod that just announced its shutdown was heartbeating
+// moments ago, while a node that died long ago has been silent for longer
+// than any drain grace.
+func agentIsDraining(agent *types.AgentNode) bool {
+	if agent == nil || agent.LifecycleStatus != types.AgentStatusOffline || agent.LastHeartbeat.IsZero() {
+		return false
+	}
+	grace := AgentDrainGrace()
+	if grace <= 0 {
+		return false
+	}
+	return time.Since(agent.LastHeartbeat) <= grace
+}
+func AgentDrainGrace() time.Duration   { return time.Duration(agentDrainGraceNanos.Load()) }
+func AgentRestartGrace() time.Duration { return agentRestartGrace() }
 
 // waitForDrainingAgent holds admission before any execution row exists while
 // an orderly shutdown is in progress. A replacement registration is detected
