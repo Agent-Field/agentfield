@@ -150,11 +150,13 @@ type asyncExecutionJob struct {
 }
 
 type asyncWorkerPool struct {
-	queue        chan asyncExecutionJob
-	reservations chan struct{}
-	mu           sync.RWMutex
-	stopped      bool
-	jobs         sync.WaitGroup
+	queue         chan asyncExecutionJob
+	reservations  chan struct{}
+	workerCtx     context.Context
+	cancelWorkers context.CancelFunc
+	mu            sync.RWMutex
+	stopped       bool
+	jobs          sync.WaitGroup
 }
 
 type completionJob struct {

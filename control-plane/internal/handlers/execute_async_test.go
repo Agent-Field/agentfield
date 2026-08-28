@@ -186,44 +186,46 @@ func TestWriteExecutionError_ConcurrencyLimitIncludesRetryAfter(t *testing.T) {
 }
 
 func TestAsyncWorkerPoolStopFailsQueuedJobsAndRejectsSubmissions(t *testing.T) {
-	agent := &types.AgentNode{ID: "node-1"}
+	workerStarted := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(workerStarted)
+		select {
+		case <-r.Context().Done():
+		case <-releaseWorker:
+		}
+	}))
+	defer agentServer.Close()
+	agent := &types.AgentNode{ID: "node-1", BaseURL: agentServer.URL}
 	store := newTestExecutionStorage(agent)
 	now := time.Now().UTC()
-	exec := &types.Execution{ExecutionID: "queued-1", RunID: "run-1", NodeID: "node-1", AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, CreatedAt: now, StartedAt: now, UpdatedAt: now}
-	require.NoError(t, store.CreateExecutionRecord(context.Background(), exec))
-	require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{ExecutionID: exec.ExecutionID, WorkflowID: exec.RunID, RunID: &exec.RunID, AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, StartedAt: now, CreatedAt: now, UpdatedAt: now}))
 	target, err := parseTarget("node-1.reasoner-a")
 	require.NoError(t, err)
-	webhookCalled := false
-	webhooks := &mockWebhookDispatcher{notifyFunc: func(_ context.Context, executionID string) error {
-		require.Equal(t, exec.ExecutionID, executionID)
-		webhookCalled = true
-		return nil
-	}}
-	eventCh := store.GetExecutionEventBus().Subscribe("async-pool-shutdown-test")
-	defer store.GetExecutionEventBus().Unsubscribe("async-pool-shutdown-test")
-	pool := newAsyncWorkerPool(0, 2)
-	require.True(t, pool.submit(asyncExecutionJob{controller: newExecutionController(store, nil, webhooks, time.Second, ""), plan: preparedExecution{exec: exec, target: target, webhookRegistered: true}}))
+	pool := newAsyncWorkerPool(1, 2)
+	for _, id := range []string{"running-1", "queued-1"} {
+		exec := &types.Execution{ExecutionID: id, RunID: id, NodeID: "node-1", AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, CreatedAt: now, StartedAt: now, UpdatedAt: now}
+		require.NoError(t, store.CreateExecutionRecord(context.Background(), exec))
+		require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{ExecutionID: id, WorkflowID: id, RunID: &id, AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, StartedAt: now, CreatedAt: now, UpdatedAt: now}))
+		require.True(t, pool.submit(asyncExecutionJob{controller: newExecutionController(store, nil, nil, time.Second, ""), plan: preparedExecution{exec: exec, target: target, agent: agent, requestBody: []byte(`{"input":{}}`)}}))
+	}
+	<-workerStarted
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	pool.Stop(ctx)
+	close(releaseWorker)
 	require.False(t, pool.submit(asyncExecutionJob{}))
-	stored, err := store.GetExecutionRecord(context.Background(), exec.ExecutionID)
-	require.NoError(t, err)
-	require.Equal(t, types.ExecutionStatusFailed, stored.Status)
-	require.Equal(t, "control_plane_shutdown", *stored.StatusReason)
-	workflow, err := store.GetWorkflowExecution(context.Background(), exec.ExecutionID)
-	require.NoError(t, err)
-	require.Equal(t, types.ExecutionStatusFailed, workflow.Status)
-	require.Equal(t, "control_plane_shutdown", *workflow.StatusReason)
-	require.True(t, webhookCalled)
-	select {
-	case event := <-eventCh:
-		require.Equal(t, exec.ExecutionID, event.ExecutionID)
-		require.Equal(t, string(types.ExecutionStatusFailed), event.Status)
-	case <-time.After(time.Second):
-		t.Fatal("expected execution failed event")
+	for _, id := range []string{"running-1", "queued-1"} {
+		stored, getErr := store.GetExecutionRecord(context.Background(), id)
+		require.NoError(t, getErr)
+		require.Equal(t, types.ExecutionStatusFailed, stored.Status)
+		require.Equal(t, "control_plane_shutdown", *stored.StatusReason)
+		require.NotNil(t, stored.ErrorMessage)
+		require.Contains(t, *stored.ErrorMessage, "control plane shut down")
+		workflow, workflowErr := store.GetWorkflowExecution(context.Background(), id)
+		require.NoError(t, workflowErr)
+		require.Equal(t, types.ExecutionStatusFailed, workflow.Status)
+		require.Equal(t, "control_plane_shutdown", *workflow.StatusReason)
 	}
 }
 

@@ -834,6 +834,10 @@ func (c *executionController) savePayload(ctx context.Context, data []byte) *str
 }
 
 func (j asyncExecutionJob) process() {
+	j.processWithContext(context.Background())
+}
+
+func (j asyncExecutionJob) processWithContext(workerCtx context.Context) {
 	// Release the per-agent concurrency slot when this job finishes
 	if j.plan.target != nil {
 		defer ReleaseExecutionSlot(j.plan.target.NodeID)
@@ -842,7 +846,7 @@ func (j asyncExecutionJob) process() {
 	// Use a bounded context so that paused executions do not block goroutines
 	// indefinitely if the resume/cancel event is never delivered (e.g. event bus
 	// crash, server restart). 24 hours is generous but prevents permanent leaks.
-	bgCtx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	bgCtx, cancel := context.WithTimeout(workerCtx, 24*time.Hour)
 	defer cancel()
 
 	currentExec, err := j.controller.store.GetExecutionRecord(bgCtx, j.plan.exec.ExecutionID)
@@ -865,6 +869,12 @@ func (j asyncExecutionJob) process() {
 	}
 
 	resultBody, elapsed, asyncAccepted, callErr := j.controller.callAgent(bgCtx, &j.plan)
+	if workerCtx.Err() != nil {
+		persistCtx, persistCancel := shutdownPersistenceContext()
+		j.failForControlPlaneShutdown(persistCtx)
+		persistCancel()
+		return
+	}
 	if callErr == nil && asyncAccepted {
 		logger.Logger.Info().
 			Str("execution_id", j.plan.exec.ExecutionID).
@@ -912,9 +922,12 @@ func (j asyncExecutionJob) process() {
 }
 
 func newAsyncWorkerPool(workerCount, queueCapacity int) *asyncWorkerPool {
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	pool := &asyncWorkerPool{
-		queue:        make(chan asyncExecutionJob, queueCapacity),
-		reservations: make(chan struct{}, queueCapacity),
+		queue:         make(chan asyncExecutionJob, queueCapacity),
+		reservations:  make(chan struct{}, queueCapacity),
+		workerCtx:     workerCtx,
+		cancelWorkers: cancelWorkers,
 	}
 
 	for i := 0; i < workerCount; i++ {
@@ -925,11 +938,11 @@ func newAsyncWorkerPool(workerCount, queueCapacity int) *asyncWorkerPool {
 				stopped := pool.stopped
 				pool.mu.RUnlock()
 				if stopped {
-					persistCtx, cancel := shutdownPersistenceContext(context.Background())
+					persistCtx, cancel := shutdownPersistenceContext()
 					job.failForControlPlaneShutdown(persistCtx)
 					cancel()
 				} else {
-					job.process()
+					job.processWithContext(pool.workerCtx)
 				}
 				pool.jobs.Done()
 			}
@@ -1015,26 +1028,22 @@ func (p *asyncWorkerPool) Stop(ctx context.Context) {
 	case <-ctx.Done():
 	}
 
-	persistCtx, cancel := shutdownPersistenceContext(ctx)
+	p.cancelWorkers()
+	persistCtx, cancel := shutdownPersistenceContext()
 	defer cancel()
 	for job := range p.queue {
 		p.releaseReservation()
 		job.failForControlPlaneShutdown(persistCtx)
 		p.jobs.Done()
 	}
+	select {
+	case <-done:
+	case <-persistCtx.Done():
+	}
 }
 
-func shutdownPersistenceContext(shutdownCtx context.Context) (context.Context, context.CancelFunc) {
-	timeout := 5 * time.Second
-	if deadline, ok := shutdownCtx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining < timeout {
-			timeout = remaining
-		}
-	}
-	if timeout <= 0 {
-		return context.WithCancel(shutdownCtx)
-	}
-	return context.WithTimeout(context.Background(), timeout)
+func shutdownPersistenceContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
 func (j asyncExecutionJob) failForControlPlaneShutdown(ctx context.Context) {
