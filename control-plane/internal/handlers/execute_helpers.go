@@ -921,7 +921,16 @@ func newAsyncWorkerPool(workerCount, queueCapacity int) *asyncWorkerPool {
 		go func(workerID int) {
 			for job := range pool.queue {
 				pool.releaseReservation()
-				job.process()
+				pool.mu.RLock()
+				stopped := pool.stopped
+				pool.mu.RUnlock()
+				if stopped {
+					persistCtx, cancel := shutdownPersistenceContext(context.Background())
+					job.failForControlPlaneShutdown(persistCtx)
+					cancel()
+				} else {
+					job.process()
+				}
 				pool.jobs.Done()
 			}
 		}(i)
@@ -989,7 +998,10 @@ func StopAsyncWorkerPool(ctx context.Context) {
 // honestly terminates any jobs which have not started.
 func (p *asyncWorkerPool) Stop(ctx context.Context) {
 	p.mu.Lock()
-	p.stopped = true
+	if !p.stopped {
+		p.stopped = true
+		close(p.queue)
+	}
 	p.mu.Unlock()
 
 	done := make(chan struct{})
@@ -1003,19 +1015,29 @@ func (p *asyncWorkerPool) Stop(ctx context.Context) {
 	case <-ctx.Done():
 	}
 
-	for {
-		select {
-		case job := <-p.queue:
-			p.releaseReservation()
-			job.failForControlPlaneShutdown()
-			p.jobs.Done()
-		default:
-			return
-		}
+	persistCtx, cancel := shutdownPersistenceContext(ctx)
+	defer cancel()
+	for job := range p.queue {
+		p.releaseReservation()
+		job.failForControlPlaneShutdown(persistCtx)
+		p.jobs.Done()
 	}
 }
 
-func (j asyncExecutionJob) failForControlPlaneShutdown() {
+func shutdownPersistenceContext(shutdownCtx context.Context) (context.Context, context.CancelFunc) {
+	timeout := 5 * time.Second
+	if deadline, ok := shutdownCtx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		return context.WithCancel(shutdownCtx)
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+func (j asyncExecutionJob) failForControlPlaneShutdown(ctx context.Context) {
 	if j.plan.target != nil {
 		ReleaseExecutionSlot(j.plan.target.NodeID)
 	}
@@ -1023,12 +1045,12 @@ func (j asyncExecutionJob) failForControlPlaneShutdown() {
 		message:  "execution was not started before the control plane shut down",
 		category: ErrorCategoryControlPlaneShutdown,
 	}
-	if err := j.controller.failExecution(context.Background(), &j.plan, shutdownErr, 0, nil); err != nil {
+	if err := j.controller.failExecution(ctx, &j.plan, shutdownErr, 0, nil); err != nil {
 		logger.Logger.Error().Err(err).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to terminate queued execution during shutdown")
 		return
 	}
 	reason := string(ErrorCategoryControlPlaneShutdown)
-	if err := j.controller.store.UpdateWorkflowExecution(context.Background(), j.plan.exec.ExecutionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+	if err := j.controller.store.UpdateWorkflowExecution(ctx, j.plan.exec.ExecutionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
 		if current == nil {
 			return nil, fmt.Errorf("workflow execution %s not found", j.plan.exec.ExecutionID)
 		}

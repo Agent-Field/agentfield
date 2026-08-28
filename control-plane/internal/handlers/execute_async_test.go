@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -259,6 +260,42 @@ func TestAsyncWorkerPoolStopFailsQueuedJobsAndRejectsSubmissions(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expected execution failed event")
 	}
+}
+
+func TestAsyncWorkerPoolStopDoesNotStartQueuedJobsAfterReturn(t *testing.T) {
+	var starts atomic.Int32
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if starts.Add(1) == 1 {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer agentServer.Close()
+
+	agent := &types.AgentNode{ID: "node-1", BaseURL: agentServer.URL, Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}}}
+	store := newTestExecutionStorage(agent)
+	target, err := parseTarget("node-1.reasoner-a")
+	require.NoError(t, err)
+	pool := newAsyncWorkerPool(1, 8)
+	now := time.Now().UTC()
+	for i := 0; i < 4; i++ {
+		id := fmt.Sprintf("stop-start-%d", i)
+		exec := &types.Execution{ExecutionID: id, RunID: id, NodeID: "node-1", AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, CreatedAt: now, StartedAt: now, UpdatedAt: now}
+		require.NoError(t, store.CreateExecutionRecord(context.Background(), exec))
+		require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{ExecutionID: id, WorkflowID: id, RunID: &id, AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, StartedAt: now, CreatedAt: now, UpdatedAt: now}))
+		require.True(t, pool.submit(asyncExecutionJob{controller: newExecutionController(store, nil, nil, time.Second, ""), plan: preparedExecution{exec: exec, target: target, agent: agent, requestBody: []byte(`{"input":{}}`)}}))
+	}
+	<-firstStarted
+	stopCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pool.Stop(stopCtx)
+	require.Equal(t, int32(1), starts.Load())
+	close(releaseFirst)
+	require.Eventually(t, func() bool { return starts.Load() == 1 }, 100*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestExecuteAsyncHandler_WithWebhook(t *testing.T) {
