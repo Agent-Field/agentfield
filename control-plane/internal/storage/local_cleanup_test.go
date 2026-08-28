@@ -359,3 +359,55 @@ func TestCleanupOldExecutionsRetentionContract(t *testing.T) {
 		require.Equal(t, 1, count)
 	}
 }
+
+func TestPayloadURIListingsHandleEmptyNullAndErrors(t *testing.T) {
+	ctx := context.Background()
+	rawDB, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "payload-uris.db"))
+	require.NoError(t, err)
+	_, err = rawDB.Exec(`CREATE TABLE executions (
+		execution_id TEXT PRIMARY KEY, run_id TEXT, agent_node_id TEXT, reasoner_id TEXT,
+		node_id TEXT, status TEXT, started_at TIMESTAMP, completed_at TIMESTAMP,
+		created_at TIMESTAMP, updated_at TIMESTAMP, input_uri TEXT, result_uri TEXT
+	)`)
+	require.NoError(t, err)
+	ls := &LocalStorage{db: newSQLDatabase(rawDB, "local"), mode: "local"}
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	rows := []struct {
+		id     string
+		input  interface{}
+		result interface{}
+	}{
+		{"nulls", nil, nil},
+		{"empty", "", ""},
+		{"values", "payload://input", "payload://result"},
+	}
+	for _, row := range rows {
+		_, err := ls.db.ExecContext(ctx, `INSERT INTO executions
+			(execution_id, run_id, agent_node_id, reasoner_id, node_id, status, started_at, completed_at, created_at, updated_at, input_uri, result_uri)
+			VALUES (?, ?, 'agent', 'reasoner', 'node', 'completed', ?, ?, ?, ?, ?, ?)`, row.id, "run-"+row.id, old, old, old, old, row.input, row.result)
+		require.NoError(t, err)
+	}
+
+	uris, err := ls.ListExpiredExecutionPayloadURIs(ctx, 0, 10)
+	require.NoError(t, err)
+	require.Nil(t, uris)
+	uris, err = ls.ListExpiredExecutionPayloadURIs(ctx, time.Hour, 10)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"payload://input", "payload://result"}, uris)
+	refs, err := ls.ListPayloadURIs(ctx)
+	require.NoError(t, err)
+	require.Equal(t, map[string]struct{}{"payload://input": {}, "payload://result": {}}, refs)
+
+	require.NoError(t, rawDB.Close())
+	_, err = ls.ListExpiredExecutionPayloadURIs(ctx, time.Hour, 10)
+	require.ErrorContains(t, err, "query expired execution payload URIs")
+	_, err = ls.ListPayloadURIs(ctx)
+	require.ErrorContains(t, err, "query payload URIs")
+}
+
+func TestCleanupOldExecutionsBatchSizeGuard(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+	deleted, err := ls.CleanupOldExecutions(ctx, time.Hour, 0)
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+}

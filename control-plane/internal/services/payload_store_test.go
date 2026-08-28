@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +72,42 @@ func TestFilePayloadStoreSweepPreservesReferencesAndGrace(t *testing.T) {
 	require.NoError(t, reader.Close())
 	_, err = store.Open(ctx, orphan.URI)
 	require.Error(t, err)
+}
+
+func TestFilePayloadStoreSweepGuardAndEntryBranches(t *testing.T) {
+	ctx := context.Background()
+	var nilStore *FilePayloadStore
+	inspected, removed, err := nilStore.Sweep(ctx, nil, 0, 10)
+	require.NoError(t, err)
+	require.Zero(t, inspected)
+	require.Zero(t, removed)
+
+	store := NewFilePayloadStore(filepath.Join(t.TempDir(), "missing"))
+	inspected, removed, err = store.Sweep(ctx, nil, 0, 0)
+	require.NoError(t, err)
+	require.Zero(t, inspected)
+	require.Zero(t, removed)
+	inspected, removed, err = store.Sweep(ctx, nil, 0, 10)
+	require.NoError(t, err)
+	require.Zero(t, inspected)
+	require.Zero(t, removed)
+
+	dir := t.TempDir()
+	store = NewFilePayloadStore(dir)
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "payload-temporary"), []byte("temp"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "orphan"), []byte("old"), 0o600))
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	inspected, removed, err = store.Sweep(cancelled, nil, 0, 10)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, inspected)
+	require.Zero(t, removed)
+
+	inspected, removed, err = store.Sweep(ctx, nil, -time.Hour, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, inspected)
+	require.Equal(t, 1, removed)
 }
 
 func TestFilePayloadStoreSaveBytes(t *testing.T) {

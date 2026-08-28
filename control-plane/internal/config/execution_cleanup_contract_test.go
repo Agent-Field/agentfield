@@ -6,8 +6,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMarkExecutionCleanupEnabledIfSet(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  bool
+		want bool
+	}{{"absent", false, false}, {"explicit false", true, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := viper.New()
+			if tc.set {
+				v.Set("agentfield.execution_cleanup.enabled", false)
+			}
+			var cfg Config
+			MarkExecutionCleanupEnabledIfSet(v, &cfg)
+			require.Equal(t, tc.want, cfg.AgentField.ExecutionCleanup.enabledSet)
+		})
+	}
+}
 
 func TestLoadConfigHonorsExplicitExecutionCleanupDisabled(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agentfield.yaml")

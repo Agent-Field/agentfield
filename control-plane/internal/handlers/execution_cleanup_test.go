@@ -57,6 +57,7 @@ type payloadCleanupStore struct {
 	*cleanupStoreMock
 	expired []string
 	refs    map[string]struct{}
+	refsErr error
 }
 
 type blockingOrphanStore struct {
@@ -73,12 +74,14 @@ func (s *payloadCleanupStore) ListExpiredExecutionPayloadURIs(context.Context, t
 	return s.expired, nil
 }
 func (s *payloadCleanupStore) ListPayloadURIs(context.Context) (map[string]struct{}, error) {
-	return s.refs, nil
+	return s.refs, s.refsErr
 }
 
 type cleanupPayloadStore struct {
-	removed []string
-	swept   bool
+	removed   []string
+	swept     bool
+	removeErr error
+	sweepErr  error
 }
 
 func (s *cleanupPayloadStore) SaveFromReader(context.Context, io.Reader) (*services.PayloadRecord, error) {
@@ -92,12 +95,14 @@ func (s *cleanupPayloadStore) Open(context.Context, string) (io.ReadCloser, erro
 }
 func (s *cleanupPayloadStore) Remove(_ context.Context, uri string) error {
 	s.removed = append(s.removed, uri)
-	return nil
+	return s.removeErr
 }
 func (s *cleanupPayloadStore) Sweep(context.Context, map[string]struct{}, time.Duration, int) (int, int, error) {
 	s.swept = true
-	return 2, 1, nil
+	return 2, 1, s.sweepErr
 }
+
+type noSweepPayloadStore struct{ services.PayloadStore }
 
 func (m *cleanupStoreMock) CleanupOldExecutions(ctx context.Context, retentionPeriod time.Duration, batchSize int) (int, error) {
 	m.mu.Lock()
@@ -326,6 +331,35 @@ func TestExecutionCleanupService_RemovesDeletedPayloadsAndSweepsOrphans(t *testi
 	if strings.Join(gcPayloads.removed, ",") != "payload://input,payload://result" {
 		t.Fatalf("unexpected removed payloads: %v", gcPayloads.removed)
 	}
+}
+
+func TestExecutionCleanupServicePayloadErrorAndCapabilityBranches(t *testing.T) {
+	t.Run("remove failure is logged and cleanup continues", func(t *testing.T) {
+		logs := setupExecutionCleanupTestLogger(t)
+		store := &payloadCleanupStore{cleanupStoreMock: &cleanupStoreMock{cleanupResponses: []cleanupResponse{{count: 1}}}, expired: []string{"payload://old"}}
+		payloads := &cleanupPayloadStore{removeErr: errors.New("remove denied")}
+		NewExecutionCleanupService(store, testExecutionCleanupConfig(10), payloads).performCleanup(context.Background())
+		if !strings.Contains(logs.String(), "failed to remove retained execution payload") {
+			t.Fatalf("missing remove warning: %s", logs.String())
+		}
+	})
+
+	t.Run("orphan sweep requires both capabilities", func(t *testing.T) {
+		setupExecutionCleanupTestLogger(t)
+		NewExecutionCleanupService(&cleanupStoreMock{}, testExecutionCleanupConfig(10), &noSweepPayloadStore{}).sweepOrphans(context.Background())
+		NewExecutionCleanupService(&cleanupStoreMock{}, testExecutionCleanupConfig(10), &cleanupPayloadStore{}).sweepOrphans(context.Background())
+	})
+
+	t.Run("orphan errors return without panic", func(t *testing.T) {
+		logs := setupExecutionCleanupTestLogger(t)
+		listErrStore := &payloadCleanupStore{cleanupStoreMock: &cleanupStoreMock{}, refsErr: errors.New("list failed")}
+		NewExecutionCleanupService(listErrStore, testExecutionCleanupConfig(10), &cleanupPayloadStore{}).sweepOrphans(context.Background())
+		sweepErrStore := &payloadCleanupStore{cleanupStoreMock: &cleanupStoreMock{}, refs: map[string]struct{}{}}
+		NewExecutionCleanupService(sweepErrStore, testExecutionCleanupConfig(10), &cleanupPayloadStore{sweepErr: errors.New("sweep failed")}).sweepOrphans(context.Background())
+		if !strings.Contains(logs.String(), "failed to list payload references") || !strings.Contains(logs.String(), "payload orphan sweep failed") {
+			t.Fatalf("missing orphan error logs: %s", logs.String())
+		}
+	})
 }
 
 func TestExecutionCleanupService_StartClampsInvalidTickerInterval(t *testing.T) {
