@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
@@ -237,8 +240,23 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("AgentField server running on http://localhost:%d\n", cfg.AgentField.Port)
 	fmt.Printf("Press Ctrl+C to exit.\n")
-	// Keep main goroutine alive
-	select {}
+
+	shutdownCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	waitForShutdown(shutdownCtx)
+	// Restore the default signal behavior before draining so a second signal
+	// forces an immediate exit.
+	stopSignals()
+
+	fmt.Println("\nShutdown signal received, draining connections...")
+	if err := agentfieldServer.Stop(); err != nil {
+		log.Printf("Error during shutdown: %v", err)
+		os.Exit(1)
+	}
+	fmt.Println("Server stopped gracefully.")
+}
+
+func waitForShutdown(ctx context.Context) {
+	<-ctx.Done()
 }
 
 // loadConfig loads configuration with sensible defaults for user experience

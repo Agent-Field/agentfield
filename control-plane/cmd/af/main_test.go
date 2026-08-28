@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -12,6 +14,22 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWaitForShutdownReturnsWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		waitForShutdown(ctx)
+		close(done)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("waitForShutdown did not return after cancellation")
+	}
+}
 
 // serverCommandWithConfig writes an agentfield.yaml, runs the real CLI tree
 // (the one main() builds) with `--config <file> server`, and returns the
