@@ -291,9 +291,7 @@ func loadConfig(configFile string) (*config.Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
-	if viper.IsSet("agentfield.execution_cleanup.enabled") {
-		config.MarkExecutionCleanupEnabledConfigured(&cfg)
-	}
+	config.MarkExecutionCleanupEnabledIfSet(viper.GetViper(), &cfg)
 
 	config.ApplyDefaults(&cfg)
 	config.ApplyEnvOverrides(&cfg)

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/viper"
+
 	"gopkg.in/yaml.v3" // Added for yaml.Unmarshal
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -248,6 +250,13 @@ func (c *ExecutionCleanupConfig) UnmarshalYAML(node *yaml.Node) error {
 // loaders such as Viper whose struct unmarshalling cannot retain it.
 func MarkExecutionCleanupEnabledConfigured(cfg *Config) {
 	cfg.AgentField.ExecutionCleanup.enabledSet = true
+}
+
+// MarkExecutionCleanupEnabledIfSet preserves Viper's key-presence information.
+func MarkExecutionCleanupEnabledIfSet(v *viper.Viper, cfg *Config) {
+	if v.IsSet("agentfield.execution_cleanup.enabled") {
+		MarkExecutionCleanupEnabledConfigured(cfg)
+	}
 }
 
 const (
