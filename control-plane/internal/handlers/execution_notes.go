@@ -288,9 +288,10 @@ func ensureExecutionNoteReadOwnership(callerAgentID string, apiKeyOperator bool,
 // Retrieves notes for a specific execution with optional tag filtering.
 //
 // ownershipEnforced reports whether the server runs with an authentication
-// method that yields a trusted caller identity. When true, the caller must own
-// the target execution or the read is rejected with 403. When false the server
-// is fully unauthenticated, matching the write endpoint's S2 behavior.
+// method that yields a trusted caller identity. When true, an identified agent
+// must own the target execution; an authenticated API-key caller without an
+// agent identity is treated as an operator and may read it. When false the
+// server is fully unauthenticated, matching the write endpoint's S2 behavior.
 func GetExecutionNotesHandler(storageProvider ExecutionNoteStorage, ownershipEnforced bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		executionID := c.Param("execution_id")
