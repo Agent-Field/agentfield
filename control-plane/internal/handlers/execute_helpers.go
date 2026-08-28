@@ -923,9 +923,10 @@ func (j asyncExecutionJob) processWithContext(workerCtx context.Context) {
 
 func newAsyncWorkerPool(workerCount, queueCapacity int) *asyncWorkerPool {
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	admissionCapacity := workerCount + queueCapacity
 	pool := &asyncWorkerPool{
-		queue:         make(chan asyncExecutionJob, queueCapacity),
-		reservations:  make(chan struct{}, queueCapacity),
+		queue:         make(chan asyncExecutionJob, admissionCapacity),
+		reservations:  make(chan struct{}, admissionCapacity),
 		workerCtx:     workerCtx,
 		cancelWorkers: cancelWorkers,
 	}
@@ -933,18 +934,20 @@ func newAsyncWorkerPool(workerCount, queueCapacity int) *asyncWorkerPool {
 	for i := 0; i < workerCount; i++ {
 		go func(workerID int) {
 			for job := range pool.queue {
-				pool.releaseReservation()
-				pool.mu.RLock()
-				stopped := pool.stopped
-				pool.mu.RUnlock()
-				if stopped {
-					persistCtx, cancel := shutdownPersistenceContext()
-					job.failForControlPlaneShutdown(persistCtx)
-					cancel()
-				} else {
-					job.processWithContext(pool.workerCtx)
-				}
-				pool.jobs.Done()
+				func() {
+					defer pool.releaseReservation()
+					defer pool.jobs.Done()
+					pool.mu.RLock()
+					stopped := pool.stopped
+					pool.mu.RUnlock()
+					if stopped {
+						persistCtx, cancel := shutdownPersistenceContext()
+						job.failForControlPlaneShutdown(persistCtx)
+						cancel()
+					} else {
+						job.processWithContext(pool.workerCtx)
+					}
+				}()
 			}
 		}(i)
 	}

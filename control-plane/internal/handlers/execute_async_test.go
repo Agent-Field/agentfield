@@ -42,7 +42,6 @@ func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
 		_, _ = w.Write([]byte(`{"result":{}}`))
 	}))
 	defer agentServer.Close()
-	defer close(releaseWorker)
 
 	agent := &types.AgentNode{
 		ID:        "node-1",
@@ -52,6 +51,14 @@ func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
 	store := newTestExecutionStorage(agent)
 	payloads := services.NewFilePayloadStore(t.TempDir())
 	router := gin.New()
+	const burstSize = 10
+	var ready sync.WaitGroup
+	ready.Add(burstSize)
+	start := make(chan struct{})
+	router.Use(func(c *gin.Context) {
+		ready.Done()
+		<-start
+	})
 	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, payloads, nil, 90*time.Second, ""))
 
 	request := func() *httptest.ResponseRecorder {
@@ -61,14 +68,29 @@ func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
 		router.ServeHTTP(resp, req)
 		return resp
 	}
-	require.Equal(t, http.StatusAccepted, request().Code)
-	<-workerStarted
-	require.Equal(t, http.StatusAccepted, request().Code)
-	for i := 0; i < 3; i++ {
-		resp := request()
-		require.Equal(t, http.StatusServiceUnavailable, resp.Code)
-		require.Contains(t, resp.Body.String(), "async execution queue is full")
+	responses := make(chan *httptest.ResponseRecorder, burstSize)
+	for i := 0; i < burstSize; i++ {
+		go func() { responses <- request() }()
 	}
+	ready.Wait()
+	close(start)
+
+	accepted := 0
+	rejected := 0
+	for i := 0; i < burstSize; i++ {
+		resp := <-responses
+		switch resp.Code {
+		case http.StatusAccepted:
+			accepted++
+		case http.StatusServiceUnavailable:
+			rejected++
+			require.Contains(t, resp.Body.String(), "async execution queue is full")
+		default:
+			t.Fatalf("unexpected async response status %d: %s", resp.Code, resp.Body.String())
+		}
+	}
+	require.Equal(t, 2, accepted, "workers + queue capacity must be admitted")
+	require.Equal(t, burstSize-2, rejected)
 
 	records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
 	require.NoError(t, err)
@@ -76,6 +98,23 @@ func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
 	workflows, err := store.QueryWorkflowExecutions(context.Background(), types.WorkflowExecutionFilters{})
 	require.NoError(t, err)
 	require.Len(t, workflows, 2, "rejected requests must not persist workflow rows")
+	close(releaseWorker)
+	<-workerStarted
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	asyncPool.Stop(stopCtx)
+	require.Eventually(t, func() bool {
+		completed, queryErr := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+		if queryErr != nil || len(completed) != 2 {
+			return false
+		}
+		for _, record := range completed {
+			if record.Status == types.ExecutionStatusRunning {
+				return false
+			}
+		}
+		return true
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestExecuteAsyncHandler_ConcurrencyRejectionHasNoPersistence(t *testing.T) {
