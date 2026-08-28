@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,93 +23,59 @@ import (
 
 func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	oldPool, oldOnce := asyncPool, asyncPoolOnce
+	asyncPool = newAsyncWorkerPool(1, 1)
+	asyncPoolOnce = sync.Once{}
+	asyncPoolOnce.Do(func() {})
+	defer func() { asyncPool, asyncPoolOnce = oldPool, oldOnce }()
 
-	// Set a small queue capacity for this test
-	// Note: This only works if the pool hasn't been initialized yet
-	// In a real scenario, the pool is initialized once, so this test
-	// verifies the queue saturation logic when the queue is actually full
-	originalCapacity := os.Getenv("AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY")
-	defer func() {
-		if originalCapacity != "" {
-			os.Setenv("AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY", originalCapacity)
-		} else {
-			os.Unsetenv("AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY")
+	workerStarted := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case <-workerStarted:
+		default:
+			close(workerStarted)
 		}
-	}()
-
-	// Set a very small capacity to make saturation easier to test
-	os.Setenv("AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY", "2")
+		<-releaseWorker
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer agentServer.Close()
+	defer close(releaseWorker)
 
 	agent := &types.AgentNode{
 		ID:        "node-1",
-		BaseURL:   "http://agent.example",
+		BaseURL:   agentServer.URL,
 		Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}},
 	}
-
 	store := newTestExecutionStorage(agent)
 	payloads := services.NewFilePayloadStore(t.TempDir())
-
-	// Get the pool (will be initialized with small capacity)
-	pool := getAsyncWorkerPool()
-
-	// Fill the queue completely - submit more jobs than capacity
-	// Workers will consume some, but we want to ensure queue is full when we make the request
-	queueCapacity := cap(pool.queue)
-
-	// Submit enough jobs to fill the queue (accounting for workers consuming)
-	// We submit more than capacity to ensure queue stays full
-	for i := 0; i < queueCapacity*2; i++ {
-		job := asyncExecutionJob{
-			controller: newExecutionController(store, payloads, nil, 90*time.Second, ""),
-			plan: preparedExecution{
-				exec: &types.Execution{
-					ExecutionID: "test-exec-fill",
-					RunID:       "test-run",
-				},
-			},
-		}
-		if !pool.submit(job) {
-			// Queue is full, good
-			break
-		}
-	}
-
-	// Give a tiny moment for queue state to stabilize
-	time.Sleep(10 * time.Millisecond)
-
 	router := gin.New()
 	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, payloads, nil, 90*time.Second, ""))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{"foo":"bar"}}`))
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
-
-	// The queue might not be full if workers consumed jobs quickly
-	// So we check if we got either 503 (queue full) or 202 (accepted)
-	// If we got 202, the queue wasn't full, which is also a valid test outcome
-	if resp.Code == http.StatusServiceUnavailable {
-		var payload map[string]string
-		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
-		require.Contains(t, payload["error"], "async execution queue is full")
-
-		// Verify execution was marked as failed
-		records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
-		require.NoError(t, err)
-		if len(records) > 0 {
-			// Find the execution we just created
-			for i := len(records) - 1; i >= 0; i-- {
-				if records[i].Status == types.ExecutionStatusFailed {
-					// Found a failed execution, which is expected for queue saturation
-					return
-				}
-			}
-		}
-	} else {
-		// Queue wasn't full, which is fine - test still validates the code path exists
-		require.Equal(t, http.StatusAccepted, resp.Code)
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{"foo":"bar"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		return resp
 	}
+	require.Equal(t, http.StatusAccepted, request().Code)
+	<-workerStarted
+	require.Equal(t, http.StatusAccepted, request().Code)
+	for i := 0; i < 3; i++ {
+		resp := request()
+		require.Equal(t, http.StatusServiceUnavailable, resp.Code)
+		require.Contains(t, resp.Body.String(), "async execution queue is full")
+	}
+
+	records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Len(t, records, 2, "rejected requests must not persist execution rows")
+	workflows, err := store.QueryWorkflowExecutions(context.Background(), types.WorkflowExecutionFilters{})
+	require.NoError(t, err)
+	require.Len(t, workflows, 2, "rejected requests must not persist workflow rows")
 }
 
 func TestExecuteAsyncHandler_ConcurrencyRejectionHasNoPersistence(t *testing.T) {
