@@ -13,6 +13,7 @@ spec:
       labels:
         app.kubernetes.io/component: postgres
     spec:
+      terminationGracePeriodSeconds: 45
       containers:
         - name: postgres
           image: pgvector/pgvector:pg16
@@ -47,4 +48,3 @@ spec:
         resources:
           requests:
             storage: 5Gi
-

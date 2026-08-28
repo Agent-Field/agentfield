@@ -12,6 +12,7 @@ spec:
       labels:
         app.kubernetes.io/component: demo-python-agent
     spec:
+      terminationGracePeriodSeconds: 45
       initContainers:
         - name: wait-control-plane
           image: curlimages/curl:8.12.1
@@ -62,4 +63,3 @@ spec:
         - name: app
           configMap:
             name: agentfield-demo-python-agent
-

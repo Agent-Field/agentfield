@@ -12,6 +12,7 @@ spec:
       labels:
         app.kubernetes.io/component: control-plane
     spec:
+      terminationGracePeriodSeconds: 45
       containers:
         - name: control-plane
           image: agentfield/control-plane:latest

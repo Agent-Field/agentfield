@@ -32,6 +32,8 @@ controlPlane:
     AGENTFIELD_CONFIG_FILE: /dev/null
 
   extraEnv: []
+  # - name: AGENTFIELD_AGENT_DRAIN_GRACE
+  #   value: "60s"
 
   persistence:
     enabled: true
@@ -95,6 +97,9 @@ demoAgent:
     tag: local
     pullPolicy: IfNotPresent
   nodeId: demo-go-agent
+  extraEnv: []
+  # - name: AGENTFIELD_SHUTDOWN_TIMEOUT
+  #   value: "30s"
   service:
     type: ClusterIP
     port: 8001
@@ -109,6 +114,9 @@ demoPythonAgent:
     pullPolicy: IfNotPresent
   pipPackage: "agentfield"
   nodeId: demo-python-agent
+  extraEnv: []
+  # - name: AGENTFIELD_SHUTDOWN_TIMEOUT
+  #   value: "30s"
   service:
     type: ClusterIP
     port: 8001
