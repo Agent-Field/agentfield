@@ -8,7 +8,7 @@ resolution-markers = [
 
 [[package]]
 name = "agentfield"
-version = "0.1.137rc5"
+version = "0.1.137rc12"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
