@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -681,7 +682,15 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 					logger.Logger.Error().Str("agent_node_id", nodeID).Msg("storage does not support instance-scoped orphan cleanup; relying on stale sweep")
 					return
 				}
-				reaped, reapErr := reaper.MarkAgentInstanceExecutionsOrphaned(context.Background(), nodeID, oldInstanceID, reason)
+				reapCtx, cancelReap := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancelReap()
+				reaped, reapErr := reaper.MarkAgentInstanceExecutionsOrphaned(reapCtx, nodeID, oldInstanceID, reason)
+				if errors.Is(reapCtx.Err(), context.DeadlineExceeded) {
+					logger.Logger.Error().
+						Str("agent_node_id", nodeID).
+						Str("old_instance_id", oldInstanceID).
+						Msg("⚠️ Timed out reaping orphaned executions on agent restart")
+				}
 				if reapErr != nil {
 					// Best-effort: log loudly but don't fail the registration. The agent
 					// is already persisted; the existing stale-execution sweep will
