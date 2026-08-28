@@ -361,21 +361,21 @@ class AgentFieldHandler:
                     f"{signal_name} received - initiating graceful shutdown via uvicorn"
                 )
 
-            # Set shutdown flag
-            self.agent._shutdown_requested = True
-            self.agent._current_status = AgentStatus.OFFLINE
+            if not self.agent._shutdown_requested:
+                self.agent._shutdown_requested = True
+                self.agent._current_status = AgentStatus.OFFLINE
 
-            # Best-effort immediate notification to AgentField
-            try:
-                success = self.agent.client.notify_graceful_shutdown_sync(
-                    self.agent.node_id
-                )
-                if self.agent.dev_mode:
-                    state = "sent" if success else "failed"
-                    log_info(f"Shutdown notification {state}")
-            except Exception as e:
-                if self.agent.dev_mode:
-                    log_error(f"Shutdown notification error: {e}")
+                # Best-effort immediate notification to AgentField
+                try:
+                    success = self.agent.client.notify_graceful_shutdown_sync(
+                        self.agent.node_id
+                    )
+                    if self.agent.dev_mode:
+                        state = "sent" if success else "failed"
+                        log_info(f"Shutdown notification {state}")
+                except Exception as e:
+                    if self.agent.dev_mode:
+                        log_error(f"Shutdown notification error: {e}")
 
             # IMPORTANT: Do not perform heavy cleanup here. Let FastAPI/uvicorn shutdown events handle it.
             # Re-install default handler and re-emit the same signal so uvicorn orchestrates cleanup.

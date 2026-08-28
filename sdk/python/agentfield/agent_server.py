@@ -219,7 +219,9 @@ class AgentServer:
                 # Notify AgentField server of shutdown initiation
                 try:
                     success = self.agent.client.notify_graceful_shutdown_sync(
-                        self.agent.node_id
+                        self.agent.node_id,
+                        reason="http",
+                        timeout_seconds=timeout_seconds,
                     )
                     if self.agent.dev_mode:
                         state = "sent" if success else "failed"
@@ -509,7 +511,11 @@ class AgentServer:
             except Exception as exc:
                 log_warn(f"Failed to stop heartbeat during shutdown: {exc}")
             try:
-                self.agent.client.notify_graceful_shutdown_sync(self.agent.node_id)
+                self.agent.client.notify_graceful_shutdown_sync(
+                    self.agent.node_id,
+                    reason="signal",
+                    timeout_seconds=self._shutdown_timeout,
+                )
             except Exception as exc:
                 log_warn(f"Failed to notify AgentField of shutdown: {exc}")
         if self._uvicorn_server is not None:

@@ -153,6 +153,31 @@ def test_fast_lifecycle_signal_handler_tolerates_notification_failure(monkeypatc
     assert kill_calls == [(os.getpid(), signal.SIGTERM)]
 
 
+def test_legacy_signal_handler_skips_duplicate_shutdown_work(monkeypatch):
+    agent = make_shutdown_agent()
+    agent._shutdown_requested = True
+    agent._current_status = AgentStatus.READY
+    handler = AgentFieldHandler(agent)
+    registered = {}
+    kill_calls = []
+
+    monkeypatch.setattr(
+        "agentfield.agent_field_handler.signal.signal",
+        lambda signum, callback: registered.setdefault(signum, callback),
+    )
+    monkeypatch.setattr(
+        "agentfield.agent_field_handler.os.kill",
+        lambda pid, signum: kill_calls.append((pid, signum)),
+    )
+
+    handler.setup_fast_lifecycle_signal_handlers()
+    registered[signal.SIGTERM](signal.SIGTERM, None)
+
+    assert agent._current_status == AgentStatus.READY
+    assert agent.client.shutdown_calls == []
+    assert kill_calls == [(os.getpid(), signal.SIGTERM)]
+
+
 @pytest.mark.asyncio
 async def test_cleanup_async_resources_releases_manager_and_client():
     agent = Agent(
