@@ -88,17 +88,18 @@ func (ecs *ExecutionCleanupService) Start(ctx context.Context) error {
 // Stop stops the background cleanup process
 func (ecs *ExecutionCleanupService) Stop() error {
 	ecs.mu.Lock()
-	defer ecs.mu.Unlock()
-
 	if !ecs.isRunning {
+		ecs.mu.Unlock()
 		return nil // Already stopped
 	}
 
 	logger.Logger.Debug().Msg("Stopping execution cleanup service")
 
 	close(ecs.stopChan)
-	ecs.wg.Wait()
 	ecs.isRunning = false
+	ecs.mu.Unlock()
+
+	ecs.wg.Wait()
 
 	logger.Logger.Debug().Msg("Execution cleanup service stopped")
 	return nil

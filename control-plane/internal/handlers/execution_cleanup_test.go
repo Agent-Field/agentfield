@@ -51,6 +51,8 @@ type cleanupStoreMock struct {
 	retryStaleCalls []markStaleCall
 	retryStaleIDs   [][]string
 	retryStaleErrs  []error
+	cleanupCalled   chan struct{}
+	cleanupRelease  chan struct{}
 }
 
 type payloadCleanupStore struct {
@@ -105,6 +107,15 @@ func (s *cleanupPayloadStore) Sweep(context.Context, map[string]struct{}, time.D
 type noSweepPayloadStore struct{ services.PayloadStore }
 
 func (m *cleanupStoreMock) CleanupOldExecutions(ctx context.Context, retentionPeriod time.Duration, batchSize int) (int, error) {
+	if m.cleanupCalled != nil {
+		select {
+		case m.cleanupCalled <- struct{}{}:
+		default:
+		}
+	}
+	if m.cleanupRelease != nil {
+		<-m.cleanupRelease
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -120,6 +131,38 @@ func (m *cleanupStoreMock) CleanupOldExecutions(ctx context.Context, retentionPe
 	}
 
 	return 0, nil
+}
+
+func TestExecutionCleanupStopDoesNotDeadlockOnCleanupError(t *testing.T) {
+	store := &cleanupStoreMock{
+		cleanupResponses: []cleanupResponse{{err: errors.New("cleanup failed")}},
+		cleanupCalled:    make(chan struct{}, 1),
+		cleanupRelease:   make(chan struct{}),
+	}
+	service := NewExecutionCleanupService(store, config.ExecutionCleanupConfig{
+		Enabled: true, CleanupInterval: time.Hour, BatchSize: 10,
+	})
+	service.initialDelay = time.Millisecond
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatalf("start cleanup service: %v", err)
+	}
+	select {
+	case <-store.cleanupCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup pass did not start")
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- service.Stop() }()
+	close(store.cleanupRelease)
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("stop cleanup service: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop deadlocked waiting for cleanup error path")
+	}
 }
 
 func (m *cleanupStoreMock) MarkStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
