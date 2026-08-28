@@ -178,7 +178,10 @@ func TestC17InactiveNodeWithoutUpdateIsRejectedAsUnavailable(t *testing.T) {
 
 func TestWaitForDrainingAgentDispatchesToReplacement(t *testing.T) {
 	withRestartGrace(t, time.Second)
-	old := &types.AgentNode{ID: "demo-node", DeploymentType: "long_running", InstanceID: "old", LifecycleStatus: types.AgentStatusOffline}
+	old := &types.AgentNode{
+		ID: "demo-node", DeploymentType: "long_running", InstanceID: "old",
+		LifecycleStatus: types.AgentStatusOffline, HealthStatus: types.HealthStatusActive,
+	}
 	replacement := *old
 	replacement.InstanceID = "new"
 	replacement.LifecycleStatus = types.AgentStatusReady
@@ -704,6 +707,7 @@ func TestExecuteReplayRequestBypassesTheNodeHealthGate(t *testing.T) {
 // rejected, and leaves no execution record behind to be counted as a failure.
 func TestExecuteRejectsKnownDownNodeWithoutRecordingAnExecution(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	withRestartGrace(t, 2*time.Second)
 
 	agent := &types.AgentNode{
 		ID:              "demoproj",
@@ -721,9 +725,12 @@ func TestExecuteRejectsKnownDownNodeWithoutRecordingAnExecution(t *testing.T) {
 		strings.NewReader(`{"input":{"message":"hi"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
+	started := time.Now()
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Less(t, time.Since(started), 250*time.Millisecond,
+		"an offline, inactive node must fail immediately instead of waiting for restart grace")
 
 	var body map[string]interface{}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))

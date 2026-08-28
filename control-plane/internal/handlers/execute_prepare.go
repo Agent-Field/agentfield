@@ -109,7 +109,7 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 	// contacting the agent, so the node being down must not reject it (a
 	// replay miss simply dials and fails exactly as it did before this gate).
 	if agent.DeploymentType != "serverless" && strings.TrimSpace(headers.replaySourceRunID) == "" {
-		if agent.LifecycleStatus == types.AgentStatusOffline {
+		if agent.LifecycleStatus == types.AgentStatusOffline && agent.HealthStatus == types.HealthStatusActive {
 			agent, err = c.waitForDrainingAgent(ctx, agent, target.NodeID)
 			if err != nil {
 				return nil, err
