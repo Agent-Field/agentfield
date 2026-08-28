@@ -197,6 +197,8 @@ class AgentWorkflow:
         *,
         input_data: Optional[Dict[str, Any]] = None,
         parent_execution_id: Optional[str] = None,
+        status: str = "failed",
+        status_reason: Optional[str] = None,
     ) -> None:
         self._emit_execution_transition_log(
             context,
@@ -204,7 +206,7 @@ class AgentWorkflow:
             event_type="reasoner.failed",
             level="ERROR",
             message=f"Reasoner {context.reasoner_name} failed",
-            status="failed",
+            status=status,
             duration_ms=duration_ms,
             error=error,
             input_data=input_data,
@@ -213,11 +215,13 @@ class AgentWorkflow:
         payload = self._build_event_payload(
             context,
             context.reasoner_name,
-            status="failed",
+            status=status,
             parent_execution_id=parent_execution_id,
             input_data=input_data,
         )
         payload["error"] = error
+        if status_reason is not None:
+            payload["status_reason"] = status_reason
         payload["duration_ms"] = duration_ms
         await self.fire_and_forget_update(payload)
 

@@ -2637,16 +2637,26 @@ class Agent(FastAPI):
         except asyncio.CancelledError as cancel_err:
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
+                shutdown_cancel = getattr(self, "_shutdown_cancelling", False)
+                cancellation_error = (
+                    "cancelled during graceful shutdown"
+                    if shutdown_cancel
+                    else "Execution cancelled by upstream client"
+                )
 
                 self._notification_dispatcher.submit(
                     lambda: self.workflow_handler.notify_call_error(
                         execution_context.execution_id,
                         execution_context.workflow_id,
-                        "Execution cancelled by upstream client",
+                        cancellation_error,
                         int((end_time - start_time) * 1000),
                         execution_context,
                         input_data=payload_dict,
                         parent_execution_id=execution_context.parent_execution_id,
+                        status="cancelled" if shutdown_cancel else "failed",
+                        status_reason=(
+                            "shutdown timeout exceeded" if shutdown_cancel else None
+                        ),
                     )
                 )
 
@@ -3349,14 +3359,27 @@ class Agent(FastAPI):
                 except asyncio.CancelledError as cancel_err:
                     duration_ms = int((time.time() - start_time) * 1000)
                     if handler:
+                        shutdown_cancel = getattr(
+                            self, "_shutdown_cancelling", False
+                        )
                         await handler.notify_call_error(
                             execution_context.execution_id,
                             execution_context.workflow_id,
-                            "Execution cancelled by upstream client",
+                            (
+                                "cancelled during graceful shutdown"
+                                if shutdown_cancel
+                                else "Execution cancelled by upstream client"
+                            ),
                             duration_ms,
                             execution_context,
                             input_data=input_payload,
                             parent_execution_id=execution_context.parent_execution_id,
+                            status="cancelled" if shutdown_cancel else "failed",
+                            status_reason=(
+                                "shutdown timeout exceeded"
+                                if shutdown_cancel
+                                else None
+                            ),
                         )
                     raise cancel_err
                 except HTTPException as http_exc:

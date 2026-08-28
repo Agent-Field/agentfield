@@ -4,11 +4,13 @@ import signal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 
 from agentfield.agent import Agent
 from agentfield.agent_field_handler import AgentFieldHandler
 from agentfield.agent_server import AgentServer, parse_shutdown_timeout
+from agentfield.client import AgentFieldClient
 from agentfield.types import AgentStatus
 from tests.helpers import DummyAgentFieldClient, StubAgent
 
@@ -255,6 +257,69 @@ async def test_reasoner_background_task_cancelled_at_budget_reports_shutdown():
     assert agent._shutdown_cancelling is True
     assert terminal.is_set()
     assert payload == {"status": "cancelled", "error": "cancelled during shutdown"}
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_status_and_workflow_payloads_agree(monkeypatch):
+    agent = Agent(
+        node_id="shutdown-events",
+        agentfield_server="http://control",
+        auto_register=False,
+        enable_mcp=False,
+        enable_did=False,
+    )
+    started = asyncio.Event()
+    recorded = []
+
+    @agent.reasoner()
+    async def wait_for_shutdown() -> None:
+        started.set()
+        await asyncio.sleep(60)
+
+    class Response:
+        status_code = 200
+
+    async def record_request(self, method, url, **kwargs):
+        recorded.append((url, kwargs.get("json")))
+        return Response()
+
+    monkeypatch.setattr(AgentFieldClient, "_async_request", record_request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=agent), base_url="http://agent"
+    ) as client:
+        response = await client.post(
+            "/reasoners/wait_for_shutdown",
+            json={},
+            headers={
+                "X-Execution-ID": "exec-shutdown",
+                "X-Run-ID": "run-shutdown",
+                "X-Workflow-ID": "workflow-shutdown",
+            },
+        )
+
+    assert response.status_code == 202
+    await started.wait()
+    agent._shutdown_cancelling = True
+    for task in list(agent._background_tasks):
+        task.cancel()
+    await asyncio.gather(*list(agent._background_tasks), return_exceptions=True)
+
+    status_payload = next(
+        payload for url, payload in recorded if url.endswith("/exec-shutdown/status")
+    )
+    workflow_payload = next(
+        payload
+        for url, payload in recorded
+        if url.endswith("/api/v1/workflow/executions/events")
+        and payload.get("status") == "cancelled"
+    )
+    assert status_payload["status"] == workflow_payload["status"] == "cancelled"
+    assert (
+        status_payload["status_reason"]
+        == workflow_payload["status_reason"]
+        == "shutdown timeout exceeded"
+    )
 
 
 @pytest.mark.asyncio
