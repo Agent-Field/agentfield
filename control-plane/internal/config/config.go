@@ -267,11 +267,30 @@ const (
 // ExecutionQueueConfig configures execution and webhook settings.
 type ExecutionQueueConfig struct {
 	AgentCallTimeout       time.Duration `yaml:"agent_call_timeout" mapstructure:"agent_call_timeout"`
+	agentCallTimeoutSet    bool          `yaml:"-" mapstructure:"-"`
 	MaxConcurrentPerAgent  int           `yaml:"max_concurrent_per_agent" mapstructure:"max_concurrent_per_agent"` // 0 = unlimited
 	WebhookTimeout         time.Duration `yaml:"webhook_timeout" mapstructure:"webhook_timeout"`
 	WebhookMaxAttempts     int           `yaml:"webhook_max_attempts" mapstructure:"webhook_max_attempts"`
 	WebhookRetryBackoff    time.Duration `yaml:"webhook_retry_backoff" mapstructure:"webhook_retry_backoff"`
 	WebhookMaxRetryBackoff time.Duration `yaml:"webhook_max_retry_backoff" mapstructure:"webhook_max_retry_backoff"`
+}
+
+// UnmarshalYAML records whether agent_call_timeout was explicitly configured,
+// including zero and negative values that disable the timeout.
+func (c *ExecutionQueueConfig) UnmarshalYAML(node *yaml.Node) error {
+	type plain ExecutionQueueConfig
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*c = ExecutionQueueConfig(decoded)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == "agent_call_timeout" {
+			c.agentCallTimeoutSet = true
+			break
+		}
+	}
+	return nil
 }
 
 // RateLimitConfig configures per-endpoint rate limiting.
@@ -585,7 +604,7 @@ func ApplyDefaults(cfg *Config) {
 	if cleanup.PayloadOrphanGrace <= 0 {
 		cleanup.PayloadOrphanGrace = time.Hour
 	}
-	if cfg.AgentField.ExecutionQueue.AgentCallTimeout <= 0 {
+	if !cfg.AgentField.ExecutionQueue.agentCallTimeoutSet && cfg.AgentField.ExecutionQueue.AgentCallTimeout == 0 {
 		cfg.AgentField.ExecutionQueue.AgentCallTimeout = DefaultAgentCallTimeout
 	}
 	if cfg.AgentField.ARD.Publish.DefaultType == "" {

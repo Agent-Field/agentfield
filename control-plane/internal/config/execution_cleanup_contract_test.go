@@ -49,6 +49,22 @@ func TestExecutionCleanupDefaultsWithoutConfiguration(t *testing.T) {
 	require.Equal(t, 90*time.Second, cfg.AgentField.ExecutionQueue.AgentCallTimeout)
 }
 
+func TestLoadConfigPreservesExplicitDisabledAgentCallTimeout(t *testing.T) {
+	for _, value := range []string{"0s", "-1s"} {
+		t.Run(value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "agentfield.yaml")
+			contents := "agentfield:\n  execution_queue:\n    agent_call_timeout: " + value + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
+
+			cfg, err := LoadConfig(path)
+			require.NoError(t, err)
+			want, err := time.ParseDuration(value)
+			require.NoError(t, err)
+			require.Equal(t, want, cfg.AgentField.ExecutionQueue.AgentCallTimeout)
+		})
+	}
+}
+
 func TestExecutionCleanupEnvironmentOverridesAndMalformedValues(t *testing.T) {
 	cfg := Config{}
 	ApplyDefaults(&cfg)
