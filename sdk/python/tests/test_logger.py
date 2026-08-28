@@ -2,6 +2,7 @@ import io
 import json
 import logging
 import threading
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -310,6 +311,80 @@ def test_structured_mirror_is_bounded_valid_json_and_cp_receives_full_record(
     assert mirrored["attributes"]["result"] == "<4002 bytes elided>"
     dispatch.assert_called_once_with(record)
     assert record["attributes"]["result"] == "x" * 4000
+
+
+@pytest.mark.unit
+def test_structured_mirror_elides_oversized_message(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+
+    AgentFieldLogger("oversized-message").log_execution(
+        "λ" * 4000, event_type="test.oversized-message"
+    )
+
+    line = stream.getvalue().rstrip("\n")
+    mirrored = json.loads(line)
+    assert len(line.encode("utf-8")) <= 512
+    assert "bytes elided]" in mirrored["message"]
+
+
+@pytest.mark.unit
+def test_structured_mirror_elides_oversized_non_dict_attributes(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    logger = AgentFieldLogger("non-dict-attributes")
+    record = logger._build_execution_record(
+        message="kept", level="INFO", event_type="test.non-dict"
+    )
+    record["attributes"] = ["x" * 4000]
+
+    logger._emit_structured_record(record)
+
+    line = stream.getvalue().rstrip("\n")
+    mirrored = json.loads(line)
+    assert len(line.encode("utf-8")) <= 512
+    assert mirrored["attributes"] == "<4004 bytes elided>"
+
+
+@pytest.mark.unit
+def test_structured_mirror_many_large_attributes_stays_fast(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "4000")
+    monkeypatch.setattr(logger_module.sys, "stdout", io.StringIO())
+    attributes = {f"key-{index}": "x" * 50_000 for index in range(200)}
+
+    start = time.perf_counter()
+    AgentFieldLogger("many-attributes").log_execution(
+        "bounded", event_type="test.many-attributes", attributes=attributes
+    )
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.2
+
+
+@pytest.mark.unit
+def test_public_structured_logger_emits_only_bounded_json_lines(monkeypatch):
+    cap = 512
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", str(cap))
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", "true")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    logger = get_logger("agentfield")
+    set_log_level("INFO")
+
+    logger.log_execution("short", event_type="test.short", attributes={"ok": True})
+    logger.log_execution(
+        "x" * 4000,
+        event_type="test.large",
+        attributes={"payload": "y" * 4000},
+    )
+
+    lines = stream.getvalue().splitlines()
+    assert len(lines) == 2
+    for line in lines:
+        json.loads(line)
+        assert len(line.encode("utf-8")) <= cap
 
 
 @pytest.mark.unit
