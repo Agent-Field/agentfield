@@ -45,6 +45,11 @@ func readClaudeCodeToken() string {
 	return token
 }
 
+// claudeUsageURL is Anthropic's OAuth usage endpoint. It is queried with a
+// bearer token and the oauth beta header. It lives with its only caller so
+// the linux lint pass does not see it as unused.
+const claudeUsageURL = "https://api.anthropic.com/api/oauth/usage"
+
 // fetchClaudeQuotaNow reads the token and queries the OAuth usage endpoint once.
 // It returns a zero (OK=false) claudeQuota whenever anything is unavailable, so
 // the caller can render nothing without special-casing.
