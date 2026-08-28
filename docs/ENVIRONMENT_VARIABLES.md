@@ -245,7 +245,7 @@ When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution valu
 ### Tracing (control plane)
 
 - `AGENTFIELD_TRACING_ENABLED`: Set to `true` or `1` to enable tracing. Setting any of the endpoint variables below also enables it.
-- `AGENTFIELD_TRACING_EXPORTER`: `otlp-http` (default) or `otlp-grpc`. Any other value is rejected at startup.
+- `AGENTFIELD_TRACING_EXPORTER`: `otlp-http` (default) or `otlp-grpc`. For any other value, the control plane logs a startup warning, continues running, and leaves tracing disabled.
 - `AGENTFIELD_TRACING_ENDPOINT`: AgentField-native endpoint setting (the env equivalent of `features.tracing.endpoint` in YAML).
 - `OTEL_EXPORTER_OTLP_ENDPOINT`: Standard generic OTLP endpoint.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`: Standard trace-specific OTLP endpoint.
@@ -254,6 +254,6 @@ When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution valu
 
 Endpoint precedence, highest first: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`, then `AGENTFIELD_TRACING_ENDPOINT`. When none is set, the default is `localhost:4318` for `otlp-http` and `localhost:4317` for `otlp-grpc`.
 
-Each endpoint accepts either a bare `host:port` or a full `http://` / `https://` URL; any other scheme is rejected at startup. For HTTP export a URL without a path sends the trace signal to `/v1/traces`.
+Each endpoint accepts either a bare `host:port` or a full `http://` / `https://` URL. For an invalid endpoint or unsupported scheme, the control plane logs a startup warning, continues running, and leaves tracing disabled. For HTTP export a URL without a path sends the trace signal to `/v1/traces`.
 
 For a local OpenTelemetry Collector, use `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. For Langfuse through an OTel Collector, point this variable at the collector's OTLP/HTTP listener and configure the collector's authenticated Langfuse export pipeline; use `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces` when specifying the trace signal URL directly.
