@@ -240,20 +240,34 @@ class AgentFieldLogger:
         if isinstance(attributes, dict):
             attributes = dict(attributes)
             view["attributes"] = attributes
-            attributes_size = len(self._json_line(attributes).encode("utf-8"))
-            sizes = sorted(
+            encoded_sizes = [
                 (
-                    (len(self._json_line(value).encode("utf-8")), key)
-                    for key, value in attributes.items()
-                ),
-                reverse=True,
+                    len(self._json_line(value).encode("utf-8")),
+                    len(self._json_line(key).encode("utf-8")),
+                    key,
+                )
+                for key, value in attributes.items()
+            ]
+            attributes_size = 2 + sum(
+                key_size + 1 + value_size
+                for value_size, key_size, _key in encoded_sizes
             )
-            for size, key in sizes:
-                attributes[key] = f"<{size} bytes elided>"
-                line = self._json_line(view)
-                if len(line.encode("utf-8")) <= budget:
-                    return line
-            view["attributes"] = {"_elided": f"<{attributes_size} bytes elided>"}
+            if encoded_sizes:
+                attributes_size += len(encoded_sizes) - 1
+
+            estimated_size = len(line.encode("utf-8"))
+            for size, _key_size, key in sorted(
+                encoded_sizes, key=lambda item: item[0], reverse=True
+            ):
+                marker = f"<{size} bytes elided>"
+                marker_size = len(self._json_line(marker).encode("utf-8"))
+                attributes[key] = marker
+                estimated_size -= size - marker_size
+                if estimated_size <= budget:
+                    break
+
+            if estimated_size > budget:
+                view["attributes"] = {"_elided": f"<{attributes_size} bytes elided>"}
         else:
             size = len(self._json_line(attributes).encode("utf-8"))
             view["attributes"] = f"<{size} bytes elided>"
