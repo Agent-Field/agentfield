@@ -24,11 +24,6 @@ if TYPE_CHECKING:
 
 
 _DEFAULT_STRUCTURED_SOURCE = "sdk.python.logger"
-# Values that count as "off" for boolean environment variables that default to
-# on, matching ``node_logs.logs_enabled()``. Anything else keeps the default:
-# an unrecognised value, and the set-but-empty variable a bare ``VAR=`` in a
-# Compose file produces, must not silently drop log output.
-_FALSY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 _LEVEL_TO_LOGGING = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -87,11 +82,6 @@ class AgentFieldLogger:
             os.getenv("AGENTFIELD_LOG_TRACKING", "false").lower() == "true"
         )
         self.show_fire = os.getenv("AGENTFIELD_LOG_FIRE", "false").lower() == "true"
-        self.emit_structured_stdout = (
-            os.getenv("AGENTFIELD_LOG_STDOUT", "true").strip().lower()
-            not in _FALSY_ENV_VALUES
-        )
-
         # Set logger level based on configuration
         self.logger.setLevel(_LEVEL_TO_LOGGING.get(self.log_level, logging.WARNING))
 

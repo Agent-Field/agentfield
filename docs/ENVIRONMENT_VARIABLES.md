@@ -175,7 +175,6 @@ AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT=false
 ### Structured logging (SDKs)
 
 - `AGENTFIELD_LOGS_ENABLED` (default: `true`): Enables Python agent-node stdout/stderr capture and the `/agentfield/v1/logs` endpoint. This controls capture, not control-plane execution-log dispatch.
-- `AGENTFIELD_LOG_STDOUT` (default: `true`): Mirrors structured execution records to stdout in the Python and Go SDKs. Set to `false`, `0`, `no`, or `off` to disable the mirror without disabling full-record dispatch to the control plane.
 - `AGENTFIELD_LOG_TRUNCATE` (Python default: `200` characters): Truncates human-readable plain log messages and visible plain-log payloads. It does not truncate structured records.
 - `AGENTFIELD_LOG_PAYLOADS` (Python default: `false`): Shows payloads in human-readable plain logs when `true`. Structured execution attributes are unaffected.
 - `AGENTFIELD_LOG_MAX_LINE_BYTES` (default: `16384`): Maximum emitted process-log line size in bytes. The Python structured stdout mirror elides attributes, then the message or entire record as needed, so every emitted line—including the complete JSON envelope—is valid JSON and fits this cap.
