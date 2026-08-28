@@ -166,15 +166,26 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
     app.memory_event_client = None
     app.client = SimpleNamespace(aclose=AsyncMock())
 
-    def fake_uvicorn_run(served_app, **config):
-        async def exercise_lifespan():
-            async with served_app.router.lifespan_context(served_app):
-                events.append("serving")
+    class FakeConfig:
+        def __init__(self, served_app, **config):
+            self.app = served_app
+            self.options = config
 
-        asyncio.run(exercise_lifespan())
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+
+        def run(self):
+            async def exercise_lifespan():
+                app = self.config.app
+                async with app.router.lifespan_context(app):
+                    events.append("serving")
+
+            asyncio.run(exercise_lifespan())
 
     monkeypatch.setattr("agentfield.connection_manager.ConnectionManager", _FakeConnectionManager)
-    monkeypatch.setattr("agentfield.agent_server.uvicorn.run", fake_uvicorn_run)
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Config", FakeConfig)
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Server", FakeServer)
 
     AgentServer(app).serve(port=8001)
 

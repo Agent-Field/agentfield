@@ -1121,23 +1121,10 @@ class AgentServer:
 
         try:
             # Start FastAPI server with production-ready configuration
-            original_server = uvicorn.run.__globals__.get("Server")
-
-            if original_server is None:
-                uvicorn.run(self.agent, **uvicorn_config)
-            else:
-                owner = self
-
-                class CapturedServer(original_server):
-                    def __init__(captured_self, *args, **server_kwargs):
-                        super().__init__(*args, **server_kwargs)
-                        owner._uvicorn_server = captured_self
-
-                uvicorn.run.__globals__["Server"] = CapturedServer
-                try:
-                    uvicorn.run(self.agent, **uvicorn_config)
-                finally:
-                    uvicorn.run.__globals__["Server"] = original_server
+            config = uvicorn.Config(self.agent, **uvicorn_config)
+            server = uvicorn.Server(config)
+            self._uvicorn_server = server
+            server.run()
         except OSError as e:
             if "Address already in use" in str(e):
                 log_error(
