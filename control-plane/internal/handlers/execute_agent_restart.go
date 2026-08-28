@@ -50,6 +50,7 @@ const (
 	// import, register and start serving; 15s covers that with headroom while
 	// staying well inside the 90s default agent call timeout.
 	defaultAgentRestartGrace = 15 * time.Second
+	defaultAgentDrainGrace   = 60 * time.Second
 
 	// agentRestartPoll is how often the node record is re-read while waiting.
 	// The SDK heartbeats every 2s and re-registers immediately on boot, so a
@@ -63,6 +64,7 @@ const (
 // server startup, read on every dispatch. Stored as an int64 so tests can
 // change it without racing the async worker pool.
 var agentRestartGraceNanos atomic.Int64
+var agentDrainGraceNanos atomic.Int64
 var updatingAgentNodes = struct {
 	sync.RWMutex
 	names map[string]int
@@ -70,6 +72,7 @@ var updatingAgentNodes = struct {
 
 func init() {
 	agentRestartGraceNanos.Store(int64(defaultAgentRestartGrace))
+	agentDrainGraceNanos.Store(int64(defaultAgentDrainGrace))
 }
 
 // SetAgentRestartGrace configures how long a dispatch waits for a restarting
@@ -81,6 +84,62 @@ func SetAgentRestartGrace(d time.Duration) {
 
 func agentRestartGrace() time.Duration {
 	return time.Duration(agentRestartGraceNanos.Load())
+}
+
+func SetAgentDrainGrace(d time.Duration) { agentDrainGraceNanos.Store(int64(d)) }
+
+// agentIsDraining reports whether an offline node should be treated as
+// draining: it went quiet recently enough that a replacement instance is
+// still expected, so a dispatch is worth holding for the restart grace. The
+// window is the same drain grace that defers the orphan reap, so "hold the
+// dispatch" and "keep its executions alive" agree on what "recently" means.
+//
+// Health is deliberately not consulted. Every node-announced offline
+// transition (POST /nodes/{id}/shutdown, the lifecycle/status route, a
+// status PATCH) records health as inactive, and so does the health monitor's
+// own demotion — so health cannot tell a draining pod from a dead one. The
+// last heartbeat can: a pod that just announced its shutdown was heartbeating
+// moments ago, while a node that died long ago has been silent for longer
+// than any drain grace.
+func agentIsDraining(agent *types.AgentNode) bool {
+	if agent == nil || agent.LifecycleStatus != types.AgentStatusOffline || agent.LastHeartbeat.IsZero() {
+		return false
+	}
+	grace := AgentDrainGrace()
+	if grace <= 0 {
+		return false
+	}
+	return time.Since(agent.LastHeartbeat) <= grace
+}
+func AgentDrainGrace() time.Duration   { return time.Duration(agentDrainGraceNanos.Load()) }
+func AgentRestartGrace() time.Duration { return agentRestartGrace() }
+
+// waitForDrainingAgent holds admission before any execution row exists while
+// an orderly shutdown is in progress. A replacement registration is detected
+// by the same instance/heartbeat predicate used by dispatch retry.
+func (c *executionController) waitForDrainingAgent(ctx context.Context, observed *types.AgentNode, nodeID string) (*types.AgentNode, error) {
+	plan := &preparedExecution{agent: observed, target: &parsedTarget{NodeID: nodeID}}
+	if !c.agentMayRestart(plan) {
+		return observed, ensureAgentDispatchable(observed, nodeID)
+	}
+	grace, _ := agentRestartGraceFor(nodeID)
+	deadline := time.NewTimer(grace)
+	defer deadline.Stop()
+	ticker := time.NewTicker(agentRestartPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return observed, ctx.Err()
+		case <-deadline.C:
+			return observed, ensureAgentDispatchable(observed, nodeID)
+		case <-ticker.C:
+			agent, err := c.store.GetAgent(ctx, nodeID)
+			if err == nil && agent != nil && agentCameBack(agent, observed.InstanceID, observed.LastHeartbeat) && agent.LifecycleStatus != types.AgentStatusOffline {
+				return agent, nil
+			}
+		}
+	}
 }
 
 // SetAgentUpdateInProgress extends dispatch restart tolerance for one node

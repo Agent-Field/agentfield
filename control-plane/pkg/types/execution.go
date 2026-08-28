@@ -15,6 +15,7 @@ type Execution struct {
 
 	// Agent metadata
 	AgentNodeID string `json:"agent_node_id" db:"agent_node_id"`
+	InstanceID  string `json:"instance_id,omitempty" db:"instance_id"`
 	ReasonerID  string `json:"reasoner_id" db:"reasoner_id"`
 	NodeID      string `json:"node_id" db:"node_id"`
 

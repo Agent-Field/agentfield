@@ -6,6 +6,247 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.9] - 2026-08-28
+
+
+### Fixed
+
+- Fix(control-plane): instance-scoped, deferred orphan reap on agent re-registration; hold dispatch while a node drains (#1004)
+
+* fix(control-plane): stamp executions with agent instance
+
+* fix(control-plane): defer instance orphan reap during drains
+
+* docs(control-plane): configure agent drain grace
+
+* test(control-plane): account for execution instance column
+
+* fix(control-plane): only hold actively draining agents
+
+* fix(control-plane): hold dispatches by offline recency, not health
+
+Every node-announced offline transition (POST /nodes/{id}/shutdown, the
+lifecycle/status route, a status PATCH) records health as inactive, and so
+does the health monitor's own demotion, so gating the hold on health kept
+the one case it exists for — a pod that just announced its shutdown — on
+the fail-fast path and held only monitor-demoted nodes.
+
+Gate on recency instead: a node whose last heartbeat is within
+AGENTFIELD_AGENT_DRAIN_GRACE is treated as draining and held for the
+restart grace; one silent for longer is dead and fails fast with 503 and no
+execution row. The same window already defers the orphan reap, so both
+sides of the drain agree on what "recently" means.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(control-plane): move the .env.example block into its section
+
+Keeps this PR's example variables next to the section they belong to
+instead of appending at end-of-file, so sibling PRs that also extend
+.env.example merge in any order.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): bound deferred orphan reap
+
+* docs(control-plane): document deferred reap backstop
+
+* fix(control-plane): read workflow instance IDs
+
+* test(control-plane): script instance_id in workflow-execution fixtures
+
+The workflow-execution SELECT now reads COALESCE(instance_id, ''), so the
+scripted driver row and the shared lifecycle column list must carry the
+column too; CI's coverage run caught the 43-vs-44 Scan mismatch.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c477f6d)
+
+## [0.1.137-rc.8] - 2026-08-28
+
+
+### Fixed
+
+- Fix(control-plane): reject async executions before persisting them; drain the async pool on shutdown; ingress limits (#1001)
+
+* test(control-plane): cover async admission and ingress contracts
+
+* fix(control-plane): admit async work before persistence
+
+* fix(control-plane): drain async pool and harden ingress
+
+* docs(control-plane): document execution admission settings
+
+* fix(control-plane): scope execute body cap to execute routes
+
+* fix(control-plane): emit shutdown failure notifications
+
+* refactor(control-plane): remove unused shutdown wrapper
+
+* docs(control-plane): clarify async reservation lifetime
+
+* docs(control-plane): move the .env.example block into its section
+
+Keeps this PR's example variables next to the section they belong to
+instead of appending at end-of-file, so sibling PRs that also extend
+.env.example merge in any order.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): reject streamed oversized executions
+
+* fix(control-plane): bound async shutdown draining
+
+* test(control-plane): make async saturation deterministic
+
+* fix(control-plane): persist async jobs interrupted by shutdown
+
+* fix(control-plane): admit workers plus queued async jobs
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (9a517de)
+
+## [0.1.137-rc.7] - 2026-08-28
+
+
+### Fixed
+
+- Fix(control-plane): honor execution_id query filter, per-key rate-limit identity, operator note reads, real details timestamps; make OTLP export work with standard endpoints (#1005)
+
+* fix(control-plane): honor execution query filters
+
+* fix(control-plane): allow operator note reads
+
+* fix(control-plane): return persisted execution details
+
+* fix(control-plane): export traces to configured OTLP transport
+
+* docs(control-plane): document tracing configuration
+
+* fix(control-plane): use complete workflow reads for details
+
+* fix(control-plane): restore exact execution detail reads
+
+* chore(control-plane): tidy tracing dependencies
+
+* style(control-plane): format execution storage fixture
+
+* fix(control-plane): use exporter-specific OTLP defaults
+
+* docs(control-plane): clarify tracing startup failures
+
+* docs(control-plane): describe execution note operator reads (e38277a)
+
+## [0.1.137-rc.6] - 2026-08-28
+
+
+### Added
+
+- Feat(sdk): allow disabling structured log stdout mirroring (#994)
+
+* feat(sdk): allow disabling structured log stdout mirroring
+
+* fix(sdk): treat AGENTFIELD_LOG_STDOUT like the SDK's other on-by-default flags
+
+AGENTFIELD_LOG_STDOUT was parsed as `== "true"`, so only the literal string
+"true" kept the stdout mirror on. Every other value turned it off, including
+values that are truthy everywhere else in the SDK (`_TRUTHY_ENV_VALUES` in
+agent.py accepts 1/true/yes), a set-but-empty variable — what a bare
+`AGENTFIELD_LOG_STDOUT=` in a Compose file or `value: ""` in a Kubernetes
+manifest produces — and any typo. An operator who set the flag to `1` to keep
+mirroring, or who left it empty, silently lost their structured log output.
+
+Use the falsy-list convention already established by node_logs.logs_enabled()
+for on-by-default flags: 0/false/no/off disable, everything else keeps the
+default. The flag now fails towards keeping records visible.
+
+Also move the docs entry out of "Control Plane (Server) > Logging" into
+"Agent Nodes > Python SDK agents" — the variable is read only by the Python
+SDK, so a server operator setting it would see no effect — and spell out the
+accepted values the way the neighbouring AGENTFIELD_DISABLE_IP_DETECTION
+entry does.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk): make structured stdout mirroring opt-in
+
+* Revert "fix(sdk): make structured stdout mirroring opt-in"
+
+This reverts commit ff99fa92be41ab3955679826d954d06cb347e05d.
+
+* fix(sdk): skip disabled structured log serialization
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (515ae55)
+
+
+
+### Fixed
+
+- Fix(sdk/go,sdk/typescript): graceful shutdown drains dispatched executions under AGENTFIELD_SHUTDOWN_TIMEOUT (#1000)
+
+* test(sdk): cover graceful shutdown contracts
+
+* fix(sdk/go): drain asynchronous executions on shutdown
+
+* fix(sdk/typescript): handle signals and drain executions
+
+* test(sdk/typescript): run shutdown parser contract in suite
+
+* docs(sdk): document shared graceful shutdown timeout
+
+* fix(sdk/go): unblock Serve after remote shutdown
+
+* fix(sdk/go): bound graceful shutdown drain
+
+* test(sdk/go): cover asynchronous shutdown drain
+
+* fix(sdk/typescript): cancel all executions on shutdown timeout
+
+* fix(sdk/typescript): exit after signal shutdown
+
+* fix(sdk/typescript): reuse shutdown promise
+
+* test(sdk/typescript): cover shutdown drain lifecycle
+
+* test(sdk/go): cover shutdown drain branches
+
+* chore: drop stray worker report from repo root
+
+REPORT.md was an agent work-log artifact accidentally committed to the
+repository root; it is not project documentation and should not ship.
+
+* docs: restore blank line before Harness heading
+
+Lost while resolving the ENVIRONMENT_VARIABLES.md rebase conflict.
+
+* docs: place the SDK graceful-shutdown section under Agent Nodes
+
+Moves the Go/TypeScript AGENTFIELD_SHUTDOWN_TIMEOUT section next to the
+other agent-node settings instead of the end of the file, and leaves the
+control-plane bullet untouched, so sibling PRs editing the same document
+merge in any order. Points at the Python SDK section for its equivalent.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ts-sdk): bound post-cancel drain wait
+
+* fix(ts-sdk): reject executions during shutdown
+
+* fix(go-sdk): make shutdown lease stop idempotent
+
+* docs: clarify graceful shutdown bound
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (9399409)
+
 ## [0.1.137-rc.5] - 2026-08-28
 
 

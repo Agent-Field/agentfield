@@ -33,14 +33,14 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 	insert := `
 		INSERT INTO executions (
 			execution_id, run_id, parent_execution_id,
-			agent_node_id, reasoner_id, node_id,
+			agent_node_id, instance_id, reasoner_id, node_id,
 			status, status_reason, input_payload, result_payload, error_message,
 			input_uri, result_uri,
 			session_id, actor_id,
 			started_at, completed_at, duration_ms,
 			notes,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	// Serialize notes to JSON
 	var notesJSON []byte
@@ -59,6 +59,7 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 		exec.RunID,
 		exec.ParentExecutionID,
 		exec.AgentNodeID,
+		exec.InstanceID,
 		exec.ReasonerID,
 		exec.NodeID,
 		exec.Status,
@@ -88,7 +89,7 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 func (ls *LocalStorage) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
 	query := `
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
 		       status, status_reason, input_payload, result_payload, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -130,7 +131,7 @@ func (ls *LocalStorage) GetExecutionRecordsBatch(ctx context.Context, executionI
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(executionIDs)), ",")
 	query := fmt.Sprintf(`
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
 		       status, status_reason, input_payload, result_payload, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -192,7 +193,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 	// commits, then re-reads the committed row instead of a stale snapshot.
 	row := tx.QueryRowContext(ctx, `
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
 		       status, status_reason, input_payload, result_payload, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -234,6 +235,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 			run_id = ?,
 			parent_execution_id = ?,
 			agent_node_id = ?,
+			instance_id = ?,
 			reasoner_id = ?,
 			node_id = ?,
 			status = ?,
@@ -258,6 +260,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 		updated.RunID,
 		updated.ParentExecutionID,
 		updated.AgentNodeID,
+		updated.InstanceID,
 		updated.ReasonerID,
 		updated.NodeID,
 		updated.Status,
@@ -345,7 +348,7 @@ func (ls *LocalStorage) QueryExecutionRecords(ctx context.Context, filter types.
 	}
 	queryBuilder.WriteString(`
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
 		       status, status_reason, ` + payloadCols + `, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -1379,7 +1382,17 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 // older code path reading it sees a consistent picture. We deliberately do
 // not write duration_ms here: the row's started_at is preserved, so consumers
 // that need the runtime can compute completed_at - started_at directly.
-func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error) {
+func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID, reasonMessage string) (int, error) {
+	return ls.markAgentExecutionsOrphaned(ctx, agentNodeID, "*", reasonMessage)
+}
+
+// MarkAgentInstanceExecutionsOrphaned limits restart cleanup to the departing
+// process plus legacy rows which predate per-execution instance stamping.
+func (ls *LocalStorage) MarkAgentInstanceExecutionsOrphaned(ctx context.Context, agentNodeID, departingInstanceID, reasonMessage string) (int, error) {
+	return ls.markAgentExecutionsOrphaned(ctx, agentNodeID, departingInstanceID, reasonMessage)
+}
+
+func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNodeID, departingInstanceID, reasonMessage string) (int, error) {
 	if strings.TrimSpace(agentNodeID) == "" {
 		return 0, fmt.Errorf("agent_node_id is required")
 	}
@@ -1394,9 +1407,10 @@ func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNo
 		UPDATE workflow_executions
 		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
 		WHERE agent_node_id = ?
+		  AND (? = '*' OR COALESCE(instance_id, '') = '' OR instance_id = ?)
 		  AND status IN ('running', 'pending', 'queued', 'waiting')
 		  AND COALESCE(status_reason, '') <> ?`,
-		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID, departingInstanceID, departingInstanceID,
 		types.ExecutionReasonAwaitingAgentRestart,
 	)
 	if err != nil {
@@ -1412,9 +1426,10 @@ func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNo
 		UPDATE executions
 		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
 		WHERE agent_node_id = ?
+		  AND (? = '*' OR COALESCE(instance_id, '') = '' OR instance_id = ?)
 		  AND status IN ('running', 'pending', 'queued', 'waiting')
 		  AND COALESCE(status_reason, '') <> ?`,
-		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID, departingInstanceID, departingInstanceID,
 		types.ExecutionReasonAwaitingAgentRestart,
 	)
 
@@ -1549,6 +1564,7 @@ func scanExecution(scanner interface {
 		&exec.RunID,
 		&parentExecutionID,
 		&exec.AgentNodeID,
+		&exec.InstanceID,
 		&exec.ReasonerID,
 		&exec.NodeID,
 		&exec.Status,

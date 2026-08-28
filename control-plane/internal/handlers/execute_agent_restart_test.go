@@ -176,6 +176,41 @@ func TestC17InactiveNodeWithoutUpdateIsRejectedAsUnavailable(t *testing.T) {
 	assert.Equal(t, "node_unavailable", precondition.ErrorCode())
 }
 
+func TestWaitForDrainingAgentDispatchesToReplacement(t *testing.T) {
+	withRestartGrace(t, time.Second)
+	// Mirror the record a node leaves behind when it announces its own
+	// shutdown: lifecycle offline, health already inactive, heartbeat fresh.
+	old := &types.AgentNode{
+		ID: "demo-node", DeploymentType: "long_running", InstanceID: "old",
+		LifecycleStatus: types.AgentStatusOffline, HealthStatus: types.HealthStatusInactive,
+		LastHeartbeat: time.Now(),
+	}
+	replacement := *old
+	replacement.InstanceID = "new"
+	replacement.LifecycleStatus = types.AgentStatusReady
+	replacement.HealthStatus = types.HealthStatusActive
+	store := &restartingStore{testExecutionStorage: newTestExecutionStorage(old), after: &replacement, readsAt: 1}
+	controller := newExecutionController(store, nil, nil, 0, "")
+
+	got, err := controller.waitForDrainingAgent(context.Background(), old, old.ID)
+	require.NoError(t, err)
+	require.Equal(t, "new", got.InstanceID)
+	assert.Empty(t, store.executionRecords, "drain admission must not create an execution row")
+}
+
+func TestWaitForDrainingAgentTimesOutWithoutExecution(t *testing.T) {
+	withRestartGrace(t, 10*time.Millisecond)
+	old := &types.AgentNode{ID: "demo-node", DeploymentType: "long_running", InstanceID: "old", LifecycleStatus: types.AgentStatusOffline}
+	store := &restartingStore{testExecutionStorage: newTestExecutionStorage(old), after: old, readsAt: 1 << 20}
+	controller := newExecutionController(store, nil, nil, 0, "")
+
+	_, err := controller.waitForDrainingAgent(context.Background(), old, old.ID)
+	var precondition *executionPreconditionError
+	require.ErrorAs(t, err, &precondition)
+	assert.Equal(t, "node_unavailable", precondition.ErrorCode())
+	assert.Empty(t, store.executionRecords)
+}
+
 func TestE11ConfiguredTenMinuteGraceDoesNotImplyAnUpdate(t *testing.T) {
 	withRestartGrace(t, 10*time.Minute)
 	agent := &types.AgentNode{ID: "demo-node", HealthStatus: types.HealthStatusInactive, LifecycleStatus: types.AgentStatusOffline}
@@ -675,6 +710,7 @@ func TestExecuteReplayRequestBypassesTheNodeHealthGate(t *testing.T) {
 // rejected, and leaves no execution record behind to be counted as a failure.
 func TestExecuteRejectsKnownDownNodeWithoutRecordingAnExecution(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	withRestartGrace(t, 2*time.Second)
 
 	agent := &types.AgentNode{
 		ID:              "demoproj",
@@ -682,6 +718,7 @@ func TestExecuteRejectsKnownDownNodeWithoutRecordingAnExecution(t *testing.T) {
 		DeploymentType:  "long_running",
 		HealthStatus:    types.HealthStatusInactive,
 		LifecycleStatus: types.AgentStatusOffline,
+		LastHeartbeat:   time.Now().Add(-time.Hour), // silent far longer than any drain grace: dead, not draining
 		Reasoners:       []types.ReasonerDefinition{{ID: "echo"}},
 	}
 	store := newTestExecutionStorage(agent)
@@ -692,9 +729,12 @@ func TestExecuteRejectsKnownDownNodeWithoutRecordingAnExecution(t *testing.T) {
 		strings.NewReader(`{"input":{"message":"hi"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
+	started := time.Now()
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Less(t, time.Since(started), 250*time.Millisecond,
+		"a node silent for longer than the drain grace must fail immediately instead of waiting for restart grace")
 
 	var body map[string]interface{}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
@@ -705,6 +745,80 @@ func TestExecuteRejectsKnownDownNodeWithoutRecordingAnExecution(t *testing.T) {
 	recorded := len(store.executionRecords)
 	store.mu.Unlock()
 	assert.Zero(t, recorded, "a request we never dispatched must not be counted as a failed execution")
+}
+
+func withDrainGrace(t *testing.T, d time.Duration) {
+	t.Helper()
+	previous := AgentDrainGrace()
+	SetAgentDrainGrace(d)
+	t.Cleanup(func() { SetAgentDrainGrace(previous) })
+}
+
+func TestAgentIsDrainingUsesRecencyNotHealth(t *testing.T) {
+	withDrainGrace(t, time.Minute)
+	fresh := time.Now()
+	stale := time.Now().Add(-2 * time.Minute)
+	cases := []struct {
+		name  string
+		agent *types.AgentNode
+		want  bool
+	}{
+		{"nil", nil, false},
+		{"ready node", &types.AgentNode{LifecycleStatus: types.AgentStatusReady, LastHeartbeat: fresh}, false},
+		{"offline, never heartbeated", &types.AgentNode{LifecycleStatus: types.AgentStatusOffline}, false},
+		{"offline recently, health inactive (announced shutdown)", &types.AgentNode{LifecycleStatus: types.AgentStatusOffline, HealthStatus: types.HealthStatusInactive, LastHeartbeat: fresh}, true},
+		{"offline recently, health active (monitor demotion in flight)", &types.AgentNode{LifecycleStatus: types.AgentStatusOffline, HealthStatus: types.HealthStatusActive, LastHeartbeat: fresh}, true},
+		{"offline long ago", &types.AgentNode{LifecycleStatus: types.AgentStatusOffline, HealthStatus: types.HealthStatusActive, LastHeartbeat: stale}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, agentIsDraining(tc.agent))
+		})
+	}
+	t.Run("drain grace disabled", func(t *testing.T) {
+		withDrainGrace(t, 0)
+		assert.False(t, agentIsDraining(&types.AgentNode{LifecycleStatus: types.AgentStatusOffline, LastHeartbeat: fresh}))
+	})
+}
+
+// A pod that just announced its shutdown (health inactive, heartbeat fresh)
+// is exactly the case the hold exists for: the dispatch waits out the restart
+// grace for a replacement instead of failing at once, and still creates no
+// execution row when none arrives.
+func TestExecuteHoldsRecentlyOfflineNodeRegardlessOfHealth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withRestartGrace(t, 300*time.Millisecond)
+	withDrainGrace(t, time.Minute)
+
+	agent := &types.AgentNode{
+		ID:              "demoproj",
+		BaseURL:         "http://127.0.0.1:8001",
+		DeploymentType:  "long_running",
+		InstanceID:      "old",
+		HealthStatus:    types.HealthStatusInactive,
+		LifecycleStatus: types.AgentStatusOffline,
+		LastHeartbeat:   time.Now(),
+		Reasoners:       []types.ReasonerDefinition{{ID: "echo"}},
+	}
+	store := newTestExecutionStorage(agent)
+	router := gin.New()
+	router.POST("/execute/:target", ExecuteHandler(store, nil, nil, 0, ""))
+
+	req := httptest.NewRequest(http.MethodPost, "/execute/demoproj.echo",
+		strings.NewReader(`{"input":{"message":"hi"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	started := time.Now()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.GreaterOrEqual(t, time.Since(started), 300*time.Millisecond,
+		"a draining node must be held for the restart grace before giving up")
+
+	store.mu.Lock()
+	recorded := len(store.executionRecords)
+	store.mu.Unlock()
+	assert.Zero(t, recorded, "holding for a replacement must not create an execution row")
 }
 
 // errAgentReadStore fails every node re-read, the way storage can while the

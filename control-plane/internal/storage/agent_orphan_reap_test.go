@@ -123,6 +123,53 @@ func TestMarkAgentExecutionsOrphaned_ReapsByAgent(t *testing.T) {
 		"already-succeeded execution must NOT flip to failed")
 }
 
+func TestMarkAgentInstanceExecutionsOrphaned_ReapsDepartingAndLegacyOnly(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+	seedRunningWorkflowExecution(t, ls, "exec-a", "shared-node", now)
+	seedRunningWorkflowExecution(t, ls, "exec-b", "shared-node", now)
+	seedRunningWorkflowExecution(t, ls, "exec-legacy", "shared-node", now)
+
+	db := ls.requireSQLDB()
+	for _, table := range []string{"executions", "workflow_executions"} {
+		_, err := db.ExecContext(ctx, "UPDATE "+table+" SET instance_id = ? WHERE execution_id = ?", "instance-a", "exec-a")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "UPDATE "+table+" SET instance_id = ? WHERE execution_id = ?", "instance-b", "exec-b")
+		require.NoError(t, err)
+	}
+
+	reaped, err := ls.MarkAgentInstanceExecutionsOrphaned(ctx, "shared-node", "instance-b", "agent_restart_orphaned: drain elapsed")
+	require.NoError(t, err)
+	require.Equal(t, 2, reaped)
+
+	for id, want := range map[string]string{"exec-a": "running", "exec-b": "failed", "exec-legacy": "failed"} {
+		got, err := ls.GetWorkflowExecution(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, want, got.Status, id)
+	}
+}
+
+func TestExecutionRecordsPersistServingInstance(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+	exec := &types.Execution{ExecutionID: "exec-stamped", RunID: "run-stamped", AgentNodeID: "node", InstanceID: "instance-current", ReasonerID: "reasoner", NodeID: "node", Status: "running", StartedAt: now}
+	require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
+	wf := &types.WorkflowExecution{WorkflowID: "run-stamped", ExecutionID: "exec-stamped", AgentFieldRequestID: "req-stamped", AgentNodeID: "node", InstanceID: "instance-current", ReasonerID: "reasoner", Status: "running", StartedAt: now, WorkflowTags: []string{}}
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, wf))
+
+	for _, table := range []string{"executions", "workflow_executions"} {
+		var instanceID string
+		require.NoError(t, ls.requireSQLDB().QueryRowContext(ctx, "SELECT COALESCE(instance_id, '') FROM "+table+" WHERE execution_id = ?", "exec-stamped").Scan(&instanceID))
+		require.Equal(t, "instance-current", instanceID, table)
+	}
+	got, err := ls.GetWorkflowExecution(ctx, "exec-stamped")
+	require.NoError(t, err)
+	require.Equal(t, "instance-current", got.InstanceID)
+	gotList, err := ls.QueryWorkflowExecutions(ctx, types.WorkflowExecutionFilters{})
+	require.NoError(t, err)
+	require.Equal(t, "instance-current", gotList[0].InstanceID)
+}
+
 // TestMarkAgentExecutionsOrphaned_ReapsAllNonTerminalStatuses ensures we don't
 // silently leave `pending`, `queued`, or `waiting` executions behind. They're
 // equally orphaned by a process restart.

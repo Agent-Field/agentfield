@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -660,34 +661,62 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 		InvalidateDiscoveryCache()
 
 		if shouldReapOrphans {
-			reason := fmt.Sprintf(
-				"agent_restart_orphaned: %s re-registered with new instance %s (was %s); previous process is gone, in-flight reasoner cannot be revived",
-				newNode.ID, newNode.InstanceID, oldInstanceID,
-			)
-			reaped, reapErr := storageProvider.MarkAgentExecutionsOrphaned(ctx, newNode.ID, reason)
-			if reapErr != nil {
-				// Best-effort: log loudly but don't fail the registration. The agent
-				// is already persisted; the existing stale-execution sweep will
-				// eventually clean these up via the 30-minute updated_at fallback.
-				logger.Logger.Error().Err(reapErr).
-					Str("agent_node_id", newNode.ID).
-					Str("old_instance_id", oldInstanceID).
-					Str("new_instance_id", newNode.InstanceID).
-					Msg("⚠️ Failed to reap orphaned executions on agent restart; falling back to stale-execution sweep")
-			} else if reaped > 0 {
-				logger.Logger.Warn().
-					Int("orphans_reaped", reaped).
-					Str("agent_node_id", newNode.ID).
-					Str("old_instance_id", oldInstanceID).
-					Str("new_instance_id", newNode.InstanceID).
-					Msg("🧹 Reaped in-flight executions orphaned by agent restart")
-			} else {
-				logger.Logger.Debug().
-					Str("agent_node_id", newNode.ID).
-					Str("old_instance_id", oldInstanceID).
-					Str("new_instance_id", newNode.InstanceID).
-					Msg("Agent restart detected; no in-flight executions to reap")
-			}
+			// Detach cleanup from the registration request. The departing pod may
+			// still complete work during its termination grace period. This timer is
+			// in-memory and is lost if the control plane restarts; the stale-execution
+			// sweep is the backstop for any executions left non-terminal.
+			nodeID, newInstanceID := newNode.ID, newNode.InstanceID
+			go func() {
+				grace := AgentDrainGrace()
+				if grace > 0 {
+					timer := time.NewTimer(grace)
+					defer timer.Stop()
+					<-timer.C
+				}
+				reason := fmt.Sprintf(
+					"agent_restart_orphaned: previous instance %s is gone and the execution did not complete within the drain window",
+					oldInstanceID,
+				)
+				reaper, ok := storageProvider.(interface {
+					MarkAgentInstanceExecutionsOrphaned(context.Context, string, string, string) (int, error)
+				})
+				if !ok {
+					logger.Logger.Error().Str("agent_node_id", nodeID).Msg("storage does not support instance-scoped orphan cleanup; relying on stale sweep")
+					return
+				}
+				reapCtx, cancelReap := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancelReap()
+				reaped, reapErr := reaper.MarkAgentInstanceExecutionsOrphaned(reapCtx, nodeID, oldInstanceID, reason)
+				if errors.Is(reapCtx.Err(), context.DeadlineExceeded) {
+					logger.Logger.Error().
+						Str("agent_node_id", nodeID).
+						Str("old_instance_id", oldInstanceID).
+						Msg("⚠️ Timed out reaping orphaned executions on agent restart")
+				}
+				if reapErr != nil {
+					// Best-effort: log loudly but don't fail the registration. The agent
+					// is already persisted; the existing stale-execution sweep will
+					// eventually clean these up via the 30-minute updated_at fallback.
+					logger.Logger.Error().Err(reapErr).
+						Str("agent_node_id", nodeID).
+						Str("old_instance_id", oldInstanceID).
+						Str("new_instance_id", newInstanceID).
+						Msg("⚠️ Failed to reap orphaned executions on agent restart; falling back to stale-execution sweep")
+				} else if reaped > 0 {
+					logger.Logger.Warn().
+						Int("orphans_reaped", reaped).
+						Str("agent_node_id", nodeID).
+						Str("old_instance_id", oldInstanceID).
+						Str("new_instance_id", newInstanceID).
+						Msg("🧹 Reaped in-flight executions orphaned by agent restart")
+				} else {
+					logger.Logger.Debug().
+						Str("agent_node_id", nodeID).
+						Str("old_instance_id", oldInstanceID).
+						Str("new_instance_id", newInstanceID).
+						Msg("Agent restart detected; no in-flight executions to reap")
+				}
+			}()
 		}
 
 		logger.Logger.Debug().Msgf("✅ Successfully registered node: %s", newNode.ID)

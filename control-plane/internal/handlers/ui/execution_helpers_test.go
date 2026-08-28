@@ -76,6 +76,7 @@ func TestExecutionHelpersSummaryAndDetails(t *testing.T) {
 		ErrorMessage:  &errorMessage,
 		Notes:         notes,
 		UpdatedAt:     now.Add(5 * time.Second),
+		CreatedAt:     now.Add(-time.Hour),
 	}
 
 	summary := handler.toExecutionSummary(exec)
@@ -97,6 +98,7 @@ func TestExecutionHelpersSummaryAndDetails(t *testing.T) {
 	require.NotNil(t, details.LatestNote)
 	require.Equal(t, "completed", details.LatestNote.Message)
 	require.Equal(t, completedAt.Format(time.RFC3339), *details.CompletedAt)
+	require.Equal(t, now.Add(-time.Hour).Format(time.RFC3339), details.CreatedAt)
 	require.Equal(t, 1500, *details.DurationMS)
 	require.Equal(t, []string{"payload://input", "payload://output"}, payloadStore.opens)
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -168,6 +169,13 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	if grace := cfg.AgentField.NodeHealth.AgentRestartGrace; grace != 0 {
 		handlers.SetAgentRestartGrace(grace)
 	}
+	if grace := cfg.AgentField.NodeHealth.AgentDrainGrace; grace != 0 {
+		handlers.SetAgentDrainGrace(grace)
+	}
+	logger.Logger.Info().
+		Dur("agent_restart_grace", handlers.AgentRestartGrace()).
+		Dur("agent_drain_grace", handlers.AgentDrainGrace()).
+		Msg("configured agent restart and drain grace windows")
 
 	Router := newRouter()
 
@@ -713,10 +721,7 @@ func (s *AgentFieldServer) Start() error {
 
 	// Start HTTP server (using net/http.Server for graceful shutdown support)
 	addr := ":" + strconv.Itoa(s.config.AgentField.Port)
-	httpServer := &http.Server{
-		Addr:    addr,
-		Handler: s.Router,
-	}
+	httpServer := s.newHTTPServer(addr)
 	if !s.setHTTPServer(httpServer) {
 		return nil
 	}
@@ -735,6 +740,41 @@ func (s *AgentFieldServer) Start() error {
 	return nil
 }
 
+func (s *AgentFieldServer) newHTTPServer(addr string) *http.Server {
+	maxExecuteBodyBytes := int64(32 << 20)
+	if raw := strings.TrimSpace(os.Getenv("AGENTFIELD_MAX_EXECUTE_BODY_BYTES")); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			maxExecuteBodyBytes = parsed
+		} else {
+			logger.Logger.Warn().Str("value", raw).Msg("invalid AGENTFIELD_MAX_EXECUTE_BODY_BYTES; using 32 MiB")
+		}
+	}
+	handler := maxExecuteBodyHandler(s.Router, maxExecuteBodyBytes)
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+}
+
+func maxExecuteBodyHandler(next http.Handler, limit int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isExecuteRoute := r.URL.Path == "/api/v1/execute" || strings.HasPrefix(r.URL.Path, "/api/v1/execute/")
+		if r.Method == http.MethodPost && isExecuteRoute {
+			if r.ContentLength > limit {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_, _ = w.Write([]byte(`{"error":"request body too large"}`))
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *AgentFieldServer) setHTTPServer(httpServer *http.Server) bool {
 	s.httpServerMu.Lock()
 	defer s.httpServerMu.Unlock()
@@ -751,21 +791,11 @@ func (s *AgentFieldServer) getHTTPServer() *http.Server {
 	return s.httpServer
 }
 
-func (s *AgentFieldServer) shutdownHTTPServer() error {
+func (s *AgentFieldServer) shutdownHTTPServerWithContext(ctx context.Context) error {
 	httpServer := s.getHTTPServer()
 	if httpServer == nil {
 		return nil
 	}
-
-	var shutdownTimeout time.Duration
-	if s.config != nil {
-		shutdownTimeout = s.config.AgentField.ShutdownTimeout
-	}
-	if shutdownTimeout <= 0 {
-		shutdownTimeout = 30 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
 	if err := httpServer.Shutdown(ctx); err != nil {
 		logger.Logger.Error().Err(err).Msg("HTTP server shutdown timed out, forcing close")
 		_ = httpServer.Close()
@@ -839,7 +869,14 @@ func (s *AgentFieldServer) Stop() error {
 	s.stopping = true
 	s.httpServerMu.Unlock()
 
-	httpShutdownErr := s.shutdownHTTPServer()
+	shutdownTimeout := 30 * time.Second
+	if s.config != nil && s.config.AgentField.ShutdownTimeout > 0 {
+		shutdownTimeout = s.config.AgentField.ShutdownTimeout
+	}
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancelShutdown()
+	httpShutdownErr := s.shutdownHTTPServerWithContext(shutdownCtx)
+	handlers.StopAsyncWorkerPool(shutdownCtx)
 
 	if s.adminGRPCServer != nil {
 		s.adminGRPCServer.GracefulStop()
