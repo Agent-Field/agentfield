@@ -368,8 +368,12 @@ func TestServeReturnsAfterRemoteImmediateShutdown(t *testing.T) {
 	go func() { done <- a.Serve(context.Background()) }()
 	require.Eventually(t, func() bool {
 		a.serverMu.RLock()
-		defer a.serverMu.RUnlock()
-		return a.server != nil && a.initialized
+		serverStarted := a.server != nil
+		a.serverMu.RUnlock()
+		a.initMu.Lock()
+		initialized := a.initialized
+		a.initMu.Unlock()
+		return serverStarted && initialized
 	}, 500*time.Millisecond, 5*time.Millisecond)
 
 	recorder := httptest.NewRecorder()
