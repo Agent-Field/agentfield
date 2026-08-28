@@ -221,6 +221,8 @@ Many Python examples also require model provider credentials (for example `OPENA
 
 On SIGTERM or a graceful `POST /shutdown`, the node immediately stops heartbeats, notifies the control plane that it is stopping, and drains in-progress reasoners before closing the callback client. A reasoner still running when `AGENTFIELD_SHUTDOWN_TIMEOUT` expires is cancelled and receives a terminal `cancelled` status whose reason identifies shutdown, so the execution is not left running indefinitely.
 
+`af stop` waits **at least** the node's shutdown budget, not exactly that duration: its total wait also includes the initial HTTP request and, when needed, the signal fallback after the budget expires.
+
 For Kubernetes, set `terminationGracePeriodSeconds` to a value greater than the shutdown budget. This leaves time for the terminal callback and normal process teardown after the reasoner drain. The older `Agent.setup_signal_handlers()` API is retained for compatibility, but `app.serve()` owns the production uvicorn-aware signal lifecycle.
 
 ### MiniMax video generation
