@@ -573,7 +573,7 @@ func writeExecutionError(ctx *gin.Context, err error) {
 			body["error"] = code
 			body["message"] = pe.Error()
 		}
-		if pe.Category() == ErrorCategoryConcurrencyLimit {
+		if pe.Category() == ErrorCategoryConcurrencyLimit || pe.Category() == ErrorCategoryNodeUnavailable {
 			ctx.Header("Retry-After", "1")
 			body["retry_after"] = 1
 		}

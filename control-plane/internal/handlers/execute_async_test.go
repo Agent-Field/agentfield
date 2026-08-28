@@ -224,6 +224,16 @@ func TestWriteExecutionError_ConcurrencyLimitIncludesRetryAfter(t *testing.T) {
 	require.JSONEq(t, `{"error":"busy","error_category":"concurrency_limit","retry_after":1}`, recorder.Body.String())
 }
 
+func TestWriteExecutionError_NodeUnavailableIncludesRetryAfter(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	writeExecutionError(ctx, &executionPreconditionError{
+		code: http.StatusServiceUnavailable, message: "offline", category: ErrorCategoryNodeUnavailable, errorCode: "node_unavailable",
+	})
+	require.Equal(t, "1", recorder.Header().Get("Retry-After"))
+	require.JSONEq(t, `{"error":"node_unavailable","message":"offline","error_category":"node_unavailable","retry_after":1}`, recorder.Body.String())
+}
+
 func TestAsyncWorkerPoolStopFailsQueuedJobsAndRejectsSubmissions(t *testing.T) {
 	workerStarted := make(chan struct{})
 	releaseWorker := make(chan struct{})
