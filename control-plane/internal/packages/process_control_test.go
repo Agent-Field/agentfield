@@ -2,10 +2,12 @@ package packages
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -713,8 +715,31 @@ func TestPackageHealthIdentityUsesManifestMetadata(t *testing.T) {
 func TestRequestHTTPShutdownHonorsExpiredContext(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	accepted, timedOut := requestHTTPShutdown(ctx, 1)
+	accepted, timedOut := requestHTTPShutdown(ctx, 1, 30*time.Second)
 	if accepted || !timedOut {
 		t.Fatalf("accepted=%v timedOut=%v", accepted, timedOut)
+	}
+}
+
+func TestRequestHTTPShutdownSendsResolvedBudget(t *testing.T) {
+	var body struct {
+		Graceful       bool    `json:"graceful"`
+		TimeoutSeconds float64 `json:"timeout_seconds"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	accepted, timedOut := requestHTTPShutdown(context.Background(), port, 45*time.Second)
+	if !accepted || timedOut {
+		t.Fatalf("accepted=%v timedOut=%v", accepted, timedOut)
+	}
+	if !body.Graceful || body.TimeoutSeconds != 45 {
+		t.Fatalf("body=%+v", body)
 	}
 }

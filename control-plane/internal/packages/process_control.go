@@ -234,10 +234,11 @@ func StopRecordedProcessWithAssessment(ctx context.Context, name string, entry I
 
 	httpSupported := !packageUsesGo(entry)
 	if httpSupported && entry.Runtime.Port != nil {
+		shutdownBudget := agentShutdownBudget(entry)
 		result.HTTPAttempted = true
-		result.HTTPAccepted, result.HTTPTimedOut = requestHTTPShutdown(ctx, *entry.Runtime.Port)
+		result.HTTPAccepted, result.HTTPTimedOut = requestHTTPShutdown(ctx, *entry.Runtime.Port, shutdownBudget)
 		if result.HTTPAccepted {
-			if waitForProcessExit(*entry.Runtime.PID, agentShutdownBudget(entry)) {
+			if waitForProcessExit(*entry.Runtime.PID, shutdownBudget) {
 				return result, nil
 			}
 		}
@@ -334,10 +335,10 @@ func packageUsesGo(entry InstalledPackage) bool {
 	return err == nil && metadata.IsGo()
 }
 
-func requestHTTPShutdown(ctx context.Context, port int) (accepted bool, timedOut bool) {
+func requestHTTPShutdown(ctx context.Context, port int, shutdownBudget time.Duration) (accepted bool, timedOut bool) {
 	requestBody, err := json.Marshal(map[string]interface{}{
 		"graceful":        true,
-		"timeout_seconds": 30,
+		"timeout_seconds": shutdownBudget.Seconds(),
 	})
 	if err != nil {
 		return false, false
