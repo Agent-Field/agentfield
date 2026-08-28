@@ -2574,6 +2574,18 @@ func (ls *LocalStorage) ListPayloadURIs(ctx context.Context) (map[string]struct{
 	return refs, rows.Err()
 }
 
+// EffectiveExecutionRetention returns the age an execution must reach before
+// pruning. Both retention and the preserve-recent window must have elapsed.
+func EffectiveExecutionRetention(retentionPeriod, preserveRecent time.Duration) time.Duration {
+	if retentionPeriod <= 0 {
+		return retentionPeriod
+	}
+	if preserveRecent > retentionPeriod {
+		return preserveRecent
+	}
+	return retentionPeriod
+}
+
 // CleanupOldExecutions removes old finished executions based on retention period.
 func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPeriod time.Duration, batchSize int) (int, error) {
 	// Check context cancellation early

@@ -337,6 +337,9 @@ func TestCleanupOldExecutionsRetentionContract(t *testing.T) {
 			require.Equal(t, len(all), count)
 		}
 	}
+	preserved, err := ls.CleanupOldExecutions(ctx, EffectiveExecutionRetention(72*time.Hour, 120*time.Hour), 100)
+	require.NoError(t, err)
+	require.Zero(t, preserved, "preserve-recent window must outlast the shorter retention period")
 
 	uris, err := ls.ListExpiredExecutionPayloadURIs(ctx, 72*time.Hour, 100)
 	require.NoError(t, err)

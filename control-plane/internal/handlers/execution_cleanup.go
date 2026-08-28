@@ -156,6 +156,7 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 
 	// Perform cleanup in batches until no more executions to clean
 	totalCleaned := 0
+	effectiveRetention := storage.EffectiveExecutionRetention(ecs.config.RetentionPeriod, ecs.config.PreserveRecentDuration)
 	if ecs.config.StaleExecutionTimeout > 0 {
 		// Retry eligible workflow executions before marking anything as timed out
 		if ecs.config.MaxRetries > 0 {
@@ -197,14 +198,14 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 
 	for {
 		var payloadURIs []string
-		if ecs.payloads != nil && ecs.config.RetentionPeriod > 0 {
+		if ecs.payloads != nil && effectiveRetention > 0 {
 			if source, ok := ecs.storage.(interface {
 				ListExpiredExecutionPayloadURIs(context.Context, time.Duration, int) ([]string, error)
 			}); ok {
-				payloadURIs, _ = source.ListExpiredExecutionPayloadURIs(cleanupCtx, ecs.config.RetentionPeriod, ecs.config.BatchSize)
+				payloadURIs, _ = source.ListExpiredExecutionPayloadURIs(cleanupCtx, effectiveRetention, ecs.config.BatchSize)
 			}
 		}
-		cleaned, err := ecs.storage.CleanupOldExecutions(cleanupCtx, ecs.config.RetentionPeriod, ecs.config.BatchSize)
+		cleaned, err := ecs.storage.CleanupOldExecutions(cleanupCtx, effectiveRetention, ecs.config.BatchSize)
 		if err != nil {
 			ecs.mu.Lock()
 			ecs.lastCleanupErr = err
@@ -301,8 +302,9 @@ func (ecs *ExecutionCleanupService) ForceCleanup(ctx context.Context) (int, erro
 	defer cancel()
 
 	totalCleaned := 0
+	effectiveRetention := storage.EffectiveExecutionRetention(ecs.config.RetentionPeriod, ecs.config.PreserveRecentDuration)
 	for {
-		cleaned, err := ecs.storage.CleanupOldExecutions(cleanupCtx, ecs.config.RetentionPeriod, ecs.config.BatchSize)
+		cleaned, err := ecs.storage.CleanupOldExecutions(cleanupCtx, effectiveRetention, ecs.config.BatchSize)
 		if err != nil {
 			return totalCleaned, err
 		}
