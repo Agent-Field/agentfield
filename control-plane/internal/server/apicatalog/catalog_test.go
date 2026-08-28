@@ -179,6 +179,20 @@ func TestDefaultEntries_NotEmpty(t *testing.T) {
 	}
 }
 
+func TestDefaultEntries_IncludesUIExecutionDetails(t *testing.T) {
+	for _, entry := range DefaultEntries() {
+		if entry.Method == "GET" && entry.Path == "/api/ui/v1/executions/:execution_id/details" {
+			assert.Equal(t, "api_key", entry.AuthLevel)
+			assert.Equal(t, "ui-executions", entry.Group)
+			require.Len(t, entry.Parameters, 1)
+			assert.Equal(t, "execution_id", entry.Parameters[0].Name)
+			assert.True(t, entry.Parameters[0].Required)
+			return
+		}
+	}
+	t.Fatal("UI execution details endpoint missing from default catalog")
+}
+
 func TestLevenshtein(t *testing.T) {
 	assert.Equal(t, 0, levenshtein("abc", "abc"))
 	assert.Equal(t, 1, levenshtein("abc", "ab"))

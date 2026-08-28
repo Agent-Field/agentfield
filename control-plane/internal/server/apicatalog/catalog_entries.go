@@ -57,10 +57,13 @@ func DefaultEntries() []EndpointEntry {
 		},
 		{Method: "GET", Path: "/api/ui/v1/settings/node-log-proxy", Group: "ui-settings", Summary: "Effective node log proxy limits and env lock flags", AuthLevel: "api_key", Tags: []string{"ui", "settings", "logs"}},
 		{Method: "PUT", Path: "/api/ui/v1/settings/node-log-proxy", Group: "ui-settings", Summary: "Update node log proxy limits (persisted to DB config blob)", AuthLevel: "api_key", Tags: []string{"ui", "settings", "logs"}},
+		{Method: "GET", Path: "/api/ui/v1/executions/:execution_id/details", Group: "ui-executions", Summary: "Get full execution details for the UI", AuthLevel: "api_key", Tags: []string{"ui", "executions", "details"},
+			Parameters: []ParamEntry{{Name: "execution_id", In: "path", Required: true, Type: "string", Desc: "Execution ID"}},
+		},
 
 		// --- Execute ---
 		{Method: "POST", Path: "/api/v1/execute/:target", Group: "execute", Summary: "Execute a reasoner or skill synchronously", AuthLevel: "api_key", Tags: []string{"execute", "reasoner", "skill", "sync"},
-			Parameters: []ParamEntry{{Name: "target", In: "path", Required: true, Type: "string", Desc: "Target in format agent_id.reasoner_id or agent_id.skill_id"}},
+			Parameters:  []ParamEntry{{Name: "target", In: "path", Required: true, Type: "string", Desc: "Target in format agent_id.reasoner_id or agent_id.skill_id"}},
 			RequestBody: &BodyEntry{ContentType: "application/json", Fields: map[string]string{"input": "object - Input payload", "session_id": "string - Optional session ID", "run_id": "string - Optional run ID", "workflow_id": "string - Optional workflow ID"}},
 		},
 		{Method: "POST", Path: "/api/v1/execute/async/:target", Group: "execute", Summary: "Execute a reasoner or skill asynchronously", AuthLevel: "api_key", Tags: []string{"execute", "reasoner", "skill", "async"},
