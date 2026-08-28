@@ -55,6 +55,7 @@ class AgentServer:
         self._in_flight_tasks: set[asyncio.Task] = set()
         self._shutdown_timeout = DEFAULT_SHUTDOWN_TIMEOUT
         self._uvicorn_server = None
+        self._shutdown_notification_task = None
 
     def _track_task(self, task: asyncio.Task) -> asyncio.Task:
         """Track an in-flight task until completion."""
@@ -510,14 +511,14 @@ class AgentServer:
                 self.agent.agentfield_handler.stop_heartbeat()
             except Exception as exc:
                 log_warn(f"Failed to stop heartbeat during shutdown: {exc}")
-            try:
-                self.agent.client.notify_graceful_shutdown_sync(
+            loop = asyncio.get_running_loop()
+            self._shutdown_notification_task = loop.create_task(
+                self.agent.client.notify_graceful_shutdown(
                     self.agent.node_id,
                     reason="signal",
                     timeout_seconds=self._shutdown_timeout,
                 )
-            except Exception as exc:
-                log_warn(f"Failed to notify AgentField of shutdown: {exc}")
+            )
         if self._uvicorn_server is not None:
             self._uvicorn_server.handle_exit(signum, None)
 
@@ -1001,6 +1002,14 @@ class AgentServer:
             """Cleanup all resources when FastAPI shuts down"""
 
             await self._drain_reasoner_tasks(self._shutdown_timeout)
+
+            if self._shutdown_notification_task is not None:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(self._shutdown_notification_task), timeout=2.0
+                    )
+                except (asyncio.TimeoutError, Exception) as exc:
+                    log_warn(f"Failed to notify AgentField of shutdown: {exc}")
 
             # Stop connection manager
             if self.agent.connection_manager:

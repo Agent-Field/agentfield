@@ -348,6 +348,33 @@ async def test_shutdown_cancellation_status_and_workflow_payloads_agree(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_signal_shutdown_notifies_without_delaying_uvicorn_exit():
+    agent = make_shutdown_agent()
+    notification_started = asyncio.Event()
+    release_notification = asyncio.Event()
+
+    async def notify(node_id, **kwargs):
+        notification_started.set()
+        await release_notification.wait()
+        return True
+
+    agent.client.notify_graceful_shutdown = notify
+    agent.agentfield_handler = SimpleNamespace(stop_heartbeat=Mock())
+    server = AgentServer(agent)
+    uvicorn_server = SimpleNamespace(handle_exit=Mock())
+    server._uvicorn_server = uvicorn_server
+
+    server._begin_signal_shutdown(signal.SIGTERM)
+
+    uvicorn_server.handle_exit.assert_called_once_with(signal.SIGTERM, None)
+    await notification_started.wait()
+    assert server._shutdown_notification_task is not None
+    assert not server._shutdown_notification_task.done()
+    release_notification.set()
+    await server._shutdown_notification_task
+
+
+@pytest.mark.asyncio
 async def test_graceful_shutdown_force_cancels_tasks_after_timeout(monkeypatch):
     agent = make_shutdown_agent()
     agent.mcp_handler = SimpleNamespace(_cleanup_mcp_servers=lambda: None)
