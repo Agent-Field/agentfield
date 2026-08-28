@@ -130,7 +130,7 @@ Execution cleanup also has YAML keys `agentfield.execution_cleanup.max_retries` 
 - `AGENTFIELD_EXECUTION_CLEANUP_BATCH_SIZE` (default: `200`): Maximum finished execution rows removed in one database transaction.
 - `AGENTFIELD_EXECUTION_PRESERVE_RECENT` (default: `1h`): Window of recent executions that retention never deletes.
 - `AGENTFIELD_PAYLOAD_ORPHAN_GRACE` (default: `1h`): Minimum age before an unreferenced payload file may be swept, so in-flight writes are not removed.
-- `AGENTFIELD_AGENT_CALL_TIMEOUT` (default: `90s`): Timeout for HTTP calls from the control plane to agent nodes. Equivalent YAML: `agentfield.execution_queue.agent_call_timeout`.
+- `AGENTFIELD_AGENT_CALL_TIMEOUT` (default: `90s`): Timeout for HTTP calls from the control plane to agent nodes. Set to `0s` or a negative duration such as `-1s` to disable the timeout through the dispatch layer. Equivalent YAML: `agentfield.execution_queue.agent_call_timeout`.
 
 All durations use Go duration syntax (`30s`, `5m`, `72h`). The same settings are available in YAML under `agentfield.execution_cleanup`; environment variables take precedence. `AGENTFIELD_EXECUTION_MAX_RETRIES` and `AGENTFIELD_EXECUTION_RETRY_BACKOFF` are described under Miscellaneous control-plane knobs above. The effective values are logged once at startup.
 
