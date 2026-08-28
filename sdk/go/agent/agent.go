@@ -552,10 +552,11 @@ type Agent struct {
 	serverMu sync.RWMutex
 	server   *http.Server
 
-	stopLease    chan struct{}
-	shutdownDone chan struct{}
-	shutdownOnce sync.Once
-	logger       *log.Logger
+	stopLease     chan struct{}
+	stopLeaseOnce sync.Once
+	shutdownDone  chan struct{}
+	shutdownOnce  sync.Once
+	logger        *log.Logger
 
 	router      http.Handler
 	handlerOnce sync.Once

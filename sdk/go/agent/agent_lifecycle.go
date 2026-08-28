@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -369,7 +370,10 @@ func (a *Agent) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	}
 	req := shutdownRequest{Graceful: true}
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid shutdown request", http.StatusBadRequest)
+			return
+		}
 	}
 	timeout := a.cfg.ShutdownTimeout
 	if req.TimeoutSeconds > 0 {
@@ -383,11 +387,7 @@ func (a *Agent) shutdownWithOptions(ctx context.Context, graceful bool, timeout 
 	a.logExecutionInfo(ctx, "agent.shutdown.start", "shutting down agent", map[string]any{
 		"node_id": a.cfg.NodeID,
 	})
-	select {
-	case <-a.stopLease:
-	default:
-		close(a.stopLease)
-	}
+	a.stopLeaseOnce.Do(func() { close(a.stopLease) })
 
 	if a.client != nil {
 		if _, err := a.client.Shutdown(ctx, a.cfg.NodeID, types.ShutdownRequest{Reason: "shutdown", Version: a.cfg.Version}); err != nil {

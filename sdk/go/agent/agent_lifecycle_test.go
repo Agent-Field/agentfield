@@ -217,6 +217,33 @@ func TestShutdownRouteAccepted(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, recorder.Code)
 }
 
+func TestShutdownRouteRejectsMalformedJSON(t *testing.T) {
+	a, err := New(Config{NodeID: "node-1", Version: "1", Logger: log.New(io.Discard, "", 0)})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	a.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/shutdown", strings.NewReader(`{"graceful":`)))
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
+func TestShutdownConcurrentCallsDoNotPanic(t *testing.T) {
+	a, err := New(Config{
+		NodeID: "node-1", Version: "1", Logger: log.New(io.Discard, "", 0),
+	})
+	require.NoError(t, err)
+
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-start
+			done <- a.shutdown(context.Background())
+		}()
+	}
+	close(start)
+	require.NoError(t, <-done)
+	require.NoError(t, <-done)
+}
+
 func TestAcceptedReasonerRequestAfterShutdownBeginsReturnsUnavailable(t *testing.T) {
 	a, err := New(Config{
 		NodeID:        "node-1",
