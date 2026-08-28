@@ -72,7 +72,7 @@ func (s *FilePayloadStore) Sweep(ctx context.Context, referenced map[string]stru
 			if err := ctx.Err(); err != nil {
 				return inspected, removed, err
 			}
-			if entry.IsDir() || strings.HasPrefix(entry.Name(), "payload-") {
+			if entry.IsDir() {
 				continue
 			}
 			inspected++

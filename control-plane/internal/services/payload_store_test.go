@@ -74,6 +74,33 @@ func TestFilePayloadStoreSweepPreservesReferencesAndGrace(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestFilePayloadStoreSweepRemovesOnlyStaleUnreferencedTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFilePayloadStore(dir)
+	ctx := context.Background()
+	referenced, err := store.SaveBytes(ctx, []byte("referenced final payload"))
+	require.NoError(t, err)
+
+	staleTemp := filepath.Join(dir, "payload-stale")
+	recentTemp := filepath.Join(dir, "payload-recent")
+	require.NoError(t, os.WriteFile(staleTemp, []byte("stale"), 0o600))
+	require.NoError(t, os.WriteFile(recentTemp, []byte("recent"), 0o600))
+	old := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(staleTemp, old, old))
+
+	inspected, removed, err := store.Sweep(ctx, map[string]struct{}{referenced.URI: {}}, time.Hour, 100)
+	require.NoError(t, err)
+	require.Equal(t, 3, inspected)
+	require.Equal(t, 1, removed)
+	_, err = os.Stat(staleTemp)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(recentTemp)
+	require.NoError(t, err)
+	reader, err := store.Open(ctx, referenced.URI)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+}
+
 func TestFilePayloadStoreSweepDeletionCapDoesNotLimitInspection(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFilePayloadStore(dir)
@@ -127,8 +154,8 @@ func TestFilePayloadStoreSweepGuardAndEntryBranches(t *testing.T) {
 
 	inspected, removed, err = store.Sweep(ctx, nil, -time.Hour, 10)
 	require.NoError(t, err)
-	require.Equal(t, 1, inspected)
-	require.Equal(t, 1, removed)
+	require.Equal(t, 2, inspected)
+	require.Equal(t, 2, removed)
 }
 
 func TestFilePayloadStoreSaveBytes(t *testing.T) {
