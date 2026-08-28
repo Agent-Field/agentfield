@@ -1,11 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -751,7 +753,15 @@ func (s *AgentFieldServer) newHTTPServer(addr string) *http.Server {
 			logger.Logger.Warn().Str("value", raw).Msg("invalid AGENTFIELD_MAX_EXECUTE_BODY_BYTES; using 32 MiB")
 		}
 	}
-	handler := maxExecuteBodyHandler(s.Router, maxExecuteBodyBytes)
+	maxRegisterBodyBytes := int64(8 << 20)
+	if raw := strings.TrimSpace(os.Getenv("AGENTFIELD_MAX_REGISTER_BODY_BYTES")); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			maxRegisterBodyBytes = parsed
+		} else {
+			logger.Logger.Warn().Str("value", raw).Msg("invalid AGENTFIELD_MAX_REGISTER_BODY_BYTES; using 8 MiB")
+		}
+	}
+	handler := maxRequestBodyHandler(s.Router, maxExecuteBodyBytes, maxRegisterBodyBytes)
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
@@ -762,19 +772,47 @@ func (s *AgentFieldServer) newHTTPServer(addr string) *http.Server {
 }
 
 func maxExecuteBodyHandler(next http.Handler, limit int64) http.Handler {
+	return maxRequestBodyHandler(next, limit, 0)
+}
+
+func maxRequestBodyHandler(next http.Handler, executeLimit, registerLimit int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isExecuteRoute := r.URL.Path == "/api/v1/execute" || strings.HasPrefix(r.URL.Path, "/api/v1/execute/")
 		if r.Method == http.MethodPost && isExecuteRoute {
-			if r.ContentLength > limit {
+			if r.ContentLength > executeLimit {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				_, _ = w.Write([]byte(`{"error":"request body too large"}`))
 				return
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, limit)
+			r.Body = http.MaxBytesReader(w, r.Body, executeLimit)
+		}
+		isRegisterRoute := r.URL.Path == "/api/v1/nodes/register" || r.URL.Path == "/api/v1/nodes" || r.URL.Path == "/api/v1/nodes/register-serverless"
+		if r.Method == http.MethodPost && isRegisterRoute && registerLimit > 0 {
+			if r.ContentLength > registerLimit {
+				writeBodyTooLarge(w)
+				return
+			}
+			body, err := io.ReadAll(io.LimitReader(r.Body, registerLimit+1))
+			if err != nil {
+				http.Error(w, "failed to read request body", http.StatusBadRequest)
+				return
+			}
+			if int64(len(body)) > registerLimit {
+				writeBodyTooLarge(w)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func writeBodyTooLarge(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusRequestEntityTooLarge)
+	_, _ = w.Write([]byte(`{"error":"request body too large"}`))
 }
 
 func (s *AgentFieldServer) setHTTPServer(httpServer *http.Server) bool {

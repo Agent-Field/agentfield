@@ -53,3 +53,43 @@ func TestMaxExecuteBodyHandlerDoesNotCapOtherRoutes(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.Code)
 	require.Equal(t, "12345", resp.Body.String())
 }
+
+func TestMaxRequestBodyHandlerRejectsOversizeRegistrationBeforeHandler(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		chunked bool
+	}{
+		{name: "content length"},
+		{name: "chunked", chunked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			handler := maxRequestBodyHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				called = true
+			}), 32, 4)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/register", strings.NewReader("12345"))
+			if tc.chunked {
+				req.ContentLength = -1
+				req.TransferEncoding = []string{"chunked"}
+			}
+			resp := httptest.NewRecorder()
+			handler.ServeHTTP(resp, req)
+			require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+			require.JSONEq(t, `{"error":"request body too large"}`, resp.Body.String())
+			require.False(t, called)
+		})
+	}
+}
+
+func TestMaxRequestBodyHandlerAllowsNormalRegistration(t *testing.T) {
+	handler := maxRequestBodyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		_, _ = w.Write(body)
+	}), 4, 8)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/register-serverless", strings.NewReader("normal"))
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, "normal", resp.Body.String())
+}
