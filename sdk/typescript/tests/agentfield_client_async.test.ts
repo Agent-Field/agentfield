@@ -190,6 +190,20 @@ describe('AgentFieldClient.reportExecutionResult', () => {
     expect(recs[0].body.result).toEqual({ already: 'object' });
   });
 
+  it('serializes a cancellation status reason for the control plane', async () => {
+    const { base, recs } = await startServer((req, res) => res.status(200).json({ ok: true }));
+    await makeClient(base).reportExecutionResult('exec-1', {
+      status: 'cancelled',
+      error: 'cancelled during graceful shutdown',
+      statusReason: 'shutdown timeout exceeded'
+    });
+    expect(recs[0].body).toMatchObject({
+      status: 'cancelled',
+      error: 'cancelled during graceful shutdown',
+      status_reason: 'shutdown timeout exceeded'
+    });
+  });
+
   it('retries on failure and returns false after exhausting retries', async () => {
     const { base, recs } = await startServer((req, res) => res.status(500).json({ error: 'down' }));
     const ok = await makeClient(base).reportExecutionResult('exec-1', { status: 'failed', error: 'x' }, 2);

@@ -19,6 +19,8 @@ type RegisterPayload = {
 
 type FakeServer = {
   close: ReturnType<typeof vi.fn>;
+  closeIdleConnections: ReturnType<typeof vi.fn>;
+  closeAllConnections: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
 };
 
@@ -28,9 +30,23 @@ function createFakeServer(): FakeServer {
       callback?.();
       return server;
     }),
+    closeIdleConnections: vi.fn(),
+    closeAllConnections: vi.fn(),
     on: vi.fn((_event: string, _handler: (...args: unknown[]) => void) => server)
   };
 
+  return server;
+}
+
+function createControllableFakeServer(): FakeServer & { finishClose(): void } {
+  let closeCallback: ((err?: Error) => void) | undefined;
+  const server = createFakeServer() as FakeServer & { finishClose(): void };
+  server.close.mockImplementation((callback?: (err?: Error) => void) => {
+    closeCallback = callback;
+    return server;
+  });
+  server.finishClose = () => closeCallback?.();
+  server.closeAllConnections.mockImplementation(() => server.finishClose());
   return server;
 }
 
@@ -341,6 +357,29 @@ describe('Agent lifecycle', () => {
     expect(completed).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await shutdown;
+    expect(completed).toBe(true);
+  });
+
+  it('forces stuck connections closed within the shutdown and settlement budget', async () => {
+    process.env.AGENTFIELD_SHUTDOWN_TIMEOUT = '0.01s';
+    const agent = new Agent({
+      nodeId: 'agent-1', agentFieldUrl: 'http://control-plane.local', didEnabled: false
+    });
+    const server = createControllableFakeServer();
+    const internals = agent as any;
+    internals.server = server;
+    internals.inFlightExecutions.set('exec-stuck', new Promise<void>(() => {}));
+
+    let completed = false;
+    const shutdown = agent.shutdown().then(() => { completed = true; });
+    expect(server.closeIdleConnections).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5009);
+    expect(completed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await shutdown;
+
+    expect(server.closeAllConnections).toHaveBeenCalledTimes(1);
     expect(completed).toBe(true);
   });
 

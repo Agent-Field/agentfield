@@ -604,6 +604,7 @@ export class AgentFieldClient {
       status: string;
       result?: any;
       error?: string;
+      statusReason?: string;
       errorDetails?: unknown;
       durationMs?: number;
       completedAt?: string;
@@ -627,6 +628,7 @@ export class AgentFieldClient {
     };
     if (payload.result !== undefined) body.result = wrapResult(payload.result);
     if (payload.error !== undefined) body.error = payload.error;
+    if (payload.statusReason !== undefined) body.status_reason = payload.statusReason;
     if (payload.errorDetails !== undefined) body.error_details = payload.errorDetails;
     if (payload.usage !== undefined) body.usage = payload.usage;
 

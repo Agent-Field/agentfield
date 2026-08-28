@@ -682,24 +682,31 @@ export class Agent {
   }
 
   private async performShutdown(): Promise<void> {
+    const timeoutMs = parseShutdownTimeout(process.env.AGENTFIELD_SHUTDOWN_TIMEOUT);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<'timeout'>(resolve => {
+      timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    });
     const listenerClosed = new Promise<void>((resolve, reject) => {
       if (!this.server) return resolve();
       this.server.close((err) => {
         if (err) reject(err);
         else resolve();
       });
+      this.server.closeIdleConnections?.();
     });
     try { await this.agentFieldClient.shutdown(this.config.nodeId); }
     catch (err) { console.warn('[Agent] Failed to notify control plane of shutdown:', err); }
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
     }
-    await listenerClosed;
-    const timeoutMs = parseShutdownTimeout(process.env.AGENTFIELD_SHUTDOWN_TIMEOUT);
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), timeoutMs); });
     const drained = Promise.allSettled([...this.inFlightExecutions.values()]).then(() => 'drained' as const);
-    if (await Promise.race([drained, timeout]) === 'timeout') {
+    const listenerSettled = listenerClosed.catch((err) => {
+      console.warn('[Agent] HTTP listener close failed during shutdown:', err);
+    });
+    const closedAndDrained = Promise.all([listenerSettled, drained]).then(() => 'drained' as const);
+    if (await Promise.race([closedAndDrained, timeout]) === 'timeout') {
+      this.server?.closeAllConnections?.();
       for (const executionId of this.inFlightExecutions.keys()) {
         this.cancelRegistry.cancel(executionId, 'shutdown_timeout');
       }
@@ -1273,6 +1280,10 @@ export class Agent {
   }
 
   private async executeSkill(req: express.Request, res: express.Response, name: string) {
+    if (this.shuttingDown) {
+      res.status(503).json({ error: 'agent shutting down' });
+      return;
+    }
     try {
       await this.executeInvocation({
         targetName: name,
@@ -1786,10 +1797,12 @@ export class Agent {
         });
       } else if (controller.signal.aborted) {
         // External cooperative cancel arrived via the cancel dispatcher.
+        const shutdownCancel = controller.signal.reason === 'shutdown_timeout';
         await this.agentFieldClient.reportExecutionResult(executionId, {
           status: 'cancelled',
-          error: 'cancelled_by_control_plane',
-          errorDetails: { reason: 'cancelled' },
+          error: shutdownCancel ? 'cancelled during graceful shutdown' : 'cancelled_by_control_plane',
+          statusReason: shutdownCancel ? 'shutdown timeout exceeded' : 'cancelled',
+          errorDetails: { reason: shutdownCancel ? 'shutdown' : 'cancelled' },
           durationMs,
           completedAt: completedAt(),
           reasoner: reasonerName,
