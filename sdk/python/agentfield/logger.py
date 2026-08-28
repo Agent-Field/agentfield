@@ -185,10 +185,10 @@ class AgentFieldLogger:
         }
 
     def _emit_structured_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        line = json.dumps(
-            record, ensure_ascii=False, separators=(",", ":"), default=str
-        )
         if self.emit_structured_stdout:
+            line = json.dumps(
+                record, ensure_ascii=False, separators=(",", ":"), default=str
+            )
             print(line, file=sys.stdout, flush=True)
         self._dispatch_to_cp(record)
         return record

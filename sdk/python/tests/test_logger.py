@@ -24,6 +24,22 @@ def test_structured_stdout_can_be_disabled(monkeypatch, capsys):
 
 
 @pytest.mark.unit
+def test_structured_stdout_disabled_skips_serialization(monkeypatch, capsys):
+    class Unserializable:
+        def __str__(self):
+            raise AssertionError(
+                "structured stdout should not serialize disabled records"
+            )
+
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", "false")
+    logger = AgentFieldLogger("structured.stdout.no-serialization")
+
+    logger._emit_structured_record({"event_type": "test", "payload": Unserializable()})
+
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.unit
 def test_structured_stdout_is_enabled_by_default(capsys):
     logger = AgentFieldLogger("structured.stdout.default")
 
