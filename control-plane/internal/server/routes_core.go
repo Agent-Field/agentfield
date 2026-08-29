@@ -132,7 +132,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// pattern as POST /executions/batch-status); gin matches static first.
 	agentAPI.GET("/executions/active", handlers.ActiveExecutionsHandler(s.storage))
 	agentAPI.GET("/executions/:execution_id", handlers.GetExecutionStatusHandler(s.storage))
-	agentAPI.GET("/executions/:execution_id/events", handlers.StreamExecutionEventsHandler(s.storage))
+	agentAPI.GET("/executions/:execution_id/events", s.streamHandler(handlers.StreamExecutionEventsHandler(s.storage)))
 	agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
 	agentAPI.POST("/executions/:execution_id/logs", handlers.StructuredExecutionLogsHandler(s.storage, func() config.ExecutionLogsConfig {

@@ -113,9 +113,12 @@ type AgentFieldServer struct {
 	// Native scope-aware RAG knowledge store (embed-on-write/search).
 	knowledgeService *knowledge.Service
 	// HTTP server for graceful shutdown support
-	httpServerMu sync.RWMutex
-	httpServer   *http.Server
-	stopping     bool
+	httpServerMu      sync.RWMutex
+	httpServer        *http.Server
+	stopping          bool
+	streamCtx         context.Context
+	cancelStreams     context.CancelFunc
+	cancelStreamsOnce sync.Once
 }
 
 // newRouter builds the gin engine the control plane serves from, with the
@@ -557,6 +560,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		Msg("knowledge store embedding provider initialized")
 	knowledgeService := knowledge.NewService(storageProvider, embedder)
 
+	streamCtx, cancelStreams := context.WithCancel(context.Background())
 	return &AgentFieldServer{
 		storage:                storageProvider,
 		cache:                  cacheProvider,
@@ -588,6 +592,8 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		observabilityForwarder: observabilityForwarder,
 		executionTracer:        executionTracer,
 		tracerShutdown:         tracerShutdown,
+		streamCtx:              streamCtx,
+		cancelStreams:          cancelStreams,
 		telemetryService:       telemetryService,
 		registryWatcherCancel:  nil,
 		adminGRPCPort:          adminPort,
@@ -908,6 +914,11 @@ func (s *AgentFieldServer) Stop() error {
 	s.httpServerMu.Lock()
 	s.stopping = true
 	s.httpServerMu.Unlock()
+	s.cancelStreamsOnce.Do(func() {
+		if s.cancelStreams != nil {
+			s.cancelStreams()
+		}
+	})
 
 	shutdownTimeout := 30 * time.Second
 	if s.config != nil && s.config.AgentField.ShutdownTimeout > 0 {
@@ -916,7 +927,9 @@ func (s *AgentFieldServer) Stop() error {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancelShutdown()
 	httpShutdownErr := s.shutdownHTTPServerWithContext(shutdownCtx)
-	handlers.StopAsyncWorkerPool(shutdownCtx)
+	asyncCtx, cancelAsync := asyncDrainContext(shutdownCtx)
+	handlers.StopAsyncWorkerPool(asyncCtx)
+	cancelAsync()
 
 	if s.adminGRPCServer != nil {
 		s.adminGRPCServer.GracefulStop()
@@ -1018,6 +1031,25 @@ func (s *AgentFieldServer) Stop() error {
 
 	// TODO: Implement graceful shutdown for WebSocket
 	return httpShutdownErr
+}
+
+func (s *AgentFieldServer) streamHandler(handler gin.HandlerFunc) gin.HandlerFunc {
+	if s.streamCtx == nil {
+		s.streamCtx, s.cancelStreams = context.WithCancel(context.Background())
+	}
+	return handlers.WithStreamContext(s.streamCtx, handler)
+}
+
+func asyncDrainContext(shutdownCtx context.Context) (context.Context, context.CancelFunc) {
+	budget := 5 * time.Second
+	if deadline, ok := shutdownCtx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > budget {
+			budget = remaining
+		}
+	}
+	// The async pool always gets a useful drain window, so total shutdown may
+	// exceed AGENTFIELD_SHUTDOWN_TIMEOUT by up to five seconds.
+	return context.WithTimeout(context.Background(), budget)
 }
 
 // setupRoutes composes the full HTTP surface by delegating to focused

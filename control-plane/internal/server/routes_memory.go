@@ -48,7 +48,7 @@ func (s *AgentFieldServer) registerMemoryRoutes(agentAPI *gin.RouterGroup) {
 		// Memory events endpoints
 		memoryEventsHandler := handlers.NewMemoryEventsHandler(s.storage)
 		memoryGroup.GET("/events/ws", memoryEventsHandler.WebSocketHandler)
-		memoryGroup.GET("/events/sse", memoryEventsHandler.SSEHandler)
+		memoryGroup.GET("/events/sse", s.streamHandler(memoryEventsHandler.SSEHandler))
 		memoryGroup.GET("/events/history", handlers.GetEventHistoryHandler(s.storage))
 	}
 }
