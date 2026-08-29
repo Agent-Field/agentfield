@@ -388,9 +388,6 @@ func (a *Agent) shutdownWithOptions(ctx context.Context, graceful bool, timeout 
 		"node_id": a.cfg.NodeID,
 	})
 	a.stopLeaseOnce.Do(func() { close(a.stopLease) })
-	a.shutdownMu.Lock()
-	a.shuttingDown = true
-	a.shutdownMu.Unlock()
 
 	if a.client != nil {
 		if _, err := a.client.Shutdown(ctx, a.cfg.NodeID, types.ShutdownRequest{Reason: "shutdown", Version: a.cfg.Version}); err != nil {
@@ -401,6 +398,9 @@ func (a *Agent) shutdownWithOptions(ctx context.Context, graceful bool, timeout 
 			})
 		}
 	}
+	a.shutdownMu.Lock()
+	a.shuttingDown = true
+	a.shutdownMu.Unlock()
 	a.serverMu.RLock()
 	server := a.server
 	a.serverMu.RUnlock()

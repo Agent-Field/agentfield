@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -268,32 +269,33 @@ func TestAcceptedReasonerRequestAfterShutdownBeginsReturnsUnavailable(t *testing
 	assert.Contains(t, recorder.Body.String(), "agent is shutting down")
 }
 
-func TestAsyncReasonerDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T) {
-	testDispatchDuringShutdownNotifyReturnsUnavailable(t, "/reasoners/echo", true, false)
+func TestAsyncReasonerDispatchDuringShutdownNotifyIsAccepted(t *testing.T) {
+	testDispatchDuringShutdownNotifyIsAccepted(t, "/reasoners/echo", true, false)
 }
 
-func TestSyncReasonerDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T) {
-	testDispatchDuringShutdownNotifyReturnsUnavailable(t, "/reasoners/echo", false, false)
+func TestSyncReasonerDispatchDuringShutdownNotifyIsAccepted(t *testing.T) {
+	testDispatchDuringShutdownNotifyIsAccepted(t, "/reasoners/echo", false, false)
 }
 
-func TestSkillDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T) {
-	testDispatchDuringShutdownNotifyReturnsUnavailable(t, "/skills/echo", false, true)
+func TestSkillDispatchDuringShutdownNotifyIsAccepted(t *testing.T) {
+	testDispatchDuringShutdownNotifyIsAccepted(t, "/skills/echo", false, true)
 }
 
-func TestExecuteDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T) {
-	testDispatchDuringShutdownNotifyReturnsUnavailable(t, "/execute/echo", false, false)
+func TestExecuteDispatchDuringShutdownNotifyIsAccepted(t *testing.T) {
+	testDispatchDuringShutdownNotifyIsAccepted(t, "/execute/echo", false, false)
 }
 
-func testDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T, path string, async, skill bool) {
+func testDispatchDuringShutdownNotifyIsAccepted(t *testing.T, path string, async, skill bool) {
 	t.Helper()
 	notifyStarted := make(chan struct{})
 	releaseNotify := make(chan struct{})
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/nodes/node-1/shutdown", r.URL.Path)
-		close(notifyStarted)
-		select {
-		case <-releaseNotify:
-		case <-time.After(time.Second):
+		if r.URL.Path == "/api/v1/nodes/node-1/shutdown" {
+			close(notifyStarted)
+			select {
+			case <-releaseNotify:
+			case <-time.After(time.Second):
+			}
 		}
 		_, _ = io.WriteString(w, `{}`)
 	}))
@@ -304,9 +306,9 @@ func testDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T, path strin
 		Logger: log.New(io.Discard, "", 0),
 	})
 	require.NoError(t, err)
-	handlerCalled := false
+	var handlerCalled atomic.Bool
 	handler := func(context.Context, map[string]any) (any, error) {
-		handlerCalled = true
+		handlerCalled.Store(true)
 		return map[string]any{"ok": true}, nil
 	}
 	if skill {
@@ -330,11 +332,19 @@ func testDispatchDuringShutdownNotifyReturnsUnavailable(t *testing.T, path strin
 	recorder := httptest.NewRecorder()
 	a.Handler().ServeHTTP(recorder, req)
 
-	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	assert.Equal(t, "agent is shutting down\n", recorder.Body.String())
-	assert.False(t, handlerCalled)
+	wantStatus := http.StatusOK
+	if async {
+		wantStatus = http.StatusAccepted
+	}
+	assert.Equal(t, wantStatus, recorder.Code)
+	require.Eventually(t, handlerCalled.Load, time.Second, time.Millisecond)
 	close(releaseNotify)
 	require.NoError(t, <-shutdownDone)
+
+	after := httptest.NewRecorder()
+	a.Handler().ServeHTTP(after, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))
+	assert.Equal(t, http.StatusServiceUnavailable, after.Code)
+	assert.Equal(t, "agent is shutting down\n", after.Body.String())
 }
 
 func TestServeReturnsAfterRemoteImmediateShutdown(t *testing.T) {
