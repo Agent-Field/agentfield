@@ -1,5 +1,6 @@
 controlPlane:
   replicaCount: 1
+  terminationGracePeriodSeconds: 45
 
   image:
     repository: agentfield/control-plane
@@ -91,6 +92,7 @@ postgres:
 
 demoAgent:
   enabled: false
+  terminationGracePeriodSeconds: 45
   image:
     # Build locally from deployments/docker/Dockerfile.demo-go-agent and push/load into your cluster.
     repository: agentfield-demo-go-agent
@@ -108,6 +110,7 @@ demoPythonAgent:
   # Demo agent that installs the Python SDK from PyPI at startup (no custom image required).
   # Intended for evaluation only.
   enabled: false
+  terminationGracePeriodSeconds: 45
   image:
     repository: python
     tag: "3.11-slim"

@@ -24,7 +24,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      terminationGracePeriodSeconds: 45
+      terminationGracePeriodSeconds: {{ .Values.controlPlane.terminationGracePeriodSeconds }}
       {{- with .Values.controlPlane.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}

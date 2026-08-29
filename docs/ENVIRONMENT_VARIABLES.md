@@ -195,7 +195,7 @@ AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT=false
 - `AGENTFIELD_LOGS_ENABLED` (default: `true`): Enables Python, Go, and TypeScript agent-node stdout/stderr capture and the `/agentfield/v1/logs` endpoint. This controls capture, not control-plane execution-log dispatch.
 - `AGENTFIELD_LOG_TRUNCATE` (Python default: `200` characters): Truncates human-readable plain log messages and visible plain-log payloads. It does not truncate structured records.
 - `AGENTFIELD_LOG_PAYLOADS` (Python default: `false`): Shows payloads in human-readable plain logs when `true`. Structured execution attributes are unaffected.
-- `AGENTFIELD_LOG_MAX_LINE_BYTES` (default: `16384`, minimum: `256`): Maximum emitted process-log line size in bytes. Values below 256 bytes are raised to the minimum. The Python structured stdout mirror elides attributes, then the message or entire record as needed, so every emitted line—including the complete JSON envelope—is valid JSON and fits this cap.
+- `AGENTFIELD_LOG_MAX_LINE_BYTES` (default: `16384`, minimum: `256`): Maximum emitted process-log line size in bytes. The Go and TypeScript SDKs treat invalid values or values below 256 as unset and use the 16384-byte default. The Python structured stdout mirror elides attributes, then the message or entire record as needed, so every emitted line—including the complete JSON envelope—is valid JSON and fits this cap.
 - `AGENTFIELD_LOG_BUFFER_BYTES` (default: `4194304`): Approximate total byte capacity of the in-memory process-log capture ring; oldest entries are discarded when full.
 
 Agent nodes run as separate processes/pods and register with the control plane. The most important Kubernetes-specific concept is:
