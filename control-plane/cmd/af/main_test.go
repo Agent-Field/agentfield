@@ -156,3 +156,11 @@ func TestDrainOnShutdownPropagatesStopError(t *testing.T) {
 		t.Fatalf("got %v, want %v", err, want)
 	}
 }
+
+func TestDrainOnShutdownTreatsTimeoutAsSuccessfulExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, drainOnShutdown(ctx, nil, func() error {
+		return context.DeadlineExceeded
+	}))
+}

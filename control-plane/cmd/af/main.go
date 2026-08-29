@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -258,6 +259,10 @@ func drainOnShutdown(ctx context.Context, stopSignals func(), stop func() error)
 	}
 	fmt.Println("\nShutdown signal received, draining connections...")
 	if err := stop(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("Warning: shutdown drain timed out; forced close completed: %v", err)
+			return nil
+		}
 		return err
 	}
 	fmt.Println("Server stopped gracefully.")

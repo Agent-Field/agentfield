@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -260,11 +261,20 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Graceful shutdown
 	fmt.Println("\nShutdown signal received, draining connections...")
-	if err := agentfieldServer.Stop(); err != nil {
+	if err := finishShutdown(agentfieldServer.Stop); err != nil {
 		log.Printf("Error during shutdown: %v", err)
 		os.Exit(1)
 	}
 	fmt.Println("Server stopped gracefully.")
+}
+
+func finishShutdown(stop func() error) error {
+	err := stop()
+	if errors.Is(err, context.DeadlineExceeded) {
+		log.Printf("Warning: shutdown drain timed out; forced close completed: %v", err)
+		return nil
+	}
+	return err
 }
 
 // loadConfig loads configuration from file and environment variables.

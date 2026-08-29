@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +18,19 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+func TestFinishShutdownTreatsTimeoutAsSuccessfulExit(t *testing.T) {
+	if err := finishShutdown(func() error { return context.DeadlineExceeded }); err != nil {
+		t.Fatalf("timeout should be a successful shutdown exit: %v", err)
+	}
+}
+
+func TestFinishShutdownPropagatesGenuineFailure(t *testing.T) {
+	want := errors.New("close failed")
+	if err := finishShutdown(func() error { return want }); !errors.Is(err, want) {
+		t.Fatalf("got %v, want %v", err, want)
+	}
+}
 
 func TestLoadConfig_DefaultsApplied(t *testing.T) {
 	t.Setenv("AGENTFIELD_PORT", "")
