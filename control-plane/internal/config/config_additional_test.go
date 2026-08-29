@@ -661,3 +661,20 @@ func TestAgentDrainGraceFromEnvironment(t *testing.T) {
 		t.Fatalf("expected 75s drain grace, got %s", cfg.AgentField.NodeHealth.AgentDrainGrace)
 	}
 }
+
+func TestShutdownTimeoutEnvAcceptsBareSecondsLikeTheSDKs(t *testing.T) {
+	t.Setenv("AGENTFIELD_SHUTDOWN_TIMEOUT", "20")
+	cfg := &Config{}
+	ApplyDefaults(cfg)
+	ApplyEnvOverrides(cfg)
+	if cfg.AgentField.ShutdownTimeout != 20*time.Second {
+		t.Fatalf("expected 20s from bare seconds, got %v", cfg.AgentField.ShutdownTimeout)
+	}
+	t.Setenv("AGENTFIELD_SHUTDOWN_TIMEOUT", "nonsense")
+	cfg = &Config{}
+	ApplyDefaults(cfg)
+	ApplyEnvOverrides(cfg)
+	if cfg.AgentField.ShutdownTimeout != 30*time.Second {
+		t.Fatalf("expected the 30s default to survive an invalid value, got %v", cfg.AgentField.ShutdownTimeout)
+	}
+}

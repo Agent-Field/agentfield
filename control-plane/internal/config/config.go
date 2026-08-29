@@ -727,10 +727,14 @@ func ApplyEnvOverrides(cfg *Config) {
 		}
 	}
 
-	// Shutdown timeout override
+	// Shutdown timeout override. The SDKs accept bare seconds ("30") as well
+	// as Go durations ("30s", "5m") for the same variable name, so accept both
+	// here too instead of silently keeping the default.
 	if val := os.Getenv("AGENTFIELD_SHUTDOWN_TIMEOUT"); val != "" {
-		if d, err := time.ParseDuration(val); err == nil {
+		if d, ok := parseShutdownTimeout(val); ok {
 			cfg.AgentField.ShutdownTimeout = d
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: invalid AGENTFIELD_SHUTDOWN_TIMEOUT=%q; keeping %s\n", val, cfg.AgentField.ShutdownTimeout)
 		}
 	}
 
@@ -1062,4 +1066,18 @@ func splitEnvCSV(value string) []string {
 		}
 	}
 	return out
+}
+
+// parseShutdownTimeout parses a shutdown budget given as a Go duration or as
+// bare seconds; non-positive values are rejected.
+func parseShutdownTimeout(val string) (time.Duration, bool) {
+	val = strings.TrimSpace(val)
+	if d, err := time.ParseDuration(val); err == nil {
+		return d, d > 0
+	}
+	if secs, err := strconv.ParseFloat(val, 64); err == nil {
+		d := time.Duration(secs * float64(time.Second))
+		return d, d > 0
+	}
+	return 0, false
 }
