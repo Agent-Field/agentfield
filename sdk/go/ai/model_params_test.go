@@ -320,6 +320,9 @@ func TestIsVouchedRewriteEndpoint(t *testing.T) {
 		{"https://my-resource.openai.azure.com/openai/deployments/gpt-4o", true},
 		// OpenRouter
 		{"https://openrouter.ai/api/v1", true},
+		// OrcaRouter
+		{"https://api.orcarouter.ai/v1", true},
+		{"https://api.orcarouter.ai/v1/", true},
 		// Known non-OpenAI providers — should NOT rewrite
 		{"https://api.anthropic.com/v1", false},
 		{"https://api.cohere.ai/v1", false},
@@ -333,6 +336,7 @@ func TestIsVouchedRewriteEndpoint(t *testing.T) {
 		// Lookalike hosts must not match by substring
 		{"https://notopenai.com/v1", false},
 		{"https://api.openai.com.evil.example/v1", false},
+		{"https://orcarouter.ai.evil.example/v1", false},
 		// Edge cases: no scheme means no host, and requests can't be sent
 		// there anyway
 		{"api.openai.com/v1", false},

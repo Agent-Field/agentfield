@@ -1,10 +1,10 @@
 # Go SDK AI Package
 
-This package provides AI/LLM capabilities for the AgentField Go SDK, supporting both OpenAI and OpenRouter APIs with structured output support.
+This package provides AI/LLM capabilities for the AgentField Go SDK, supporting OpenAI, OpenRouter, Infron, and OrcaRouter APIs with structured output support.
 
 ## Features
 
-- ✅ **OpenAI & OpenRouter Support**: Works with both OpenAI API and OpenRouter for multi-model routing
+- ✅ **OpenAI, OpenRouter, Infron & OrcaRouter Support**: Works with OpenAI API, OpenRouter, Infron, and OrcaRouter for multi-model routing
 - ✅ **Structured Outputs**: JSON schema validation with Go struct support
 - ✅ **Streaming**: Support for streaming responses
 - ✅ **Type-Safe**: Automatic conversion from Go structs to JSON schemas
@@ -86,6 +86,10 @@ export AI_MODEL="gpt-4o"  # Optional, defaults to gpt-4o
 export OPENROUTER_API_KEY="sk-..."
 export AI_MODEL="openai/gpt-4o"  # Use OpenRouter model format
 
+# For OrcaRouter
+export ORCAROUTER_API_KEY="sk-orca-..."
+export AI_MODEL="orcarouter/auto"  # Use OrcaRouter model format
+
 # Custom base URL
 export AI_BASE_URL="https://api.openai.com/v1"
 ```
@@ -143,6 +147,33 @@ Model: "infron/moonshotai/kimi-k2.6"  // sent as moonshotai/kimi-k2.6
 Note that Infron reports native cost at the top level of the body (and of the
 final stream chunk) rather than nested under `usage.cost`. The SDK normalizes
 both shapes into `Usage.Cost`, so cost tracking reads the same either way.
+
+### OrcaRouter Configuration
+
+OrcaRouter is an OpenAI-compatible AI gateway. Like OpenRouter, it exposes a
+provider/model namespace across many models (`orcarouter/auto`,
+`orcarouter/fusion`, ...), and it combines adaptive routing, automatic
+failover, observability, and guardrails behind the same endpoint. The
+`orcarouter/` prefix is part of the published model id, so it stays on the
+wire:
+
+```go
+aiConfig := &ai.Config{
+    APIKey:   os.Getenv("ORCAROUTER_API_KEY"),
+    BaseURL:  "https://api.orcarouter.ai/v1",
+    Model:    "orcarouter/auto", // OrcaRouter format: orcarouter/<model>
+    SiteURL:  "https://myapp.com", // app attribution
+    SiteName: "My AI App",
+}
+```
+
+`ai.DefaultConfig()` picks this up from `ORCAROUTER_API_KEY` automatically. A
+gateway key already present in the environment keeps precedence, so adding an
+OrcaRouter key to a configured environment never silently reroutes it.
+
+OrcaRouter reports native cost inside `usage.cost` when the request opts in
+with `usage: {"include": true}`, which the SDK sends for OrcaRouter requests
+automatically.
 
 ## API Reference
 
