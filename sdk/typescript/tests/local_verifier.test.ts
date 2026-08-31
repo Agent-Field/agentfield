@@ -2,6 +2,34 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { LocalVerifier, type PolicyEntry } from '../src/verification/LocalVerifier.js';
 
 describe('LocalVerifier', () => {
+
+  describe('constructor url normalization', () => {
+    const url = (v: LocalVerifier) => (v as any).agentFieldUrl as string;
+
+    it('strips a single trailing slash', () => {
+      expect(url(new LocalVerifier('http://localhost:8080/'))).toBe('http://localhost:8080');
+    });
+
+    it('strips repeated trailing slashes', () => {
+      expect(url(new LocalVerifier('http://localhost:8080///'))).toBe('http://localhost:8080');
+    });
+
+    it('leaves a url without a trailing slash untouched', () => {
+      expect(url(new LocalVerifier('http://localhost:8080/api'))).toBe('http://localhost:8080/api');
+    });
+
+    it('handles the empty string and an all-slash string', () => {
+      expect(url(new LocalVerifier(''))).toBe('');
+      expect(url(new LocalVerifier('////'))).toBe('');
+    });
+
+    it('stays linear on a long slash run', () => {
+      const long = `${'/'.repeat(200000)}x`;
+      const start = Date.now();
+      expect(url(new LocalVerifier(long))).toBe(long);
+      expect(Date.now() - start).toBeLessThan(1000);
+    });
+  });
   describe('checkRevocation', () => {
     it('returns false when DID is not revoked', () => {
       const verifier = new LocalVerifier('http://localhost:8080');
