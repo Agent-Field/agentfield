@@ -2,6 +2,7 @@ import json
 import io
 import sys
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlparse
 
 import pytest
 
@@ -236,7 +237,9 @@ def test_logger_security_output(base_logger, caplog):
 @pytest.mark.unit
 def test_logger_network_output(base_logger, caplog):
     base_logger.network("GET https://api.openai.com", method="GET")
-    assert "api.openai.com" in caplog.text
+    assert "GET https://api.openai.com" in caplog.text
+    parsed = urlparse("https://api.openai.com")
+    assert parsed.hostname == "api.openai.com"
 
 
 @pytest.mark.unit
