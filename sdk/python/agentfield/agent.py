@@ -47,6 +47,7 @@ from agentfield.vc_generator import VCGenerator
 from agentfield.memory import MemoryClient, MemoryInterface
 from agentfield.memory_events import MemoryEventClient
 from agentfield.logger import log_debug, log_error, log_info, log_warn, set_cp_client
+from agentfield.litellm_observability import register_callbacks
 from agentfield.router import AgentRouter
 from agentfield.connection_manager import ConnectionManager
 from agentfield.cost_tracker import (
@@ -898,6 +899,11 @@ class Agent(FastAPI):
 
         # Initialize AI and Memory configurations
         self.ai_config = ai_config if ai_config else AIConfig.from_env()
+        # LiteLLM callback registration is opt-in and process-global.
+        try:
+            register_callbacks()
+        except Exception as exc:
+            log_debug(f"Could not configure LiteLLM observability callbacks: {exc}")
         self.harness_config = harness_config
         self.cost_tracker = CostTracker()
         self.memory_config = (
