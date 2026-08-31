@@ -101,6 +101,22 @@ func TestWorkflowExecutionEventHandler_CreateAndUpdate(t *testing.T) {
 	assert.Equal(t, duration, *wfExec.DurationMS)
 }
 
+func TestWorkflowExecutionEventHandler_PreservesGatewayInputEnvelope(t *testing.T) {
+	gatewayPayload := json.RawMessage(`{"input":{"message":"same"},"context":{"tenant":"acme"}}`)
+	current := &types.Execution{
+		ExecutionID:  "exec_gateway",
+		Status:       string(types.ExecutionStatusRunning),
+		InputPayload: append(json.RawMessage(nil), gatewayPayload...),
+	}
+
+	applyEventToExecution(current, &WorkflowExecutionEventRequest{
+		Status:    string(types.ExecutionStatusRunning),
+		InputData: map[string]interface{}{"message": "same"},
+	}, time.Now().UTC())
+
+	require.JSONEq(t, string(gatewayPayload), string(current.InputPayload))
+}
+
 // TestWorkflowExecutionEventHandler_TerminalRegression covers the case where
 // fire-and-forget workflow events from the SDK arrive out of order — e.g. an
 // outer reasoner emits "failed" while an inner reasoner emits a delayed
