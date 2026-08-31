@@ -1,4 +1,5 @@
 import copy
+import importlib.metadata
 import json
 import sys
 import threading
@@ -7,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import SimpleNamespace
 
 import pytest
+from packaging.version import Version
 
 from agentfield.agent import Agent
 from agentfield.agent_ai import AgentAI
@@ -26,9 +28,37 @@ from agentfield.types import AIConfig
 from tests.helpers import StubAgent
 
 
+_LITELLM_VERSION = Version(importlib.metadata.version("litellm"))
+
+# LiteLLM below 1.98 routes an `openrouter/` model that carries a custom
+# api_base through the OpenAI SDK while still applying
+# OpenrouterConfig.transform_request, which unconditionally injects a top-level
+# `usage` key that AsyncCompletions.create() rejects. That is LiteLLM's own
+# request shaping and has nothing to do with the metadata under test; real
+# AgentField OpenRouter traffic carries no custom api_base and is unaffected.
+# pyproject.toml caps LiteLLM at <1.98.0 on Python 3.10, so this route is only
+# exercisable on the newer legs of the CI matrix.
+_openrouter_route = pytest.param(
+    "openrouter/gpt-4o-mini",
+    marks=pytest.mark.skipif(
+        _LITELLM_VERSION < Version("1.98.0"),
+        reason=(
+            "litellm <1.98 sends OpenrouterConfig's top-level `usage` through "
+            "the OpenAI SDK, which rejects it; unrelated to metadata"
+        ),
+    ),
+)
+
+
 @pytest.fixture(autouse=True)
 def restore_observability_globals():
     saved = set(_AGENTFIELD_REGISTERED)
+    # Start from empty. Several tests below assert that the vendor-alias keys
+    # are absent, which only holds if this process-global set is empty on
+    # entry. Today no other module registers a callback, so restoring on the
+    # way out would be enough — clearing on the way in keeps that from becoming
+    # an order-dependent failure the first time one does.
+    _AGENTFIELD_REGISTERED.clear()
     yield
     _AGENTFIELD_REGISTERED.clear()
     _AGENTFIELD_REGISTERED.update(saved)
@@ -283,8 +313,42 @@ def test_vendor_aliases_only_when_agentfield_registered():
     assert isinstance(metadata["tags"], list)
 
 
-def test_metadata_never_contains_user_id_or_requester_metadata():
+def test_vendor_aliases_not_stamped_for_a_non_langfuse_callback():
+    # An application registered `langfuse` itself; the operator asked AgentField
+    # for a different vendor. Stamping the LangFuse-native aliases here would
+    # re-key, rename and re-tag that application's own generations.
+    module = callback_module(known=())
+    module.callbacks.append("langfuse")
+    assert register_callbacks(["helicone"], env={}, litellm_module=module) == [
+        "helicone"
+    ]
     metadata = build_execution_metadata(execution_context())
+    assert {
+        "trace_id",
+        "session_id",
+        "trace_name",
+        "generation_name",
+        "tags",
+    }.isdisjoint(metadata)
+    assert metadata["agentfield_run_id"] == "run-1"
+
+
+def test_register_callbacks_reports_nothing_when_no_branch_registers():
+    # Neither an add_litellm_callback manager nor a `callbacks` list: there is
+    # nowhere to install the callback, so it must not be reported as registered
+    # and must not flip the vendor-alias gate.
+    module = types.SimpleNamespace()
+    assert register_callbacks(["langfuse"], env={}, litellm_module=module) == []
+    assert _AGENTFIELD_REGISTERED == set()
+    assert "trace_id" not in build_execution_metadata(execution_context())
+
+
+def test_metadata_never_contains_user_id_or_requester_metadata():
+    # Register a LangFuse callback so the alias branch — the one place a future
+    # `user_id` / `requester_metadata` alias would plausibly be added — is live.
+    register_callbacks(["langfuse"], env={}, litellm_module=callback_module())
+    metadata = build_execution_metadata(execution_context())
+    assert "tags" in metadata
     assert "user_id" not in metadata
     assert "requester_metadata" not in metadata
 
@@ -367,6 +431,9 @@ async def test_agent_ai_without_context_emits_no_agentfield_keys(monkeypatch):
 
 async def test_tool_loop_inherits_metadata(monkeypatch):
     captured = ai_stub(monkeypatch, [chat_response()])
+    # Registered so the stamp carries the `tags` list, whose per-turn identity
+    # is asserted below.
+    register_callbacks(["langfuse"], env={}, litellm_module=callback_module())
 
     async def fake_loop(*, litellm_params, make_completion, **kwargs):
         first = await make_completion({**litellm_params})
@@ -392,11 +459,16 @@ async def test_tool_loop_inherits_metadata(monkeypatch):
         "run-1",
     ]
     assert id(captured[0]["metadata"]) != id(captured[1]["metadata"])
+    # ... and the container values are not shared by reference either, so a
+    # LangFuse-style integration appending to one turn's tags cannot leak into
+    # the next turn.
+    assert captured[0]["metadata"]["tags"] == captured[1]["metadata"]["tags"]
+    assert id(captured[0]["metadata"]["tags"]) != id(captured[1]["metadata"]["tags"])
 
 
 @pytest.mark.parametrize(
     "model",
-    ["openai/gpt-4o-mini", "litellm_proxy/gpt-4o-mini", "openrouter/gpt-4o-mini"],
+    ["openai/gpt-4o-mini", "litellm_proxy/gpt-4o-mini", _openrouter_route],
 )
 async def test_metadata_never_reaches_the_wire(model, real_litellm_state):
     captured = []
@@ -461,4 +533,14 @@ async def test_metadata_never_reaches_the_wire(model, real_litellm_state):
 
 
 def test_tts_paths_are_not_stamped():
-    assert "metadata" not in AIConfig(model="openai/gpt-4o-mini").get_litellm_params()
+    # Must run with a live ExecutionContext: the regression this guards is the
+    # stamp migrating into AIConfig.get_litellm_params, whose dict the two TTS
+    # call sites read config["api_key"] out of — one of them builds a raw OpenAI
+    # SDK client whose create() has no metadata kwarg, and the resulting
+    # TypeError is swallowed into a silent degrade to a text-only response.
+    token = set_execution_context(execution_context())
+    try:
+        params = AIConfig(model="openai/gpt-4o-mini").get_litellm_params()
+    finally:
+        reset_execution_context(token)
+    assert "metadata" not in params
