@@ -20,15 +20,41 @@ import (
 )
 
 func TestFinishShutdownTreatsTimeoutAsSuccessfulExit(t *testing.T) {
-	if err := finishShutdown(func() error { return context.DeadlineExceeded }); err != nil {
+	if err := finishShutdown(nil, 0, func() error { return context.DeadlineExceeded }); err != nil {
 		t.Fatalf("timeout should be a successful shutdown exit: %v", err)
 	}
 }
 
 func TestFinishShutdownPropagatesGenuineFailure(t *testing.T) {
 	want := errors.New("close failed")
-	if err := finishShutdown(func() error { return want }); !errors.Is(err, want) {
+	if err := finishShutdown(nil, 0, func() error { return want }); !errors.Is(err, want) {
 		t.Fatalf("got %v, want %v", err, want)
+	}
+}
+
+func TestFinishShutdownBeginsDrainBeforeMinimumDelayAndStop(t *testing.T) {
+	started := time.Now()
+	drained := false
+	if err := finishShutdown(func() { drained = true }, 50*time.Millisecond, func() error {
+		if !drained {
+			t.Fatal("stop called before beginDrain")
+		}
+		if elapsed := time.Since(started); elapsed < 50*time.Millisecond {
+			t.Fatalf("stop called after %s, want at least 50ms", elapsed)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFinishShutdownZeroDelayStopsImmediately(t *testing.T) {
+	started := time.Now()
+	if err := finishShutdown(func() {}, 0, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed >= 40*time.Millisecond {
+		t.Fatalf("zero delay took %s", elapsed)
 	}
 }
 
