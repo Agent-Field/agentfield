@@ -12,7 +12,7 @@ spec:
       labels:
         app.kubernetes.io/component: control-plane
     spec:
-      terminationGracePeriodSeconds: 45
+      terminationGracePeriodSeconds: 60
       containers:
         - name: control-plane
           image: agentfield/control-plane:latest
@@ -31,6 +31,8 @@ spec:
               value: "/dev/null"
             - name: AGENTFIELD_STORAGE_MODE
               value: "local"
+            - name: AGENTFIELD_SHUTDOWN_MIN_DELAY
+              value: "5s"
           volumeMounts:
             - name: data
               mountPath: /data
@@ -41,6 +43,8 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
+          # Keep the image-compatible default; opt in to shutdown-aware
+          # readiness with /api/v1/health/ready after upgrading every image.
           readinessProbe:
             httpGet:
               path: /api/v1/health
