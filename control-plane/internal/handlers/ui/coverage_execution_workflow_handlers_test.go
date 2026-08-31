@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -502,6 +504,198 @@ func TestWorkflowRunHandlerSaveGoldenRunPreservesLineageMetadata(t *testing.T) {
 	metadata := decodeWorkflowRunMetadata(run.Metadata)
 	require.Contains(t, metadata, "lineage")
 	require.Contains(t, metadata, "golden")
+}
+
+func TestSanitizeStringListBounds(t *testing.T) {
+	distinct := make([]string, 100)
+	for i := range distinct {
+		distinct[i] = "tag-" + strconv.Itoa(i)
+	}
+	longASCII := strings.Repeat("a", 65)
+	maxASCII := strings.Repeat("a", 64)
+	maxCJK := strings.Repeat("漢", 64)
+	longCJK := strings.Repeat("漢", 65)
+	veryLong := strings.Repeat("z", 1000)
+
+	tests := []struct {
+		name      string
+		values    []string
+		maxCount  int
+		maxRunes  int
+		want      []string
+		wantEmpty bool
+	}{
+		{name: "count cap preserves first entries", values: distinct, maxCount: 20, maxRunes: 64, want: distinct[:20]},
+		{name: "overlong ASCII dropped", values: []string{longASCII, maxASCII}, maxCount: 20, maxRunes: 64, want: []string{maxASCII}},
+		{name: "multibyte rune cap", values: []string{maxCJK, longCJK}, maxCount: 20, maxRunes: 64, want: []string{maxCJK}},
+		{name: "legacy sanitizing", values: []string{" smoke ", "smoke", "", "   ", "restart"}, maxCount: 20, maxRunes: 64, want: []string{"smoke", "restart"}},
+		{name: "nil input", values: nil, maxCount: 20, maxRunes: 64, wantEmpty: true},
+		{name: "zero count", values: []string{"tag"}, maxCount: 0, maxRunes: 64, wantEmpty: true},
+		{name: "zero runes disables length cap", values: []string{veryLong}, maxCount: 20, maxRunes: 0, want: []string{veryLong}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeStringList(tc.values, tc.maxCount, tc.maxRunes)
+			if tc.wantEmpty {
+				require.Empty(t, got)
+				return
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	require.Equal(t, 64, utf8.RuneCountInString(maxCJK))
+	require.Equal(t, maxCJK, sanitizeStringList([]string{maxCJK}, 20, 64)[0])
+}
+
+func TestSanitizeStringListDoesNotPreallocateFromInputLength(t *testing.T) {
+	values := make([]string, 100000)
+	for i := range values {
+		values[i] = "tag-" + strconv.Itoa(i)
+	}
+
+	out := sanitizeStringList(values, 20, 64)
+	require.Len(t, out, 20)
+	require.LessOrEqual(t, cap(out), 20)
+}
+
+func TestTruncateRunes(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		maxRunes int
+		want     string
+	}{
+		{name: "shorter than cap", value: "short", maxRunes: 10, want: "short"},
+		{name: "exactly at cap", value: "exact", maxRunes: 5, want: "exact"},
+		{name: "longer ASCII", value: "abcdef", maxRunes: 5, want: "abcde"},
+		{name: "multibyte boundary", value: "漢字仮名", maxRunes: 3, want: "漢字仮"},
+		{name: "zero cap", value: "value", maxRunes: 0, want: ""},
+		{name: "negative cap", value: "value", maxRunes: -1, want: ""},
+		{name: "empty input", value: "", maxRunes: 5, want: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncateRunes(tc.value, tc.maxRunes)
+			require.Equal(t, tc.want, got)
+			require.True(t, utf8.ValidString(got))
+			require.NotContains(t, got, "�")
+			if utf8.RuneCountInString(tc.value) > tc.maxRunes && tc.maxRunes > 0 {
+				require.Equal(t, tc.maxRunes, utf8.RuneCountInString(got))
+			}
+		})
+	}
+}
+
+func TestWorkflowRunHandlerSaveGoldenRunBoundsNameAndTags(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ls, ctx := setupUIHandlerStorage(t)
+	runID := "run-golden-bounds"
+	executionID := "exec-golden-bounds"
+	now := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	completed := now.Add(time.Second)
+	require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
+		ExecutionID: executionID, RunID: runID, AgentNodeID: "agent-alpha", NodeID: "agent-alpha",
+		ReasonerID: "planner", Status: types.ExecutionStatusSucceeded, InputPayload: json.RawMessage(`{"input":{}}`),
+		StartedAt: now, CompletedAt: &completed, CreatedAt: now, UpdatedAt: completed,
+	}))
+
+	handler := NewWorkflowRunHandler(ls)
+	router := gin.New()
+	router.POST("/api/ui/v1/workflow-runs/:run_id/golden", handler.SaveGoldenRunHandler)
+	tags := make([]string, 0, 51)
+	for i := 0; i < 50; i++ {
+		tags = append(tags, "tag-"+strconv.Itoa(i))
+	}
+	overlongTag := strings.Repeat("漢", 65)
+	tags = append([]string{overlongTag}, tags...)
+	payload, err := json.Marshal(saveGoldenRunRequest{Name: strings.Repeat("a", 1<<20), Tags: tags})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ui/v1/workflow-runs/"+runID+"/golden", strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+	var summary WorkflowRunSummary
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &summary))
+	require.NotNil(t, summary.Golden)
+	require.Len(t, summary.Golden.Tags, 20)
+	require.NotContains(t, summary.Golden.Tags, overlongTag)
+
+	run, err := ls.GetWorkflowRun(ctx, runID)
+	require.NoError(t, err)
+	require.Less(t, len(run.Metadata), 4096)
+	metadata := decodeWorkflowRunMetadata(run.Metadata)
+	encodedGolden, err := json.Marshal(metadata["golden"])
+	require.NoError(t, err)
+	var golden GoldenRunMetadata
+	require.NoError(t, json.Unmarshal(encodedGolden, &golden))
+	require.Len(t, golden.Tags, 20)
+	require.NotEmpty(t, golden.Name)
+	require.Equal(t, maxGoldenNameRunes, utf8.RuneCountInString(golden.Name))
+
+	emptyNameReq := httptest.NewRequest(http.MethodPost, "/api/ui/v1/workflow-runs/"+runID+"/golden", strings.NewReader(`{"name":"   "}`))
+	emptyNameReq.Header.Set("Content-Type", "application/json")
+	emptyNameResp := httptest.NewRecorder()
+	router.ServeHTTP(emptyNameResp, emptyNameReq)
+	require.Equal(t, http.StatusOK, emptyNameResp.Code)
+	parsed := handler.loadRunMetadata(ctx, runID)
+	require.NotNil(t, parsed)
+	require.NotNil(t, parsed.Golden)
+	require.Equal(t, runID, parsed.Golden.Name)
+}
+
+func TestWorkflowRunHandlerGoldenReadBackIsNotRevalidated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ls, ctx := setupUIHandlerStorage(t)
+	runID := "run-golden-existing-oversized"
+	executionID := "exec-golden-existing-oversized"
+	now := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
+	completed := now.Add(time.Second)
+	tags := make([]string, 50)
+	for i := range tags {
+		tags[i] = "legacy-tag-" + strconv.Itoa(i)
+	}
+	name := strings.Repeat("漢", 500)
+	metadata, err := json.Marshal(map[string]interface{}{"golden": GoldenRunMetadata{Name: name, Tags: tags}})
+	require.NoError(t, err)
+	require.NoError(t, ls.StoreWorkflowRun(ctx, &types.WorkflowRun{
+		RunID: runID, RootWorkflowID: runID, RootExecutionID: &executionID,
+		Status: string(types.ExecutionStatusSucceeded), TotalSteps: 1, CompletedSteps: 1,
+		Metadata: metadata, CreatedAt: now, UpdatedAt: completed,
+	}))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
+		ExecutionID: executionID, RunID: runID, AgentNodeID: "agent-alpha", NodeID: "agent-alpha",
+		ReasonerID: "planner", Status: types.ExecutionStatusSucceeded, InputPayload: json.RawMessage(`{"input":{}}`),
+		StartedAt: now, CompletedAt: &completed, CreatedAt: now, UpdatedAt: completed,
+	}))
+
+	handler := NewWorkflowRunHandler(ls)
+	router := gin.New()
+	router.GET("/api/ui/v2/workflow-runs", handler.ListWorkflowRunsHandler)
+	router.GET("/api/ui/v2/workflow-runs/:run_id", handler.GetWorkflowRunDetailHandler)
+
+	listResp := httptest.NewRecorder()
+	router.ServeHTTP(listResp, httptest.NewRequest(http.MethodGet, "/api/ui/v2/workflow-runs?page_size=200", nil))
+	require.Equal(t, http.StatusOK, listResp.Code)
+	var list WorkflowRunListResponse
+	require.NoError(t, json.Unmarshal(listResp.Body.Bytes(), &list))
+	require.Len(t, list.Runs, 1)
+	require.NotNil(t, list.Runs[0].Golden)
+	require.Equal(t, name, list.Runs[0].Golden.Name)
+	require.Len(t, list.Runs[0].Golden.Tags, 50)
+
+	detailResp := httptest.NewRecorder()
+	router.ServeHTTP(detailResp, httptest.NewRequest(http.MethodGet, "/api/ui/v2/workflow-runs/"+runID, nil))
+	require.Equal(t, http.StatusOK, detailResp.Code)
+	var detail WorkflowRunDetailResponse
+	require.NoError(t, json.Unmarshal(detailResp.Body.Bytes(), &detail))
+	require.NotNil(t, detail.Run.Golden)
+	require.Equal(t, name, detail.Run.Golden.Name)
+	require.Len(t, detail.Run.Golden.Tags, 50)
 }
 
 func TestWorkflowRunHandlerSaveGoldenRunErrors(t *testing.T) {
