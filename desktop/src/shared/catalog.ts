@@ -1,4 +1,5 @@
 import { BUNDLED_NODES } from './bundled'
+import { stripTrailingSlashes } from './trimSlashes'
 import type { CatalogEntry } from './types'
 
 // Curated list of installable agent nodes, shown in the app's Install view.
@@ -70,7 +71,7 @@ export function sourceRepo(source: string): string {
   if (subdir >= 0) repo = repo.slice(0, subdir)
   const ref = repo.lastIndexOf('@')
   if (ref > repo.lastIndexOf('/')) repo = repo.slice(0, ref)
-  return repo.replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase()
+  return stripTrailingSlashes(repo).replace(/\.git$/i, '').toLowerCase()
 }
 
 /** True when two source strings name the same repository (see sourceRepo). */

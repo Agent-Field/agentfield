@@ -1,4 +1,5 @@
 import { getApiKey, getBaseUrl } from './connection'
+import { stripTrailingSlashes } from '../shared/trimSlashes'
 import type {
   ControlPlaneVersion,
   PackageMaintenanceStatus,
@@ -338,7 +339,7 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
     if (key !== null) headers.set('X-API-Key', key)
     if (init.body !== undefined) headers.set('Content-Type', 'application/json')
 
-    const response = await fetchImpl(`${baseUrl().replace(/\/+$/, '')}${path}`, {
+    const response = await fetchImpl(`${stripTrailingSlashes(baseUrl())}${path}`, {
       ...init,
       headers,
       signal: AbortSignal.timeout(
