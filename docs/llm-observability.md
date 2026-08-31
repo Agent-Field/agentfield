@@ -27,7 +27,7 @@ Inside a reasoner, each `app.ai` text completion receives a LiteLLM `metadata` d
 
 The execution ID, run ID, agent node ID, and reasoner name appear when they are available from the current execution context. Session and parent execution IDs appear only when present. Caller-provided metadata keys take precedence. `user_id` and `requester_metadata` are never added.
 
-When AgentField itself successfully registers at least one callback, it also supplies callback-native aliases: `trace_id` is the run ID, `session_id` is the session ID, `trace_name` is the node ID, `generation_name` is the node and reasoner name, and `tags` identifies AgentField plus the available node and reasoner. These aliases are not added merely because application code registered a process-global LiteLLM callback, avoiding changes to an existing callback setup.
+When AgentField itself successfully registers a LangFuse-family callback (`langfuse` or `langfuse_otel`), it also supplies that vendor's native aliases: `trace_id` is the run ID, `session_id` is the session ID, `trace_name` is the node ID, `generation_name` is the node and reasoner name, and `tags` identifies AgentField plus the available node and reasoner. These aliases are never added merely because application code registered a process-global LiteLLM callback itself, nor because AgentField registered some other vendor's callback — either would silently re-key, rename and re-tag an existing LangFuse setup's generations.
 
 `metadata` is a LiteLLM-only parameter and is not included in the provider request body. To disable all AgentField execution metadata stamping while retaining callback registration, set:
 
