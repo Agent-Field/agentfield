@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -79,6 +80,19 @@ type GoldenRunMetadata struct {
 	SavedBy string   `json:"saved_by,omitempty"`
 	SavedAt string   `json:"saved_at,omitempty"`
 }
+
+// Bounds on the golden-run metadata a client may write into
+// workflow_runs.metadata. This row is re-read and re-serialised on every
+// runs-list page that contains the run, so an unbounded name or tag list is
+// a stored amplification vector (issue #944). The UI's save-as-golden button
+// sends one hard-coded tag, so these caps are unreachable in practice today.
+// They are package-level constants rather than inline literals so the
+// run-metadata endpoint can reuse the same bounds.
+const (
+	maxGoldenTags      = 20
+	maxGoldenTagRunes  = 64
+	maxGoldenNameRunes = 200
+)
 
 type WorkflowRunListResponse struct {
 	Runs       []WorkflowRunSummary `json:"runs"`
@@ -261,8 +275,9 @@ func (h *WorkflowRunHandler) SaveGoldenRunHandler(c *gin.Context) {
 	}
 
 	now := time.Now().UTC()
-	name := strings.TrimSpace(req.Name)
+	name := truncateRunes(strings.TrimSpace(req.Name), maxGoldenNameRunes)
 	if name == "" {
+		// Do not truncate the run ID fallback; only the caller-supplied name is bounded.
 		name = runID
 	}
 	metadata := map[string]interface{}{}
@@ -271,7 +286,7 @@ func (h *WorkflowRunHandler) SaveGoldenRunHandler(c *gin.Context) {
 	}
 	metadata["golden"] = GoldenRunMetadata{
 		Name:    name,
-		Tags:    sanitizeStringList(req.Tags),
+		Tags:    sanitizeStringList(req.Tags, maxGoldenTags, maxGoldenTagRunes),
 		SavedBy: "user",
 		SavedAt: now.Format(time.RFC3339),
 	}
@@ -645,12 +660,35 @@ func decodeWorkflowRunMetadata(raw json.RawMessage) map[string]interface{} {
 	return metadata
 }
 
-func sanitizeStringList(values []string) []string {
-	out := make([]string, 0, len(values))
-	seen := map[string]struct{}{}
+// sanitizeStringList trims, de-duplicates and bounds a caller-supplied list of
+// short strings, preserving input order.
+//
+// Entries longer than maxRunes runes are DROPPED rather than truncated: cutting
+// a string at a byte offset can land mid-rune, and json.Marshal silently
+// rewrites the resulting invalid UTF-8 to U+FFFD. Rune counting (not len)
+// keeps a maxRunes-rune multi-byte tag legal.
+//
+// At most maxCount entries are returned. Both the output slice and the de-dupe
+// map are sized from min(len(values), maxCount) and the loop stops once
+// maxCount survivors are collected, so a huge attacker-supplied array cannot
+// force a large allocation before the cap applies. maxRunes <= 0 disables the
+// length cap; maxCount <= 0 yields an empty result.
+func sanitizeStringList(values []string, maxCount, maxRunes int) []string {
+	if maxCount <= 0 {
+		return nil
+	}
+	size := min(len(values), maxCount)
+	out := make([]string, 0, size)
+	seen := make(map[string]struct{}, size)
 	for _, value := range values {
+		if len(out) >= maxCount {
+			break
+		}
 		trimmed := strings.TrimSpace(value)
 		if trimmed == "" {
+			continue
+		}
+		if maxRunes > 0 && utf8.RuneCountInString(trimmed) > maxRunes {
 			continue
 		}
 		if _, ok := seen[trimmed]; ok {
@@ -660,6 +698,24 @@ func sanitizeStringList(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+// truncateRunes returns value limited to at most maxRunes runes, cutting on a
+// rune boundary so the result is always valid UTF-8. It walks the string by
+// rune start offsets instead of materialising a []rune, so a multi-megabyte
+// input costs no extra allocation.
+func truncateRunes(value string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	count := 0
+	for i := range value {
+		if count == maxRunes {
+			return value[:i]
+		}
+		count++
+	}
+	return value
 }
 
 func deriveOverallStatusForUI(executions []*types.Execution) string {
