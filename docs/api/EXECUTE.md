@@ -11,6 +11,7 @@ The control plane exposes synchronous and asynchronous execution endpoints:
 {
   "input": {"question": "What changed?"},
   "context": {"provider": "openai"},
+  "run_metadata": {"display_name": "Release verification", "labels": ["release"]},
   "webhook": {
     "url": "https://example.com/execution-events",
     "secret": "shared-secret",
@@ -23,9 +24,12 @@ The control plane exposes synchronous and asynchronous execution endpoints:
 |-------|---------|
 | `input` | Object delivered to the local agent reasoner as its arguments. |
 | `context` | Optional control-plane context. This is a reserved, control-plane-interpreted field, not a general user metadata bag. |
+| `run_metadata` | Optional root-run display name, labels, and links. See [Run metadata](RUN_METADATA.md). |
 | `webhook` | Optional completion webhook registration (`url`, optional `secret`, and optional string `headers`). |
 
 The control plane stores `input` and `context` together in `executions.input_payload` and includes `context` in replay matching. It inspects the reserved context keys `llm_endpoint`, `llm_backend`, `backend`, `provider`, and `model_provider` for LLM-endpoint gating. For external ARD targets it also interprets `operation` for policy enforcement and forwards the complete context object verbatim to the external endpoint.
+
+`run_metadata` is ignored on child executes and excluded from replay matching. On a root execute that carries `run_metadata`, `X-Actor-ID` supplies its bounded `set_by` value and may contain at most 200 Unicode code points.
 
 `context` is never delivered to a local agent node: local dispatch sends only `input`. The Python, Go, and TypeScript execute helpers currently serialize only `input`, so callers that need these control-plane fields must use the REST endpoint directly. The restart helper is the exception and can send restart context.
 

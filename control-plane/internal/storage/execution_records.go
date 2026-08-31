@@ -475,8 +475,8 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 	}
 	if filter.Search != nil {
 		searchTerm := "%" + *filter.Search + "%"
-		where = append(where, "(run_id LIKE ? OR agent_node_id LIKE ? OR reasoner_id LIKE ?)")
-		args = append(args, searchTerm, searchTerm, searchTerm)
+		where = append(where, "(run_id LIKE ? OR agent_node_id LIKE ? OR reasoner_id LIKE ? OR "+runMetadataSearchPredicate(ls.mode)+")")
+		args = append(args, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm)
 	}
 
 	whereClause := ""
@@ -776,6 +776,54 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 	}
 
 	return summaries, totalRuns, nil
+}
+
+// runMetadataSearchPredicate adds only the client-facing run display name and
+// labels to run search. The workflow_runs metadata column is JSONB in
+// PostgreSQL and JSON text in SQLite, so each backend needs its own JSON table
+// function. Both variants guard legacy/malformed namespace shapes rather than
+// letting one bad metadata row fail the whole runs list.
+func runMetadataSearchPredicate(mode string) string {
+	if mode == "postgres" {
+		return `run_id IN (
+			SELECT wr.run_id
+			FROM workflow_runs wr
+			WHERE wr.metadata->'run'->>'display_name' LIKE ?
+			   OR EXISTS (
+				SELECT 1
+				FROM jsonb_array_elements_text(
+					CASE
+						WHEN jsonb_typeof(wr.metadata->'run'->'labels') = 'array'
+						THEN wr.metadata->'run'->'labels'
+						ELSE '[]'::jsonb
+					END
+				) AS run_label(value)
+				WHERE run_label.value LIKE ?
+			)
+		)`
+	}
+	return `run_id IN (
+		SELECT wr.run_id
+		FROM workflow_runs wr
+		WHERE CASE
+				WHEN json_valid(wr.metadata) THEN json_extract(wr.metadata, '$.run.display_name')
+			END LIKE ?
+		   OR EXISTS (
+			SELECT 1
+			FROM json_each(
+				CASE
+					WHEN json_valid(wr.metadata) THEN
+						CASE
+							WHEN json_type(wr.metadata, '$.run.labels') = 'array'
+							THEN json_extract(wr.metadata, '$.run.labels')
+							ELSE '[]'
+						END
+					ELSE '[]'
+				END
+			) AS run_label
+			WHERE CAST(run_label.value AS TEXT) LIKE ?
+		)
+	)`
 }
 
 // mapRunSummarySortColumn restricts ORDER BY to vetted columns to avoid SQL injection and

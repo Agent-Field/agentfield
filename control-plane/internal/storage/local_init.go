@@ -106,7 +106,7 @@ func (ls *LocalStorage) initializeSQLite(ctx context.Context) error {
 		busyTimeout = 60000
 	}
 
-	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=NORMAL&_cache_size=10000&_foreign_keys=ON&_busy_timeout=%d&_wal_autocheckpoint=1000&_temp_store=MEMORY&_mmap_size=268435456",
+	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=NORMAL&_cache_size=10000&_foreign_keys=ON&_busy_timeout=%d&_txlock=immediate&_wal_autocheckpoint=1000&_temp_store=MEMORY&_mmap_size=268435456",
 		dbPath, busyTimeout)
 
 	db, err := sql.Open("sqlite3", dsn)

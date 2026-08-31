@@ -6,6 +6,761 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.5] - 2026-08-31
+
+
+### Added
+
+- Feat(control-plane): client-settable run display name, labels and links (#1032)
+
+* fix(control-plane): bound golden-run name and tag writes into run metadata
+
+POST /api/ui/v2/workflow-runs/:run_id/golden wrote the caller-supplied name
+and tag list into workflow_runs.metadata with no bounds at all. The name was
+only TrimSpace'd, so a 1 MiB name persisted verbatim; sanitizeStringList
+trimmed and de-duped but capped neither the entry count nor the entry length,
+and it preallocated its output slice (and an unbounded de-dupe map) straight
+from the attacker-controlled input length. That row is re-read and
+re-serialised on every runs-list page that contains the run, so both are
+stored amplification vectors (#944).
+
+Cap tags at 20 entries of at most 64 runes each, and truncate the name at 200
+runes. Over-long tags are dropped rather than truncated: byte-slicing can land
+mid-rune and json.Marshal silently rewrites the invalid UTF-8 to U+FFFD.
+Lengths are counted with utf8.RuneCountInString so a 64-rune CJK tag survives.
+The output slice and de-dupe map are now sized min(len(values), maxCount) and
+the loop stops once maxCount survivors are collected, so a multi-million-entry
+tag array cannot force a large allocation before the cap applies.
+
+This route is UI-private and its only caller sends one hard-coded tag, so
+oversized input is bounded silently rather than rejected — a 400 would break
+the existing "Save as golden run" button. The name fallback is unchanged: an
+empty name still falls back to run_id, and run_id itself is not truncated.
+
+Forward-only. Nothing re-validates on read, so rows that already hold
+oversized golden metadata keep reading back exactly as they do today.
+
+The caps are named constants so the follow-up run-metadata endpoint can reuse
+the same bounds and the same helper.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover golden-run metadata bounds and forward-only reads
+
+Adds the behaviour tests for the golden-run caps:
+
+- sanitizeStringList: 100 inputs cap to the first 20; a 65-rune ASCII entry is
+  dropped while its 64-rune neighbour survives; a 64-rune CJK entry is kept
+  byte-identical (proving it is not truncated into U+FFFD) while a 65-rune one
+  is dropped; the legacy trim/de-dupe/order behaviour is pinned unchanged; the
+  maxCount<=0 and maxRunes<=0 guards are exercised.
+- A 100k-entry input asserts cap(out) <= 20, which is the allocation contract —
+  a length assertion alone would still pass with the old preallocation.
+- truncateRunes: cut on a rune boundary, result always valid UTF-8 with no
+  replacement character, and the non-positive cap guard.
+- Handler round-trip: a POST with 50 tags plus one over-long tag stores exactly
+  20, a 1 MiB name stores 200 runes and keeps the whole metadata blob under
+  4 KiB, and a blank name still falls back to run_id.
+- Read-back: a pre-seeded row holding 50 tags and a 500-rune name still
+  surfaces in full on both the runs list and the run detail, pinning that this
+  change is forward-only and read paths do not re-validate.
+
+The two pre-existing golden-route tests are left untouched as the
+behaviour-unchanged regression guard.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): client-settable run display name, labels and links
+
+A 'run' namespace in workflow_runs.metadata, written only through a
+namespace-merging transactional primitive (never the full-row upsert, which
+clobbers golden/lineage and resets state columns). POST
+/api/v1/runs/:run_id/metadata read-merge-writes it with strict caps
+(display_name<=200, labels<=20x64, links<=10, url<=2048, http/https only, no
+embedded credentials) and creates the carrier row on first write; an optional
+run_metadata execute field seeds it at dispatch, excluded from the replay
+dedupe key; restart lineage now writes through the same primitive. The run
+list, run detail, DAG and agentic overview surface it. external_status is
+deliberately out of scope.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(storage): open SQLite with _txlock=immediate
+
+Write transactions now take the write reservation at BEGIN instead of on
+first write, so the read-merge-write metadata primitive (and every other
+BeginTx writer) cannot hit the read->write upgrade deadlock; WAL and the 60s
+busy timeout were already in place. Global, deliberate change — the full
+suite gates it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(web-ui): render run display names, label chips and safe external links
+
+Display name takes precedence in the run list row, labels render as chips,
+links render only after scheme re-validation (http/https, host required)
+with rel="noopener noreferrer"; nothing is treated as trusted HTML.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): run metadata contract, race, replay and negative-matrix coverage
+
+Concurrent different-namespace writers both survive; lineage seed and
+metadata merge interleave without clobbering; two executes differing only in
+run_metadata replay-hit through the real findReplayHit path; byte-identity
+of untouched namespaces; endpoint-level negatives for every cap and for
+javascript:/data:/file:/credentialed/scheme-less URLs with storage untouched.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document the run metadata endpoint and execute field
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): harden run metadata updates
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c2df003)
+
+- Feat(control-plane,k8s): shutdown min delay, drain-aware readiness, chart defaults and a coherent tuning recipe (#1030)
+
+* feat(control-plane): add AGENTFIELD_SHUTDOWN_MIN_DELAY and shutdown-aware readiness
+
+On Kubernetes the control plane closes its listener the instant it is
+signalled, while kube-proxy is still routing traffic to the pod: in-flight
+and newly arriving requests get connection refusals for however long
+endpoint removal takes to propagate. There was also no way to tell a
+draining control plane from a healthy one -- /health and /api/v1/health
+answer 200 right up to the moment the listener goes away, so a readiness
+probe pointed at them can never fail early enough to help.
+
+Add two pieces that fix that together:
+
+- AGENTFIELD_SHUTDOWN_MIN_DELAY: a control-plane-only wait between the
+  shutdown signal and the start of Stop(). It defaults to 0, which
+  reproduces the previous timing exactly, and accepts bare seconds or a Go
+  duration like AGENTFIELD_SHUTDOWN_TIMEOUT does. It gets its own
+  non-negative parser rather than relaxing parseShutdownTimeout, because
+  that parser rejecting 0 is what keeps AGENTFIELD_SHUTDOWN_TIMEOUT=0 from
+  silently changing meaning. The wait is placed after cmd/af's
+  stopSignals() and after cmd/agentfield-server's waitForShutdown helper
+  has returned, so a second SIGTERM during the window still kills the
+  process immediately.
+- GET /readyz and GET /api/v1/health/ready: readiness routes that run the
+  same dependency checks as /health but answer 503 as soon as BeginDrain
+  has run. Liveness is deliberately untouched, so the kubelet does not
+  kill a pod that is draining on purpose, and the process keeps accepting
+  and completing requests for the whole window.
+
+/readyz is added to the API-key skip list (the middleware only exempts the
+/api/v1/health prefix, /health and /metrics), and both paths are listed in
+the DID auth skip paths.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover the min delay, the drain readiness flip and the shipped probe path
+
+Each test maps to one observable behaviour rather than to the code shape:
+
+- the env table covers 5, 5s, 500ms, 0, unset, abc and -1s, with 0 accepted
+  as a real value and the invalid cases leaving the configured value alone;
+- a separate case asserts AGENTFIELD_SHUTDOWN_TIMEOUT=0 still keeps its
+  current value, which is the guard against someone "simplifying" the two
+  parsers back into one;
+- the routing test walks /readyz, /api/v1/health/ready, /health and
+  /api/v1/health before and after BeginDrain, with an API key configured so
+  it also proves the skip-path entry, and then asks for /api/v1/version to
+  show ordinary traffic is still served while draining;
+- both entry points assert beginDrain runs before stop, that stop is not
+  reached before a 50ms delay elapses, and that a zero delay does not wait.
+
+The manifest test reads the chart values and the kustomize base and asserts
+the shipped readinessProbe path is still /api/v1/health. The chart defaults
+to image tag latest with IfNotPresent and one replica, so flipping that
+path to one an older cached image does not serve would leave the Service
+with zero endpoints -- that regression should fail a test, not a cluster.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(deployments): ship a 5s control-plane shutdown delay and a gated readiness path
+
+The chart and the kustomize base now set AGENTFIELD_SHUTDOWN_MIN_DELAY to
+5s and raise the control-plane pod grace from 45 to 60 seconds, which is
+what the shutdown actually needs: 5s minimum delay + the 30s
+AGENTFIELD_SHUTDOWN_TIMEOUT drain + roughly 20s of tail (a fresh >=5s
+async-pool budget plus 5s each for package maintenance, the observability
+forwarder and the tracer). The agent templates are left alone.
+
+The readinessProbe path is deliberately NOT flipped to the new
+shutdown-aware route. controlPlane.image.tag defaults to latest with
+pullPolicy IfNotPresent and replicaCount 1, so a chart upgrade can land on
+a node holding an older cached image; pointing the probe at a path that
+image 404s would leave a single-replica Service with zero endpoints. The
+path moves behind controlPlane.readinessProbe.path, defaulting to today's
+/api/v1/health, with a comment saying when it is safe to switch.
+
+The min-delay env entry is skipped when controlPlane.env already defines
+AGENTFIELD_SHUTDOWN_MIN_DELAY, so an explicit operator value never renders
+a duplicate env name.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(k8s): make the drain and shutdown recipe derivable without reading code
+
+The Kubernetes guide told operators to raise terminationGracePeriodSeconds
+when they raised AGENTFIELD_SHUTDOWN_TIMEOUT, and stopped there. That is
+the exact configuration that breaks: the deferred reap fires
+AGENTFIELD_AGENT_DRAIN_GRACE after the REPLACEMENT registers, regardless of
+how much drain budget the departing pod still has, and under a default
+rolling update the replacement is Ready and registered before the old pod
+is even signalled. A reader following the old text ends up with a long
+reasoner reaped mid-flight and a 409 on its own success callback.
+
+State the invariant instead, and the things a reader cannot guess:
+
+- the drain-grace inequality, with maxSurge: 0 as the way to zero the
+  registration-to-SIGTERM lag term, and a worked 10-minute-reasoner example
+  written with unit suffixes, because AGENTFIELD_AGENT_DRAIN_GRACE takes
+  Go durations only -- a bare 660 is dropped silently and the 60s default
+  survives;
+- that 0s does not disable the reap (zero keeps the default) and a negative
+  duration makes it immediate, so it is not an opt-out;
+- that drain grace is one global setting that also feeds agentIsDraining,
+  so a 12m value holds every dead node's dispatches and rows for 12m;
+- that AGENTFIELD_EXECUTION_STALE_TIMEOUT (30m) is a second ceiling no
+  drain tuning can raise, and the exact status_reason to grep for;
+- the 409 / idempotent-200 / 500 callback outcomes after a reap;
+- why replicas must stay 1 today, in terms of instance_id and the single
+  callback URL field, not as a roadmap promise.
+
+Also document the new AGENTFIELD_SHUTDOWN_MIN_DELAY and readiness routes,
+the real control-plane pod-grace arithmetic (min delay + shutdown timeout +
+~20s of tail, not the optimistic +5s), and reconcile the agent pod-grace
+floor to one number (+15s) across both files. Drops the stale claim that
+Agent.setup_signal_handlers() is retained for compatibility -- that
+delegate was removed and this line was its last mention in the repo.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(k8s): fix the worked terminationGracePeriodSeconds arithmetic
+
+Review caught 11m15s being written as 690s. Derive the number from the
+stated invariant (budget + settlement + headroom) instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): assert the helm templates consume the new values keys
+
+The values.yaml parse test would keep passing if the deployment template
+stopped referencing controlPlane.readinessProbe.path, shutdownMinDelay or
+terminationGracePeriodSeconds. Table-driven template-reference assertions
+close that hole without depending on a helm binary.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(k8s): align readiness drain timing
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e1c67ba)
+
+- Feat(sdk-python): opt-in litellm observability callbacks and execution metadata (#1029)
+
+* feat(sdk-python): opt-in litellm callbacks and execution metadata
+
+LangFuse/Logfire/Langsmith users see `app.ai` completions as anonymous
+LLM calls: nothing correlates a generation back to the AgentField run,
+execution or reasoner that produced it, and wiring litellm callbacks by
+hand means editing every acompletion site (#990, #997).
+
+Add `agentfield/litellm_observability.py`:
+
+- `AGENTFIELD_LITELLM_CALLBACKS` — comma-separated litellm callback names,
+  trimmed, lowercased, deduped, registered once per process through
+  `logging_callback_manager.add_litellm_callback`, with a hand-rolled
+  dedupe fallback when that private attribute is absent. Unset means we
+  never import litellm and never touch its callback state, so today's
+  behaviour is unchanged by default. Registration failures are logged and
+  swallowed — a bad callback name must not stop an agent from booting.
+  Unknown names are passed through rather than allowlisted, because
+  litellm's own `_known_custom_logger_compatible_callbacks` omits real
+  callbacks (helicone, lunary, athina, plain s3).
+- An execution-correlation stamp on every `app.ai` text completion:
+  `agentfield_execution_id`, `agentfield_run_id`, `agentfield_agent_node_id`,
+  `agentfield_reasoner`, plus session / parent execution ids when the
+  context has them. `metadata` is a litellm-only param, so none of this
+  reaches the provider request body. Opt out with
+  `AGENTFIELD_LITELLM_METADATA=false`, mirroring
+  `AGENTFIELD_OPENROUTER_ATTRIBUTION`.
+
+The LangFuse-native aliases (trace_id, session_id, trace_name,
+generation_name, tags) are stamped only when AgentField itself registered
+a callback. litellm's callback state is process-global, so stamping them
+unconditionally would silently re-key, rename and re-tag every generation
+belonging to a user who had already wired up LangFuse themselves.
+
+`user_id` and `requester_metadata` are never emitted: anthropic copies
+`metadata["user_id"]` into the request body and vertex turns
+`metadata["requester_metadata"]` into request labels.
+
+The stamp is applied in `AgentAI.ai` rather than in
+`AIConfig.get_litellm_params`, because the two text-to-speech paths splat
+that config into calls with no `metadata` kwarg. It is re-applied at the
+top of the tool-loop completion so each turn gets its own metadata dict
+instead of sharing one object through the loop's shallow param copies.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): cover litellm observability callbacks and metadata
+
+32 tests over the new module, driven by injected litellm stubs so the
+process-global callback lists are never mutated by accident; the two
+tests that do touch the real module snapshot and restore
+`callbacks` / `success_callback` / `failure_callback`.
+
+The wire test is the important one. Asserting that `metadata` is in
+litellm's `all_litellm_params` would only restate litellm's own table,
+and that table moves — the SDK floats litellm on Python 3.11+. Instead a
+stdlib HTTPServer on 127.0.0.1 captures the real request body for the
+openai/, litellm_proxy/ and openrouter/ routes and asserts no `metadata`
+key and no `agentfield_*` key ever reaches it.
+
+The canary comment records why: the module reads litellm's private
+`logging_callback_manager` and `_known_custom_logger_compatible_callbacks`,
+and the weekly canary already runs this module via run_pytest.sh, so an
+upstream rename surfaces there rather than in a user's process.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document litellm observability callbacks and execution metadata
+
+New top-level page rather than docs/integrations/, which is reserved for
+control-plane integration packs.
+
+Beyond the env vars and the metadata field list, the page states the
+three things that bite people: litellm callback state is process-global,
+so a process hosting several Agents applies the union of their configured
+callbacks; langfuse and logfire are not SDK dependencies and litellm
+degrades a missing one to a logged non-blocking error rather than failing
+the call (verified against litellm 1.98.0); and an otel-family callback
+produces a second trace tree disconnected from the control plane's own
+OTLP spans, because nothing in this repo propagates W3C traceparent to
+agent nodes.
+
+It also names what the stamp does not cover — image generation and the
+harness schema-repair call go to litellm directly, and the text-to-speech
+paths take `metadata=` explicitly — so nobody reads the feature as wider
+than it is.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk-python): narrow litellm alias gate and callback bookkeeping
+
+Review follow-ups on the opt-in LiteLLM observability module.
+
+Gate the LangFuse-native metadata aliases (trace_id, session_id,
+trace_name, generation_name, tags) on AgentField having registered a
+LangFuse-family callback rather than on it having registered any callback
+at all. The previous gate still re-keyed, renamed and re-tagged an
+application's own LangFuse generations whenever the operator set
+AGENTFIELD_LITELLM_CALLBACKS to a different vendor, which is the hazard
+the contract item was written to prevent.
+
+Record a callback in _AGENTFIELD_REGISTERED only when a registration
+branch actually installed it. Given neither a logging_callback_manager
+nor a litellm.callbacks list, register_callbacks previously reported
+success and flipped the alias gate on for a callback that was never
+installed anywhere.
+
+Copy a stamped list value when merging, so the tool-calling loop's
+shallow `{**litellm_params}` copies do not share one metadata["tags"]
+list across turns -- LangFuse-style integrations append to it.
+
+Replace the two dead metadata.pop() calls with a comment recording why
+user_id and requester_metadata must never be added: LiteLLM's anthropic
+transform copies metadata["user_id"] into the provider request body, and
+its vertex transform turns metadata["requester_metadata"] into request
+labels.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): fix the py3.10 leg and guard the alias narrowing
+
+Skip the openrouter parametrization of test_metadata_never_reaches_the_wire
+on LiteLLM below 1.98. That version routes an `openrouter/` model carrying
+a custom api_base through the OpenAI SDK while still applying
+OpenrouterConfig.transform_request, which unconditionally injects a
+top-level `usage` key that AsyncCompletions.create() rejects. pyproject
+caps LiteLLM at <1.98.0 on Python 3.10, so the CI matrix's 3.10 leg failed
+on LiteLLM's own request shaping rather than on the metadata under test.
+Real AgentField openrouter traffic sets no api_base and is unaffected, and
+the route still runs on 3.11+.
+
+Cover the two behaviour fixes: a non-LangFuse callback registered by
+AgentField must not stamp the LangFuse aliases even when the application
+registered langfuse itself, and register_callbacks must report nothing when
+neither registration branch can install anything.
+
+Make three existing assertions load-bearing. Run the TTS one inside a live
+ExecutionContext so it fails if the stamp ever migrates into
+AIConfig.get_litellm_params; exercise the alias branch in the
+user_id/requester_metadata test so a future alias addition is caught; and
+assert the tool loop's turns do not share one tags list.
+
+Clear _AGENTFIELD_REGISTERED on fixture entry so the alias-absence
+assertions cannot become order-dependent.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: scope litellm alias stamping to the langfuse family
+
+The callback-native aliases are stamped only when AgentField itself
+registered `langfuse` or `langfuse_otel`, not on any AgentField-registered
+callback, so that registering some other vendor cannot silently re-key an
+existing LangFuse setup's generations.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(sdk-python): include litellm_observability in the coverage module list
+
+The re-review caught the new module missing from the --cov list, so its
+patch coverage was never measured. Full sdk-python gate re-run with it
+included: all pass.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk-python): harden LiteLLM observability
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (41699ab)
+
+
+
+### Fixed
+
+- Fix(sdk-typescript): honor AGENTFIELD_LOG_STDOUT, and document the per-SDK logging knobs (#1020)
+
+* fix(sdk-typescript): honor AGENTFIELD_LOG_STDOUT in the ExecutionLogger
+
+docs/api/AGENT_NODE_LOGS.md has promised AGENTFIELD_LOG_STDOUT SDK-agnostically
+since it was written, and the Python (`_stdout_mirror_enabled`) and Go
+(`executionLogStdoutEnabled`) SDKs both honor it. The TypeScript
+ExecutionLogger did not: `mirrorToStdout` defaulted to `true` and nothing ever
+read the environment, so a TypeScript node had no way to turn the structured
+stdout mirror off (#985).
+
+`mirrorToStdout` becomes tri-state (`boolean | undefined`). An explicit option
+still wins in both directions; when it is absent the flag is resolved from the
+environment. The resolution happens per emit rather than in the constructor
+because `Agent` builds one shared ExecutionLogger at construction time, so a
+snapshot would freeze the flag for the whole process lifetime — Python and Go
+both re-read it on every record.
+
+The accepted falsy spellings (`0`/`false`/`no`/`off`, case-insensitive,
+whitespace trimmed) move into a new internal `utils/envFlags` helper that
+`processLogs.ts` now shares, so the list cannot drift between modules or
+against the other SDKs. The helper guards `process` with
+`typeof process !== 'undefined'`, matching the guard ExecutionLogger already
+uses for `process.stdout`, so the class stays usable outside Node.
+
+The default is unchanged: unset, empty, or any unrecognised value keeps the
+mirror on, so a typo cannot silently drop log output, and nothing in the repo
+sets this variable. Serialization now happens inside the mirror branch — with
+the mirror off the JSON envelope is never built, which is the cost the flag
+exists to avoid (the transport is handed the object, not the string).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): pin AGENTFIELD_LOG_MAX_LINE_BYTES parsing
+
+`node_logs.max_line_bytes()` had no direct test, yet its parsing differs from
+the Go and TypeScript SDKs in ways the environment-variable reference is about
+to describe: Python clamps every integer below 256 up to 256 (including zero
+and negatives) where Go and TypeScript reject those values and fall back to
+16384, and Python's `int(raw, 10)` rejects `512abc` where TypeScript's
+`parseInt` prefix-parses it to 512.
+
+Table-driven so the documented matrix and the code cannot drift apart.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(logging): file AGENTFIELD_LOG_STDOUT cross-SDK and correct the line-cap claims
+
+AGENTFIELD_LOG_STDOUT was documented under "Python SDK agents" even though the
+Go SDK reads it too (and now the TypeScript SDK does). It moves to "Structured
+logging (SDKs)" with an explicit reader list; a pointer stays in the Python
+section so a reader scanning only their own section does not lose it. Two
+consequences that were previously undocumented are stated so they are not
+later filed as regressions: a record with no execution id is skipped by
+control-plane dispatch in all three SDKs and is therefore dropped entirely when
+the mirror is off, and because the node-log ring is fed by captured stdout,
+disabling the mirror also empties structured records out of
+GET /agentfield/v1/logs.
+
+The AGENTFIELD_LOG_MAX_LINE_BYTES entry claimed "minimum: 256" and that "the Go
+and TypeScript SDKs treat invalid values as unset". The first is misleading and
+the second is false. Python clamps sub-256 integers up to 256; Go and
+TypeScript reject them upward to the 16384 default, so `=100` yields a cap 64x
+larger than requested. Python and Go reject non-integers outright while
+TypeScript's parseInt prefix-parses (`512abc` -> 512). The Python clamp also
+governs both Python log paths — the stdout/stderr tee behind
+/agentfield/v1/logs and the structured-mirror elision budget — not just the
+mirror. Every number here is pinned by the new test_node_logs.py table.
+
+Each SDK README gains a short Logging section carrying that SDK's own numbers.
+The Python one uses absolute github.com URLs because that file is the PyPI
+long_description, where relative links render dead.
+
+No code behaviour changes in this commit.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-typescript): isolate execution logger stdout env
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (4b2b8bd)
+
+## [0.1.138-rc.4] - 2026-08-31
+
+
+### Changed
+
+- Refactor(desktop): share one linear trailing-slash trim (#1021)
+
+#1019 replaced the `/\/+$/` replace in the TypeScript SDK's LocalVerifier
+after CodeQL flagged it as js/polynomial-redos. Four copies of the same
+pattern remained in desktop/: catalog.sourceRepo, cloudUpdate.normalizedUrl
+(twice) and cpClient.request.
+
+CodeQL does not flag those — they take operator config, not attacker
+input, so there is no taint path — but there is no reason to keep four
+copies of a pattern the scanner objects to when one linear helper does
+the job.
+
+Add shared/trimSlashes.ts with the same backward index scan LocalVerifier
+now uses, and route all four call sites through it. Behavior is unchanged
+for every input, interior '//' in catalog source strings included. (7f58f58)
+
+
+
+### Chores
+
+- Chore(pre-commit): repair the ruff hooks, pin them to CI's version (#1022)
+
+The ruff hooks have been dead. `sdk/python/pyproject.toml` selects the
+ASYNC ruleset, which the pinned v0.6.9 does not know, so both hooks
+aborted before linting anything:
+
+    ruff failed
+      Cause: Failed to parse sdk/python/pyproject.toml
+      Cause: TOML parse error at line 136, column 1
+        Unknown rule selector: `ASYNC240`
+
+Every Python commit hit this, which is how #1018 ended up needing
+--no-verify. Pin to v0.15.22, the version .github/workflows/sdk-python.yml
+already installs, so local and CI enforce one contract. 0.16.x stays out
+of scope: it flags ~2700 pre-existing violations repo-wide.
+
+Scope both hooks to ^sdk/python/, matching that workflow's
+working-directory. Unscoped they run from the repo root and surface 53
+pre-existing errors in examples/ and scripts/ that CI has never checked
+— a real backlog, but one that deserves its own PR rather than arriving
+as a side effect of a version bump.
+
+Also switch `ruff` to `ruff-check`; the old id is now a legacy alias.
+
+Verified: `pre-commit run --all-files ruff-check` passes, and the file
+that forced --no-verify on #1018 passes every hook. (d48f40f)
+
+
+
+### Fixed
+
+- Fix(control-plane): bound golden-run name and tag writes into workflow_runs.metadata (#1025)
+
+* fix(control-plane): bound golden-run name and tag writes into run metadata
+
+POST /api/ui/v2/workflow-runs/:run_id/golden wrote the caller-supplied name
+and tag list into workflow_runs.metadata with no bounds at all. The name was
+only TrimSpace'd, so a 1 MiB name persisted verbatim; sanitizeStringList
+trimmed and de-duped but capped neither the entry count nor the entry length,
+and it preallocated its output slice (and an unbounded de-dupe map) straight
+from the attacker-controlled input length. That row is re-read and
+re-serialised on every runs-list page that contains the run, so both are
+stored amplification vectors (#944).
+
+Cap tags at 20 entries of at most 64 runes each, and truncate the name at 200
+runes. Over-long tags are dropped rather than truncated: byte-slicing can land
+mid-rune and json.Marshal silently rewrites the invalid UTF-8 to U+FFFD.
+Lengths are counted with utf8.RuneCountInString so a 64-rune CJK tag survives.
+The output slice and de-dupe map are now sized min(len(values), maxCount) and
+the loop stops once maxCount survivors are collected, so a multi-million-entry
+tag array cannot force a large allocation before the cap applies.
+
+This route is UI-private and its only caller sends one hard-coded tag, so
+oversized input is bounded silently rather than rejected — a 400 would break
+the existing "Save as golden run" button. The name fallback is unchanged: an
+empty name still falls back to run_id, and run_id itself is not truncated.
+
+Forward-only. Nothing re-validates on read, so rows that already hold
+oversized golden metadata keep reading back exactly as they do today.
+
+The caps are named constants so the follow-up run-metadata endpoint can reuse
+the same bounds and the same helper.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover golden-run metadata bounds and forward-only reads
+
+Adds the behaviour tests for the golden-run caps:
+
+- sanitizeStringList: 100 inputs cap to the first 20; a 65-rune ASCII entry is
+  dropped while its 64-rune neighbour survives; a 64-rune CJK entry is kept
+  byte-identical (proving it is not truncated into U+FFFD) while a 65-rune one
+  is dropped; the legacy trim/de-dupe/order behaviour is pinned unchanged; the
+  maxCount<=0 and maxRunes<=0 guards are exercised.
+- A 100k-entry input asserts cap(out) <= 20, which is the allocation contract —
+  a length assertion alone would still pass with the old preallocation.
+- truncateRunes: cut on a rune boundary, result always valid UTF-8 with no
+  replacement character, and the non-positive cap guard.
+- Handler round-trip: a POST with 50 tags plus one over-long tag stores exactly
+  20, a 1 MiB name stores 200 runes and keeps the whole metadata blob under
+  4 KiB, and a blank name still falls back to run_id.
+- Read-back: a pre-seeded row holding 50 tags and a 500-rune name still
+  surfaces in full on both the runs list and the run detail, pinning that this
+  change is forward-only and read paths do not re-validate.
+
+The two pre-existing golden-route tests are left untouched as the
+behaviour-unchanged regression guard.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e1f2831)
+
+
+
+### Performance
+
+- Perf(sdk-python): stop re-serializing oversized structured log records (#1028)
+
+* perf(sdk-python): stop re-serializing oversized structured log records
+
+_bounded_mirror_line serialized the whole record with json.dumps before it
+knew whether the record fit the mirror budget, and serialized it a second
+time at the end to report original_size. A record carrying a multi-megabyte
+string attribute therefore passed that payload to json.dumps twice, and every
+size check did len(<str>.encode("utf-8")), materialising a throwaway
+multi-megabyte bytes copy purely to count.
+
+Three changes, all inside that one private method and the helpers next to it:
+
+* _certainly_exceeds_budget is a shallow O(top-level keys + attributes) sum
+  over str/bytes payloads that skips the speculative whole-record dumps when
+  it can already prove the record is oversized. It is deliberately NOT a
+  recursive walker — a recursive lower-bound walk measured +318% on a fitting
+  14.7 KB record and never aborts early for int-heavy payloads. Nested
+  containers count as zero, so "False" means "unknown, serialize and measure",
+  and any exception falls back to that same path so a mirror line is never
+  dropped because the estimator misbehaved.
+* _record_size reconstructs the full record size arithmetically from the
+  envelope plus the already-computed attributes size instead of re-encoding,
+  which removes the second whole-record dumps. It falls back to a plain dumps
+  when the record has no "attributes" key, because {**record,
+  "attributes": {}} would APPEND the key and overcount the envelope by 14
+  bytes in the reported original_size.
+* _byte_len replaces len(x.encode("utf-8")) everywhere it was used only to
+  count; str.isascii() is an O(1) flag check on CPython's compact-unicode
+  representation, so the common case no longer allocates at all.
+
+_json_key fixes a latent off-by-two while it is in here: json coerces non-str
+dict keys (1 -> "1", True -> "true", None -> "null"), so measuring the raw key
+undercut the attributes size by two bytes per non-str key and could push an
+elision boundary the wrong way. bool is checked before int because
+isinstance(True, int).
+
+Output is unchanged: a 220-case differential harness (hand-picked edges plus
+200 randomised records across budgets 256-16384) produces byte-identical lines
+against the previous implementation, and the record handed to _dispatch_to_cp
+is still only ever shallow-copied. Measured, mean of 5: one 5 MB str attribute
+20.4 ms -> 9.0 ms (json.dumps calls carrying a >=1 MB payload: 2 -> 1),
+200 x 50 KB attributes 46.2 ms -> 18.8 ms, and a fitting 14.7 KB record stays
+at 0.18 ms.
+
+Refs #985
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): guard the bounded mirror line against re-serialization
+
+Regression tests for the mirror-line precheck, derived from the behavior
+contract rather than from the implementation:
+
+* a 5 MB str attribute passes a >=1 MB payload to json.dumps at most once
+  (counting proxy around logger_module.json.dumps) — the deterministic guard
+  that the whole-record dumps is really skipped;
+* a record that FITS the default 16384 budget is emitted byte-identically to
+  a direct json.dumps and its nested values are never measured. The existing
+  many-large-attributes test cannot catch a recursive precheck, because its
+  first 50 KB attribute aborts the scan immediately; this one nests a str
+  subclass whose isascii()/__len__ raise, which CPython's C json encoder
+  never touches but a recursive walker would;
+* non-str attribute keys elide at the same per-attribute boundary and report
+  an aggregate _elided size that matches json.dumps exactly (4030, not the
+  4024 the raw-key measurement produced);
+* a record with no "attributes" key reports its exact size in the
+  minimal-record fallback rather than 14 bytes too many;
+* a payload that raises while being measured falls back to the full-dumps
+  path, so the stdout line is still emitted instead of being dropped;
+* _json_key's coercion table (str / bool / None / float / __str__ fallback).
+
+No wall-clock assertion is added: the post-fix timing has only ~4.6x headroom
+and would be a CI flake source. Every existing structured-mirror test —
+including the exact <4002>/<4004> markers and the elapsed < 0.2 guard — passes
+unmodified.
+
+Refs #985
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): make the mirror perf guards fail on revert
+
+Both new guards passed against main's logger.py, so neither actually
+guarded the behaviour it was named for.
+
+- test_..._serializes_large_string_payload_at_most_once classified
+  json.dumps calls by their *argument* (a >=1MB str). The redundant call
+  this PR removes passes the record *dict*, not the 5 MB string, so both
+  versions showed exactly one big-str argument. Count the *output* size
+  instead: 1 on the branch, 2 on main, 2 with the precheck neutered.
+
+- test_..._fitting_nested_record_is_not_walked_recursively used a
+  tripwire that raised AssertionError, but _certainly_exceeds_budget
+  swallows every exception and falls back to the full-dumps path, so a
+  recursive precheck silently emitted the byte-identical line the test
+  asserted. Record the touches in a list and assert it stays empty; the
+  byte-identical assertion is kept alongside it.
+
+Verified by mutation: with `return False` inserted at the top of
+_certainly_exceeds_budget the first test now fails (2 != 1), and with
+_shallow_payload_bytes made recursive over dicts/lists the second fails
+with 2800 recorded touches. Both were green before this change.
+
+Also applies `ruff format` to the one hunk in
+test_..._non_string_attribute_keys_have_exact_sizes that had drifted, so
+the file stays format-clean.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (5a0d275)
+
 ## [0.1.138-rc.3] - 2026-08-31
 
 

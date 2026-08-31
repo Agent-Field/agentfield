@@ -1,3 +1,9 @@
+{{- $shutdownMinDelayInExtraEnv := false -}}
+{{- range .Values.controlPlane.extraEnv -}}
+{{- if eq (default "" .name) "AGENTFIELD_SHUTDOWN_MIN_DELAY" -}}
+{{- $shutdownMinDelayInExtraEnv = true -}}
+{{- end -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -46,6 +52,10 @@ spec:
               value: {{ .Values.controlPlane.service.port | quote }}
             - name: AGENTFIELD_STORAGE_MODE
               value: {{ .Values.controlPlane.storage.mode | quote }}
+            {{- if and .Values.controlPlane.shutdownMinDelay (not (hasKey .Values.controlPlane.env "AGENTFIELD_SHUTDOWN_MIN_DELAY")) (not $shutdownMinDelayInExtraEnv) }}
+            - name: AGENTFIELD_SHUTDOWN_MIN_DELAY
+              value: {{ .Values.controlPlane.shutdownMinDelay | quote }}
+            {{- end }}
             {{- if eq .Values.controlPlane.storage.mode "postgres" }}
             {{- if .Values.postgres.enabled }}
             - name: AGENTFIELD_STORAGE_POSTGRES_HOST
@@ -104,12 +114,12 @@ spec:
             failureThreshold: 6
           readinessProbe:
             httpGet:
-              path: /api/v1/health
+              path: {{ .Values.controlPlane.readinessProbe.path | default "/api/v1/health" }}
               port: http
             initialDelaySeconds: 5
-            periodSeconds: 5
+            periodSeconds: {{ .Values.controlPlane.readinessProbe.periodSeconds | default 2 }}
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: {{ .Values.controlPlane.readinessProbe.failureThreshold | default 1 }}
           {{- with .Values.controlPlane.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

@@ -1,12 +1,17 @@
 package agentic
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
 )
+
+type workflowRunGetter interface {
+	GetWorkflowRun(context.Context, string) (*types.WorkflowRun, error)
+}
 
 // RunOverviewHandler returns everything about a workflow run in one call.
 func RunOverviewHandler(store storage.StorageProvider) gin.HandlerFunc {
@@ -55,7 +60,7 @@ func RunOverviewHandler(store storage.StorageProvider) gin.HandlerFunc {
 			agents = append(agents, a)
 		}
 
-		respondOK(c, gin.H{
+		payload := gin.H{
 			"run_id":     runID,
 			"executions": executions,
 			"agents":     agents,
@@ -65,6 +70,14 @@ func RunOverviewHandler(store storage.StorageProvider) gin.HandlerFunc {
 				"unique_agents":    len(agents),
 			},
 			"notes": allNotes,
-		})
+		}
+		if getter, ok := store.(workflowRunGetter); ok {
+			if run, err := getter.GetWorkflowRun(ctx, runID); err == nil && run != nil {
+				if metadata := types.ParseRunMetadata(run.Metadata); metadata != nil {
+					payload["run_metadata"] = metadata
+				}
+			}
+		}
+		respondOK(c, payload)
 	}
 }

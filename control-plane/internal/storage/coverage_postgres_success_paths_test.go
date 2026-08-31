@@ -31,11 +31,33 @@ type scriptedQueryResponse struct {
 }
 
 type scriptedSQLState struct {
-	mu      sync.Mutex
-	execs   []scriptedExecResponse
-	queries []scriptedQueryResponse
-	begin   []error
-	commit  []error
+	mu              sync.Mutex
+	execs           []scriptedExecResponse
+	queries         []scriptedQueryResponse
+	begin           []error
+	commit          []error
+	executedQueries []string
+	queriedQueries  []string
+	executedArgs    [][]driver.NamedValue
+	queriedArgs     [][]driver.NamedValue
+}
+
+func cloneNamedValues(values []driver.NamedValue) []driver.NamedValue {
+	return append([]driver.NamedValue(nil), values...)
+}
+
+func (s *scriptedSQLState) recordExec(query string, args []driver.NamedValue) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executedQueries = append(s.executedQueries, query)
+	s.executedArgs = append(s.executedArgs, cloneNamedValues(args))
+}
+
+func (s *scriptedSQLState) recordQuery(query string, args []driver.NamedValue) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queriedQueries = append(s.queriedQueries, query)
+	s.queriedArgs = append(s.queriedArgs, cloneNamedValues(args))
 }
 
 func (s *scriptedSQLState) nextExec() (scriptedExecResponse, error) {
@@ -165,7 +187,8 @@ func (c *scriptedConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, er
 	return &scriptedTx{state: c.state}, nil
 }
 
-func (c *scriptedConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+func (c *scriptedConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	c.state.recordExec(query, args)
 	resp, err := c.state.nextExec()
 	if err != nil {
 		return nil, err
@@ -176,7 +199,8 @@ func (c *scriptedConn) ExecContext(context.Context, string, []driver.NamedValue)
 	return resp.result, resp.err
 }
 
-func (c *scriptedConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+func (c *scriptedConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	c.state.recordQuery(query, args)
 	resp, err := c.state.nextQuery()
 	if err != nil {
 		return nil, err

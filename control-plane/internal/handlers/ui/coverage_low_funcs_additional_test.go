@@ -52,10 +52,10 @@ func (s *workflowRunOverrideStorage) GetWorkflowExecution(ctx context.Context, e
 	return s.StorageProvider.GetWorkflowExecution(ctx, executionID)
 }
 
-func (s *workflowRunOverrideStorage) StoreWorkflowRun(ctx context.Context, run *types.WorkflowRun) error {
+func (s *workflowRunOverrideStorage) UpdateWorkflowRunMetadata(ctx context.Context, runID string, mutate func(map[string]json.RawMessage) error) error {
 	return s.StorageProvider.(interface {
-		StoreWorkflowRun(context.Context, *types.WorkflowRun) error
-	}).StoreWorkflowRun(ctx, run)
+		UpdateWorkflowRunMetadata(context.Context, string, func(map[string]json.RawMessage) error) error
+	}).UpdateWorkflowRunMetadata(ctx, runID, mutate)
 }
 
 func (s *workflowRunOverrideStorage) GetWorkflowRun(ctx context.Context, runID string) (*types.WorkflowRun, error) {

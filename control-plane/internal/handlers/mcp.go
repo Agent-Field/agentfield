@@ -537,6 +537,7 @@ func (s *mcpServer) startAsyncRun(ctx context.Context, target string, input map[
 		}
 	}()
 
+	// MCP creates an ordinary execution and deliberately leaves RunMetadata nil.
 	plan, err := controller.prepareExecutionForTargetWithAdmission(ctx, target, ExecuteRequest{Input: input}, headers, callerDID, targetDID, true)
 	if err != nil {
 		return "", "", err

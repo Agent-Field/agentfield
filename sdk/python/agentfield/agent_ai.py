@@ -796,6 +796,10 @@ class AgentAI:
         # Ensure messages are always included in the final params
         litellm_params["messages"] = messages
 
+        from agentfield.litellm_observability import apply_execution_metadata
+
+        apply_execution_metadata(litellm_params)
+
         # CRITICAL: Pass an HTTP-level timeout to litellm so httpx itself
         # aborts the underlying socket, not just the asyncio coroutine wrapper.
         # Without this, asyncio.wait_for cancels the coroutine but leaves the
@@ -856,6 +860,7 @@ class AgentAI:
 
             async def _tool_loop_completion(params):
                 """Make an LLM call with rate limiting and model fallbacks."""
+                apply_execution_metadata(params)
                 if litellm_module is None:
                     raise ImportError(
                         "litellm is not installed. Please install it with `pip install litellm`."

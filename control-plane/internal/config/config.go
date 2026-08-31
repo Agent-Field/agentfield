@@ -75,6 +75,7 @@ type UIConfig struct {
 type AgentFieldConfig struct {
 	Port             int                    `yaml:"port"`
 	ShutdownTimeout  time.Duration          `yaml:"shutdown_timeout" mapstructure:"shutdown_timeout"`
+	ShutdownMinDelay time.Duration          `yaml:"shutdown_min_delay" mapstructure:"shutdown_min_delay"`
 	ARD              ARDConfig              `yaml:"ard" mapstructure:"ard"`
 	Registration     RegistrationConfig     `yaml:"registration" mapstructure:"registration"`
 	NodeHealth       NodeHealthConfig       `yaml:"node_health" mapstructure:"node_health"`
@@ -737,6 +738,13 @@ func ApplyEnvOverrides(cfg *Config) {
 			fmt.Fprintf(os.Stderr, "Warning: invalid AGENTFIELD_SHUTDOWN_TIMEOUT=%q; keeping %s\n", val, cfg.AgentField.ShutdownTimeout)
 		}
 	}
+	if val := os.Getenv("AGENTFIELD_SHUTDOWN_MIN_DELAY"); val != "" {
+		if d, ok := parseNonNegativeDuration(val); ok {
+			cfg.AgentField.ShutdownMinDelay = d
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: invalid AGENTFIELD_SHUTDOWN_MIN_DELAY=%q; keeping %s\n", val, cfg.AgentField.ShutdownMinDelay)
+		}
+	}
 
 	// Node health monitoring overrides
 	if val := os.Getenv("AGENTFIELD_HEALTH_CHECK_INTERVAL"); val != "" {
@@ -1078,6 +1086,22 @@ func parseShutdownTimeout(val string) (time.Duration, bool) {
 	if secs, err := strconv.ParseFloat(val, 64); err == nil {
 		d := time.Duration(secs * float64(time.Second))
 		return d, d > 0
+	}
+	return 0, false
+}
+
+// parseNonNegativeDuration parses a duration given as a Go duration string or
+// as bare seconds. Unlike parseShutdownTimeout, zero is a valid value: it is
+// the default for AGENTFIELD_SHUTDOWN_MIN_DELAY and means "do not wait".
+// Negative values are rejected.
+func parseNonNegativeDuration(val string) (time.Duration, bool) {
+	val = strings.TrimSpace(val)
+	if d, err := time.ParseDuration(val); err == nil {
+		return d, d >= 0
+	}
+	if secs, err := strconv.ParseFloat(val, 64); err == nil {
+		d := time.Duration(secs * float64(time.Second))
+		return d, d >= 0
 	}
 	return 0, false
 }
