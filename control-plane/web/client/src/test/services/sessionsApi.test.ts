@@ -74,4 +74,35 @@ describe("sessionsApi", () => {
       sessionsApi.invokeTool("sess-1", "missing", { input: {} }),
     ).rejects.toThrow("bad tool");
   });
+
+  it("extracts a message from a structured session error", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({
+        error: {
+          code: "node_offline",
+          message: "No active node can start this session",
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(sessionsApi.startSession("support.voice")).rejects.toThrow(
+      "No active node can start this session",
+    );
+  });
+
+  it("falls back to the HTTP status when the response has no safe message", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({ code: "node_offline" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(sessionsApi.startSession("support.voice")).rejects.toThrow(
+      "Request failed with status 503",
+    );
+  });
 });

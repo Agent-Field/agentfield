@@ -11,6 +11,7 @@ import type {
   MCPHealthResponseModeAware,
   MCPServerMetrics,
 } from '../types/agentfield';
+import { getErrorMessage } from './errorMessage';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
 const STORAGE_KEY = "af_api_key";
@@ -97,11 +98,11 @@ async function fetchWrapper<T>(url: string, options?: RequestInit & { timeout?: 
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({
-        message: 'Request failed with status ' + response.status
-      }));
+      const errorData: unknown = await response.json().catch(() => null);
 
-      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      throw new Error(
+        getErrorMessage(errorData, `HTTP error! status: ${response.status}`),
+      );
     }
 
     return response.json() as Promise<T>;

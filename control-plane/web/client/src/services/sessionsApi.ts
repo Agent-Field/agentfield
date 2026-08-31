@@ -1,4 +1,5 @@
 import { getGlobalApiKey } from "./api";
+import { getErrorMessage } from "./errorMessage";
 
 const API_BASE = "/api/v1";
 
@@ -56,8 +57,10 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
     }),
   });
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || errorData.error || `Request failed with status ${response.status}`);
+    const errorData: unknown = await response.json().catch(() => null);
+    throw new Error(
+      getErrorMessage(errorData, `Request failed with status ${response.status}`),
+    );
   }
   return response.json();
 }
