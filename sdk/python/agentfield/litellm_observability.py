@@ -11,6 +11,9 @@ METADATA_ENV = "AGENTFIELD_LITELLM_METADATA"
 
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _AGENTFIELD_REGISTERED: set[str] = set()
+# LiteLLM callback names whose logger reads the LangFuse-native metadata
+# aliases (trace_id, session_id, trace_name, generation_name, tags).
+_LANGFUSE_CALLBACKS = frozenset({"langfuse", "langfuse_otel"})
 
 
 def resolve_callbacks(
@@ -61,15 +64,24 @@ def register_callbacks(
                 log_debug(
                     f"LiteLLM callback '{name}' is not in LiteLLM's known callback list; registering it anyway"
                 )
+            # Only record a name that one of the branches below actually
+            # installed: reporting success for a callback that was never
+            # registered would also flip the vendor-alias gate in
+            # build_execution_metadata() on for it.
+            added = False
             add_callback = getattr(manager, "add_litellm_callback", None)
             if callable(add_callback):
                 add_callback(name)
+                added = True
             else:
                 callbacks = getattr(litellm_module, "callbacks", None)
-                if isinstance(callbacks, list) and name not in callbacks:
-                    callbacks.append(name)
-            _AGENTFIELD_REGISTERED.add(name)
-            registered.append(name)
+                if isinstance(callbacks, list):
+                    if name not in callbacks:
+                        callbacks.append(name)
+                    added = True
+            if added:
+                _AGENTFIELD_REGISTERED.add(name)
+                registered.append(name)
     except Exception as exc:
         log_warn(f"Could not register LiteLLM observability callback: {exc}")
     return registered
@@ -118,7 +130,12 @@ def build_execution_metadata(
         key: str(value) for key, value in values.items() if value not in (None, "")
     }
 
-    if agentfield_registered_callbacks():
+    # The aliases below are LangFuse-native keys, so they are stamped only when
+    # AgentField itself registered a LangFuse-family callback. Gating on "any
+    # AgentField-registered callback" would still re-key, rename and re-tag the
+    # generations of an application that registered `langfuse` itself while the
+    # operator set AGENTFIELD_LITELLM_CALLBACKS to some other vendor.
+    if agentfield_registered_callbacks() & _LANGFUSE_CALLBACKS:
         aliases = {
             "trace_id": run_id,
             "session_id": getattr(context, "session_id", None),
@@ -141,8 +158,11 @@ def build_execution_metadata(
             tags.append(f"agentfield-reasoner:{reasoner}")
         metadata["tags"] = tags
 
-    metadata.pop("user_id", None)
-    metadata.pop("requester_metadata", None)
+    # NOTE: never add a "user_id" or "requester_metadata" key to this dict.
+    # LiteLLM's anthropic transform copies metadata["user_id"] into the
+    # provider request body, and its vertex transform turns
+    # metadata["requester_metadata"] into request labels — either would leak
+    # AgentField identifiers past the LiteLLM boundary.
     return metadata
 
 
@@ -164,7 +184,17 @@ def apply_execution_metadata(
             return
         merged = dict(existing or {})
         for key, value in stamp.items():
-            merged.setdefault(key, value)
+            if key in merged:
+                # A caller-supplied value — or one an earlier stamp left on the
+                # params this call was shallow-copied from — always wins.
+                value = merged[key]
+            # Give a stamped list value its own object. The tool-calling loop
+            # passes `{**litellm_params}` per turn, so without this every turn
+            # would share one metadata["tags"] list, and LangFuse-style
+            # integrations append to it.
+            if isinstance(value, list):
+                value = list(value)
+            merged[key] = value
         params["metadata"] = merged
     except Exception as exc:
         log_debug(f"Could not apply AgentField LiteLLM metadata: {exc}")
