@@ -2,6 +2,7 @@ import json
 import io
 import sys
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlparse
 
 import pytest
 
@@ -236,7 +237,11 @@ def test_logger_security_output(base_logger, caplog):
 @pytest.mark.unit
 def test_logger_network_output(base_logger, caplog):
     base_logger.network("GET https://api.openai.com", method="GET")
-    assert "api.openai.com" in caplog.text
+    # Pull the URL back out of the captured log line and compare the parsed
+    # hostname for equality, rather than substring-matching the host against
+    # caplog.text (CodeQL py/incomplete-url-substring-sanitization).
+    logged_urls = [tok for tok in caplog.text.split() if tok.startswith("https://")]
+    assert any(urlparse(url).hostname == "api.openai.com" for url in logged_urls)
 
 
 @pytest.mark.unit

@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.3] - 2026-08-31
+
+
+### Fixed
+
+- Fix(sdk/python): parse URL in logger test to resolve CodeQL substring-sanitization alert (#1018)
+
+* fix(sdk/python): parse URL in logger test to resolve CodeQL substring-sanitization alert
+
+* review: assert the parsed hostname from the captured log line
+
+The first pass added `urlparse("https://api.openai.com").hostname ==
+"api.openai.com"`, which parses a hardcoded literal and can never fail.
+It asserts that urllib works, not that the logger emitted anything, and
+left the original substring check as the only real assertion.
+
+Pull the URL back out of caplog.text and compare parsed hostnames for
+equality. Any `in` against a bare hostname literal, set membership
+included, still trips py/incomplete-url-substring-sanitization, so the
+check is written as `any(... == ...)`.
+
+Verified 17 passed, and that the assertion fails when the logged host
+changes. (35c1f18)
+
+- Fix(sdk/typescript): replace trailing-slash regex to resolve CodeQL polynomial-redos alert (#1019)
+
+* fix(sdk/typescript): replace trailing-slash regex to resolve CodeQL polynomial-redos alert
+
+CodeQL alert #54 (js/polynomial-redos) flagged /\/+$/ in LocalVerifier's
+constructor as a polynomial-time regex on uncontrolled input. Trim
+trailing slashes with a plain loop instead; behavior is identical.
+
+Fixes CodeQL alert #54.
+
+* review: single-pass trailing-slash trim + regression tests
+
+The first pass traded the regex for `while (url.endsWith('/')) url =
+url.slice(0, -1)`, which reallocates the string once per trailing slash
+and is quadratic on the very input the CodeQL alert was about.
+
+Walk an index backwards and slice once instead: linear, one allocation,
+still no regex. Rewrite the comment, which described a `.test` call the
+original code never made.
+
+Add constructor tests covering single, repeated, absent, empty-string
+and all-slash inputs, plus a 200k-slash run to catch a regression back
+to quadratic behavior. (9af2d49)
+
 ## [0.1.138-rc.2] - 2026-08-31
 
 
