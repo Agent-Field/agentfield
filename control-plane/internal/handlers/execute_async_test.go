@@ -59,6 +59,7 @@ func TestExecuteAsyncHandler_PoolStoppedTerminatesPersistedRow(t *testing.T) {
 	require.Equal(t, "1", resp.Header().Get("Retry-After"))
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Equal(t, string(ErrorCategoryControlPlaneShutdown), body["error_category"])
 	require.Equal(t, float64(1), body["retry_after"])
 	records, err := baseStore.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
 	require.NoError(t, err)
@@ -71,13 +72,67 @@ func TestExecuteAsyncHandler_PoolStoppedTerminatesPersistedRow(t *testing.T) {
 	require.Len(t, workflows, 1)
 	require.NotNil(t, workflows[0].StatusReason)
 	require.Equal(t, "control_plane_shutdown", *workflows[0].StatusReason)
+	require.Equal(t, string(records[0].Status), workflows[0].Status)
 	require.Zero(t, concurrencyLimiter.GetRunningCount("node-1"))
+}
+
+func TestExecuteAsyncHandler_AlreadyStoppedPoolReturnsShutdownWithoutPersistence(t *testing.T) {
+	pool := newAsyncWorkerPool(0, 2)
+	pool.mu.Lock()
+	pool.stopped = true
+	pool.mu.Unlock()
+	useAsyncPoolForTest(t, pool)
+	store := newTestExecutionStorage(testRestartAgent("http://agent.example"))
+	router := gin.New()
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
+	require.Equal(t, "1", resp.Header().Get("Retry-After"))
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Equal(t, string(ErrorCategoryControlPlaneShutdown), body["error_category"])
+	records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Empty(t, records)
 }
 
 type stopPoolOnCreateStorage struct {
 	*testExecutionStorage
 	pool   *asyncWorkerPool
 	cancel context.CancelFunc
+}
+
+type cancelBeforeShutdownUpdateStore struct {
+	*testExecutionStorage
+	once          sync.Once
+	interleaveErr error
+}
+
+func (s *cancelBeforeShutdownUpdateStore) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
+	s.once.Do(func() {
+		reason := "cancelled_by_user"
+		_, s.interleaveErr = s.testExecutionStorage.UpdateExecutionRecord(ctx, executionID, func(current *types.Execution) (*types.Execution, error) {
+			current.Status = types.ExecutionStatusCancelled
+			current.StatusReason = &reason
+			return current, nil
+		})
+		if s.interleaveErr != nil {
+			return
+		}
+		s.interleaveErr = s.testExecutionStorage.UpdateWorkflowExecution(ctx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+			current.Status = string(types.ExecutionStatusCancelled)
+			current.StatusReason = &reason
+			return current, nil
+		})
+	})
+	if s.interleaveErr != nil {
+		return nil, s.interleaveErr
+	}
+	return s.testExecutionStorage.UpdateExecutionRecord(ctx, executionID, update)
 }
 
 func (s *stopPoolOnCreateStorage) CreateExecutionRecord(ctx context.Context, execution *types.Execution) error {
@@ -89,6 +144,88 @@ func (s *stopPoolOnCreateStorage) CreateExecutionRecord(ctx context.Context, exe
 		s.cancel()
 	}
 	return err
+}
+
+func TestAsyncShutdownTerminalizationPreservesCancellationInterleaving(t *testing.T) {
+	oldLimiter := concurrencyLimiter
+	concurrencyLimiter = &AgentConcurrencyLimiter{maxPerAgent: 2}
+	t.Cleanup(func() { concurrencyLimiter = oldLimiter })
+	require.NoError(t, concurrencyLimiter.Acquire("node-1"))
+
+	base := newTestExecutionStorage(testRestartAgent("http://agent.example"))
+	now := time.Now().UTC()
+	exec := &types.Execution{
+		ExecutionID: "exec-cancel-race", RunID: "run-cancel-race", AgentNodeID: "node-1", NodeID: "node-1",
+		ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning,
+		CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, base.CreateExecutionRecord(context.Background(), exec))
+	require.NoError(t, base.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{
+		ExecutionID: exec.ExecutionID, WorkflowID: exec.RunID, RunID: &exec.RunID,
+		AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: string(types.ExecutionStatusRunning),
+		CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}))
+	store := &cancelBeforeShutdownUpdateStore{testExecutionStorage: base}
+	target, err := parseTarget("node-1.reasoner-a")
+	require.NoError(t, err)
+	job := asyncExecutionJob{
+		controller: newExecutionController(store, nil, nil, time.Second, ""),
+		plan: preparedExecution{
+			exec: exec, target: target, slotHeld: true,
+		},
+	}
+
+	job.terminateForControlPlaneShutdown(newControlPlaneShutdownError("control plane stopped"))
+
+	stored, err := base.GetExecutionRecord(context.Background(), exec.ExecutionID)
+	require.NoError(t, err)
+	workflow, err := base.GetWorkflowExecution(context.Background(), exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusCancelled, stored.Status)
+	require.Equal(t, string(types.ExecutionStatusCancelled), workflow.Status)
+	require.Equal(t, "cancelled_by_user", *stored.StatusReason)
+	require.Equal(t, "cancelled_by_user", *workflow.StatusReason)
+	require.Zero(t, concurrencyLimiter.GetRunningCount("node-1"))
+}
+
+func TestAsyncForcedWorkerCancellationReleasesOnlyOwnedSlot(t *testing.T) {
+	oldLimiter := concurrencyLimiter
+	concurrencyLimiter = &AgentConcurrencyLimiter{maxPerAgent: 2}
+	t.Cleanup(func() { concurrencyLimiter = oldLimiter })
+	require.NoError(t, concurrencyLimiter.Acquire("node-1"))
+	require.NoError(t, concurrencyLimiter.Acquire("node-1"))
+
+	agent := testRestartAgent("http://agent.example")
+	store := newTestExecutionStorage(agent)
+	now := time.Now().UTC()
+	exec := &types.Execution{
+		ExecutionID: "exec-forced-stop", RunID: "run-forced-stop", AgentNodeID: "node-1", NodeID: "node-1",
+		ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning,
+		CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), exec))
+	require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{
+		ExecutionID: exec.ExecutionID, WorkflowID: exec.RunID, RunID: &exec.RunID,
+		AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: string(types.ExecutionStatusRunning),
+		CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}))
+	target, err := parseTarget("node-1.reasoner-a")
+	require.NoError(t, err)
+	job := asyncExecutionJob{
+		controller: newExecutionController(store, nil, nil, time.Second, ""),
+		plan: preparedExecution{
+			exec: exec, target: target, agent: agent, requestBody: []byte(`{}`), slotHeld: true,
+		},
+	}
+	workerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	job.processWithContext(workerCtx)
+
+	// This job owned one of two live slots. Forced shutdown must not consume the
+	// other execution's count through failForControlPlaneShutdown plus defer.
+	require.EqualValues(t, 1, concurrencyLimiter.GetRunningCount("node-1"))
+	ReleaseExecutionSlot("node-1")
+	require.Zero(t, concurrencyLimiter.GetRunningCount("node-1"))
 }
 
 func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {

@@ -45,7 +45,7 @@ Operators polling execution state should branch on the stable category before an
 | `approval_rejected[: ...]` | Approval was rejected; an optional suffix contains feedback. |
 | `awaiting_child` | The parent is waiting for a child execution. |
 | `agent_client_error:<status>` | The agent reported a client-facing HTTP 4xx failure. |
-| `llm_unavailable`, `concurrency_limit`, `agent_timeout`, `agent_error`, `agent_unreachable`, `bad_response`, `internal_error`, `validation`, `permission_denied`, `node_unavailable`, `target_not_found` | Canonical failure categories used for operator routing and HTTP mapping. |
+| `llm_unavailable`, `concurrency_limit`, `control_plane_shutdown`, `agent_timeout`, `agent_error`, `agent_unreachable`, `bad_response`, `internal_error`, `validation`, `permission_denied`, `node_unavailable`, `target_not_found` | Canonical failure categories used for operator routing and HTTP mapping. A pool that stops after restart persistence returns and stores `control_plane_shutdown`. |
 
 Concurrency and LLM-circuit admission checks run before restart persistence. A rejected restart creates no execution or workflow-execution row. Queue-full restart responses return `503` with matching `Retry-After` and `retry_after` values.
 

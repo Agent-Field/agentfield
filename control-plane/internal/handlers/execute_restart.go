@@ -152,7 +152,11 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 
 	target := fmt.Sprintf("%s.%s", restartExec.NodeID, restartExec.ReasonerID)
 	pool := getAsyncWorkerPool()
-	if !pool.reserve() {
+	if reserved, stopped := pool.reserveForAdmission(); !reserved {
+		if stopped {
+			writeExecutionError(ctx, newControlPlaneShutdownError("async execution queue stopped; retry later"))
+			return
+		}
 		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue is full; retry later")
 		return
 	}
@@ -172,6 +176,9 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 		writeExecutionError(ctx, err)
 		return
 	}
+	// Keep ownership in the handler until the job copy is ready. Gin recovery
+	// can then release the slot if metadata/event publication panics.
+	defer plan.releaseSlot()
 
 	kind := "restart"
 	if req.Fork || req.Input != nil || req.Context != nil {
@@ -185,12 +192,20 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 		controller: c,
 		plan:       *plan,
 	}
+	plan.slotHeld = false // ownership transferred to job
+	submitted := false
+	defer func() {
+		if !submitted {
+			job.plan.releaseSlot()
+		}
+	}()
 	if ok := pool.submitReserved(job); !ok {
-		job.terminateForControlPlaneShutdown()
-		queueErr := &executionPreconditionError{code: http.StatusServiceUnavailable, message: "async execution queue is full; retry later", category: ErrorCategoryConcurrencyLimit}
-		writeExecutionError(ctx, queueErr)
+		shutdownErr := newControlPlaneShutdownError("async execution queue stopped; retry later")
+		job.terminateForControlPlaneShutdown(shutdownErr)
+		writeExecutionError(ctx, shutdownErr)
 		return
 	}
+	submitted = true
 	reserved = false
 
 	createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)

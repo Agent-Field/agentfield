@@ -113,6 +113,15 @@ func newLLMUnavailableError(message, lastErr string, retryAfter int) error {
 	}
 }
 
+func newControlPlaneShutdownError(message string) *executionPreconditionError {
+	return &executionPreconditionError{
+		code:       503,
+		message:    message,
+		category:   ErrorCategoryControlPlaneShutdown,
+		retryAfter: 1,
+	}
+}
+
 // ReleaseExecutionSlot releases the concurrency slot for the given agent.
 // Safe to call even if concurrency limiting is disabled.
 func ReleaseExecutionSlot(agentNodeID string) {

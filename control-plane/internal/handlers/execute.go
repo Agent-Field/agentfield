@@ -266,9 +266,7 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		return
 	}
 	plan.executionMode = "sync"
-	if plan.slotHeld {
-		defer ReleaseExecutionSlot(plan.target.NodeID)
-	}
+	defer plan.releaseSlot()
 
 	if plan.replayHit != nil {
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
@@ -433,7 +431,11 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 	// is released when the worker job returns (early on an agent HTTP 202 ACK).
 	// Workers plus queue capacity bound admitted work; a paused execution pins a
 	// worker and reservation for up to 24 hours.
-	if !pool.reserve() {
+	if reserved, stopped := pool.reserveForAdmission(); !reserved {
+		if stopped {
+			writeExecutionError(ctx, newControlPlaneShutdownError("async execution queue stopped; retry later"))
+			return
+		}
 		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue is full; retry later")
 		return
 	}
@@ -450,6 +452,10 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 		return
 	}
 	plan.executionMode = "async"
+	// Preparation owns the slot until it is deliberately transferred to the
+	// worker job below. This also protects the recovered-panic interval between
+	// persistence and submission.
+	defer plan.releaseSlot()
 
 	if plan.replayHit != nil {
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
@@ -490,6 +496,13 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 		controller: c,
 		plan:       *plan,
 	}
+	plan.slotHeld = false // ownership transferred to job
+	submitted := false
+	defer func() {
+		if !submitted {
+			job.plan.releaseSlot()
+		}
+	}()
 
 	if ok := pool.submitReserved(job); !ok {
 		// The pool only refuses a reserved submission once it has stopped, i.e.
@@ -497,10 +510,12 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 		// context: the request context is very likely being cancelled by the
 		// same shutdown, and a cancelled write would strand this row in
 		// "running" — exactly the orphan this branch exists to prevent.
-		job.terminateForControlPlaneShutdown()
-		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue stopped; retry later")
+		shutdownErr := newControlPlaneShutdownError("async execution queue stopped; retry later")
+		job.terminateForControlPlaneShutdown(shutdownErr)
+		writeExecutionError(ctx, shutdownErr)
 		return
 	}
+	submitted = true
 	reserved = false
 
 	createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)

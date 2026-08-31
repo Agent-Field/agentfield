@@ -41,7 +41,7 @@ func (c *executionController) prepareExecutionWithAdmission(ctx context.Context,
 	)
 }
 
-func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string, acquireSlot bool) (_ *preparedExecution, retErr error) {
+func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string, acquireSlot bool) (*preparedExecution, error) {
 	target, err := parseTarget(targetParam)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
@@ -165,6 +165,7 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 
 	llmEndpoint := extractRequestedLLMEndpoint(req)
 	slotAcquired := false
+	slotTransferred := false
 	if acquireSlot && hit == nil {
 		if err := CheckExecutionPreconditions(target.NodeID, llmEndpoint); err != nil {
 			logger.Logger.Warn().
@@ -176,7 +177,9 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 		}
 		slotAcquired = true
 		defer func() {
-			if retErr != nil && slotAcquired {
+			// Gin recovers handler panics. Do not strand a slot when persistence or
+			// another preparation dependency panics before a plan takes ownership.
+			if slotAcquired && !slotTransferred {
 				ReleaseExecutionSlot(target.NodeID)
 			}
 		}()
@@ -258,7 +261,7 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 
 	c.ensureWorkflowExecutionRecord(ctx, exec, target, storedPayload)
 
-	return &preparedExecution{
+	plan := &preparedExecution{
 		exec:                    exec,
 		requestBody:             agentPayloadBytes,
 		agent:                   agent,
@@ -275,7 +278,9 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 		replayBeforeExecutionID: headers.replayBeforeExecutionID,
 		replayMode:              headers.replayMode,
 		replayHit:               hit,
-	}, nil
+	}
+	slotTransferred = true
+	return plan, nil
 }
 
 // findReplayHit returns a previously-succeeded child output to reuse for the

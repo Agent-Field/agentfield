@@ -86,9 +86,9 @@ Execute requests can be rejected before dispatch:
 | --- | --- | --- |
 | `429` | Concurrency limit | `Retry-After: 1` and `{"error":"...","error_category":"concurrency_limit","retry_after":1}` |
 | `503` | Async dispatch queue full | `Retry-After: 1` and `{"error":"async execution queue is full; retry later","error_category":"concurrency_limit","retry_after":1}` |
-| `503` | Control plane shutting down (async pool stopped) | `Retry-After: 1` and `{"error":"...","error_category":"concurrency_limit","retry_after":1}`; the `error` text distinguishes it from queue-full |
+| `503` | Control plane shutting down (async pool stopped) | `Retry-After: 1` and `{"error":"...","error_category":"control_plane_shutdown","retry_after":1}`; an execution persisted before the pool stopped is terminalized with the same category |
 | `503` | Target node known to be down (after the drain hold expires) | `Retry-After: 1` and `{"error":"...","error_category":"node_unavailable","retry_after":1}` |
-| `503` | Required LLM unavailable | `Retry-After: <recovery window>` and `{"error":"...","error_category":"llm_unavailable","retry_after":<recovery window>}`; the window is the circuit breaker's remaining recovery timeout (default 30s, floor 1s) |
+| `503` | Required LLM unavailable | `Retry-After: <recovery window>` and `{"error":"...","error_category":"llm_unavailable","retry_after":<recovery window>}`; the window reaches the next scheduled health probe eligible to transition the circuit, including recovery timeout and check cadence (floor 1s) |
 | `413` | Body exceeds `AGENTFIELD_MAX_EXECUTE_BODY_BYTES` (default 32 MiB) | `{"error":"request body too large"}` |
 
 These pre-dispatch rejections persist no `executions` or `workflow_executions` row and no payload; the exception is a request rejected because the async pool has already stopped after preparation, which is terminated as `failed` with `status_reason` `control_plane_shutdown`.
