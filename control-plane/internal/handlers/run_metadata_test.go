@@ -203,6 +203,70 @@ func TestSetRunMetadataHandlerRoundTripAndRejectsBeforeWrite(t *testing.T) {
 	require.Nil(t, missing)
 }
 
+func TestSetRunMetadataHandlerBoundsBodyAndActorBeforeWrite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, ctx := setupTestStorage(t)
+	getter := store.(interface {
+		GetWorkflowRun(context.Context, string) (*types.WorkflowRun, error)
+	})
+	runID := "run-metadata-bounds"
+	require.NoError(t, store.CreateExecutionRecord(ctx, &types.Execution{
+		ExecutionID: "exec-metadata-bounds", RunID: runID, AgentNodeID: "node",
+		ReasonerID: "reasoner", Status: "succeeded",
+	}))
+	router := gin.New()
+	router.POST("/runs/:run_id/metadata", SetRunMetadataHandler(store))
+
+	oversizedBody := `{"display_name":"ok","padding":"` + strings.Repeat("x", int(maxRunMetadataRequestBytes)) + `"}`
+	for _, test := range []struct {
+		name    string
+		chunked bool
+	}{
+		{name: "content length"},
+		{name: "chunked", chunked: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/runs/"+runID+"/metadata", strings.NewReader(oversizedBody))
+			request.Header.Set("Content-Type", "application/json")
+			if test.chunked {
+				request.ContentLength = -1
+				request.TransferEncoding = []string{"chunked"}
+			}
+			router.ServeHTTP(recorder, request)
+			require.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code, recorder.Body.String())
+			require.JSONEq(t, `{"error":"request body too large"}`, recorder.Body.String())
+		})
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/runs/"+runID+"/metadata", strings.NewReader(`{"display_name":"Release"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Actor-ID", strings.Repeat("a", types.MaxRunMetadataSetByRunes+1))
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "X-Actor-ID exceeds")
+
+	stored, err := getter.GetWorkflowRun(ctx, runID)
+	require.NoError(t, err)
+	require.Nil(t, stored)
+}
+
+func TestNormalizeRunMetadataActor(t *testing.T) {
+	actor, err := normalizeRunMetadataActor("   ")
+	require.NoError(t, err)
+	require.Equal(t, "api", actor)
+
+	actor, err = normalizeRunMetadataActor(" release-bot ")
+	require.NoError(t, err)
+	require.Equal(t, "release-bot", actor)
+
+	_, err = normalizeRunMetadataActor(strings.Repeat("漢", types.MaxRunMetadataSetByRunes+1))
+	require.ErrorContains(t, err, "X-Actor-ID exceeds")
+	_, err = normalizeRunMetadataActor(string([]byte{0xff}))
+	require.ErrorContains(t, err, "valid UTF-8")
+}
+
 type executionStoreWithoutMetadataWriter struct{ storage.StorageProvider }
 
 func TestSetRunMetadataHandlerBranchesAndPartialUpdates(t *testing.T) {
@@ -407,6 +471,17 @@ func TestPersistExecuteRunMetadataAndRootGuard(t *testing.T) {
 		}
 	})
 
+	t.Run("oversized actor does not write", func(t *testing.T) {
+		seed(t, "invalid-actor")
+		actor := strings.Repeat("a", types.MaxRunMetadataSetByRunes+1)
+		controller.persistExecuteRunMetadata(ctx, "invalid-actor", RunMetadataInput{DisplayName: raw(`"X"`)}, &actor)
+		run, err := getter.GetWorkflowRun(ctx, "invalid-actor")
+		require.NoError(t, err)
+		if run != nil {
+			require.Nil(t, types.ParseRunMetadata(run.Metadata))
+		}
+	})
+
 	t.Run("child execute ignores metadata at root guard", func(t *testing.T) {
 		bad := &RunMetadataInput{Labels: raw(`"bad"`)}
 		parent := "parent"
@@ -414,6 +489,12 @@ func TestPersistExecuteRunMetadataAndRootGuard(t *testing.T) {
 		require.ErrorContains(t, rootErr, "invalid run_metadata")
 		_, childErr := controller.prepareExecutionForTargetWithAdmission(ctx, "missing.reasoner", ExecuteRequest{RunMetadata: bad}, executionHeaders{runID: "guard-child", parentExecutionID: &parent}, "", "", false)
 		require.ErrorContains(t, childErr, "agent 'missing' not found")
+		actor := strings.Repeat("a", types.MaxRunMetadataSetByRunes+1)
+		valid := &RunMetadataInput{DisplayName: raw(`"X"`)}
+		_, rootActorErr := controller.prepareExecutionForTargetWithAdmission(ctx, "missing.reasoner", ExecuteRequest{RunMetadata: valid}, executionHeaders{runID: "guard-root-actor", actorID: &actor}, "", "", false)
+		require.ErrorContains(t, rootActorErr, "X-Actor-ID exceeds")
+		_, childActorErr := controller.prepareExecutionForTargetWithAdmission(ctx, "missing.reasoner", ExecuteRequest{RunMetadata: valid}, executionHeaders{runID: "guard-child-actor", parentExecutionID: &parent, actorID: &actor}, "", "", false)
+		require.ErrorContains(t, childActorErr, "agent 'missing' not found")
 		for _, runID := range []string{"guard-root", "guard-child"} {
 			run, err := getter.GetWorkflowRun(ctx, runID)
 			require.NoError(t, err)

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,6 +13,12 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
 )
+
+// maxRunMetadataRequestBytes is large enough for every documented field at
+// its maximum size, including JSON escaping, while preventing an unbounded
+// chunked body from being decoded into RawMessages and slices. Execute has its
+// own larger payload limit; this endpoint only accepts short identity fields.
+const maxRunMetadataRequestBytes int64 = 128 << 10
 
 // RunMetadataInput preserves absent, null and value as distinct patch states.
 type RunMetadataInput struct {
@@ -32,8 +39,14 @@ func SetRunMetadataHandler(store ExecutionStore) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "run_id is required"})
 			return
 		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRunMetadataRequestBytes)
 		var input RunMetadataInput
 		if err := c.ShouldBindJSON(&input); err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 			return
 		}
@@ -55,9 +68,10 @@ func SetRunMetadataHandler(store ExecutionStore) gin.HandlerFunc {
 			c.JSON(http.StatusNotImplemented, gin.H{"error": "run metadata storage is not supported"})
 			return
 		}
-		actor := strings.TrimSpace(c.GetHeader("X-Actor-ID"))
-		if actor == "" {
-			actor = "api"
+		actor, err := normalizeRunMetadataActor(c.GetHeader("X-Actor-ID"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
 		}
 		var merged types.RunMetadata
 		err = writer.UpdateWorkflowRunMetadata(c.Request.Context(), runID, func(namespaces map[string]json.RawMessage) error {
@@ -85,6 +99,20 @@ func SetRunMetadataHandler(store ExecutionStore) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, merged)
 	}
+}
+
+func normalizeRunMetadataActor(raw string) (string, error) {
+	actor := strings.TrimSpace(raw)
+	if actor == "" {
+		return "api", nil
+	}
+	if !utf8.ValidString(actor) {
+		return "", fmt.Errorf("X-Actor-ID must be valid UTF-8")
+	}
+	if utf8.RuneCountInString(actor) > types.MaxRunMetadataSetByRunes {
+		return "", fmt.Errorf("X-Actor-ID exceeds %d runes", types.MaxRunMetadataSetByRunes)
+	}
+	return actor, nil
 }
 
 // applyRunMetadataInput merges a public API patch. Unlike the UI-private golden

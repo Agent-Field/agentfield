@@ -59,6 +59,9 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 		if _, err := applyRunMetadataInput(types.RunMetadata{}, *req.RunMetadata); err != nil {
 			return nil, fmt.Errorf("invalid run_metadata: %w", err)
 		}
+		if _, err := normalizeRunMetadataActor(pointerValue(headers.actorID)); err != nil {
+			return nil, fmt.Errorf("invalid run_metadata: %w", err)
+		}
 	}
 
 	var (
@@ -306,9 +309,10 @@ func (c *executionController) persistExecuteRunMetadata(ctx context.Context, run
 	if !ok {
 		return
 	}
-	actor := "api"
-	if actorID != nil && strings.TrimSpace(*actorID) != "" {
-		actor = strings.TrimSpace(*actorID)
+	actor, err := normalizeRunMetadataActor(pointerValue(actorID))
+	if err != nil {
+		logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to persist execute run metadata")
+		return
 	}
 	if err := writer.UpdateWorkflowRunMetadata(ctx, runID, func(namespaces map[string]json.RawMessage) error {
 		current := types.RunMetadata{}
@@ -326,6 +330,13 @@ func (c *executionController) persistExecuteRunMetadata(ctx context.Context, run
 	}); err != nil {
 		logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to persist execute run metadata")
 	}
+}
+
+func pointerValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // findReplayHit returns a previously-succeeded child output to reuse for the

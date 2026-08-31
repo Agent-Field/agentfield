@@ -29,7 +29,7 @@ The control plane exposes synchronous and asynchronous execution endpoints:
 
 The control plane stores `input` and `context` together in `executions.input_payload` and includes `context` in replay matching. It inspects the reserved context keys `llm_endpoint`, `llm_backend`, `backend`, `provider`, and `model_provider` for LLM-endpoint gating. For external ARD targets it also interprets `operation` for policy enforcement and forwards the complete context object verbatim to the external endpoint.
 
-`run_metadata` is ignored on child executes and excluded from replay matching.
+`run_metadata` is ignored on child executes and excluded from replay matching. On a root execute that carries `run_metadata`, `X-Actor-ID` supplies its bounded `set_by` value and may contain at most 200 Unicode code points.
 
 `context` is never delivered to a local agent node: local dispatch sends only `input`. The Python, Go, and TypeScript execute helpers currently serialize only `input`, so callers that need these control-plane fields must use the REST endpoint directly. The restart helper is the exception and can send restart context.
 

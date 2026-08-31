@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,8 +83,36 @@ func TestUpdateWorkflowRunMetadataConcurrentFirstWritesPreserveBothNamespaces(t 
 	require.Equal(t, `{ "kind" : "fork" }`, string(namespaces["lineage"]))
 }
 
-func TestUpdateWorkflowRunMetadataConcurrentFirstWritesPostgres(t *testing.T) {
-	t.Skip("no live PostgreSQL integration harness is available in the storage test suite")
+func TestUpdateWorkflowRunMetadataPostgresLocksAndMerges(t *testing.T) {
+	state := &scriptedSQLState{
+		execs: []scriptedExecResponse{{result: driver.RowsAffected(0)}, {result: driver.RowsAffected(1)}},
+		queries: []scriptedQueryResponse{{
+			columns: []string{"metadata"},
+			rows:    [][]driver.Value{{`{"lineage":{"kind":"fork"}}`}},
+		}},
+	}
+	db := openScriptedSQLDB(t, state)
+	store := &LocalStorage{db: newSQLDatabase(db, "postgres"), mode: "postgres"}
+	require.NoError(t, store.UpdateWorkflowRunMetadata(context.Background(), "run-postgres", func(metadata map[string]json.RawMessage) error {
+		metadata[types.RunMetadataNamespace] = json.RawMessage(`{"display_name":"Release"}`)
+		return nil
+	}))
+	state.assertConsumed(t)
+
+	state.mu.Lock()
+	executedQueries := append([]string(nil), state.executedQueries...)
+	queriedQueries := append([]string(nil), state.queriedQueries...)
+	executedArgs := append([][]driver.NamedValue(nil), state.executedArgs...)
+	state.mu.Unlock()
+	require.Len(t, executedQueries, 2)
+	require.Contains(t, executedQueries[0], "ON CONFLICT(run_id) DO NOTHING")
+	require.Contains(t, executedQueries[0], "$1")
+	require.Contains(t, executedQueries[1], "UPDATE workflow_runs SET metadata = $1")
+	require.Len(t, queriedQueries, 1)
+	require.True(t, strings.HasSuffix(strings.TrimSpace(queriedQueries[0]), "FOR UPDATE"), queriedQueries[0])
+	require.Contains(t, queriedQueries[0], "$1")
+	require.Len(t, executedArgs, 2)
+	require.JSONEq(t, `{"lineage":{"kind":"fork"},"run":{"display_name":"Release"}}`, executedArgs[1][0].Value.(string))
 }
 
 func TestUpdateWorkflowRunMetadataRejectsInvalidCallsAndRollsBack(t *testing.T) {

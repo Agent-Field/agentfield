@@ -129,8 +129,7 @@ type workflowRunMetadataReader interface {
 }
 
 type workflowRunMetadataWriter interface {
-	StoreWorkflowRun(ctx context.Context, run *types.WorkflowRun) error
-	GetWorkflowRun(ctx context.Context, runID string) (*types.WorkflowRun, error)
+	UpdateWorkflowRunMetadata(context.Context, string, func(map[string]json.RawMessage) error) error
 }
 
 type saveGoldenRunRequest struct {
@@ -276,47 +275,26 @@ func (h *WorkflowRunHandler) SaveGoldenRunHandler(c *gin.Context) {
 		return
 	}
 
-	now := time.Now().UTC()
 	name := truncateRunes(strings.TrimSpace(req.Name), maxGoldenNameRunes)
 	if name == "" {
 		// Do not truncate the run ID fallback; only the caller-supplied name is bounded.
 		name = runID
 	}
-	metadata := map[string]interface{}{}
-	if existing, err := store.GetWorkflowRun(ctx, runID); err == nil && existing != nil {
-		metadata = decodeWorkflowRunMetadata(existing.Metadata)
-	}
-	metadata["golden"] = GoldenRunMetadata{
+	now := time.Now().UTC()
+	golden, err := json.Marshal(GoldenRunMetadata{
 		Name:    name,
 		Tags:    sanitizeStringList(req.Tags, maxGoldenTags, maxGoldenTagRunes),
 		SavedBy: "user",
 		SavedAt: now.Format(time.RFC3339),
-	}
-	encoded, err := json.Marshal(metadata)
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode golden metadata"})
 		return
 	}
-
-	rootExecutionID := executions[0].ExecutionID
-	for _, exec := range executions {
-		if exec.ParentExecutionID == nil || *exec.ParentExecutionID == "" {
-			rootExecutionID = exec.ExecutionID
-			break
-		}
-	}
-	run := &types.WorkflowRun{
-		RunID:           runID,
-		RootWorkflowID:  runID,
-		RootExecutionID: &rootExecutionID,
-		Status:          string(types.ExecutionStatusSucceeded),
-		TotalSteps:      len(executions),
-		CompletedSteps:  len(executions),
-		Metadata:        json.RawMessage(encoded),
-		CreatedAt:       executions[0].StartedAt,
-		UpdatedAt:       now,
-	}
-	if err := store.StoreWorkflowRun(ctx, run); err != nil {
+	if err := store.UpdateWorkflowRunMetadata(ctx, runID, func(namespaces map[string]json.RawMessage) error {
+		namespaces["golden"] = golden
+		return nil
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save golden run"})
 		return
 	}

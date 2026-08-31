@@ -11,12 +11,13 @@ import (
 const RunMetadataNamespace = "run"
 
 const (
-	MaxRunDisplayNameRunes = 200
-	MaxRunLabels           = 20
-	MaxRunLabelRunes       = 64
-	MaxRunLinks            = 10
-	MaxRunLinkLabelRunes   = 64
-	MaxRunLinkURLBytes     = 2048
+	MaxRunDisplayNameRunes   = 200
+	MaxRunLabels             = 20
+	MaxRunLabelRunes         = 64
+	MaxRunLinks              = 10
+	MaxRunLinkLabelRunes     = 64
+	MaxRunLinkURLBytes       = 2048
+	MaxRunMetadataSetByRunes = 200
 )
 
 type RunMetadataLink struct {

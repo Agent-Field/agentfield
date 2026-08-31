@@ -428,9 +428,15 @@ func TestWorkflowRunHandlerSaveGoldenRunPreservesLineageMetadata(t *testing.T) {
 	durationMS := int64(3000)
 
 	require.NoError(t, ls.StoreWorkflowRun(ctx, &types.WorkflowRun{
-		RunID:           runID,
-		RootExecutionID: &rootExecutionID,
-		Status:          string(types.ExecutionStatusSucceeded),
+		RunID:             runID,
+		RootWorkflowID:    "root-workflow",
+		RootExecutionID:   &rootExecutionID,
+		Status:            string(types.ExecutionStatusFailed),
+		TotalSteps:        9,
+		CompletedSteps:    6,
+		FailedSteps:       3,
+		StateVersion:      17,
+		LastEventSequence: 23,
 		Metadata: json.RawMessage(`{
 			"lineage": {
 				"kind": "fork",
@@ -439,7 +445,8 @@ func TestWorkflowRunHandlerSaveGoldenRunPreservesLineageMetadata(t *testing.T) {
 				"restarted_execution_id": "exec-source-root",
 				"reuse": "succeeded-before",
 				"scope": "workflow"
-			}
+			},
+			"run": {"display_name":"Release","labels":["important"]}
 		}`),
 		CreatedAt: now,
 		UpdatedAt: completed,
@@ -504,6 +511,14 @@ func TestWorkflowRunHandlerSaveGoldenRunPreservesLineageMetadata(t *testing.T) {
 	metadata := decodeWorkflowRunMetadata(run.Metadata)
 	require.Contains(t, metadata, "lineage")
 	require.Contains(t, metadata, "golden")
+	require.Contains(t, metadata, "run")
+	require.Equal(t, "root-workflow", run.RootWorkflowID)
+	require.Equal(t, string(types.ExecutionStatusFailed), run.Status)
+	require.Equal(t, 9, run.TotalSteps)
+	require.Equal(t, 6, run.CompletedSteps)
+	require.Equal(t, 3, run.FailedSteps)
+	require.Equal(t, int64(17), run.StateVersion)
+	require.Equal(t, int64(23), run.LastEventSequence)
 }
 
 func TestSanitizeStringListBounds(t *testing.T) {
