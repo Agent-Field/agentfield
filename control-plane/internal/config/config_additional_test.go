@@ -690,8 +690,9 @@ func TestOrphanReapEnabledParsing(t *testing.T) {
 			cfg := Config{}
 			ApplyDefaults(&cfg)
 			ApplyEnvOverrides(&cfg)
-			if cfg.AgentField.NodeHealth.AgentOrphanReapEnabled != tt.want {
-				t.Fatalf("expected %t for %q, got %t", tt.want, tt.value, cfg.AgentField.NodeHealth.AgentOrphanReapEnabled)
+			got := cfg.AgentField.NodeHealth.EffectiveAgentOrphanReapEnabled()
+			if got != tt.want {
+				t.Fatalf("expected %t for %q, got %t", tt.want, tt.value, got)
 			}
 			if got := strings.Contains(logs.String(), "invalid AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED=\"maybe\""); got != tt.warn {
 				t.Fatalf("warning presence = %t, want %t; logs: %s", got, tt.warn, logs.String())
@@ -710,16 +711,17 @@ func TestOrphanReapEnabledYAMLFalseIsPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.AgentField.NodeHealth.AgentOrphanReapEnabled {
+	if cfg.AgentField.NodeHealth.EffectiveAgentOrphanReapEnabled() {
 		t.Fatal("expected explicit YAML false to be preserved")
+	}
+	if cfg.AgentField.NodeHealth.AgentOrphanReapEnabled == nil {
+		t.Fatal("expected explicit YAML false to retain presence")
 	}
 }
 
 // TestOrphanReapEnabledViperFalseIsPreserved covers the loader the shipped
-// binaries actually use: viper decodes via mapstructure, so the yaml.v3
-// UnmarshalYAML hook never runs and key presence has to come from viper's
-// own IsSet. Without that, an explicit `false` would be indistinguishable
-// from "unset" and ApplyDefaults would silently flip it back to true.
+// binaries actually use. The pointer retains key presence through mapstructure
+// so ApplyDefaults can distinguish an explicit false from an omitted value.
 func TestOrphanReapEnabledViperFalseIsPreserved(t *testing.T) {
 	v := viper.New()
 	v.SetConfigType("yaml")
@@ -730,17 +732,16 @@ func TestOrphanReapEnabledViperFalseIsPreserved(t *testing.T) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	MarkExecutionCleanupEnabledIfSet(v, &cfg)
 	ApplyDefaults(&cfg)
-	if cfg.AgentField.NodeHealth.AgentOrphanReapEnabled {
+	if cfg.AgentField.NodeHealth.EffectiveAgentOrphanReapEnabled() {
 		t.Fatal("expected explicit viper false to survive ApplyDefaults")
+	}
+	if cfg.AgentField.NodeHealth.AgentOrphanReapEnabled == nil {
+		t.Fatal("expected Viper to retain explicit false presence")
 	}
 }
 
-// TestNodeHealthUnmarshalYAMLRejectsNonMapping pins the decode-error path of
-// the custom unmarshaller: a scalar where a mapping belongs must surface as a
-// config error rather than being silently ignored.
-func TestNodeHealthUnmarshalYAMLRejectsNonMapping(t *testing.T) {
+func TestNodeHealthYAMLRejectsNonMapping(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agentfield.yaml")
 	if err := os.WriteFile(path, []byte("agentfield:\n  node_health: 5\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)

@@ -16,19 +16,20 @@ func TestConfigureAgentRestartSettingsLogsWhenOrphanReapDisabled(t *testing.T) {
 	t.Cleanup(func() { handlers.SetAgentOrphanReapEnabled(previous) })
 	logs := captureServerLogger(t, zerolog.DebugLevel)
 
-	configureAgentRestartSettings(config.NodeHealthConfig{AgentOrphanReapEnabled: false})
+	disabled := false
+	configureAgentRestartSettings(config.NodeHealthConfig{AgentOrphanReapEnabled: &disabled})
 
 	require.False(t, handlers.AgentOrphanReapEnabled())
 	require.Contains(t, logs.String(), "agent orphan reap on re-registration is disabled")
 	require.Equal(t, 1, strings.Count(logs.String(), "agent orphan reap on re-registration is disabled"))
 }
 
-func TestConfigureAgentRestartSettingsDoesNotWarnWhenOrphanReapEnabled(t *testing.T) {
+func TestConfigureAgentRestartSettingsZeroValueDefaultsOrphanReapEnabled(t *testing.T) {
 	previous := handlers.AgentOrphanReapEnabled()
 	t.Cleanup(func() { handlers.SetAgentOrphanReapEnabled(previous) })
 	logs := captureServerLogger(t, zerolog.DebugLevel)
 
-	configureAgentRestartSettings(config.NodeHealthConfig{AgentOrphanReapEnabled: true})
+	configureAgentRestartSettings(config.NodeHealthConfig{})
 
 	require.True(t, handlers.AgentOrphanReapEnabled())
 	require.NotContains(t, logs.String(), "agent orphan reap on re-registration is disabled")
@@ -50,15 +51,14 @@ func TestConfigureAgentRestartSettingsAppliesGraceWindows(t *testing.T) {
 	})
 
 	configureAgentRestartSettings(config.NodeHealthConfig{
-		AgentRestartGrace:      7 * time.Second,
-		AgentDrainGrace:        11 * time.Second,
-		AgentOrphanReapEnabled: true,
+		AgentRestartGrace: 7 * time.Second,
+		AgentDrainGrace:   11 * time.Second,
 	})
 	require.Equal(t, 7*time.Second, handlers.AgentRestartGrace())
 	require.Equal(t, 11*time.Second, handlers.AgentDrainGrace())
 
 	// Zero means "leave the configured value alone", not "reset to zero".
-	configureAgentRestartSettings(config.NodeHealthConfig{AgentOrphanReapEnabled: true})
+	configureAgentRestartSettings(config.NodeHealthConfig{})
 	require.Equal(t, 7*time.Second, handlers.AgentRestartGrace())
 	require.Equal(t, 11*time.Second, handlers.AgentDrainGrace())
 }

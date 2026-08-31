@@ -146,8 +146,9 @@ func configureAgentRestartSettings(nodeHealth config.NodeHealthConfig) {
 	if grace := nodeHealth.AgentDrainGrace; grace != 0 {
 		handlers.SetAgentDrainGrace(grace)
 	}
-	handlers.SetAgentOrphanReapEnabled(nodeHealth.AgentOrphanReapEnabled)
-	if !nodeHealth.AgentOrphanReapEnabled {
+	orphanReapEnabled := nodeHealth.EffectiveAgentOrphanReapEnabled()
+	handlers.SetAgentOrphanReapEnabled(orphanReapEnabled)
+	if !orphanReapEnabled {
 		logger.Logger.Warn().Msg("agent orphan reap on re-registration is disabled (AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED=false); in-flight executions of a departing instance are left to the stale-execution sweep")
 	}
 	logger.Logger.Info().

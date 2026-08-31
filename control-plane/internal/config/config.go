@@ -219,27 +219,17 @@ type NodeHealthConfig struct {
 	// AgentOrphanReapEnabled controls whether a replacement registration marks
 	// the departing instance's in-flight executions orphaned. Default true.
 	// Set false for deployments running replicas>1 behind one node id, where a
-	// sibling replica registering is indistinguishable from a replacement.
-	AgentOrphanReapEnabled    bool `yaml:"agent_orphan_reap_enabled" mapstructure:"agent_orphan_reap_enabled"`
-	agentOrphanReapEnabledSet bool `yaml:"-" mapstructure:"-"`
+	// sibling replica registering is indistinguishable from a replacement. A
+	// pointer preserves the distinction between omitted (default true) and an
+	// explicit false across YAML, Viper, database overlays, and programmatic use.
+	AgentOrphanReapEnabled *bool `yaml:"agent_orphan_reap_enabled" mapstructure:"agent_orphan_reap_enabled"`
 }
 
-// UnmarshalYAML records whether agent_orphan_reap_enabled was explicitly
-// configured, including the otherwise indistinguishable false value.
-func (c *NodeHealthConfig) UnmarshalYAML(node *yaml.Node) error {
-	type plain NodeHealthConfig
-	var decoded plain
-	if err := node.Decode(&decoded); err != nil {
-		return err
-	}
-	*c = NodeHealthConfig(decoded)
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == "agent_orphan_reap_enabled" {
-			c.agentOrphanReapEnabledSet = true
-			break
-		}
-	}
-	return nil
+// EffectiveAgentOrphanReapEnabled applies the documented zero-value default
+// for callers that construct NodeHealthConfig directly instead of using a
+// config loader.
+func (c NodeHealthConfig) EffectiveAgentOrphanReapEnabled() bool {
+	return c.AgentOrphanReapEnabled == nil || *c.AgentOrphanReapEnabled
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
@@ -284,9 +274,6 @@ func MarkExecutionCleanupEnabledConfigured(cfg *Config) {
 func MarkExecutionCleanupEnabledIfSet(v *viper.Viper, cfg *Config) {
 	if v.IsSet("agentfield.execution_cleanup.enabled") {
 		MarkExecutionCleanupEnabledConfigured(cfg)
-	}
-	if v.IsSet("agentfield.node_health.agent_orphan_reap_enabled") {
-		cfg.AgentField.NodeHealth.agentOrphanReapEnabledSet = true
 	}
 }
 
@@ -608,8 +595,9 @@ func LoadConfig(configPath string) (*Config, error) {
 // ApplyDefaults fills values that should be stable across config loaders.
 func ApplyDefaults(cfg *Config) {
 	nodeHealth := &cfg.AgentField.NodeHealth
-	if !nodeHealth.agentOrphanReapEnabledSet && !nodeHealth.AgentOrphanReapEnabled {
-		nodeHealth.AgentOrphanReapEnabled = true
+	if nodeHealth.AgentOrphanReapEnabled == nil {
+		enabled := true
+		nodeHealth.AgentOrphanReapEnabled = &enabled
 	}
 	cleanup := &cfg.AgentField.ExecutionCleanup
 	// Cleanup is enabled by default so stale executions are still swept even
@@ -805,7 +793,7 @@ func ApplyEnvOverrides(cfg *Config) {
 			cfg.AgentField.NodeHealth.AgentDrainGrace = d
 		}
 	}
-	applyBoolEnv("AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED", &cfg.AgentField.NodeHealth.AgentOrphanReapEnabled)
+	applyOptionalBoolEnv("AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED", &cfg.AgentField.NodeHealth.AgentOrphanReapEnabled)
 
 	// LLM health monitoring overrides
 	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_ENABLED"); val != "" {
@@ -1077,6 +1065,24 @@ func applyBoolEnv(name string, target *bool) bool {
 		return true
 	}
 	return false
+}
+
+func applyOptionalBoolEnv(name string, target **bool) bool {
+	value := os.Getenv(name)
+	if value == "" {
+		return false
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		current := true
+		if *target != nil {
+			current = **target
+		}
+		log.Printf("warning: invalid %s=%q: %v; keeping %t", name, value, err, current)
+		return true
+	}
+	*target = &parsed
+	return true
 }
 
 func parseEnvBool(value string) bool {

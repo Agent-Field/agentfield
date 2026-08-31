@@ -44,6 +44,12 @@ func overlayDBConfig(cfg *config.Config, store storage.StorageProvider) error {
 	// Restore storage config (never overridden from DB)
 	cfg.Storage = savedStorage
 
+	// The command loaders apply environment variables before server construction,
+	// while the database overlay necessarily happens during construction. Reapply
+	// them here so the documented env > DB precedence remains true, including on
+	// runtime config reloads.
+	config.ApplyEnvOverrides(cfg)
+
 	fmt.Printf("[config] Loaded config from database (key: %s, version: %d, updated: %s)\n",
 		entry.Key, entry.Version, entry.UpdatedAt.Format(time.RFC3339))
 	return nil
@@ -56,9 +62,7 @@ func mergeDBConfig(target, dbCfg *config.Config) {
 	if dbCfg.AgentField.Port != 0 {
 		target.AgentField.Port = dbCfg.AgentField.Port
 	}
-	if dbCfg.AgentField.NodeHealth.CheckInterval != 0 {
-		target.AgentField.NodeHealth = dbCfg.AgentField.NodeHealth
-	}
+	mergeDBNodeHealthConfig(&target.AgentField.NodeHealth, dbCfg.AgentField.NodeHealth)
 	// ARD exposure is intentionally not merged from DB config. File/env config
 	// defines the deployment guardrails; runtime opt-in state lives in ard.state.
 	// Merge execution cleanup field-by-field to avoid zeroing out unset fields
@@ -133,5 +137,33 @@ func mergeDBConfig(target, dbCfg *config.Config) {
 	// UI settings
 	if dbCfg.UI.Mode != "" {
 		target.UI = dbCfg.UI
+	}
+}
+
+func mergeDBNodeHealthConfig(target *config.NodeHealthConfig, dbCfg config.NodeHealthConfig) {
+	if dbCfg.CheckInterval != 0 {
+		target.CheckInterval = dbCfg.CheckInterval
+	}
+	if dbCfg.CheckTimeout != 0 {
+		target.CheckTimeout = dbCfg.CheckTimeout
+	}
+	if dbCfg.ConsecutiveFailures != 0 {
+		target.ConsecutiveFailures = dbCfg.ConsecutiveFailures
+	}
+	if dbCfg.RecoveryDebounce != 0 {
+		target.RecoveryDebounce = dbCfg.RecoveryDebounce
+	}
+	if dbCfg.HeartbeatStaleThreshold != 0 {
+		target.HeartbeatStaleThreshold = dbCfg.HeartbeatStaleThreshold
+	}
+	if dbCfg.AgentRestartGrace != 0 {
+		target.AgentRestartGrace = dbCfg.AgentRestartGrace
+	}
+	if dbCfg.AgentDrainGrace != 0 {
+		target.AgentDrainGrace = dbCfg.AgentDrainGrace
+	}
+	if dbCfg.AgentOrphanReapEnabled != nil {
+		enabled := *dbCfg.AgentOrphanReapEnabled
+		target.AgentOrphanReapEnabled = &enabled
 	}
 }
