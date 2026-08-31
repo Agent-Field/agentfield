@@ -22,6 +22,7 @@ import (
 func (s *AgentFieldServer) registerPublicRoutes() {
 	s.Router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	s.Router.GET("/health", s.healthCheckHandler)
+	s.Router.GET("/readyz", s.readinessHandler)
 }
 
 // registerCoreRoutes installs the core agent-facing REST surface under
@@ -29,6 +30,7 @@ func (s *AgentFieldServer) registerPublicRoutes() {
 func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// Health check endpoint for container orchestration
 	agentAPI.GET("/health", s.healthCheckHandler)
+	agentAPI.GET("/health/ready", s.readinessHandler)
 	agentAPI.GET("/version", s.versionHandler)
 
 	// Apply global rate limiting if enabled
@@ -273,6 +275,23 @@ func (s *AgentFieldServer) healthCheckHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, healthStatus)
+}
+
+// readinessHandler answers Kubernetes readiness probes. It reports the same
+// dependency checks as healthCheckHandler, except that once BeginDrain has
+// run it answers 503 unconditionally so kube-proxy removes this pod from the
+// Service endpoints while the listener is still accepting and completing
+// requests.
+func (s *AgentFieldServer) readinessHandler(c *gin.Context) {
+	if s.IsDraining() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status":    "draining",
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+			"version":   buildVersion,
+		})
+		return
+	}
+	s.healthCheckHandler(c)
 }
 
 type hostingInfo struct {

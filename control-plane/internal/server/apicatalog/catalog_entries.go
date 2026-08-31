@@ -7,6 +7,8 @@ func DefaultEntries() []EndpointEntry {
 		// --- Health ---
 		{Method: "GET", Path: "/health", Group: "health", Summary: "Server health check", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
 		{Method: "GET", Path: "/api/v1/health", Group: "health", Summary: "API health check", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
+		{Method: "GET", Path: "/readyz", Group: "health", Summary: "Shutdown-aware readiness probe", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
+		{Method: "GET", Path: "/api/v1/health/ready", Group: "health", Summary: "Shutdown-aware API readiness probe", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
 		{Method: "GET", Path: "/metrics", Group: "health", Summary: "Prometheus metrics", AuthLevel: "public", Tags: []string{"metrics", "monitoring", "prometheus"}},
 
 		// --- Discovery ---
