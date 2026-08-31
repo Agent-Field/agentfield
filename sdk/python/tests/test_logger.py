@@ -373,8 +373,11 @@ def test_structured_mirror_serializes_large_string_payload_at_most_once(monkeypa
     real_dumps = logger_module.json.dumps
 
     def counting_dumps(obj, **kwargs):
-        calls.append(obj)
-        return real_dumps(obj, **kwargs)
+        result = real_dumps(obj, **kwargs)
+        # Classify by OUTPUT size: the redundant call this guards against
+        # serializes the whole record, not the oversized string itself.
+        calls.append(len(result))
+        return result
 
     monkeypatch.setattr(logger_module.json, "dumps", counting_dumps)
     record = {
@@ -387,14 +390,7 @@ def test_structured_mirror_serializes_large_string_payload_at_most_once(monkeypa
     line = stream.getvalue().rstrip("\n")
     json.loads(line)
     assert len(line.encode("utf-8")) <= budget
-    assert (
-        sum(
-            1
-            for obj in calls
-            if isinstance(obj, str) and len(obj) >= 1_000_000
-        )
-        == 1
-    )
+    assert sum(1 for size in calls if size >= 1_000_000) == 1
     assert record["attributes"]["payload"] == "x" * 5_000_000
 
 
@@ -402,14 +398,21 @@ def test_structured_mirror_serializes_large_string_payload_at_most_once(monkeypa
 def test_structured_mirror_fitting_nested_record_is_not_walked_recursively(
     monkeypatch,
 ):
+    walked = []
+
     class _TripwireStr(str):
         """A nested string a recursive precheck would touch; json.dumps does not."""
 
-        def isascii(self):  # pragma: no cover - the assertion below is the point
-            raise AssertionError("precheck walked into a nested value")
+        # Recording rather than raising is deliberate: _certainly_exceeds_budget
+        # swallows every exception and falls back to the full-dumps path, so a
+        # raising tripwire would be invisible to the caller.
+        def isascii(self):
+            walked.append("isascii")
+            return str.isascii(self)
 
-        def __len__(self):  # pragma: no cover
-            raise AssertionError("precheck walked into a nested value")
+        def __len__(self):
+            walked.append("len")
+            return str.__len__(self)
 
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "16384")
     stream = io.StringIO()
@@ -429,6 +432,7 @@ def test_structured_mirror_fitting_nested_record_is_not_walked_recursively(
     line = stream.getvalue().rstrip("\n")
     mirrored = json.loads(line)
     assert line == expected
+    assert walked == []
     assert len(mirrored["attributes"]["rows"]) == 700
 
 
@@ -446,9 +450,7 @@ def test_structured_mirror_non_string_attribute_keys_have_exact_sizes(monkeypatc
 
     stream.seek(0)
     stream.truncate(0)
-    logger._emit_structured_record(
-        {"message": "z" * 100_000, "attributes": attributes}
-    )
+    logger._emit_structured_record({"message": "z" * 100_000, "attributes": attributes})
     line = stream.getvalue().rstrip("\n")
     attributes_size = len(
         json.dumps(attributes, ensure_ascii=False, separators=(",", ":"), default=str)
