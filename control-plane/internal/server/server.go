@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
@@ -116,6 +117,7 @@ type AgentFieldServer struct {
 	httpServerMu      sync.RWMutex
 	httpServer        *http.Server
 	stopping          bool
+	draining          atomic.Bool
 	streamCtx         context.Context
 	cancelStreams     context.CancelFunc
 	cancelStreamsOnce sync.Once
@@ -911,6 +913,7 @@ func (s *AgentFieldServer) ListReasoners(ctx context.Context, _ *adminpb.ListRea
 
 // Stop gracefully shuts down the AgentFieldServer.
 func (s *AgentFieldServer) Stop() error {
+	s.BeginDrain()
 	s.httpServerMu.Lock()
 	s.stopping = true
 	s.httpServerMu.Unlock()
@@ -1031,6 +1034,20 @@ func (s *AgentFieldServer) Stop() error {
 
 	// TODO: Implement graceful shutdown for WebSocket
 	return httpShutdownErr
+}
+
+// BeginDrain marks the control plane as shutting down so readiness probes
+// start failing while the HTTP listener is still open and still serving. It
+// is safe to call more than once and never blocks. Liveness (/health,
+// /api/v1/health) is deliberately untouched: the process is alive and must
+// not be killed by the kubelet mid-drain.
+func (s *AgentFieldServer) BeginDrain() {
+	s.draining.Store(true)
+}
+
+// IsDraining reports whether shutdown draining has begun.
+func (s *AgentFieldServer) IsDraining() bool {
+	return s.draining.Load()
 }
 
 func (s *AgentFieldServer) streamHandler(handler gin.HandlerFunc) gin.HandlerFunc {

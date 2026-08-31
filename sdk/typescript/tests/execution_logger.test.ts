@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Agent } from '../src/agent/Agent.js';
 import { AgentFieldClient } from '../src/client/AgentFieldClient.js';
 import { ExecutionContext, type ExecutionMetadata } from '../src/context/ExecutionContext.js';
@@ -8,8 +8,108 @@ import {
 } from '../src/observability/ExecutionLogger.js';
 
 describe('ExecutionLogger', () => {
+  beforeEach(() => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', undefined);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it.each(['false', 'FALSE', '  False  ', '0', 'no', 'off'])(
+    'disables stdout mirroring for AGENTFIELD_LOG_STDOUT=%j without disabling transport',
+    (value) => {
+      vi.stubEnv('AGENTFIELD_LOG_STDOUT', value);
+      const write = vi.fn();
+      const emit = vi.fn();
+      const logger = createExecutionLogger({
+        contextProvider: () => ({ executionId: 'exec-env-off' }),
+        stdout: { write },
+        transport: { emit }
+      });
+
+      logger.info('still dispatched');
+
+      expect(write).not.toHaveBeenCalled();
+      expect(emit).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each([undefined, '', 'true', '1', 'yes', 'on', 'ture'])(
+    'keeps stdout mirroring enabled for AGENTFIELD_LOG_STDOUT=%j',
+    (value) => {
+      if (value === undefined) {
+        vi.stubEnv('AGENTFIELD_LOG_STDOUT', undefined);
+      } else {
+        vi.stubEnv('AGENTFIELD_LOG_STDOUT', value);
+      }
+      const write = vi.fn();
+      const logger = createExecutionLogger({ stdout: { write } });
+
+      logger.info('mirrored');
+
+      expect(write).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each([
+    { option: true, env: 'false', expectedWrites: 1 },
+    { option: false, env: 'true', expectedWrites: 0 }
+  ])('lets mirrorToStdout=$option override AGENTFIELD_LOG_STDOUT=$env', ({ option, env, expectedWrites }) => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', env);
+    const write = vi.fn();
+    const logger = createExecutionLogger({ mirrorToStdout: option, stdout: { write } });
+
+    logger.info('explicit override');
+
+    expect(write).toHaveBeenCalledTimes(expectedWrites);
+  });
+
+  it('does not serialize the record when the mirror is disabled', () => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', 'false');
+    let serialized = false;
+    const emit = vi.fn();
+    const logger = createExecutionLogger({
+      contextProvider: () => ({ executionId: 'exec-no-serialize' }),
+      stdout: { write: vi.fn() },
+      transport: { emit }
+    });
+
+    logger.info('disabled', {
+      payload: {
+        toJSON: () => {
+          serialized = true;
+          return 'x';
+        }
+      }
+    });
+
+    expect(serialized).toBe(false);
+    expect(emit).toHaveBeenCalledOnce();
+  });
+
+  it('re-reads AGENTFIELD_LOG_STDOUT between emits on the same logger', () => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', 'true');
+    const write = vi.fn();
+    const logger = createExecutionLogger({ stdout: { write } });
+
+    logger.info('first');
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', 'off');
+    logger.info('second');
+
+    expect(write).toHaveBeenCalledOnce();
+  });
+
+  it('does not assume process exists when resolving stdout mirroring', () => {
+    const write = vi.fn();
+    const logger = createExecutionLogger({ stdout: { write } });
+    vi.stubGlobal('process', undefined);
+
+    logger.info('browser-safe');
+
+    expect(write).toHaveBeenCalledOnce();
   });
 
   it('serializes execution context to the backend envelope and mirrors to stdout', () => {
@@ -138,8 +238,24 @@ describe('ExecutionLogger', () => {
 });
 
 describe('Agent execution logging', () => {
+  beforeEach(() => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', undefined);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('honors AGENTFIELD_LOG_STDOUT through the Agent construction path', () => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', 'false');
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const agent = new Agent({ nodeId: 'local', devMode: true });
+
+    agent.getExecutionLogger().info('not mirrored');
+
+    expect(write).not.toHaveBeenCalled();
   });
 
   it('emits structured runtime logs for a local reasoner execution', async () => {

@@ -7,6 +7,8 @@ func DefaultEntries() []EndpointEntry {
 		// --- Health ---
 		{Method: "GET", Path: "/health", Group: "health", Summary: "Server health check", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
 		{Method: "GET", Path: "/api/v1/health", Group: "health", Summary: "API health check", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
+		{Method: "GET", Path: "/readyz", Group: "health", Summary: "Shutdown-aware readiness probe", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
+		{Method: "GET", Path: "/api/v1/health/ready", Group: "health", Summary: "Shutdown-aware API readiness probe", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
 		{Method: "GET", Path: "/metrics", Group: "health", Summary: "Prometheus metrics", AuthLevel: "public", Tags: []string{"metrics", "monitoring", "prometheus"}},
 
 		// --- Discovery ---
@@ -89,6 +91,12 @@ func DefaultEntries() []EndpointEntry {
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/pause", Group: "executions", Summary: "Pause an execution", AuthLevel: "api_key", Tags: []string{"executions", "pause"}},
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/resume", Group: "executions", Summary: "Resume a paused execution", AuthLevel: "api_key", Tags: []string{"executions", "resume"}},
 		{Method: "POST", Path: "/api/v1/workflows/:workflowId/cancel-tree", Group: "workflows", Summary: "Cancel every non-terminal execution in a run (bottom-up)", AuthLevel: "api_key", Tags: []string{"workflows", "executions", "cancel"}},
+
+		// --- Runs ---
+		{Method: "POST", Path: "/api/v1/runs/:run_id/metadata", Group: "runs", Summary: "Set run display name, labels and links", AuthLevel: "api_key", Tags: []string{"runs", "metadata", "labels"},
+			Parameters:  []ParamEntry{{Name: "run_id", In: "path", Required: true, Type: "string", Desc: "Run ID"}},
+			RequestBody: &BodyEntry{ContentType: "application/json", Fields: map[string]string{"display_name": "string|null", "labels": "string[]|null", "links": "array|null"}},
+		},
 
 		// --- Approval ---
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/request-approval", Group: "approval", Summary: "Request approval for an execution", AuthLevel: "api_key", Tags: []string{"approval", "request"}},

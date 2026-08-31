@@ -116,9 +116,10 @@ The telemetry payload does not include prompts, inputs, outputs, logs, secrets, 
 - `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): Maximum number of asynchronous executions waiting for a worker; non-positive values use the default. Requests arriving once the queue is saturated are rejected with `503`, a `Retry-After` header and a `retry_after` field, and no execution row is persisted for them.
 - `AGENTFIELD_MAX_EXECUTE_BODY_BYTES` (default: `33554432`, 32 MiB): Maximum request body size, in bytes, for POST routes under `/api/v1/execute`. Oversize requests are rejected with `413` before any execution is persisted; other routes are not capped by this setting.
 - `AGENTFIELD_MAX_REGISTER_BODY_BYTES` (default: `8388608`, 8 MiB): Maximum request body size, in bytes, for node registration POST routes (`/api/v1/nodes`, `/api/v1/nodes/register`, and `/api/v1/nodes/register-serverless`). Oversize requests are rejected with `413` before registration handling begins.
-- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control plane HTTP server during shutdown.
+- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control-plane HTTP server. Accepts bare seconds (`30`) and Go duration strings (`30s`, `5m`). The same budget is shared with `StopAsyncWorkerPool`, which is guaranteed a fresh budget of at least 5s, so total shutdown can exceed this value. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
+- `AGENTFIELD_SHUTDOWN_MIN_DELAY` (default: `0`): Control-plane-only delay between SIGTERM/SIGINT and closing the listener; zero preserves existing timing. Accepts bare seconds or a Go duration; invalid or negative values warn and keep the current value. This name is reserved for the control plane so future SDKs do not acquire another dual-meaning shutdown variable. Equivalent YAML: `agentfield.shutdown_min_delay`. It also affects `af server`, the code path the desktop app launches, so a value in `~/.agentfield/agentfield.yaml` slows local Ctrl+C too. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
 - `AGENTFIELD_AGENT_RESTART_GRACE` (default: `15s`): How long an execution waits for an agent process to return during a coordinated restart; a negative duration disables the wait.
-- `AGENTFIELD_AGENT_DRAIN_GRACE` (default: `60s`): How long instance-scoped non-terminal work may keep completing after a replacement agent instance registers, before it is marked `agent_restart_orphaned`. The deferred in-memory timer is lost on a control-plane restart; the stale-execution sweep configured by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` is the backstop. Equivalent YAML: `agentfield.node_health.agent_drain_grace`.
+- `AGENTFIELD_AGENT_DRAIN_GRACE` (default: `60s`): How long instance-scoped non-terminal work may keep completing after a replacement agent instance registers, before it is marked `agent_restart_orphaned`. The deferred in-memory timer is lost on a control-plane restart; the stale-execution sweep configured by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` is the backstop. Equivalent YAML: `agentfield.node_health.agent_drain_grace`. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
 
 For Kubernetes, set `terminationGracePeriodSeconds` above the SDK drain window so the departing pod can return accepted work. Keep the agent `version` stable across rolling updates: changing it creates a separate versioned registration, so its work is recovered only by the stale sweep rather than this re-registration drain timer.
 
@@ -193,9 +194,10 @@ AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT=false
 ### Structured logging (SDKs)
 
 - `AGENTFIELD_LOGS_ENABLED` (default: `true`): Enables Python, Go, and TypeScript agent-node stdout/stderr capture and the `/agentfield/v1/logs` endpoint. This controls capture, not control-plane execution-log dispatch.
+- `AGENTFIELD_LOG_STDOUT` (read by Python, Go, and TypeScript; default: on): Controls whether structured execution records are mirrored to stdout as JSON. Set to `0`, `false`, `no`, or `off` (case-insensitive, surrounding whitespace ignored) to suppress the mirror; control-plane dispatch continues unchanged for records carrying an execution ID. Any other value — including `1`, `true`, `yes`, an unset variable and a set-but-empty one — keeps the mirror on, so a typo cannot silently drop log output. All three SDKs skip control-plane dispatch for a record with no execution id, so such records are stdout-only and disabling the mirror drops them entirely. Because the node-log ring behind `GET /agentfield/v1/logs` is fed by the process's captured stdout, disabling the mirror also removes structured records from that ring.
 - `AGENTFIELD_LOG_TRUNCATE` (Python default: `200` characters): Truncates human-readable plain log messages and visible plain-log payloads. It does not truncate structured records.
 - `AGENTFIELD_LOG_PAYLOADS` (Python default: `false`): Shows payloads in human-readable plain logs when `true`. Structured execution attributes are unaffected.
-- `AGENTFIELD_LOG_MAX_LINE_BYTES` (default: `16384`, minimum: `256`): Maximum emitted process-log line size in bytes. The Go and TypeScript SDKs treat invalid values or values below 256 as unset and use the 16384-byte default. The Python structured stdout mirror elides attributes, then the message or entire record as needed, so every emitted line—including the complete JSON envelope—is valid JSON and fits this cap.
+- `AGENTFIELD_LOG_MAX_LINE_BYTES` (default: `16384`): Maximum process-log line size in bytes. Python clamps every integer below 256 (including zero and negatives) to 256; Go and TypeScript instead reject values below 256 and use the 16384-byte default. Python and Go reject non-integers, while TypeScript prefix-parses them (`512abc` becomes `512`). Thus a value of `100` yields an effective cap of 256 in Python and 16384 in Go and TypeScript: in those two SDKs there is no minimum, only a rejection *upward* to the default, so asking for a smaller cap silently gives you a 64x larger one. In Python this cap applies both to the stdout/stderr tee feeding `/agentfield/v1/logs` and to structured-mirror elision; the mirror elides attributes, then the message or entire record as needed so the complete JSON envelope remains valid JSON within the cap.
 - `AGENTFIELD_LOG_BUFFER_BYTES` (default: `4194304`): Approximate total byte capacity of the in-memory process-log capture ring; oldest entries are discarded when full.
 
 Agent nodes run as separate processes/pods and register with the control plane. The most important Kubernetes-specific concept is:
@@ -218,7 +220,7 @@ Note that this is the **agent-node** meaning of the variable. The control plane 
 
 The Python SDK's equivalent setting is documented under "Python SDK agents" below.
 
-In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` at least 10 seconds higher than `AGENTFIELD_SHUTDOWN_TIMEOUT` to leave room for post-cancel settlement and the control-plane notification before the container is killed.
+In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` at least 15 seconds higher than `AGENTFIELD_SHUTDOWN_TIMEOUT` to cover five seconds of post-cancel settlement and ten seconds of callback/process-exit headroom.
 
 ### Go SDK agents (example: `examples/go_agent_nodes`)
 
@@ -233,7 +235,7 @@ In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` at least 10 s
 - `AGENTFIELD_URL` (recommended): Control plane base URL.
 - `AGENT_NODE_ID` (optional): Node id.
 - `AGENT_CALLBACK_URL` (recommended in Docker/Kubernetes): URL the control plane will call back to (examples: `http://my-agent:8001`, or for host-run agents with Dockerized control plane: `http://host.docker.internal:8001`).
-- `AGENTFIELD_LOG_STDOUT` (optional, default on): Controls whether the Python and Go SDKs mirror structured execution records to stdout as JSON. Set to `0`, `false`, `no` or `off` (case-insensitive, surrounding whitespace ignored) to suppress the mirror; forwarding to the control plane continues unchanged. Any other value — including `1`, `true`, `yes`, an unset variable and a set-but-empty one — keeps the mirror on, so a typo cannot silently drop log output.
+- `AGENTFIELD_LOG_STDOUT`: see "Structured logging (SDKs)" above; it applies to the Python, Go, and TypeScript SDKs alike.
 - `AGENTFIELD_SHUTDOWN_TIMEOUT` (optional, default `30s`): Graceful-shutdown budget for both direct HTTP requests and control-plane-dispatched reasoners. Accepts bare seconds (`30`), seconds (`30s`), or minutes (`5m`). `app.serve(timeout_graceful_shutdown=N)` remains supported and sets both budgets unless this environment variable is explicitly set; when both are set, the `serve()` argument still controls uvicorn's direct-HTTP drain while this variable controls dispatched reasoners.
 - `AGENTFIELD_DISABLE_IP_DETECTION` (optional, default off): Set to `1`, `true` or `yes` (case-insensitive, surrounding whitespace ignored) to stop the Python SDK from probing the cloud metadata services (`169.254.169.254` for AWS/Azure, `metadata.google.internal` for GCP) and `https://api.ipify.org` for the node's public address. On Kubernetes those requests are typically denied by a `NetworkPolicy` and show up as deny-log noise. In detail:
   - **What it disables.** The probe is one step of callback-URL discovery (`_detect_container_ip()`, whose only caller is `_build_callback_candidates()`), and it only runs when the SDK believes it is inside a container — `/.dockerenv` exists, `/proc/1/cgroup` mentions docker/containerd/kubepods, any `KUBERNETES_*` variable is set, or `CONTAINER` / `DOCKER_CONTAINER` / `RAILWAY_ENVIRONMENT` is set. This variable gates that single call site, so with it on the SDK makes no metadata or `api.ipify.org` request on any code path.
@@ -249,7 +251,7 @@ On SIGTERM or a graceful `POST /shutdown`, the node immediately stops heartbeats
 
 `af stop` waits **at least** the node's shutdown budget, not exactly that duration: its total wait also includes the initial HTTP request and, when needed, the signal fallback after the budget expires.
 
-For Kubernetes, set `terminationGracePeriodSeconds` to a value greater than the shutdown budget. This leaves time for the terminal callback and normal process teardown after the reasoner drain. The older `Agent.setup_signal_handlers()` API is retained for compatibility, but `app.serve()` owns the production uvicorn-aware signal lifecycle.
+For Kubernetes, set `terminationGracePeriodSeconds` to a value greater than the shutdown budget. This leaves time for the terminal callback and normal process teardown after the reasoner drain. `app.serve()` owns the production uvicorn-aware signal lifecycle.
 
 ### MiniMax video generation
 
@@ -289,6 +291,19 @@ When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution valu
   harness session. The SDKs set it to `1` for a first-level child and increment
   an inherited numeric value for nested sessions. An explicit per-call `env`
   value wins over the derived depth.
+
+### LLM observability (Python SDK)
+
+- `AGENTFIELD_LITELLM_CALLBACKS`: Comma-separated LiteLLM callback names. When
+  unset or empty, AgentField registers nothing. Setting it also opts into the
+  execution-correlation metadata stamp for `app.ai` text completions.
+- `AGENTFIELD_LITELLM_METADATA=true`: Opt into the execution-correlation stamp
+  without configuring an AgentField-managed callback. Set it to `false` to
+  disable the stamp while retaining callback registration. When neither
+  observability variable is configured, stamping is off.
+
+See [LLM observability](llm-observability.md) for metadata fields, scope, and
+callback behavior.
 
 ### Tracing (control plane)
 

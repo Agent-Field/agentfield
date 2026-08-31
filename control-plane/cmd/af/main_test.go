@@ -124,7 +124,7 @@ func TestDrainOnShutdownRunsStopAfterSignalAndRestoresSignals(t *testing.T) {
 	stops := 0
 	done := make(chan error, 1)
 	go func() {
-		done <- drainOnShutdown(ctx, func() { restored = true }, func() error { stops++; return nil })
+		done <- drainOnShutdown(ctx, func() { restored = true }, nil, 0, func() error { stops++; return nil })
 	}()
 	select {
 	case err := <-done:
@@ -152,7 +152,7 @@ func TestDrainOnShutdownPropagatesStopError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	want := errors.New("drain failed")
-	if err := drainOnShutdown(ctx, nil, func() error { return want }); !errors.Is(err, want) {
+	if err := drainOnShutdown(ctx, nil, nil, 0, func() error { return want }); !errors.Is(err, want) {
 		t.Fatalf("got %v, want %v", err, want)
 	}
 }
@@ -160,7 +160,31 @@ func TestDrainOnShutdownPropagatesStopError(t *testing.T) {
 func TestDrainOnShutdownTreatsTimeoutAsSuccessfulExit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	require.NoError(t, drainOnShutdown(ctx, nil, func() error {
+	require.NoError(t, drainOnShutdown(ctx, nil, nil, 0, func() error {
 		return context.DeadlineExceeded
 	}))
+}
+
+func TestDrainOnShutdownBeginsDrainBeforeMinimumDelayAndStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	drained := false
+	signalsRestored := false
+	require.NoError(t, drainOnShutdown(ctx, func() { signalsRestored = true }, func() {
+		require.True(t, signalsRestored, "signal disposition must be restored before draining")
+		drained = true
+	}, 50*time.Millisecond, func() error {
+		require.True(t, drained)
+		require.GreaterOrEqual(t, time.Since(started), 50*time.Millisecond)
+		return nil
+	}))
+}
+
+func TestDrainOnShutdownZeroDelayStopsImmediately(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	require.NoError(t, drainOnShutdown(ctx, nil, func() {}, 0, func() error { return nil }))
+	require.Less(t, time.Since(started), 40*time.Millisecond)
 }

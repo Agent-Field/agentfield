@@ -21,8 +21,31 @@ from agentfield.node_logs import (
     get_ring,
     install_stdio_tee,
     iter_tail_ndjson,
+    max_line_bytes,
     verify_internal_bearer,
 )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, 16384),
+        ("100", 256),
+        ("0", 256),
+        ("-5", 256),
+        ("abc", 16384),
+        ("512abc", 16384),
+        ("512", 512),
+    ],
+)
+def test_max_line_bytes_pins_python_parsing(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("AGENTFIELD_LOG_MAX_LINE_BYTES", raising=False)
+    else:
+        monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", raw)
+
+    assert max_line_bytes() == expected
 
 
 # ---------------------------------------------------------------------------

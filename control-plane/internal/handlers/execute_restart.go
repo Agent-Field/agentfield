@@ -50,7 +50,7 @@ type restartExecutionResponse struct {
 }
 
 type workflowRunMetadataStore interface {
-	StoreWorkflowRun(ctx context.Context, run *types.WorkflowRun) error
+	UpdateWorkflowRunMetadata(context.Context, string, func(map[string]json.RawMessage) error) error
 }
 
 // RestartExecutionHandler starts a new execution/run from an existing workflow
@@ -151,6 +151,7 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 	}
 
 	target := fmt.Sprintf("%s.%s", restartExec.NodeID, restartExec.ReasonerID)
+	// Restarts mint a new run identity and deliberately leave RunMetadata nil.
 	plan, err := c.prepareExecutionForTarget(reqCtx, target, ExecuteRequest{
 		Input:   input,
 		Context: contextPayload,
@@ -247,40 +248,31 @@ func (c *executionController) persistRestartRunMetadata(ctx context.Context, pla
 	if !ok {
 		return
 	}
-	now := time.Now().UTC()
-	metadata := map[string]interface{}{
-		"lineage": map[string]interface{}{
-			"kind":                   kind,
-			"source_run_id":          sourceExec.RunID,
-			"source_execution_id":    sourceExec.ExecutionID,
-			"restarted_execution_id": restartExec.ExecutionID,
-			"reuse":                  reuse,
-			"scope":                  scope,
-		},
+	lineage := map[string]interface{}{
+		"kind":                   kind,
+		"source_run_id":          sourceExec.RunID,
+		"source_execution_id":    sourceExec.ExecutionID,
+		"restarted_execution_id": restartExec.ExecutionID,
+		"reuse":                  reuse,
+		"scope":                  scope,
 	}
+	var encodedReason json.RawMessage
 	if trimmed := strings.TrimSpace(reason); trimmed != "" {
-		metadata["reason"] = trimmed
+		encodedReason, _ = json.Marshal(trimmed)
 	}
-	encoded, err := json.Marshal(metadata)
+	encoded, err := json.Marshal(lineage)
 	if err != nil {
 		logger.Logger.Warn().Err(err).Str("run_id", plan.exec.RunID).Msg("failed to encode restart run metadata")
 		return
 	}
-	// This workflow_runs row exists only to carry lineage/golden metadata for the
-	// new run; it is the sole writer of this row for restart runs. Status and
-	// TotalSteps are seeded at enqueue time and are NOT kept current as the run
-	// progresses — every UI read path (run list, run detail, DAG) derives live
-	// status and step counts from execution aggregation and only reads the
-	// lineage/golden fields here. Do not treat these columns as authoritative.
-	if err := store.StoreWorkflowRun(ctx, &types.WorkflowRun{
-		RunID:           plan.exec.RunID,
-		RootWorkflowID:  plan.exec.RunID,
-		RootExecutionID: &plan.exec.ExecutionID,
-		Status:          string(types.ExecutionStatusQueued),
-		TotalSteps:      1,
-		Metadata:        json.RawMessage(encoded),
-		CreatedAt:       now,
-		UpdatedAt:       now,
+	if err := store.UpdateWorkflowRunMetadata(ctx, plan.exec.RunID, func(namespaces map[string]json.RawMessage) error {
+		namespaces["lineage"] = encoded
+		if encodedReason != nil {
+			namespaces["reason"] = encodedReason
+		} else {
+			delete(namespaces, "reason")
+		}
+		return nil
 	}); err != nil {
 		logger.Logger.Warn().Err(err).Str("run_id", plan.exec.RunID).Msg("failed to persist restart run metadata")
 	}

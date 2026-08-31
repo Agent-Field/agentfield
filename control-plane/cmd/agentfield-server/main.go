@@ -261,14 +261,27 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Graceful shutdown
 	fmt.Println("\nShutdown signal received, draining connections...")
-	if err := finishShutdown(agentfieldServer.Stop); err != nil {
+	if err := finishShutdown(agentfieldServer.BeginDrain, cfg.AgentField.ShutdownMinDelay, agentfieldServer.Stop); err != nil {
 		log.Printf("Error during shutdown: %v", err)
 		os.Exit(1)
 	}
 	fmt.Println("Server stopped gracefully.")
 }
 
-func finishShutdown(stop func() error) error {
+// finishShutdown flips the server to draining so readiness probes start
+// failing, waits out minDelay while the listener keeps serving, and then runs
+// the server's bounded shutdown sequence. minDelay of 0 skips the wait. It is
+// deliberately called after waitForShutdownFunc has returned: that helper
+// restores the default signal disposition on return, so a second signal
+// received during the wait terminates the process immediately.
+func finishShutdown(beginDrain func(), minDelay time.Duration, stop func() error) error {
+	if beginDrain != nil {
+		beginDrain()
+	}
+	if minDelay > 0 {
+		log.Printf("Waiting %s before closing the listener", minDelay)
+		time.Sleep(minDelay)
+	}
 	err := stop()
 	if errors.Is(err, context.DeadlineExceeded) {
 		log.Printf("Warning: shutdown drain timed out; forced close completed: %v", err)

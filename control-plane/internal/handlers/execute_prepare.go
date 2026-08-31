@@ -55,6 +55,14 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 	if req.Input == nil {
 		req.Input = map[string]interface{}{}
 	}
+	if req.RunMetadata != nil && headers.parentExecutionID == nil {
+		if _, err := applyRunMetadataInput(types.RunMetadata{}, *req.RunMetadata); err != nil {
+			return nil, fmt.Errorf("invalid run_metadata: %w", err)
+		}
+		if _, err := normalizeRunMetadataActor(pointerValue(headers.actorID)); err != nil {
+			return nil, fmt.Errorf("invalid run_metadata: %w", err)
+		}
+	}
 
 	var (
 		sanitizedWebhook *normalizedWebhookConfig
@@ -167,14 +175,7 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 	executionID := utils.GenerateExecutionID()
 	now := time.Now().UTC()
 
-	clientPayload := map[string]interface{}{
-		"input": req.Input,
-	}
-	if len(req.Context) > 0 {
-		clientPayload["context"] = req.Context
-	}
-
-	storedPayload, err := json.Marshal(clientPayload)
+	storedPayload, err := json.Marshal(buildClientPayload(req))
 	if err != nil {
 		return nil, fmt.Errorf("encode execution payload: %w", err)
 	}
@@ -221,6 +222,9 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 
 	if err := c.store.CreateExecutionRecord(ctx, exec); err != nil {
 		return nil, fmt.Errorf("create execution record: %w", err)
+	}
+	if headers.parentExecutionID == nil && req.RunMetadata != nil {
+		c.persistExecuteRunMetadata(ctx, runID, *req.RunMetadata, headers.actorID)
 	}
 
 	var webhookRegistered bool
@@ -274,6 +278,65 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 		replayMode:              headers.replayMode,
 		replayHit:               hit,
 	}, nil
+}
+
+// buildClientPayload builds the blob persisted as executions.input_payload,
+// which canonicalReplayPayload then hashes into the replay dedupe key.
+//
+// Only input and context belong in it. run_metadata is deliberately excluded:
+// it names the run for humans and has no bearing on what the reasoner is asked
+// to compute, so two executes that differ only in run_metadata must still
+// replay-match each other. Adding a field here changes the dedupe key for every
+// caller and silently turns existing replay hits into misses.
+func buildClientPayload(req ExecuteRequest) map[string]interface{} {
+	payload := map[string]interface{}{
+		"input": req.Input,
+	}
+	if len(req.Context) > 0 {
+		payload["context"] = req.Context
+	}
+	return payload
+}
+
+// persistExecuteRunMetadata stores the run_metadata a root execute carried, by
+// merging it into the run's "run" namespace. Best effort on purpose: an execute
+// must not fail because a display name could not be recorded, so a failure is
+// logged and swallowed — the same contract persistRestartRunMetadata uses for
+// the lineage seed. Callers must have already checked that this is a root
+// execute; only the run root establishes run identity.
+func (c *executionController) persistExecuteRunMetadata(ctx context.Context, runID string, input RunMetadataInput, actorID *string) {
+	writer, ok := c.store.(workflowRunMetadataWriter)
+	if !ok {
+		return
+	}
+	actor, err := normalizeRunMetadataActor(pointerValue(actorID))
+	if err != nil {
+		logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to persist execute run metadata")
+		return
+	}
+	if err := writer.UpdateWorkflowRunMetadata(ctx, runID, func(namespaces map[string]json.RawMessage) error {
+		current := types.RunMetadata{}
+		if raw := namespaces[types.RunMetadataNamespace]; raw != nil {
+			_ = json.Unmarshal(raw, &current)
+		}
+		merged, err := applyRunMetadataInput(current, input)
+		if err != nil {
+			return err
+		}
+		merged.SetBy = actor
+		merged.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		namespaces[types.RunMetadataNamespace], err = json.Marshal(merged)
+		return err
+	}); err != nil {
+		logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to persist execute run metadata")
+	}
+}
+
+func pointerValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // findReplayHit returns a previously-succeeded child output to reuse for the

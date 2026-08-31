@@ -122,6 +122,14 @@ agent.reasoner('process', async (ctx) => {
 
 **Use `note()` for AgentField UI tracking, `console.log()` for local debugging.**
 
+## Logging
+
+- `AGENTFIELD_LOG_STDOUT` controls the on-by-default structured JSON mirror; `0`, `false`, `no`, or `off` disables it without disabling execution-scoped control-plane dispatch.
+- `AGENTFIELD_LOGS_ENABLED` controls stdout/stderr capture and the node logs endpoint, not control-plane dispatch.
+- `AGENTFIELD_LOG_MAX_LINE_BYTES` defaults to 16384 bytes. Values below 256 use that default; parsing accepts an integer prefix, so `512abc` yields 512.
+
+See the [environment-variable reference](../../docs/ENVIRONMENT_VARIABLES.md) for details.
+
 ## Human-in-the-Loop Approvals
 
 Use the `ApprovalClient` to pause agent execution for human review:

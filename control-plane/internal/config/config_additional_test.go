@@ -678,3 +678,48 @@ func TestShutdownTimeoutEnvAcceptsBareSecondsLikeTheSDKs(t *testing.T) {
 		t.Fatalf("expected the 30s default to survive an invalid value, got %v", cfg.AgentField.ShutdownTimeout)
 	}
 }
+
+func TestShutdownMinDelayEnvParsing(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		configured time.Duration
+		want       time.Duration
+	}{
+		{name: "bare seconds", value: "5", want: 5 * time.Second},
+		{name: "duration", value: "5s", want: 5 * time.Second},
+		{name: "subsecond duration", value: "500ms", want: 500 * time.Millisecond},
+		{name: "zero", value: "0", configured: time.Second, want: 0},
+		{name: "unset", value: "", configured: time.Second, want: time.Second},
+		{name: "unparseable", value: "abc", configured: time.Second, want: time.Second},
+		{name: "negative", value: "-1s", configured: time.Second, want: time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENTFIELD_SHUTDOWN_MIN_DELAY", tt.value)
+			cfg := Config{AgentField: AgentFieldConfig{ShutdownMinDelay: tt.configured}}
+			ApplyEnvOverrides(&cfg)
+			if cfg.AgentField.ShutdownMinDelay != tt.want {
+				t.Fatalf("got %s, want %s", cfg.AgentField.ShutdownMinDelay, tt.want)
+			}
+		})
+	}
+}
+
+func TestShutdownTimeoutZeroStillKeepsCurrentValue(t *testing.T) {
+	t.Setenv("AGENTFIELD_SHUTDOWN_TIMEOUT", "0")
+	cfg := Config{AgentField: AgentFieldConfig{ShutdownTimeout: 15 * time.Second}}
+	ApplyEnvOverrides(&cfg)
+	if cfg.AgentField.ShutdownTimeout != 15*time.Second {
+		t.Fatalf("zero changed shutdown timeout to %s", cfg.AgentField.ShutdownTimeout)
+	}
+}
+
+func TestShutdownMinDelayDefaultsToZero(t *testing.T) {
+	t.Setenv("AGENTFIELD_SHUTDOWN_MIN_DELAY", "")
+	cfg := Config{}
+	ApplyDefaults(&cfg)
+	if cfg.AgentField.ShutdownMinDelay != 0 {
+		t.Fatalf("got %s, want zero", cfg.AgentField.ShutdownMinDelay)
+	}
+}

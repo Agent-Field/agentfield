@@ -1,6 +1,27 @@
 controlPlane:
   replicaCount: 1
-  terminationGracePeriodSeconds: 45
+  # Control-plane pod grace. Sized for shutdownMinDelay (5s) + the 30s
+  # AGENTFIELD_SHUTDOWN_TIMEOUT drain + roughly 20s of shutdown tail.
+  terminationGracePeriodSeconds: 60
+  # Seconds the control plane keeps serving after SIGTERM before it starts
+  # closing the listener, so kube-proxy can remove this pod from the Service
+  # endpoints first. Accepts bare seconds or a Go duration. "0" (or "")
+  # reproduces the previous shutdown timing exactly.
+  shutdownMinDelay: 5s
+  readinessProbe:
+    # Default stays /api/v1/health so a chart upgrade against an older cached
+    # image cannot 404 the probe and leave a single-replica Service with zero
+    # endpoints. Switch to /api/v1/health/ready (or /readyz) once every node
+    # runs a control-plane image newer than v0.1.137: that path also reports
+    # 503 during the shutdown min-delay window, which /api/v1/health
+    # deliberately does not.
+    path: /api/v1/health
+    # A draining pod must fail readiness before shutdownMinDelay closes the
+    # listener. With one required failure and a two-second period, the next
+    # probe marks it Unready within 2s and leaves about 3s for endpoint
+    # propagation under the shipped 5s delay.
+    periodSeconds: 2
+    failureThreshold: 1
 
   image:
     repository: agentfield/control-plane
@@ -33,6 +54,9 @@ controlPlane:
     AGENTFIELD_CONFIG_FILE: /dev/null
 
   extraEnv: []
+  # AGENTFIELD_SHUTDOWN_MIN_DELAY may be set here instead of
+  # controlPlane.shutdownMinDelay; the template suppresses its generated entry
+  # so the rendered Pod never contains two variables with the same name.
   # - name: AGENTFIELD_AGENT_DRAIN_GRACE
   #   value: "60s"
 

@@ -1,4 +1,5 @@
 import type { WriteStream } from 'node:tty';
+import { envFlagEnabled } from '../utils/envFlags.js';
 
 export type ExecutionLogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -146,14 +147,14 @@ export function serializeExecutionLogEntry(entry: ExecutionLogEntry): string {
 export class ExecutionLogger {
   private readonly contextProvider?: () => ExecutionLogContext | undefined;
   private readonly transport?: ExecutionLogTransport;
-  private readonly mirrorToStdout: boolean;
+  private readonly mirrorToStdout: boolean | undefined;
   private readonly stdout?: Pick<WriteStream, 'write'>;
   private readonly defaultSource: string;
 
   constructor(options: ExecutionLoggerOptions = {}) {
     this.contextProvider = options.contextProvider;
     this.transport = options.transport;
-    this.mirrorToStdout = options.mirrorToStdout ?? true;
+    this.mirrorToStdout = options.mirrorToStdout;
     this.stdout = options.stdout ?? (typeof process !== 'undefined' ? process.stdout : undefined);
     this.defaultSource = options.source ?? 'sdk.logger';
   }
@@ -227,10 +228,13 @@ export class ExecutionLogger {
 
   private emit(entry: ExecutionLogEntry): void {
     const wire = normalizeExecutionLogEntry(entry);
-    const line = safeJsonStringify(wire) + '\n';
 
-    if (this.mirrorToStdout && this.stdout?.write) {
-      this.stdout.write(line);
+    // Serialize lazily: with the mirror disabled the JSON envelope is never
+    // needed, and paying for it anyway is exactly the cost the flag exists to
+    // avoid (the Python SDK skips serialization on this path for the same
+    // reason). The transport receives the object, not this string.
+    if (this.shouldMirrorToStdout() && this.stdout?.write) {
+      this.stdout.write(safeJsonStringify(wire) + '\n');
     }
 
     if (this.transport && wire.execution_id) {
@@ -243,6 +247,10 @@ export class ExecutionLogger {
         // Logging must never break execution flow.
       }
     }
+  }
+
+  private shouldMirrorToStdout(): boolean {
+    return this.mirrorToStdout ?? envFlagEnabled('AGENTFIELD_LOG_STDOUT');
   }
 }
 
