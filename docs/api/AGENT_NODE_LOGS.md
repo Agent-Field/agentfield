@@ -4,10 +4,15 @@ Agent nodes MAY expose process stdout/stderr for the control plane UI to proxy.
 
 Capture is enabled by default and bounded by `AGENTFIELD_LOG_BUFFER_BYTES`
 (default 4194304 bytes) and `AGENTFIELD_LOG_MAX_LINE_BYTES` (default 16384
-bytes). Set `AGENTFIELD_LOGS_ENABLED=false` to disable capture and this API.
-Structured SDK records are mirrored to stdout by default; set
-`AGENTFIELD_LOG_STDOUT=false` to disable that mirror while retaining delivery
-to the control plane.
+bytes). Python clamps integer line caps below 256 to 256; Go and TypeScript
+reject them and use the default. Set `AGENTFIELD_LOGS_ENABLED=false` to disable
+capture and this API. The Python, Go, and TypeScript SDKs mirror structured
+records to stdout by default; set `AGENTFIELD_LOG_STDOUT=false` to disable that
+mirror while retaining control-plane delivery for records with an execution ID.
+All three SDKs skip that delivery for a record with no execution id, so such
+records are stdout-only and are dropped when mirroring is disabled. Since the
+node-log ring is fed by captured stdout, disabling the mirror also removes
+structured records from `GET /agentfield/v1/logs`.
 
 ## Agent endpoint
 
