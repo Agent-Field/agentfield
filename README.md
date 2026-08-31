@@ -314,6 +314,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | No timeout limits (hours/days) | Control plane allows unlimited duration |
 | Execution polling | `GET /api/v1/executions/{id}` |
 | Restart/replay | [`POST /api/v1/executions/{id}/restart`](docs/api/EXECUTION_RESTART.md) |
+| Run naming, labels, links | [`POST /api/v1/runs/{id}/metadata`](docs/api/RUN_METADATA.md) |
 | Batch status checks | `POST /api/v1/executions/batch-status` |
 | Progress updates mid-execution | Intermediate payloads during long tasks |
 | Auto retries + exponential backoff | Transparent - control plane handles |
