@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -353,3 +354,71 @@ var assertErrFakeReapFailure = &fakeReapError{}
 type fakeReapError struct{}
 
 func (*fakeReapError) Error() string { return "fake reap failure (expected in test)" }
+
+func TestReRegistrationSkipsOrphanReapWhenDisabled(t *testing.T) {
+	previousGrace := AgentDrainGrace()
+	previousEnabled := AgentOrphanReapEnabled()
+	SetAgentDrainGrace(20 * time.Millisecond)
+	SetAgentOrphanReapEnabled(false)
+	t.Cleanup(func() {
+		SetAgentDrainGrace(previousGrace)
+		SetAgentOrphanReapEnabled(previousEnabled)
+	})
+
+	gin.SetMode(gin.TestMode)
+	registrationStore := &orphanReapStorageStub{
+		nodeRESTStorageStub: nodeRESTStorageStub{
+			agent: &types.AgentNode{
+				ID:              "github-buddy",
+				BaseURL:         "http://10.0.0.5:8080",
+				LifecycleStatus: types.AgentStatusReady,
+				HealthStatus:    types.HealthStatusActive,
+				InstanceID:      "alpha",
+			},
+		},
+	}
+	registerRouter := gin.New()
+	registerRouter.POST("/nodes/register", RegisterNodeHandler(registrationStore, nil, nil, nil, nil, nil))
+	rec := registerNodeWithBody(t, registerRouter, `{
+		"id":"github-buddy",
+		"base_url":"http://10.0.0.5:8080",
+		"instance_id":"beta",
+		"callback_discovery":{"mode":"manual","preferred":"http://10.0.0.5:8080"}
+	}`)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	time.Sleep(3 * AgentDrainGrace())
+	require.Empty(t, registrationStore.orphanCalls)
+
+	executionStore := newTestExecutionStorage(&types.AgentNode{
+		ID:        "github-buddy",
+		BaseURL:   "http://10.0.0.5:8080",
+		Reasoners: []types.ReasonerDefinition{{ID: "reasoner-a"}},
+	})
+	now := time.Now().UTC()
+	require.NoError(t, executionStore.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: "exec-old-instance",
+		RunID:       "run-1",
+		AgentNodeID: "github-buddy",
+		InstanceID:  "alpha",
+		ReasonerID:  "reasoner-a",
+		Status:      types.ExecutionStatusRunning,
+		StartedAt:   now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}))
+	beforeCallback, err := executionStore.GetExecutionRecord(context.Background(), "exec-old-instance")
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusRunning, beforeCallback.Status)
+
+	statusRouter := gin.New()
+	statusRouter.PUT("/api/v1/executions/:execution_id/status", UpdateExecutionStatusHandler(executionStore, services.NewFilePayloadStore(t.TempDir()), nil, 90*time.Second))
+	statusReq := httptest.NewRequest(http.MethodPut, "/api/v1/executions/exec-old-instance/status", bytes.NewBufferString(`{"status":"succeeded","result":{"ok":true}}`))
+	statusReq.Header.Set("Content-Type", "application/json")
+	statusResp := httptest.NewRecorder()
+	statusRouter.ServeHTTP(statusResp, statusReq)
+	require.Equal(t, http.StatusOK, statusResp.Code)
+
+	completed, err := executionStore.GetExecutionRecord(context.Background(), "exec-old-instance")
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusSucceeded, completed.Status)
+}

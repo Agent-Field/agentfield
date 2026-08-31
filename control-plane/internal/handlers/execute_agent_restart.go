@@ -65,6 +65,7 @@ const (
 // change it without racing the async worker pool.
 var agentRestartGraceNanos atomic.Int64
 var agentDrainGraceNanos atomic.Int64
+var agentOrphanReapEnabled atomic.Bool
 var updatingAgentNodes = struct {
 	sync.RWMutex
 	names map[string]int
@@ -73,6 +74,7 @@ var updatingAgentNodes = struct {
 func init() {
 	agentRestartGraceNanos.Store(int64(defaultAgentRestartGrace))
 	agentDrainGraceNanos.Store(int64(defaultAgentDrainGrace))
+	agentOrphanReapEnabled.Store(true)
 }
 
 // SetAgentRestartGrace configures how long a dispatch waits for a restarting
@@ -87,6 +89,7 @@ func agentRestartGrace() time.Duration {
 }
 
 func SetAgentDrainGrace(d time.Duration) { agentDrainGraceNanos.Store(int64(d)) }
+func SetAgentOrphanReapEnabled(v bool)   { agentOrphanReapEnabled.Store(v) }
 
 // agentIsDraining reports whether an offline node should be treated as
 // draining: it went quiet recently enough that a replacement instance is
@@ -113,6 +116,7 @@ func agentIsDraining(agent *types.AgentNode) bool {
 }
 func AgentDrainGrace() time.Duration   { return time.Duration(agentDrainGraceNanos.Load()) }
 func AgentRestartGrace() time.Duration { return agentRestartGrace() }
+func AgentOrphanReapEnabled() bool     { return agentOrphanReapEnabled.Load() }
 
 // waitForDrainingAgent holds admission before any execution row exists while
 // an orderly shutdown is in progress. A replacement registration is detected

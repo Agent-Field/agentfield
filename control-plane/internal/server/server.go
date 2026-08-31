@@ -139,6 +139,23 @@ func newRouter() *gin.Engine {
 	return router
 }
 
+func configureAgentRestartSettings(nodeHealth config.NodeHealthConfig) {
+	if grace := nodeHealth.AgentRestartGrace; grace != 0 {
+		handlers.SetAgentRestartGrace(grace)
+	}
+	if grace := nodeHealth.AgentDrainGrace; grace != 0 {
+		handlers.SetAgentDrainGrace(grace)
+	}
+	handlers.SetAgentOrphanReapEnabled(nodeHealth.AgentOrphanReapEnabled)
+	if !nodeHealth.AgentOrphanReapEnabled {
+		logger.Logger.Warn().Msg("agent orphan reap on re-registration is disabled (AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED=false); in-flight executions of a departing instance are left to the stale-execution sweep")
+	}
+	logger.Logger.Info().
+		Dur("agent_restart_grace", handlers.AgentRestartGrace()).
+		Dur("agent_drain_grace", handlers.AgentDrainGrace()).
+		Msg("configured agent restart and drain grace windows")
+}
+
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
 func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	// Define agentfieldHome at the very top
@@ -171,16 +188,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 	// Configure execution event payload redaction from logging config.
 	handlers.SetRedactPayloads(cfg.Logging.ShouldRedactPayloads())
-	if grace := cfg.AgentField.NodeHealth.AgentRestartGrace; grace != 0 {
-		handlers.SetAgentRestartGrace(grace)
-	}
-	if grace := cfg.AgentField.NodeHealth.AgentDrainGrace; grace != 0 {
-		handlers.SetAgentDrainGrace(grace)
-	}
-	logger.Logger.Info().
-		Dur("agent_restart_grace", handlers.AgentRestartGrace()).
-		Dur("agent_drain_grace", handlers.AgentDrainGrace()).
-		Msg("configured agent restart and drain grace windows")
+	configureAgentRestartSettings(cfg.AgentField.NodeHealth)
 
 	Router := newRouter()
 

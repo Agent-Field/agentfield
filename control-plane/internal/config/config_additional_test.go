@@ -1,11 +1,15 @@
 package config
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 func TestEffectiveNodeLogProxy(t *testing.T) {
@@ -659,6 +663,90 @@ func TestAgentDrainGraceFromEnvironment(t *testing.T) {
 	ApplyEnvOverrides(&cfg)
 	if cfg.AgentField.NodeHealth.AgentDrainGrace != 75*time.Second {
 		t.Fatalf("expected 75s drain grace, got %s", cfg.AgentField.NodeHealth.AgentDrainGrace)
+	}
+}
+
+func TestOrphanReapEnabledParsing(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+		warn  bool
+	}{
+		{name: "unset", want: true},
+		{name: "true", value: "true", want: true},
+		{name: "false", value: "false", want: false},
+		{name: "one", value: "1", want: true},
+		{name: "zero", value: "0", want: false},
+		{name: "invalid", value: "maybe", want: true, warn: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED", tt.value)
+			var logs bytes.Buffer
+			previousWriter := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previousWriter) })
+			cfg := Config{}
+			ApplyDefaults(&cfg)
+			ApplyEnvOverrides(&cfg)
+			if cfg.AgentField.NodeHealth.AgentOrphanReapEnabled != tt.want {
+				t.Fatalf("expected %t for %q, got %t", tt.want, tt.value, cfg.AgentField.NodeHealth.AgentOrphanReapEnabled)
+			}
+			if got := strings.Contains(logs.String(), "invalid AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED=\"maybe\""); got != tt.warn {
+				t.Fatalf("warning presence = %t, want %t; logs: %s", got, tt.warn, logs.String())
+			}
+		})
+	}
+}
+
+func TestOrphanReapEnabledYAMLFalseIsPreserved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentfield.yaml")
+	contents := []byte("agentfield:\n  node_health:\n    agent_orphan_reap_enabled: false\n")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.AgentField.NodeHealth.AgentOrphanReapEnabled {
+		t.Fatal("expected explicit YAML false to be preserved")
+	}
+}
+
+// TestOrphanReapEnabledViperFalseIsPreserved covers the loader the shipped
+// binaries actually use: viper decodes via mapstructure, so the yaml.v3
+// UnmarshalYAML hook never runs and key presence has to come from viper's
+// own IsSet. Without that, an explicit `false` would be indistinguishable
+// from "unset" and ApplyDefaults would silently flip it back to true.
+func TestOrphanReapEnabledViperFalseIsPreserved(t *testing.T) {
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(strings.NewReader("agentfield:\n  node_health:\n    agent_orphan_reap_enabled: false\n")); err != nil {
+		t.Fatalf("read viper config: %v", err)
+	}
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	MarkExecutionCleanupEnabledIfSet(v, &cfg)
+	ApplyDefaults(&cfg)
+	if cfg.AgentField.NodeHealth.AgentOrphanReapEnabled {
+		t.Fatal("expected explicit viper false to survive ApplyDefaults")
+	}
+}
+
+// TestNodeHealthUnmarshalYAMLRejectsNonMapping pins the decode-error path of
+// the custom unmarshaller: a scalar where a mapping belongs must surface as a
+// config error rather than being silently ignored.
+func TestNodeHealthUnmarshalYAMLRejectsNonMapping(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentfield.yaml")
+	if err := os.WriteFile(path, []byte("agentfield:\n  node_health: 5\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("expected a parse error for a scalar node_health block")
 	}
 }
 

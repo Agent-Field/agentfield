@@ -216,6 +216,30 @@ type NodeHealthConfig struct {
 	// registers, allowing the departing process to finish accepted work.
 	// 0 = default 60s. Set to a negative duration to disable deferred cleanup.
 	AgentDrainGrace time.Duration `yaml:"agent_drain_grace" mapstructure:"agent_drain_grace"`
+	// AgentOrphanReapEnabled controls whether a replacement registration marks
+	// the departing instance's in-flight executions orphaned. Default true.
+	// Set false for deployments running replicas>1 behind one node id, where a
+	// sibling replica registering is indistinguishable from a replacement.
+	AgentOrphanReapEnabled    bool `yaml:"agent_orphan_reap_enabled" mapstructure:"agent_orphan_reap_enabled"`
+	agentOrphanReapEnabledSet bool `yaml:"-" mapstructure:"-"`
+}
+
+// UnmarshalYAML records whether agent_orphan_reap_enabled was explicitly
+// configured, including the otherwise indistinguishable false value.
+func (c *NodeHealthConfig) UnmarshalYAML(node *yaml.Node) error {
+	type plain NodeHealthConfig
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*c = NodeHealthConfig(decoded)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == "agent_orphan_reap_enabled" {
+			c.agentOrphanReapEnabledSet = true
+			break
+		}
+	}
+	return nil
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
@@ -260,6 +284,9 @@ func MarkExecutionCleanupEnabledConfigured(cfg *Config) {
 func MarkExecutionCleanupEnabledIfSet(v *viper.Viper, cfg *Config) {
 	if v.IsSet("agentfield.execution_cleanup.enabled") {
 		MarkExecutionCleanupEnabledConfigured(cfg)
+	}
+	if v.IsSet("agentfield.node_health.agent_orphan_reap_enabled") {
+		cfg.AgentField.NodeHealth.agentOrphanReapEnabledSet = true
 	}
 }
 
@@ -580,6 +607,10 @@ func LoadConfig(configPath string) (*Config, error) {
 
 // ApplyDefaults fills values that should be stable across config loaders.
 func ApplyDefaults(cfg *Config) {
+	nodeHealth := &cfg.AgentField.NodeHealth
+	if !nodeHealth.agentOrphanReapEnabledSet && !nodeHealth.AgentOrphanReapEnabled {
+		nodeHealth.AgentOrphanReapEnabled = true
+	}
 	cleanup := &cfg.AgentField.ExecutionCleanup
 	// Cleanup is enabled by default so stale executions are still swept even
 	// when retention is disabled. A zero retention period intentionally means
@@ -774,6 +805,7 @@ func ApplyEnvOverrides(cfg *Config) {
 			cfg.AgentField.NodeHealth.AgentDrainGrace = d
 		}
 	}
+	applyBoolEnv("AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED", &cfg.AgentField.NodeHealth.AgentOrphanReapEnabled)
 
 	// LLM health monitoring overrides
 	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_ENABLED"); val != "" {

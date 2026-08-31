@@ -641,7 +641,9 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 		// Strict guard: BOTH must be non-empty. An empty stored value means
 		// the prior process was on an older SDK that didn't report instance_id;
 		// we can't safely conclude its work is dead, so we don't reap.
-		shouldReapOrphans := isReRegistration &&
+		// The feature gate prevents the deferred reap goroutine from being armed.
+		shouldReapOrphans := AgentOrphanReapEnabled() &&
+			isReRegistration &&
 			existingNode != nil &&
 			strings.TrimSpace(existingNode.InstanceID) != "" &&
 			strings.TrimSpace(newNode.InstanceID) != "" &&
