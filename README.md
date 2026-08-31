@@ -231,12 +231,12 @@ Most agent tools help you **write** agent logic. AgentField is what **runs** it 
 
 ## How it scales
 
-The control plane is a stateless Go service. You put more of them behind a load balancer and the fleet grows horizontally. Work lands in a durable PostgreSQL queue with lease-based processing, so a crash or a restart resumes where it left off instead of dropping the job.
+The control plane is a stateless Go service. You put more of them behind a load balancer and the fleet grows horizontally. Work is admitted into a bounded in-process queue with backpressure (`429`/`503` plus `Retry-After`). On graceful shutdown, in-flight executions are terminated with `status_reason` `control_plane_shutdown` rather than silently dropped.
 
 | Property | What it means |
 |---|---|
 | Stateless Go control plane | Horizontal scaling behind a load balancer. Add replicas to add capacity. |
-| Durable PostgreSQL queue | Lease-based processing. Jobs survive crashes and restarts. |
+| Bounded in-process admission | Backpressure returns `429`/`503` with `Retry-After`; graceful shutdown records `control_plane_shutdown`. |
 | Async execution | Webhooks and SSE, no timeout limits. A single run can go for hours or days. |
 | Backpressure | Queue-depth limits and circuit breakers keep a fan-out from overwhelming downstream agents. |
 | Routing overhead | Roughly 100-200ms per cross-agent hop. It matters when a branch does little work per hop, so keep hops coarse when latency is tight. |
@@ -318,7 +318,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Progress updates mid-execution | Intermediate payloads during long tasks |
 | Auto retries + exponential backoff | Transparent - control plane handles |
 | Backpressure + queue depth limits | Fair scheduling, circuit breakers |
-| Durable queue (PostgreSQL) | Atomic lease-based processing |
+| Bounded in-process queue | Backpressure and explicit graceful-shutdown termination |
 
 #### Memory (Distributed State)
 

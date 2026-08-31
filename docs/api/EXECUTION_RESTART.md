@@ -47,4 +47,6 @@ Operators polling execution state should branch on the stable category before an
 | `agent_client_error:<status>` | The agent reported a client-facing HTTP 4xx failure. |
 | `llm_unavailable`, `concurrency_limit`, `agent_timeout`, `agent_error`, `agent_unreachable`, `bad_response`, `internal_error`, `validation`, `permission_denied`, `node_unavailable`, `target_not_found` | Canonical failure categories used for operator routing and HTTP mapping. |
 
+Concurrency and LLM-circuit admission checks run before restart persistence. A rejected restart creates no execution or workflow-execution row. Queue-full restart responses return `503` with matching `Retry-After` and `retry_after` values.
+
 Do not emulate restart by re-submitting `/execute`: execute has no idempotency key, creates unrelated executions, and cannot establish restart lineage or replay boundaries.
