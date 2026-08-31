@@ -45,6 +45,21 @@ export interface WorkflowSummary {
   trigger?: TriggerInfo;
   lineage?: RunLineageMetadata;
   golden?: GoldenRunMetadata;
+  run_metadata?: RunMetadata;
+}
+
+export interface RunMetadataLink {
+  label?: string;
+  url: string;
+}
+
+/** Client-settable run identity: display name, labels and external links. */
+export interface RunMetadata {
+  display_name?: string;
+  labels?: string[];
+  links?: RunMetadataLink[];
+  set_by?: string;
+  updated_at?: string;
 }
 
 export interface RunLineageMetadata {
@@ -225,4 +240,5 @@ export interface WorkflowDAGLightweightResponse {
   trigger?: TriggerInfo;
   lineage?: RunLineageMetadata;
   golden?: GoldenRunMetadata;
+  run_metadata?: RunMetadata;
 }
