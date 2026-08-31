@@ -139,6 +139,7 @@ class ReasonerEntry:
     triggers: List[Any] = field(default_factory=list)
     # 3-state webhook flag: True (opt-in), False (opt-out), "warn" (default)
     accepts_webhook: Union[bool, str] = "warn"
+    endpoint_path: str = ""
     # Note: input_schema and output_schema are generated on-demand via _get_handler_schema()
 
 
@@ -154,6 +155,7 @@ class SkillEntry:
     # Same contract as ReasonerEntry.description.
     description: str = ""
     vc_enabled: Optional[bool] = None
+    endpoint_path: str = ""
 
 
 def _docstring_summary(func: Callable) -> str:
@@ -811,6 +813,8 @@ class Agent(FastAPI):
         self._reasoner_registry: Dict[str, ReasonerEntry] = {}
         self._skill_registry: Dict[str, SkillEntry] = {}
         self._session_registry: Dict[str, Dict[str, Any]] = {}
+        # Set when this agent is hosted by an in-process AgentMesh.
+        self._mesh = None
 
         # VC override tracking (still needed for _effective_component_vc_setting)
         self._reasoner_vc_overrides: Dict[str, bool] = {}
@@ -2353,6 +2357,7 @@ class Agent(FastAPI):
                 vc_enabled=vc_setting,
                 triggers=list(merged_triggers or []),
                 accepts_webhook=resolved_accepts_webhook,
+                endpoint_path=endpoint_path,
             )
 
             # NOTE: Legacy storage removed - reasoners property generates list on-demand
@@ -3453,6 +3458,7 @@ class Agent(FastAPI):
                 description=(decorator_description or "").strip()
                 or _docstring_summary(func),
                 vc_enabled=vc_setting,
+                endpoint_path=endpoint_path,
             )
             # NOTE: Legacy self.skills.append() removed - skills property generates list on-demand
 
@@ -4343,6 +4349,93 @@ class Agent(FastAPI):
             **kwargs,
         )
 
+    def _map_call_args(self, target: str, args: tuple, kwargs: dict) -> Dict[str, Any]:
+        """Map positional args to parameter names exactly as Agent.call does."""
+        final_kwargs = kwargs.copy()
+
+        if args:
+            # If positional arguments are provided, we need to map them to parameter names
+            # For cross-agent calls, we don't have direct access to the target function signature,
+            # so we'll use a simple mapping strategy:
+
+            # Try to get parameter names from the target (if it's a local reasoner/skill)
+            if "." in target:
+                node_id, function_name = target.split(".", 1)
+
+                # If calling a local function (same node), try to get its signature
+                if node_id == self.node_id and hasattr(self, function_name):
+                    try:
+                        func = getattr(self, function_name)
+                        # Unwrap tracked wrappers (e.g. _run_async_skill,
+                        # tracked_func) to recover the original function's
+                        # typed signature instead of the generic (*args, **kwargs)
+                        # that the wrapper carries.
+                        raw_func = getattr(func, "_original_func", func)
+                        sig = inspect.signature(raw_func)
+                        param_names = [
+                            name
+                            for name, param in sig.parameters.items()
+                            if name not in ["self", "execution_context"]
+                        ]
+
+                        # Map positional args to parameter names
+                        for i, arg in enumerate(args):
+                            if i < len(param_names):
+                                param_name = param_names[i]
+                                if (
+                                    param_name not in final_kwargs
+                                ):  # Don't override explicit kwargs
+                                    final_kwargs[param_name] = arg
+                            else:
+                                # More args than parameters - use generic names
+                                final_kwargs[f"arg_{i}"] = arg
+
+                    except Exception:
+                        # Fallback to generic parameter names if signature inspection fails
+                        for i, arg in enumerate(args):
+                            final_kwargs[f"arg_{i}"] = arg
+                else:
+                    # Cross-agent call - use generic parameter names
+                    # The receiving agent will need to handle the mapping
+                    for i, arg in enumerate(args):
+                        final_kwargs[f"arg_{i}"] = arg
+            else:
+                # Simple function name without node_id - use generic names
+                for i, arg in enumerate(args):
+                    final_kwargs[f"arg_{i}"] = arg
+        return final_kwargs
+
+    async def call_local(self, target: str, *args, **kwargs) -> dict:
+        """Invoke one of THIS agent's own reasoners/skills in-process.
+
+        The explicit opt-in counterpart to the Go SDK's ``CallLocal``. Needs no
+        control plane and no AgentMesh: the call is dispatched through this
+        agent's own ASGI app, so validation, the per-execution cost tracker,
+        workflow events, DID and trigger unwrapping all run exactly as they do
+        for an HTTP-routed execution.
+
+        ``target`` may be a bare reasoner/skill name ("hello") or the fully
+        qualified form ("my-node.hello"); a qualified target naming a
+        different node raises MeshTargetNotFound.
+        """
+        from agentfield.exceptions import MeshTargetNotFound
+        from agentfield.execution_context import get_current_context
+        from agentfield.mesh import build_child_headers, dispatch_in_process
+
+        full_target = target if "." in target else f"{self.node_id}.{target}"
+        node_id = full_target.split(".", 1)[0]
+        if node_id != self.node_id:
+            raise MeshTargetNotFound(
+                f"Local target '{full_target}' names foreign node '{node_id}'"
+            )
+        final_kwargs = self._map_call_args(full_target, args, kwargs)
+        context = get_current_context() or ExecutionContext.create_new(
+            agent_node_id=self.node_id,
+            workflow_name=f"{self.node_id}_workflow",
+        )
+        headers = build_child_headers(context)
+        return await dispatch_in_process(self, full_target, final_kwargs, headers)
+
     async def call(self, target: str, *args, **kwargs) -> dict:
         """
         Initiates a cross-agent call to another reasoner or skill via the AgentField execution gateway.
@@ -4398,58 +4491,7 @@ class Agent(FastAPI):
                 log_error(f"Call failed: {e}")
         """
         # Handle argument mapping for flexibility
-        final_kwargs = kwargs.copy()
-
-        if args:
-            # If positional arguments are provided, we need to map them to parameter names
-            # For cross-agent calls, we don't have direct access to the target function signature,
-            # so we'll use a simple mapping strategy:
-
-            # Try to get parameter names from the target (if it's a local reasoner/skill)
-            if "." in target:
-                node_id, function_name = target.split(".", 1)
-
-                # If calling a local function (same node), try to get its signature
-                if node_id == self.node_id and hasattr(self, function_name):
-                    try:
-                        func = getattr(self, function_name)
-                        # Unwrap tracked wrappers (e.g. _run_async_skill,
-                        # tracked_func) to recover the original function's
-                        # typed signature instead of the generic (*args, **kwargs)
-                        # that the wrapper carries.
-                        raw_func = getattr(func, "_original_func", func)
-                        sig = inspect.signature(raw_func)
-                        param_names = [
-                            name
-                            for name, param in sig.parameters.items()
-                            if name not in ["self", "execution_context"]
-                        ]
-
-                        # Map positional args to parameter names
-                        for i, arg in enumerate(args):
-                            if i < len(param_names):
-                                param_name = param_names[i]
-                                if (
-                                    param_name not in final_kwargs
-                                ):  # Don't override explicit kwargs
-                                    final_kwargs[param_name] = arg
-                            else:
-                                # More args than parameters - use generic names
-                                final_kwargs[f"arg_{i}"] = arg
-
-                    except Exception:
-                        # Fallback to generic parameter names if signature inspection fails
-                        for i, arg in enumerate(args):
-                            final_kwargs[f"arg_{i}"] = arg
-                else:
-                    # Cross-agent call - use generic parameter names
-                    # The receiving agent will need to handle the mapping
-                    for i, arg in enumerate(args):
-                        final_kwargs[f"arg_{i}"] = arg
-            else:
-                # Simple function name without node_id - use generic names
-                for i, arg in enumerate(args):
-                    final_kwargs[f"arg_{i}"] = arg
+        final_kwargs = self._map_call_args(target, args, kwargs)
 
         # Resolve the parent execution for this call from the TASK-LOCAL
         # context ONLY — not via _get_current_execution_context(), which falls
@@ -4500,6 +4542,15 @@ class Agent(FastAPI):
         headers["X-Parent-Execution-ID"] = current_context.execution_id
         if current_context.parent_vc_id:
             headers["X-Parent-VC-ID"] = current_context.parent_vc_id
+
+        # In-process mesh resolution. Runs only when this agent was handed to
+        # an AgentMesh; a bare agent takes the identical control-plane path
+        # below, including the offline AgentFieldClientError. `final_kwargs`
+        # and `headers` are already built above, so mesh and CP bind and
+        # header identically (see docs/agent-mesh.md).
+        _mesh = getattr(self, "_mesh", None)
+        if _mesh is not None:
+            return await _mesh.dispatch(self, target, final_kwargs, headers)
 
         # DISABLED: Same-agent call detection - Force all calls through AgentField server
         # This ensures all app.call() requests go through the AgentField server for proper

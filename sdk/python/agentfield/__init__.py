@@ -1,4 +1,5 @@
 from .agent import Agent
+from .mesh import AgentMesh
 from .cost_tracker import CostTracker
 from .router import AgentRouter
 from .types import (
@@ -63,6 +64,7 @@ from .crypto import (
 from .exceptions import (
     AgentFieldError,
     AgentFieldClientError,
+    MeshTargetNotFound,
     ExecutionTimeoutError,
     MemoryAccessError,
     ReasonerFailed,
@@ -91,6 +93,7 @@ from .tool_calling import (
 
 __all__ = [
     "Agent",
+    "AgentMesh",
     "CostTracker",
     "AIConfig",
     "HarnessConfig",
@@ -161,6 +164,7 @@ __all__ = [
     # Exceptions
     "AgentFieldError",
     "AgentFieldClientError",
+    "MeshTargetNotFound",
     "ExecutionTimeoutError",
     "MemoryAccessError",
     "ReasonerFailed",
