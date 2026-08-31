@@ -76,14 +76,19 @@ func TestExecuteAsyncHandler_PoolStoppedTerminatesPersistedRow(t *testing.T) {
 
 type stopPoolOnCreateStorage struct {
 	*testExecutionStorage
-	pool *asyncWorkerPool
+	pool   *asyncWorkerPool
+	cancel context.CancelFunc
 }
 
 func (s *stopPoolOnCreateStorage) CreateExecutionRecord(ctx context.Context, execution *types.Execution) error {
 	s.pool.mu.Lock()
 	s.pool.stopped = true
 	s.pool.mu.Unlock()
-	return s.testExecutionStorage.CreateExecutionRecord(ctx, execution)
+	err := s.testExecutionStorage.CreateExecutionRecord(ctx, execution)
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return err
 }
 
 func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {

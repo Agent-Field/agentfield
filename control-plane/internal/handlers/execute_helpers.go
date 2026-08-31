@@ -1058,16 +1058,26 @@ func shutdownPersistenceContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
+func (j asyncExecutionJob) terminateForControlPlaneShutdown() {
+	persistCtx, cancel := shutdownPersistenceContext()
+	defer cancel()
+	j.failForControlPlaneShutdown(persistCtx)
+}
+
 func (j asyncExecutionJob) failForControlPlaneShutdown(ctx context.Context) {
+	nodeID := ""
+	if j.plan.target != nil {
+		nodeID = j.plan.target.NodeID
+	}
 	if j.plan.slotHeld && j.plan.target != nil {
-		ReleaseExecutionSlot(j.plan.target.NodeID)
+		ReleaseExecutionSlot(nodeID)
 	}
 	shutdownErr := &executionPreconditionError{
 		message:  "execution was not started before the control plane shut down",
 		category: ErrorCategoryControlPlaneShutdown,
 	}
 	if err := j.controller.failExecution(ctx, &j.plan, shutdownErr, 0, nil); err != nil {
-		logger.Logger.Error().Err(err).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to terminate queued execution during shutdown")
+		logger.Logger.Warn().Err(err).Str("node_id", nodeID).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to terminate queued execution during shutdown")
 		return
 	}
 	reason := string(ErrorCategoryControlPlaneShutdown)
@@ -1075,10 +1085,14 @@ func (j asyncExecutionJob) failForControlPlaneShutdown(ctx context.Context) {
 		if current == nil {
 			return nil, fmt.Errorf("workflow execution %s not found", j.plan.exec.ExecutionID)
 		}
+		now := time.Now().UTC()
+		current.Status = string(types.ExecutionStatusFailed)
 		current.StatusReason = &reason
+		current.CompletedAt = &now
+		current.UpdatedAt = now
 		return current, nil
 	}); err != nil {
-		logger.Logger.Error().Err(err).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to record shutdown reason on queued workflow execution")
+		logger.Logger.Warn().Err(err).Str("node_id", nodeID).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to record shutdown reason on queued workflow execution")
 	}
 }
 

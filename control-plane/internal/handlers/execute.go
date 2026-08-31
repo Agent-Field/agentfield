@@ -497,9 +497,7 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 		// context: the request context is very likely being cancelled by the
 		// same shutdown, and a cancelled write would strand this row in
 		// "running" — exactly the orphan this branch exists to prevent.
-		persistCtx, persistCancel := shutdownPersistenceContext()
-		job.failForControlPlaneShutdown(persistCtx)
-		persistCancel()
+		job.terminateForControlPlaneShutdown()
 		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue stopped; retry later")
 		return
 	}

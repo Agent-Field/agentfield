@@ -531,11 +531,8 @@ func (s *mcpServer) startAsyncRun(ctx context.Context, target string, input map[
 
 	job := asyncExecutionJob{controller: controller, plan: *plan}
 	if ok := pool.submitReserved(job); !ok {
-		if plan.slotHeld {
-			ReleaseExecutionSlot(plan.target.NodeID)
-		}
+		job.terminateForControlPlaneShutdown()
 		queueErr := &executionPreconditionError{code: 503, message: "async execution queue is full; retry later", category: ErrorCategoryConcurrencyLimit}
-		_ = controller.failExecution(ctx, plan, queueErr, 0, nil)
 		return "", "", queueErr
 	}
 	reserved = false

@@ -186,13 +186,8 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 		plan:       *plan,
 	}
 	if ok := pool.submitReserved(job); !ok {
-		if plan.slotHeld {
-			ReleaseExecutionSlot(plan.target.NodeID)
-		}
+		job.terminateForControlPlaneShutdown()
 		queueErr := &executionPreconditionError{code: http.StatusServiceUnavailable, message: "async execution queue is full; retry later", category: ErrorCategoryConcurrencyLimit}
-		if updateErr := c.failExecution(reqCtx, plan, queueErr, 0, nil); updateErr != nil {
-			logger.Logger.Error().Err(updateErr).Str("execution_id", plan.exec.ExecutionID).Msg("restart: failed to persist queue saturation")
-		}
 		writeExecutionError(ctx, queueErr)
 		return
 	}

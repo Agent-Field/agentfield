@@ -290,11 +290,12 @@ func TestRestartHandler_PoolStoppedPersistsMatchingStatusReason(t *testing.T) {
 		InputPayload: json.RawMessage(`{"input":{"foo":"bar"}}`),
 		StartedAt:    now, CreatedAt: now, UpdatedAt: now,
 	})
-	store := &stopPoolOnCreateStorage{testExecutionStorage: base, pool: pool}
+	reqCtx, cancel := context.WithCancel(context.Background())
+	store := &stopPoolOnCreateStorage{testExecutionStorage: base, pool: pool, cancel: cancel}
 
 	router := gin.New()
 	router.POST("/api/v1/executions/:execution_id/restart", RestartExecutionHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/source/restart", strings.NewReader(`{}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/source/restart", strings.NewReader(`{}`)).WithContext(reqCtx)
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
@@ -318,6 +319,12 @@ func TestRestartHandler_PoolStoppedPersistsMatchingStatusReason(t *testing.T) {
 	require.NotNil(t, restarted)
 	require.Equal(t, types.ExecutionStatusFailed, restarted.Status)
 	require.NotNil(t, restarted.StatusReason)
-	require.Equal(t, string(ErrorCategoryConcurrencyLimit), *restarted.StatusReason)
+	require.Equal(t, string(ErrorCategoryControlPlaneShutdown), *restarted.StatusReason)
+	workflows, err := base.QueryWorkflowExecutions(context.Background(), types.WorkflowExecutionFilters{})
+	require.NoError(t, err)
+	require.Len(t, workflows, 1)
+	require.Equal(t, string(types.ExecutionStatusFailed), workflows[0].Status)
+	require.NotNil(t, workflows[0].StatusReason)
+	require.Equal(t, string(ErrorCategoryControlPlaneShutdown), *workflows[0].StatusReason)
 	require.Zero(t, concurrencyLimiter.GetRunningCount("node-1"))
 }
