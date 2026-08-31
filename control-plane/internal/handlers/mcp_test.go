@@ -342,6 +342,26 @@ func TestMCP_ExecuteReasoner(t *testing.T) {
 	})
 }
 
+func TestMCP_ExecuteReasonerConcurrencyRejectionHasNoPersistence(t *testing.T) {
+	oldLimiter := concurrencyLimiter
+	concurrencyLimiter = &AgentConcurrencyLimiter{maxPerAgent: 1}
+	require.NoError(t, concurrencyLimiter.Acquire("planner"))
+	defer func() { concurrencyLimiter = oldLimiter }()
+	useAsyncPoolForTest(t, newAsyncWorkerPool(0, 2))
+	store := newMCPTestStore(mcpActiveAgent())
+	router := newMCPTestRouter(t, store)
+
+	payload, isErr := mcpCallTool(t, router, "execute_reasoner", map[string]interface{}{
+		"target": "planner.plan",
+		"input":  map[string]interface{}{"goal": "ship"},
+	})
+	require.True(t, isErr)
+	require.Contains(t, payload["text"], "reached max concurrent executions")
+	execs, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Empty(t, execs)
+}
+
 func TestMCP_ExecuteReasonerAuthorizesAndBindsRunToVerifiedCaller(t *testing.T) {
 	store := newMCPTestStore(mcpActiveAgent())
 	var gotCaller, gotTarget string

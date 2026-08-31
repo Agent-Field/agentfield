@@ -36,6 +36,56 @@ func useAsyncPoolForTest(t *testing.T, pool *asyncWorkerPool) {
 	})
 }
 
+func TestExecuteAsyncHandler_PoolStoppedTerminatesPersistedRow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pool := newAsyncWorkerPool(0, 4)
+	useAsyncPoolForTest(t, pool)
+	oldLimiter := concurrencyLimiter
+	concurrencyLimiter = &AgentConcurrencyLimiter{maxPerAgent: 2}
+	defer func() { concurrencyLimiter = oldLimiter }()
+
+	agent := testRestartAgent("http://agent.example")
+	baseStore := newTestExecutionStorage(agent)
+	store := &stopPoolOnCreateStorage{testExecutionStorage: baseStore, pool: pool}
+	router := gin.New()
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{"foo":"bar"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
+	require.Contains(t, resp.Body.String(), "async execution queue stopped")
+	require.Equal(t, "1", resp.Header().Get("Retry-After"))
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Equal(t, float64(1), body["retry_after"])
+	records, err := baseStore.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, types.ExecutionStatusFailed, records[0].Status)
+	require.NotNil(t, records[0].StatusReason)
+	require.Equal(t, "control_plane_shutdown", *records[0].StatusReason)
+	workflows, err := baseStore.QueryWorkflowExecutions(context.Background(), types.WorkflowExecutionFilters{})
+	require.NoError(t, err)
+	require.Len(t, workflows, 1)
+	require.NotNil(t, workflows[0].StatusReason)
+	require.Equal(t, "control_plane_shutdown", *workflows[0].StatusReason)
+	require.Zero(t, concurrencyLimiter.GetRunningCount("node-1"))
+}
+
+type stopPoolOnCreateStorage struct {
+	*testExecutionStorage
+	pool *asyncWorkerPool
+}
+
+func (s *stopPoolOnCreateStorage) CreateExecutionRecord(ctx context.Context, execution *types.Execution) error {
+	s.pool.mu.Lock()
+	s.pool.stopped = true
+	s.pool.mu.Unlock()
+	return s.testExecutionStorage.CreateExecutionRecord(ctx, execution)
+}
+
 func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	useAsyncPoolForTest(t, newAsyncWorkerPool(1, 1))

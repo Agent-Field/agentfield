@@ -934,6 +934,9 @@ func TestAsyncExecutionJob_ProcessAdditionalCoverage(t *testing.T) {
 			plan: preparedExecution{
 				exec:   &types.Execution{ExecutionID: "exec-1"},
 				target: &parsedTarget{NodeID: "node-1"},
+				// The slot was acquired above on behalf of this plan, so the job
+				// owns it and process() must release it exactly once.
+				slotHeld: true,
 			},
 		}
 
