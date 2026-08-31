@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Agent } from '../src/agent/Agent.js';
 import { AgentFieldClient } from '../src/client/AgentFieldClient.js';
 import { ExecutionContext, type ExecutionMetadata } from '../src/context/ExecutionContext.js';
@@ -8,10 +8,14 @@ import {
 } from '../src/observability/ExecutionLogger.js';
 
 describe('ExecutionLogger', () => {
+  beforeEach(() => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', undefined);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it.each(['false', 'FALSE', '  False  ', '0', 'no', 'off'])(
@@ -234,10 +238,14 @@ describe('ExecutionLogger', () => {
 });
 
 describe('Agent execution logging', () => {
+  beforeEach(() => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', undefined);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it('honors AGENTFIELD_LOG_STDOUT through the Agent construction path', () => {

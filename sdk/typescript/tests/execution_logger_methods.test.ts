@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ExecutionLogger,
   createExecutionLogger,
@@ -9,6 +9,10 @@ import {
 } from '../src/observability/ExecutionLogger.js';
 
 describe('ExecutionLogger exported API', () => {
+  beforeEach(() => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', undefined);
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });
