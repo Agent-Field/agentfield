@@ -269,3 +269,55 @@ func TestRestartHandler_QueueFullCarriesRetryAfter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 }
+
+// A restart admitted past reserve() but refused by submitReserved (the pool
+// stopped in between) must persist a status_reason that matches the
+// error_category it answers with — it used to answer concurrency_limit while
+// recording internal_error, because the queue error was untyped.
+func TestRestartHandler_PoolStoppedPersistsMatchingStatusReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pool := newAsyncWorkerPool(0, 4)
+	useAsyncPoolForTest(t, pool)
+	oldLimiter := concurrencyLimiter
+	concurrencyLimiter = &AgentConcurrencyLimiter{maxPerAgent: 2}
+	defer func() { concurrencyLimiter = oldLimiter }()
+
+	base := newTestExecutionStorage(testRestartAgent("http://agent.example"))
+	now := time.Now().UTC()
+	seedExecutionRecord(t, base, &types.Execution{
+		ExecutionID: "source", RunID: "old-run", AgentNodeID: "node-1", NodeID: "node-1",
+		ReasonerID: "reasoner-a", Status: types.ExecutionStatusFailed,
+		InputPayload: json.RawMessage(`{"input":{"foo":"bar"}}`),
+		StartedAt:    now, CreatedAt: now, UpdatedAt: now,
+	})
+	store := &stopPoolOnCreateStorage{testExecutionStorage: base, pool: pool}
+
+	router := gin.New()
+	router.POST("/api/v1/executions/:execution_id/restart", RestartExecutionHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/source/restart", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code, resp.Body.String())
+	require.Equal(t, "1", resp.Header().Get("Retry-After"))
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Equal(t, "concurrency_limit", body["error_category"])
+	require.Equal(t, float64(1), body["retry_after"])
+
+	records, err := base.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	var restarted *types.Execution
+	for _, record := range records {
+		if record.ExecutionID != "source" {
+			restarted = record
+		}
+	}
+	require.NotNil(t, restarted)
+	require.Equal(t, types.ExecutionStatusFailed, restarted.Status)
+	require.NotNil(t, restarted.StatusReason)
+	require.Equal(t, string(ErrorCategoryConcurrencyLimit), *restarted.StatusReason)
+	require.Zero(t, concurrencyLimiter.GetRunningCount("node-1"))
+}
