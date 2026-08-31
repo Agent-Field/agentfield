@@ -1,10 +1,16 @@
 import copy
+import hashlib
 import importlib.metadata
+import importlib.util
 import json
+import os
+import subprocess
 import sys
+import textwrap
 import threading
 import types
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +25,8 @@ from agentfield.execution_context import (
 )
 from agentfield.litellm_observability import (
     _AGENTFIELD_REGISTERED,
+    _AGENTFIELD_REGISTRATION_MODULES,
+    agentfield_registered_callbacks,
     apply_execution_metadata,
     build_execution_metadata,
     register_callbacks,
@@ -51,17 +59,26 @@ _openrouter_route = pytest.param(
 
 
 @pytest.fixture(autouse=True)
-def restore_observability_globals():
+def restore_observability_globals(monkeypatch):
     saved = set(_AGENTFIELD_REGISTERED)
+    saved_modules = dict(_AGENTFIELD_REGISTRATION_MODULES)
     # Start from empty. Several tests below assert that the vendor-alias keys
     # are absent, which only holds if this process-global set is empty on
     # entry. Today no other module registers a callback, so restoring on the
     # way out would be enough — clearing on the way in keeps that from becoming
     # an order-dependent failure the first time one does.
     _AGENTFIELD_REGISTERED.clear()
+    _AGENTFIELD_REGISTRATION_MODULES.clear()
+    # Most historical tests exercise the contents of the stamp. Explicitly opt
+    # those tests in while the dedicated contract tests below pass isolated
+    # env mappings to cover the new default-off behavior.
+    monkeypatch.setenv("AGENTFIELD_LITELLM_METADATA", "true")
+    monkeypatch.delenv("AGENTFIELD_LITELLM_CALLBACKS", raising=False)
     yield
     _AGENTFIELD_REGISTERED.clear()
     _AGENTFIELD_REGISTERED.update(saved)
+    _AGENTFIELD_REGISTRATION_MODULES.clear()
+    _AGENTFIELD_REGISTRATION_MODULES.update(saved_modules)
 
 
 @pytest.fixture
@@ -206,6 +223,21 @@ def test_register_callbacks_never_raises():
     assert register_callbacks(["langfuse"], env={}, litellm_module=module) == []
 
 
+def test_incompatible_langfuse_runtime_is_refused(monkeypatch):
+    module = callback_module()
+    module.__name__ = "litellm"
+    messages = []
+    monkeypatch.setattr(
+        "agentfield.litellm_observability.importlib.metadata.version",
+        lambda distribution: "3.15.0",
+    )
+    monkeypatch.setattr("agentfield.litellm_observability.log_warn", messages.append)
+
+    assert register_callbacks(["langfuse"], env={}, litellm_module=module) == []
+    assert module.callbacks == []
+    assert any("incompatible" in message for message in messages)
+
+
 def test_register_callbacks_without_manager_falls_back():
     module = types.SimpleNamespace(callbacks=[])
     register_callbacks(["helicone"], env={}, litellm_module=module)
@@ -281,15 +313,19 @@ def test_metadata_keys_from_execution_context():
         "agentfield_session_id",
         "agentfield_parent_execution_id",
         "trace_id",
+        "trace_metadata",
         "session_id",
         "trace_name",
         "generation_name",
         "tags",
     }
     assert all(
-        isinstance(value, str) for key, value in metadata.items() if key != "tags"
+        isinstance(value, str)
+        for key, value in metadata.items()
+        if key not in {"tags", "trace_metadata"}
     )
     assert all(isinstance(value, str) for value in metadata["tags"])
+    assert metadata["trace_metadata"]["agentfield_run_id"] == "run-1"
 
 
 def test_metadata_omits_absent_optional_fields():
@@ -303,14 +339,36 @@ def test_metadata_omits_absent_optional_fields():
 
 def test_vendor_aliases_only_when_agentfield_registered():
     context = execution_context()
-    aliases = {"trace_id", "session_id", "trace_name", "generation_name", "tags"}
+    aliases = {
+        "trace_id",
+        "trace_metadata",
+        "session_id",
+        "trace_name",
+        "generation_name",
+        "tags",
+    }
     user_module = callback_module()
     user_module.callbacks.append("langfuse")
     assert aliases.isdisjoint(build_execution_metadata(context))
-    register_callbacks(["langfuse"], env={}, litellm_module=user_module)
+    # An application-owned callback must not be silently claimed.
+    assert register_callbacks(["langfuse"], env={}, litellm_module=user_module) == []
+    assert aliases.isdisjoint(build_execution_metadata(context))
+
+    agentfield_module = callback_module()
+    register_callbacks(["langfuse"], env={}, litellm_module=agentfield_module)
     metadata = build_execution_metadata(context)
     assert aliases <= metadata.keys()
     assert isinstance(metadata["tags"], list)
+
+
+def test_langfuse_trace_id_is_stable_w3c_compatible():
+    register_callbacks(["langfuse"], env={}, litellm_module=callback_module())
+    metadata = build_execution_metadata(execution_context(run_id="run/not-w3c"))
+    assert metadata["trace_id"] == hashlib.sha256(b"run/not-w3c").hexdigest()[:32]
+    assert len(metadata["trace_id"]) == 32
+    assert all(character in "0123456789abcdef" for character in metadata["trace_id"])
+    assert metadata["agentfield_run_id"] == "run/not-w3c"
+    assert metadata["trace_metadata"]["agentfield_run_id"] == "run/not-w3c"
 
 
 def test_vendor_aliases_not_stamped_for_a_non_langfuse_callback():
@@ -325,6 +383,7 @@ def test_vendor_aliases_not_stamped_for_a_non_langfuse_callback():
     metadata = build_execution_metadata(execution_context())
     assert {
         "trace_id",
+        "trace_metadata",
         "session_id",
         "trace_name",
         "generation_name",
@@ -340,6 +399,29 @@ def test_register_callbacks_reports_nothing_when_no_branch_registers():
     module = types.SimpleNamespace()
     assert register_callbacks(["langfuse"], env={}, litellm_module=module) == []
     assert _AGENTFIELD_REGISTERED == set()
+    assert "trace_id" not in build_execution_metadata(execution_context())
+
+
+def test_register_callbacks_does_not_claim_a_refused_callback():
+    module = callback_module()
+    module.logging_callback_manager.add_litellm_callback = lambda name: None
+
+    assert register_callbacks(["langfuse"], env={}, litellm_module=module) == []
+    assert module.callbacks == []
+    assert agentfield_registered_callbacks() == frozenset()
+    assert "trace_id" not in build_execution_metadata(execution_context())
+
+
+def test_removed_callback_reconciles_ownership_and_alias_gate():
+    module = callback_module()
+    assert register_callbacks(["langfuse"], env={}, litellm_module=module) == [
+        "langfuse"
+    ]
+    assert "trace_id" in build_execution_metadata(execution_context())
+
+    module.callbacks.remove("langfuse")
+    assert agentfield_registered_callbacks() == frozenset()
+    assert _AGENTFIELD_REGISTRATION_MODULES == {}
     assert "trace_id" not in build_execution_metadata(execution_context())
 
 
@@ -399,16 +481,43 @@ def test_apply_execution_metadata_never_raises(monkeypatch):
         ("0", False),
         ("No", False),
         (" OFF ", False),
-        (None, True),
+        (None, False),
+        ("", False),
         ("true", True),
-        ("unexpected", True),
+        (" 1 ", True),
+        ("YES", True),
+        ("on", True),
+        ("unexpected", False),
     ],
 )
-def test_metadata_opt_out_env(value, enabled):
+def test_metadata_opt_in_env(value, enabled):
     env = {} if value is None else {"AGENTFIELD_LITELLM_METADATA": value}
     params = {}
     apply_execution_metadata(params, context=execution_context(), env=env)
     assert ("metadata" in params) is enabled
+
+
+def test_callback_configuration_opts_into_metadata():
+    params = {}
+    apply_execution_metadata(
+        params,
+        context=execution_context(),
+        env={"AGENTFIELD_LITELLM_CALLBACKS": "logfire"},
+    )
+    assert params["metadata"]["agentfield_run_id"] == "run-1"
+
+
+def test_explicit_metadata_false_overrides_callback_configuration():
+    params = {}
+    apply_execution_metadata(
+        params,
+        context=execution_context(),
+        env={
+            "AGENTFIELD_LITELLM_CALLBACKS": "langfuse",
+            "AGENTFIELD_LITELLM_METADATA": "false",
+        },
+    )
+    assert params == {}
 
 
 async def test_agent_ai_passes_metadata_to_acompletion(monkeypatch):
@@ -530,6 +639,188 @@ async def test_metadata_never_reaches_the_wire(model, real_litellm_state):
     assert captured
     assert "metadata" not in captured[0]
     assert not any(key.startswith("agentfield_") for key in captured[0])
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("langfuse") is None,
+    reason="install the langfuse extra to exercise the real LiteLLM callback",
+)
+def test_langfuse_callback_sends_correlated_local_ingestion():
+    """Catch compatible-install failures that LiteLLM logs but does not raise.
+
+    A subprocess keeps LiteLLM's global callback state isolated. Both the fake
+    OpenAI provider and fake LangFuse ingestion endpoint are local, so this
+    canary needs neither an LLM key nor LangFuse credentials.
+    """
+    assert Version(importlib.metadata.version("langfuse")) < Version("3")
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self._respond({"data": []})
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(length)
+            try:
+                body = json.loads(raw_body)
+            except json.JSONDecodeError:
+                body = raw_body.decode(errors="replace")
+            requests.append((self.path, body))
+            if self.path.startswith("/chat/completions"):
+                self._respond(
+                    {
+                        "id": "chatcmpl-langfuse-canary",
+                        "object": "chat.completion",
+                        "created": 1,
+                        "model": "gpt-4o-mini",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "finish_reason": "stop",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "local-canary-ok",
+                                },
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 2,
+                            "completion_tokens": 3,
+                            "total_tokens": 5,
+                        },
+                    }
+                )
+            else:
+                self._respond({})
+
+        def _respond(self, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    run_id = "run_langfuse_local_canary"
+    expected_trace_id = hashlib.sha256(run_id.encode()).hexdigest()[:32]
+    script = textwrap.dedent(
+        f"""
+        import asyncio
+
+        from agentfield.agent import Agent
+        from agentfield.execution_context import (
+            ExecutionContext,
+            reset_execution_context,
+            set_execution_context,
+        )
+        from agentfield.types import AIConfig
+
+        async def main():
+            config = AIConfig(
+                model="openai/gpt-4o-mini",
+                api_base={base_url!r},
+                api_key="sk-local-only",
+                retry_attempts=0,
+                enable_rate_limit_retry=False,
+                model_limits_cache={{
+                    "openai/gpt-4o-mini": {{
+                        "context_length": 1000,
+                        "max_output_tokens": 100,
+                    }}
+                }},
+            )
+            app = Agent(
+                node_id="langfuse-canary-node",
+                ai_config=config,
+                auto_register=False,
+                enable_did=False,
+            )
+            context = ExecutionContext(
+                run_id={run_id!r},
+                execution_id="exec_langfuse_local_canary",
+                agent_instance=app,
+                agent_node_id=app.node_id,
+                reasoner_name="local_ingestion_canary",
+            )
+            token = set_execution_context(context)
+            try:
+                response = await app.ai(user="hello from local canary")
+            finally:
+                reset_execution_context(token)
+
+            # LiteLLM dispatches async success callbacks after the completion.
+            # Keep this loop alive long enough for LangFuse's one-second flush.
+            await asyncio.sleep(3)
+            from litellm.litellm_core_utils.litellm_logging import (
+                _in_memory_loggers,
+            )
+            for logger in list(_in_memory_loggers):
+                client = getattr(logger, "Langfuse", None)
+                if client is None:
+                    continue
+                flush = getattr(client, "flush", None)
+                if callable(flush):
+                    await asyncio.to_thread(flush)
+                shutdown = getattr(client, "shutdown", None)
+                if callable(shutdown):
+                    await asyncio.to_thread(shutdown)
+            print("LANGFUSE_CANARY_RESPONSE=" + str(response.text))
+
+        asyncio.run(main())
+        """
+    )
+    env = os.environ.copy()
+    env.pop("AGENTFIELD_LITELLM_METADATA", None)
+    env.update(
+        {
+            "AGENTFIELD_LITELLM_CALLBACKS": "langfuse",
+            "LANGFUSE_PUBLIC_KEY": "pk-local-only",
+            "LANGFUSE_SECRET_KEY": "sk-local-only",
+            "LANGFUSE_HOST": base_url,
+            "LANGFUSE_FLUSH_INTERVAL": "1",
+        }
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=10)
+        server.server_close()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LANGFUSE_CANARY_RESPONSE=local-canary-ok" in result.stdout
+    provider_requests = [
+        body for path, body in requests if path.startswith("/chat/completions")
+    ]
+    ingestion_requests = [
+        body for path, body in requests if path.startswith("/api/public/ingestion")
+    ]
+    assert provider_requests
+    assert "metadata" not in provider_requests[0]
+    assert not any(key.startswith("agentfield_") for key in provider_requests[0])
+    assert ingestion_requests, result.stdout + result.stderr
+    serialized_ingestion = json.dumps(ingestion_requests)
+    assert expected_trace_id in serialized_ingestion
+    assert run_id in serialized_ingestion
+    assert "agentfield_run_id" in serialized_ingestion
+    assert "hello from local canary" in serialized_ingestion
+    assert "local-canary-ok" in serialized_ingestion
 
 
 def test_tts_paths_are_not_stamped():

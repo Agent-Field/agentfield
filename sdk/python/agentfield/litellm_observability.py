@@ -1,6 +1,10 @@
 """Opt-in LiteLLM callbacks and AgentField execution metadata."""
 
+import hashlib
+import importlib.metadata
 import os
+import re
+import threading
 from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Any, FrozenSet, List, Optional
 
@@ -9,10 +13,13 @@ from agentfield.logger import log_debug, log_warn
 CALLBACKS_ENV = "AGENTFIELD_LITELLM_CALLBACKS"
 METADATA_ENV = "AGENTFIELD_LITELLM_METADATA"
 
-_FALSE_VALUES = {"0", "false", "no", "off"}
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 _AGENTFIELD_REGISTERED: set[str] = set()
+_AGENTFIELD_REGISTRATION_MODULES: dict[str, Any] = {}
+_REGISTRATION_LOCK = threading.RLock()
 # LiteLLM callback names whose logger reads the LangFuse-native metadata
-# aliases (trace_id, session_id, trace_name, generation_name, tags).
+# aliases (trace_id, trace_metadata, session_id, trace_name, generation_name,
+# tags).
 _LANGFUSE_CALLBACKS = frozenset({"langfuse", "langfuse_otel"})
 
 
@@ -45,57 +52,144 @@ def register_callbacks(
     if not names:
         return []
 
-    registered: List[str] = []
     try:
         if litellm_module is None:
             import litellm as litellm_module
+    except Exception as exc:
+        log_warn(f"Could not register LiteLLM observability callback: {exc}")
+        return []
 
-        known = (
-            getattr(
-                litellm_module,
-                "_known_custom_logger_compatible_callbacks",
-                [],
-            )
-            or []
+    known = (
+        getattr(
+            litellm_module,
+            "_known_custom_logger_compatible_callbacks",
+            [],
         )
-        manager = getattr(litellm_module, "logging_callback_manager", None)
+        or []
+    )
+    manager = getattr(litellm_module, "logging_callback_manager", None)
+    registered: List[str] = []
+    with _REGISTRATION_LOCK:
+        _reconcile_registered_callbacks()
         for name in names:
+            if (
+                name == "langfuse"
+                and getattr(litellm_module, "__name__", None) == "litellm"
+                and not _standard_langfuse_runtime_compatible()
+            ):
+                continue
             if name not in known:
                 log_debug(
                     f"LiteLLM callback '{name}' is not in LiteLLM's known callback list; registering it anyway"
                 )
-            # Only record a name that one of the branches below actually
-            # installed: reporting success for a callback that was never
-            # registered would also flip the vendor-alias gate in
-            # build_execution_metadata() on for it.
-            added = False
-            add_callback = getattr(manager, "add_litellm_callback", None)
-            if callable(add_callback):
-                add_callback(name)
-                added = True
-            else:
-                callbacks = getattr(litellm_module, "callbacks", None)
-                if isinstance(callbacks, list):
-                    if name not in callbacks:
+
+            # A callback already installed by application code is deliberately
+            # not claimed by AgentField. This ownership distinction is what
+            # prevents the native LangFuse aliases from re-keying an existing
+            # application-managed integration.
+            if _callback_is_active(litellm_module, name):
+                if (
+                    name in _AGENTFIELD_REGISTERED
+                    and _AGENTFIELD_REGISTRATION_MODULES.get(name) is litellm_module
+                ):
+                    registered.append(name)
+                continue
+
+            try:
+                add_callback = getattr(manager, "add_litellm_callback", None)
+                if callable(add_callback):
+                    add_callback(name)
+                else:
+                    callbacks = getattr(litellm_module, "callbacks", None)
+                    if isinstance(callbacks, list) and name not in callbacks:
                         callbacks.append(name)
-                    added = True
-            if added:
+            except Exception as exc:
+                log_warn(
+                    f"Could not register LiteLLM observability callback '{name}': {exc}"
+                )
+                continue
+
+            # LiteLLM's manager returns None even when it refuses a callback
+            # (for example, at MAX_CALLBACKS). Only claim ownership after the
+            # public callback list proves that the name is actually active.
+            if _callback_is_active(litellm_module, name):
                 _AGENTFIELD_REGISTERED.add(name)
+                _AGENTFIELD_REGISTRATION_MODULES[name] = litellm_module
                 registered.append(name)
-    except Exception as exc:
-        log_warn(f"Could not register LiteLLM observability callback: {exc}")
+            else:
+                log_debug(f"LiteLLM did not install observability callback '{name}'")
     return registered
+
+
+def _standard_langfuse_runtime_compatible() -> bool:
+    """Validate the v2 client required by LiteLLM's standard callback path."""
+    try:
+        installed = importlib.metadata.version("langfuse")
+    except importlib.metadata.PackageNotFoundError:
+        log_warn(
+            "LiteLLM callback 'langfuse' was not registered: install "
+            "agentfield[langfuse] first"
+        )
+        return False
+
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", installed)
+    release = tuple(int(part) for part in match.groups()) if match else None
+    if release is None or not ((2, 59, 7) <= release < (3, 0, 0)):
+        log_warn(
+            "LiteLLM callback 'langfuse' was not registered: installed "
+            f"langfuse {installed} is incompatible; install "
+            "agentfield[langfuse] for the supported v2 client"
+        )
+        return False
+    return True
+
+
+def _callback_is_active(litellm_module: Any, name: str) -> bool:
+    """Return whether ``name`` is present in LiteLLM's process-global callbacks."""
+    callbacks = getattr(litellm_module, "callbacks", None)
+    if not isinstance(callbacks, Sequence) or isinstance(callbacks, (str, bytes)):
+        return False
+    try:
+        return any(callback == name for callback in callbacks)
+    except Exception:
+        return False
+
+
+def _reconcile_registered_callbacks() -> None:
+    """Drop AgentField ownership records whose LiteLLM callback was removed."""
+    for name in tuple(_AGENTFIELD_REGISTERED):
+        module = _AGENTFIELD_REGISTRATION_MODULES.get(name)
+        if module is None or not _callback_is_active(module, name):
+            _AGENTFIELD_REGISTERED.discard(name)
+            _AGENTFIELD_REGISTRATION_MODULES.pop(name, None)
 
 
 def agentfield_registered_callbacks() -> FrozenSet[str]:
     """Return callbacks successfully registered by AgentField in this process."""
-    return frozenset(_AGENTFIELD_REGISTERED)
+    with _REGISTRATION_LOCK:
+        _reconcile_registered_callbacks()
+        return frozenset(_AGENTFIELD_REGISTERED)
 
 
 def metadata_enabled(env: Optional[Mapping[str, str]] = None) -> bool:
     """Return whether AgentField execution metadata injection is enabled."""
     source = os.environ if env is None else env
-    return source.get(METADATA_ENV, "").strip().lower() not in _FALSE_VALUES
+    configured = source.get(METADATA_ENV)
+    if configured is not None:
+        return configured.strip().lower() in _TRUE_VALUES
+
+    # Callback configuration is itself an explicit observability opt-in. The
+    # active-registration fallback covers programmatic register_callbacks()
+    # calls and keeps metadata enabled for the lifetime of a callback that
+    # AgentField owns, even if the environment is later cleared.
+    return bool(resolve_callbacks(env=source)) or bool(
+        agentfield_registered_callbacks()
+    )
+
+
+def _langfuse_trace_id(run_id: Any) -> str:
+    """Derive LangFuse's stable 32-hex W3C trace ID from an AgentField run ID."""
+    return hashlib.sha256(str(run_id).encode("utf-8")).hexdigest()[:32]
 
 
 def build_execution_metadata(
@@ -136,8 +230,18 @@ def build_execution_metadata(
     # generations of an application that registered `langfuse` itself while the
     # operator set AGENTFIELD_LITELLM_CALLBACKS to some other vendor.
     if agentfield_registered_callbacks() & _LANGFUSE_CALLBACKS:
+        trace_metadata = {
+            key: value
+            for key, value in metadata.items()
+            if key.startswith("agentfield_")
+        }
         aliases = {
-            "trace_id": run_id,
+            "trace_id": _langfuse_trace_id(run_id) if run_id else None,
+            # LiteLLM intentionally filters arbitrary completion metadata from
+            # LangFuse. Its trace_* steering convention promotes this mapping
+            # to trace.metadata so the original AgentField IDs remain usable
+            # for joins instead of being lost behind the derived trace ID.
+            "trace_metadata": trace_metadata or None,
             "session_id": getattr(context, "session_id", None),
             "trace_name": node_id,
             "generation_name": (
@@ -146,7 +250,7 @@ def build_execution_metadata(
         }
         metadata.update(
             {
-                key: str(value)
+                key: value if key == "trace_metadata" else str(value)
                 for key, value in aliases.items()
                 if value not in (None, "")
             }

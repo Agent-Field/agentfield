@@ -293,9 +293,12 @@ When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution valu
 ### LLM observability (Python SDK)
 
 - `AGENTFIELD_LITELLM_CALLBACKS`: Comma-separated LiteLLM callback names. When
-  unset or empty, AgentField registers nothing.
-- `AGENTFIELD_LITELLM_METADATA=false`: Opt out of the execution-correlation
-  metadata stamp added to `app.ai` text completions.
+  unset or empty, AgentField registers nothing. Setting it also opts into the
+  execution-correlation metadata stamp for `app.ai` text completions.
+- `AGENTFIELD_LITELLM_METADATA=true`: Opt into the execution-correlation stamp
+  without configuring an AgentField-managed callback. Set it to `false` to
+  disable the stamp while retaining callback registration. When neither
+  observability variable is configured, stamping is off.
 
 See [LLM observability](llm-observability.md) for metadata fields, scope, and
 callback behavior.
