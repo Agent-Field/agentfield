@@ -35,8 +35,11 @@ func (p *GeminiProvider) Execute(ctx context.Context, prompt string, options Opt
 		cmd = append(cmd, "--sandbox")
 	}
 
-	if options.Model != "" {
-		cmd = append(cmd, "-m", options.Model)
+	// gemini has no reasoning-effort flag; strip any "#variant" suffix so
+	// the CLI still receives a valid model id, and drop the variant.
+	modelValue, _ := options.resolveModelAndVariant()
+	if modelValue != "" {
+		cmd = append(cmd, "-m", modelValue)
 	}
 
 	// Prompt passed via -p flag.

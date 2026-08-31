@@ -51,12 +51,32 @@ type PromptConfig struct {
 	ToolResultFormatter func(toolName string, result map[string]interface{}) interface{}
 }
 
+// TurnUsage pairs one LLM call's token usage with the model that served it.
+type TurnUsage struct {
+	Model string
+	Usage *Usage
+}
+
 // ToolCallTrace records the full trace of a tool-call loop.
 type ToolCallTrace struct {
 	Calls          []ToolCallRecord
 	TotalTurns     int
 	TotalToolCalls int
 	FinalResponse  string
+
+	// Usage records the token usage of every LLM call the loop made —
+	// intermediate tool-calling turns as well as the final call — in call
+	// order, so callers can account for the loop's full cost. Responses
+	// without usage data are skipped.
+	Usage []TurnUsage
+}
+
+// recordUsage appends resp's usage to the trace when present.
+func (t *ToolCallTrace) recordUsage(resp *Response) {
+	if t == nil || resp == nil || resp.Usage == nil {
+		return
+	}
+	t.Usage = append(t.Usage, TurnUsage{Model: resp.Model, Usage: resp.Usage})
 }
 
 // ToolCallResult wraps a tool-call response and its execution trace.
@@ -170,6 +190,7 @@ func (c *Client) ExecuteToolCallLoopResult(
 		if err != nil {
 			return result, fmt.Errorf("LLM call failed: %w", err)
 		}
+		trace.recordUsage(resp)
 
 		if !resp.HasToolCalls() {
 			result.Response = resp
@@ -239,6 +260,7 @@ func (c *Client) ExecuteToolCallLoopResult(
 			if err != nil {
 				return result, fmt.Errorf("final LLM call failed: %w", err)
 			}
+			trace.recordUsage(resp)
 			result.Response = resp
 			trace.FinalResponse = resp.Text()
 			return result, nil
@@ -254,6 +276,7 @@ func (c *Client) ExecuteToolCallLoopResult(
 	if err != nil {
 		return result, fmt.Errorf("final LLM call failed: %w", err)
 	}
+	trace.recordUsage(resp)
 	result.Response = resp
 	trace.FinalResponse = resp.Text()
 	trace.TotalTurns = config.MaxTurns

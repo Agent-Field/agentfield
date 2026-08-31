@@ -21,3 +21,7 @@ scripts/** linguist-vendored
 
 # Exclude migrations (SQL)
 control-plane/migrations/** linguist-vendored
+
+# Renderer source is text. Some historical TSX blobs contain literal NUL
+# delimiters; force textual review diffs while those blobs remain in history.
+*.tsx text diff

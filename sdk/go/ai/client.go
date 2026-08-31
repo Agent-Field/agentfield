@@ -34,6 +34,11 @@ func NewClient(config *Config) (*Client, error) {
 	}, nil
 }
 
+// Model returns the client's configured default model slug.
+func (c *Client) Model() string {
+	return c.config.Model
+}
+
 // Complete makes a chat completion request.
 func (c *Client) Complete(ctx context.Context, prompt string, opts ...Option) (*Response, error) {
 	// Build base request
@@ -289,13 +294,19 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 			continue // Non-data message, try next
 		}
 
-		// Need more data
+		// Need more data. Per the io.Reader contract, a Read may return n > 0
+		// alongside a non-nil error (commonly the final body bytes together
+		// with io.EOF) — those bytes must be consumed before the error is
+		// surfaced, otherwise the stream's trailing messages (e.g. a terminal
+		// usage-accounting chunk) are silently dropped.
 		n, err := d.reader.Read(d.buf)
+		if n > 0 {
+			d.accumulated = append(d.accumulated, d.buf[:n]...)
+			continue
+		}
 		if err != nil {
 			return StreamChunk{}, err
 		}
-
-		d.accumulated = append(d.accumulated, d.buf[:n]...)
 	}
 }
 

@@ -8,7 +8,9 @@ from typing import Any, Dict, List, Optional
 from agentfield.harness._cli import (
     estimate_cli_cost,
     extract_final_text,
+    extract_token_usage,
     parse_jsonl,
+    resolve_model_and_variant,
     run_cli,
     strip_ansi,
 )
@@ -44,6 +46,16 @@ class CodexProvider:
         elif permission_mode == "plan":
             cmd.extend(["--sandbox", "read-only"])
 
+        # Model via -m; reasoning effort has no dedicated flag — it's the
+        # model_reasoning_effort config key. The effort comes from a
+        # "#variant" suffix on the model (or an explicit options["variant"]),
+        # e.g. "gpt-5.3-codex#high".
+        model_value, variant_value = resolve_model_and_variant(options)
+        if model_value:
+            cmd.extend(["-m", model_value])
+        if variant_value:
+            cmd.extend(["-c", f"model_reasoning_effort={variant_value}"])
+
         cmd.append(prompt)
 
         env: Dict[str, str] = {}
@@ -76,7 +88,7 @@ class CodexProvider:
 
         num_turns = 0
         total_cost: Optional[float] = estimate_cli_cost(
-            model=str(options.get("model", "")),
+            model=model_value or "",
             prompt=prompt,
             result_text=result_text,
         )
@@ -88,6 +100,8 @@ class CodexProvider:
                 num_turns += 1
             elif event.get("type") == "thread.started":
                 session_id = str(event.get("thread_id", ""))
+
+        tokens = extract_token_usage(events)
 
         clean_stderr = strip_ansi(stderr.strip()) if stderr else ""
 
@@ -120,6 +134,11 @@ class CodexProvider:
                 num_turns=num_turns,
                 total_cost_usd=total_cost,
                 session_id=session_id,
+                input_tokens=tokens["input_tokens"],
+                output_tokens=tokens["output_tokens"],
+                cache_read_tokens=tokens["cache_read_tokens"],
+                cache_creation_tokens=tokens["cache_creation_tokens"],
+                model=model_value,
             ),
             is_error=is_error,
             error_message=error_message,

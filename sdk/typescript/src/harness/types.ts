@@ -1,6 +1,11 @@
 export interface HarnessConfig {
   provider: 'claude-code' | 'codex' | 'gemini' | 'opencode';
   model?: string;
+  /**
+   * Provider-specific reasoning-effort variant (e.g. `high`, `minimal`).
+   * Wins over a `#variant` suffix on `model`.
+   */
+  variant?: string;
   maxTurns?: number;
   maxBudgetUsd?: number;
   maxRetries?: number;
@@ -20,6 +25,11 @@ export interface HarnessConfig {
 export interface HarnessOptions {
   provider?: string;
   model?: string;
+  /**
+   * Provider-specific reasoning-effort variant (e.g. `high`, `minimal`).
+   * Wins over a `#variant` suffix on `model`.
+   */
+  variant?: string;
   maxTurns?: number;
   maxBudgetUsd?: number;
   maxRetries?: number;
@@ -44,6 +54,14 @@ export interface Metrics {
   totalCostUsd?: number;
   usage?: Record<string, unknown>;
   sessionId: string;
+  /** Token counts parsed from the provider's result payload (best effort). */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  totalTokens?: number;
+  /** Model reported by the provider, when available. */
+  model?: string;
 }
 
 export interface RawResult {
@@ -64,6 +82,14 @@ export interface HarnessResult {
   durationMs: number;
   sessionId: string;
   messages: Array<Record<string, unknown>>;
+  /** Token counts reported by the harness provider, when available. */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  totalTokens?: number;
+  /** Model reported by the harness provider, when available. */
+  model?: string;
   readonly text: string;
 }
 

@@ -192,11 +192,16 @@ type ExecutionDetailsResponse struct {
 	WebhookRegistered   bool                           `json:"webhook_registered"`
 	WebhookEvents       []*types.ExecutionWebhookEvent `json:"webhook_events,omitempty"`
 	// Provenance (from execution_vcs when DID/VC is enabled for this execution)
-	CallerDID *string `json:"caller_did,omitempty"`
-	TargetDID *string `json:"target_did,omitempty"`
-	InputHash *string `json:"input_hash,omitempty"`
-	OutputHash *string `json:"output_hash,omitempty"`
-	Trigger             *types.TriggerEventMetadata `json:"trigger,omitempty"`
+	CallerDID  *string                     `json:"caller_did,omitempty"`
+	TargetDID  *string                     `json:"target_did,omitempty"`
+	InputHash  *string                     `json:"input_hash,omitempty"`
+	OutputHash *string                     `json:"output_hash,omitempty"`
+	Trigger    *types.TriggerEventMetadata `json:"trigger,omitempty"`
+	// Token/cost usage summed from execution_usage rows for this execution
+	// (populated only when the agent SDK reported usage). The web UI renders
+	// `cost` when present.
+	Cost        *float64 `json:"cost,omitempty"`
+	TotalTokens *int64   `json:"total_tokens,omitempty"`
 }
 
 type EnhancedExecution struct {
@@ -826,10 +831,22 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		}
 	}
 
-
 	// Enrich with trigger metadata if this execution was triggered by a webhook
 	if err := h.enrichExecutionWithTrigger(ctx, exec, &resp); err != nil {
 		logger.Logger.Warn().Err(err).Str("execution_id", exec.ExecutionID).Msg("failed to enrich execution with trigger metadata")
+	}
+
+	// Enrich with token/cost usage summed from execution_usage rows (best-effort).
+	if h.storage != nil {
+		if cost, totalTokens, err := h.storage.GetExecutionUsageTotals(ctx, exec.ExecutionID); err != nil {
+			logger.Logger.Warn().Err(err).Str("execution_id", exec.ExecutionID).Msg("failed to load execution usage totals")
+		} else {
+			resp.Cost = cost
+			if totalTokens > 0 {
+				tt := totalTokens
+				resp.TotalTokens = &tt
+			}
+		}
 	}
 	return resp
 }

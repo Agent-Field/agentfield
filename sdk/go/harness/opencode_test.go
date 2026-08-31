@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -274,5 +275,57 @@ func TestOpenCodePromptDelivery(t *testing.T) {
 				t.Fatalf("viaStdin=false: stdin should be empty, got %q", gotStdin)
 			}
 		}
+	}
+}
+
+// TestOpenCodeProvider_ModelVariantFlagWiring pins the model#variant parity
+// matrix from the Python provider tests (test_harness_provider_opencode.py):
+// a "#variant" suffix on the model maps to --variant, an explicit
+// Options.Variant wins over the suffix, and a bare model produces a
+// byte-identical argv with no --variant flag at all.
+func TestOpenCodeProvider_ModelVariantFlagWiring(t *testing.T) {
+	cases := []struct {
+		name    string
+		options Options
+		wantCmd []string
+	}{
+		{
+			name:    "suffix maps to --variant",
+			options: Options{Model: "openrouter/z-ai/glm-5.2#high"},
+			wantCmd: []string{"opencode", "run", "--format", "json", "-m", "openrouter/z-ai/glm-5.2", "--variant", "high", "hello"},
+		},
+		{
+			name:    "explicit variant wins over suffix",
+			options: Options{Model: "openai/gpt-5#low", Variant: "max"},
+			wantCmd: []string{"opencode", "run", "--format", "json", "-m", "openai/gpt-5", "--variant", "max", "hello"},
+		},
+		{
+			name:    "bare model has no variant flag",
+			options: Options{Model: "deepseek/deepseek-v4-flash"},
+			wantCmd: []string{"opencode", "run", "--format", "json", "-m", "deepseek/deepseek-v4-flash", "hello"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotCmd []string
+			p := NewOpenCodeProvider("opencode", "")
+			p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, _ []byte) (*CLIResult, error) {
+				gotCmd = append([]string(nil), cmd...)
+				return &CLIResult{Stdout: "ok\n", ReturnCode: 0}, nil
+			}
+
+			raw, err := p.Execute(context.Background(), "hello", tc.options)
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if raw.IsError {
+				t.Fatalf("Execute IsError: %s", raw.ErrorMessage)
+			}
+
+			if !reflect.DeepEqual(gotCmd, tc.wantCmd) {
+				t.Fatalf("argv mismatch:\n got  %q\n want %q", gotCmd, tc.wantCmd)
+			}
+		})
 	}
 }

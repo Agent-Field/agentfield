@@ -14,3 +14,12 @@ They are rendered to 32×32 PNG (16pt @2x) as black-on-transparent template
 images so macOS recolors them to match the menu (light/dark).
 
 dot-green / dot-red / dot-gray are original status indicators.
+
+chart-column is an original column-chart glyph (drawn in the same
+black-on-transparent template style as the Lucide line icons) used for the
+Usage section.
+
+The tray's rendered images (the stacked chart, share bar, proportional model /
+quota bars, and the menu-bar sparkline widget) are pure graphics and contain no
+embedded-font text; the numbers next to them are native menu / menu-bar text.
+

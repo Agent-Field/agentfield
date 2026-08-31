@@ -45,7 +45,11 @@ export class LocalVerifier {
     timestampWindow = 300,
     apiKey?: string,
   ) {
-    this.agentFieldUrl = agentFieldUrl.replace(/\/+$/, '');
+    let url = agentFieldUrl;
+    while (url.endsWith('/')) {
+      url = url.slice(0, -1);
+    }
+    this.agentFieldUrl = url;
     this.refreshInterval = refreshInterval;
     this.timestampWindow = timestampWindow;
     this.apiKey = apiKey;

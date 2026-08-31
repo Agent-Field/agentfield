@@ -23,6 +23,9 @@ var iconGauge []byte
 //go:embed assets/icons/cpu.png
 var iconCPU []byte
 
+//go:embed assets/icons/chart-column.png
+var iconUsage []byte
+
 // Traffic-light variants of the metric icons (green good, yellow caution, red
 // bad), applied as regular (colored) images based on each stat's threshold.
 //

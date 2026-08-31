@@ -217,7 +217,7 @@ func TestSchemaHelperBranches(t *testing.T) {
 
 func TestRunnerHelperBranches(t *testing.T) {
 	t.Run("accumulateMetrics merges turns, session ids, and messages", func(t *testing.T) {
-		cost, turns, sid, msgs := accumulateMetrics([]*RawResult{
+		cost, turns, sid, msgs, _ := accumulateMetrics([]*RawResult{
 			{Metrics: Metrics{NumTurns: 1, SessionID: "old"}, Messages: []map[string]any{{"a": 1}}},
 			{Metrics: Metrics{NumTurns: 2, SessionID: "new"}, Messages: []map[string]any{{"b": 2}}},
 		})

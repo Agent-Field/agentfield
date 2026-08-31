@@ -255,6 +255,7 @@ class MultimodalResponse:
         raw_response: Optional[Any] = None,
         cost_usd: Optional[float] = None,
         usage: Optional[Dict[str, int]] = None,
+        cost_source: Optional[str] = None,
     ):
         self._text = text
         self._audio = audio
@@ -264,6 +265,7 @@ class MultimodalResponse:
         self._raw_response = raw_response
         self._cost_usd = cost_usd
         self._usage = usage or {}
+        self._cost_source = cost_source
 
     def __str__(self) -> str:
         """Backward compatibility: return text content when used as string."""
@@ -346,8 +348,17 @@ class MultimodalResponse:
 
     @property
     def usage(self) -> Dict[str, int]:
-        """Token usage breakdown (prompt_tokens, completion_tokens, total_tokens)."""
+        """Token usage breakdown (prompt_tokens, completion_tokens, total_tokens).
+
+        May also carry ``cache_read_tokens``/``cache_creation_tokens`` when the
+        provider reports prompt-cache accounting.
+        """
         return self._usage
+
+    @property
+    def cost_source(self) -> Optional[str]:
+        """Where ``cost_usd`` came from: 'provider' | 'litellm' | None."""
+        return self._cost_source
 
     def save_all(
         self, directory: Union[str, Path], prefix: str = "output"
@@ -521,6 +532,123 @@ def _find_images_recursive(obj: Any, max_depth: int = 10) -> List[ImageOutput]:
     return images
 
 
+def _coerce_int(value: Any) -> int:
+    """Best-effort int coercion for token counts (None/str/float -> int)."""
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_usage(usage_obj: Any) -> Dict[str, int]:
+    """Normalize a provider usage object into a canonical token dict.
+
+    Handles both the OpenAI/LiteLLM shape (``prompt_tokens`` /
+    ``completion_tokens``) and the Anthropic-native shape (``input_tokens`` /
+    ``output_tokens``), plus prompt-cache accounting when present
+    (``cache_read_input_tokens`` / ``cache_creation_input_tokens`` and their
+    LiteLLM-normalized ``*_details`` variants).
+
+    Cache keys are only added when the provider reports them, so responses
+    without caching keep the historical 3-key shape.
+    """
+
+    def _get(obj: Any, *names: str) -> Any:
+        for name in names:
+            if isinstance(obj, dict):
+                if name in obj and obj[name] is not None:
+                    return obj[name]
+            else:
+                val = getattr(obj, name, None)
+                if val is not None:
+                    return val
+        return None
+
+    # Accept OpenAI/LiteLLM (prompt/completion) or Anthropic-native (input/output).
+    prompt = _get(usage_obj, "prompt_tokens", "input_tokens")
+    completion = _get(usage_obj, "completion_tokens", "output_tokens")
+    total = _get(usage_obj, "total_tokens")
+
+    prompt_tokens = _coerce_int(prompt)
+    completion_tokens = _coerce_int(completion)
+    total_tokens = _coerce_int(total)
+    if not total_tokens:
+        total_tokens = prompt_tokens + completion_tokens
+
+    usage: Dict[str, int] = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+    # Prompt-cache accounting. Anthropic exposes these top-level; LiteLLM may
+    # nest read tokens under prompt_tokens_details.cached_tokens.
+    cache_read = _get(usage_obj, "cache_read_input_tokens")
+    if cache_read is None:
+        details = _get(usage_obj, "prompt_tokens_details")
+        if details is not None:
+            cache_read = _get(details, "cached_tokens")
+    cache_creation = _get(usage_obj, "cache_creation_input_tokens")
+
+    if cache_read is not None:
+        usage["cache_read_tokens"] = _coerce_int(cache_read)
+    if cache_creation is not None:
+        usage["cache_creation_tokens"] = _coerce_int(cache_creation)
+
+    return usage
+
+
+def _resolve_cost(response: Any, usage_obj: Any) -> tuple[Optional[float], Optional[str]]:
+    """Resolve a call's cost and where the figure came from.
+
+    Order of preference (never lets a failure discard tokens):
+      1. Provider-native cost (OpenRouter ``usage.cost`` when the request opted
+         into usage accounting) -> ``cost_source="provider"``.
+      2. LiteLLM's ``_hidden_params["response_cost"]`` -> ``"litellm"``.
+      3. ``litellm.completion_cost(completion_response=response)`` -> ``"litellm"``.
+    Returns ``(None, None)`` when no cost can be determined.
+    """
+    # 1. Provider-native cost (e.g. OpenRouter returns usage.cost in USD/credits).
+    if usage_obj is not None:
+        native = getattr(usage_obj, "cost", None)
+        if native is None and isinstance(usage_obj, dict):
+            native = usage_obj.get("cost")
+        if native is not None:
+            try:
+                cost = float(native)
+                if cost > 0:
+                    return cost, "provider"
+            except (TypeError, ValueError):
+                pass
+
+    # 2. LiteLLM pre-computed cost on hidden params.
+    hidden = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        response_cost = hidden.get("response_cost")
+        if response_cost is not None:
+            try:
+                cost = float(response_cost)
+                if cost > 0:
+                    return cost, "litellm"
+            except (TypeError, ValueError):
+                pass
+
+    # 3. LiteLLM pricing DB lookup.
+    if hasattr(response, "model") and response.model:
+        try:
+            import litellm as _litellm
+
+            cost = _litellm.completion_cost(completion_response=response)
+            if cost is not None and cost > 0:
+                return float(cost), "litellm"
+        except Exception:
+            pass
+
+    return None, None
+
+
 def detect_multimodal_response(response: Any) -> MultimodalResponse:
     """
     Automatically detect and wrap multimodal content from LiteLLM responses.
@@ -608,23 +736,17 @@ def detect_multimodal_response(response: Any) -> MultimodalResponse:
     if not images:
         images = _find_images_recursive(response, max_depth=5)
 
-    # Extract usage and estimate cost from response
+    # Extract usage (token counts) and resolve cost. These are decoupled: a
+    # cost-resolution failure must never discard token counts that were
+    # successfully extracted.
     usage_dict: Dict[str, int] = {}
     cost_usd: Optional[float] = None
-    if hasattr(response, "usage") and response.usage:
-        u = response.usage
-        usage_dict = {
-            "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
-            "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
-            "total_tokens": getattr(u, "total_tokens", 0) or 0,
-        }
-    if usage_dict and hasattr(response, "model") and response.model:
-        try:
-            import litellm as _litellm
-
-            cost_usd = _litellm.completion_cost(completion_response=response)
-        except Exception:
-            pass
+    cost_source: Optional[str] = None
+    usage_obj = getattr(response, "usage", None)
+    if usage_obj:
+        usage_dict = _extract_usage(usage_obj)
+    if usage_dict:
+        cost_usd, cost_source = _resolve_cost(response, usage_obj)
 
     return MultimodalResponse(
         text=text,
@@ -635,4 +757,5 @@ def detect_multimodal_response(response: Any) -> MultimodalResponse:
         raw_response=response,
         cost_usd=cost_usd,
         usage=usage_dict,
+        cost_source=cost_source,
     )

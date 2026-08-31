@@ -120,3 +120,8 @@ require (
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
 )
+
+// AgentField vendors a minimal fork of fyne.io/systray (v1.12.2 + one additive
+// SetImage capability) so the macOS tray can show wide, full-color chart/bar
+// images inside its NSMenu. See third_party/systray/PATCHES.md.
+replace fyne.io/systray => ./third_party/systray

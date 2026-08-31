@@ -172,8 +172,23 @@ export interface CliStatus {
 export interface DesktopSettings {
   /** Launch the app when you log in (starts hidden, in the tray). */
   openAtLogin: boolean
+  /** Follow the OS appearance, or explicitly force the light/dark palette. */
+  appearance: 'system' | 'light' | 'dark'
   /** Start the control plane on app launch when nothing is listening. */
   autostartControlPlane: boolean
+  /**
+   * Fixed control-plane port, or null for automatic (prefer 8080, else the
+   * next free port). A fixed port is used exactly: the app starts the control
+   * plane there and reports a conflict instead of silently moving elsewhere.
+   */
+  controlPlanePort: number | null
+  /**
+   * The port of the control plane this app last started or adopted. App-
+   * managed, not a user preference: it lets a restarted app rediscover a
+   * control plane it put on a non-default port instead of starting a second
+   * one somewhere else.
+   */
+  lastControlPlanePort: number | null
   /** Installed agent names to start once the control plane is healthy. */
   autostartAgents: string[]
   /**
@@ -196,6 +211,10 @@ export interface DesktopSettings {
    * back, and Settings keeps offering the update regardless.
    */
   dismissedUpdateVersion: string | null
+  /** Star-on-GitHub prompt state. 'pending' = may show; 'done' = permanently dismissed or already starred. */
+  starPrompt: 'pending' | 'done'
+  /** ISO timestamp until which the star prompt is snoozed (Later = +7 days). null = not snoozed. */
+  starPromptSnoozedUntil: string | null
 }
 
 /** A newer app release found on GitHub (the desktop app's update channel). */
@@ -235,6 +254,25 @@ export interface DashboardMetrics {
   successRate: number | null
 }
 
+/** One bucket from GET /api/ui/v1/usage/stats (by_agent / by_harness). */
+export interface UsageGroup {
+  key: string
+  costUsd: number | null
+  totalTokens: number
+}
+
+/**
+ * 24h usage roll-up from GET /api/ui/v1/usage/stats?window=24h.
+ * null costUsd means the CP has tokens but no priced cost (show tokens only).
+ */
+export interface UsageStats {
+  window: '24h'
+  costUsd: number | null
+  totalTokens: number
+  byAgent: UsageGroup[]
+  byHarness: UsageGroup[]
+}
+
 /** The single payload shipped over IPC to the renderer. */
 export interface AgentFieldSnapshot {
   controlPlane: ControlPlaneStatus & { baseUrl: string }
@@ -247,6 +285,12 @@ export interface AgentFieldSnapshot {
   executions: ExecutionsResult | null
   /** null when the control plane view is unavailable. */
   metrics: DashboardMetrics | null
+  /**
+   * 24h usage/cost roll-up. null when the CP is down/unrecognized, the
+   * endpoint is absent (404 / older CP), auth-blocked (401/403), or the
+   * response could not be parsed — UI hides Spend/Usage entirely.
+   */
+  usage: UsageStats | null
   /** ISO timestamp of when this snapshot was assembled. */
   fetchedAt: string
 }
@@ -274,6 +318,8 @@ export interface AgentFieldApi {
   update(name: string): Promise<InstallResult>
   /** Start / stop / restart an installed agent by its registry name. */
   agentAction(action: 'start' | 'stop' | 'restart', name: string): Promise<AgentActionResult>
+  /** Bring up the local AgentField control plane and wait until healthy. */
+  startControlPlane(): Promise<AgentActionResult>
   /** Env/secret status for every installed agent that declares variables. */
   getEnvReports(): Promise<AgentEnvReport[]>
   /** Store a declared variable's value in af's encrypted secret store. */

@@ -71,12 +71,14 @@ class AgentWorkflow:
         start_time = time.time()
         parent_execution_id = parent_context.execution_id if parent_context else None
 
-        await self.notify_call_start(
-            execution_context.execution_id,
-            execution_context,
-            reasoner_name,
-            input_data,
-            parent_execution_id=parent_execution_id,
+        self.agent._notification_dispatcher.submit(
+            lambda: self.notify_call_start(
+                execution_context.execution_id,
+                execution_context,
+                reasoner_name,
+                input_data,
+                parent_execution_id=parent_execution_id,
+            )
         )
 
         try:
@@ -84,27 +86,36 @@ class AgentWorkflow:
             if inspect.isawaitable(result):
                 result = await result
             duration_ms = int((time.time() - start_time) * 1000)
-            await self.notify_call_complete(
-                execution_context.execution_id,
-                execution_context.workflow_id,
-                result,
-                duration_ms,
-                execution_context,
-                input_data=input_data,
-                parent_execution_id=parent_execution_id,
+
+            self.agent._notification_dispatcher.submit(
+                lambda: self.notify_call_complete(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    result,
+                    duration_ms,
+                    execution_context,
+                    input_data=input_data,
+                    parent_execution_id=parent_execution_id,
+                )
             )
+
             return result
         except Exception as exc:  # pragma: no cover - re-raised
             duration_ms = int((time.time() - start_time) * 1000)
-            await self.notify_call_error(
-                execution_context.execution_id,
-                execution_context.workflow_id,
-                str(exc),
-                duration_ms,
-                execution_context,
-                input_data=input_data,
-                parent_execution_id=parent_execution_id,
+            error_msg = str(exc)
+
+            self.agent._notification_dispatcher.submit(
+                lambda: self.notify_call_error(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    error_msg,
+                    duration_ms,
+                    execution_context,
+                    input_data=input_data,
+                    parent_execution_id=parent_execution_id,
+                )
             )
+
             raise
         finally:
             reset_execution_context(token)
@@ -121,7 +132,7 @@ class AgentWorkflow:
         *,
         parent_execution_id: Optional[str] = None,
     ) -> None:
-        await self._emit_execution_transition_log(
+        self._emit_execution_transition_log(
             context,
             reasoner_name,
             event_type="reasoner.started",
@@ -131,6 +142,7 @@ class AgentWorkflow:
             input_data=input_data,
             parent_execution_id=parent_execution_id,
         )
+
         payload = self._build_event_payload(
             context,
             reasoner_name,
@@ -151,7 +163,7 @@ class AgentWorkflow:
         input_data: Optional[Dict[str, Any]] = None,
         parent_execution_id: Optional[str] = None,
     ) -> None:
-        await self._emit_execution_transition_log(
+        self._emit_execution_transition_log(
             context,
             context.reasoner_name,
             event_type="reasoner.completed",
@@ -163,6 +175,7 @@ class AgentWorkflow:
             input_data=input_data,
             parent_execution_id=parent_execution_id,
         )
+
         payload = self._build_event_payload(
             context,
             context.reasoner_name,
@@ -185,7 +198,7 @@ class AgentWorkflow:
         input_data: Optional[Dict[str, Any]] = None,
         parent_execution_id: Optional[str] = None,
     ) -> None:
-        await self._emit_execution_transition_log(
+        self._emit_execution_transition_log(
             context,
             context.reasoner_name,
             event_type="reasoner.failed",
@@ -291,7 +304,7 @@ class AgentWorkflow:
                 context.execution_id = body.get("execution_id", context.execution_id)
                 context.workflow_id = body.get("workflow_id", context.workflow_id)
                 context.run_id = body.get("run_id", context.run_id)
-            await self._emit_execution_transition_log(
+            self._emit_execution_transition_log(
                 context,
                 reasoner_name,
                 event_type="execution.registered",
@@ -303,7 +316,7 @@ class AgentWorkflow:
         except Exception as exc:  # pragma: no cover - network failure path
             if getattr(self.agent, "dev_mode", False):
                 log_warn(f"Workflow registration failed: {exc}")
-            await self._emit_execution_transition_log(
+            self._emit_execution_transition_log(
                 context,
                 reasoner_name,
                 event_type="execution.registration.failed",
@@ -348,7 +361,7 @@ class AgentWorkflow:
             payload["input_data"] = input_data
         return payload
 
-    async def _emit_execution_transition_log(
+    def _emit_execution_transition_log(
         self,
         context: ExecutionContext,
         reasoner_name: str,

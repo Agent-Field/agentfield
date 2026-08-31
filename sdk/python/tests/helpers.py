@@ -1,6 +1,9 @@
 """Shared testing utilities for AgentField SDK unit tests."""
 
 from __future__ import annotations
+from typing import Callable
+from typing import Coroutine
+
 
 import asyncio
 import threading
@@ -92,6 +95,26 @@ class DummyAgentFieldClient:
         return True
 
 
+class InlineTestingDispatcher:
+    def __init__(self):
+        self._started = True
+
+    def start(self):
+        self._started = True
+
+    def submit(self, coro_factory: Callable[[], Coroutine[Any, Any, None]]):
+        coro = coro_factory()
+        try:
+            coro.send(None)
+        except StopIteration:
+            pass
+        except RuntimeWarning:
+            pass
+
+    async def shutdown(self, timeout: int = 5):
+        self._started = False
+
+
 @dataclass
 class StubAgent:
     """Light-weight stand-in for Agent used across module tests."""
@@ -113,6 +136,9 @@ class StubAgent:
     agentfield_connected: bool = True
     _current_status: AgentStatus = AgentStatus.STARTING
     callback_candidates: List[str] = field(default_factory=list)
+    _notification_dispatcher: InlineTestingDispatcher = field(
+        default_factory=InlineTestingDispatcher
+    )
 
     def _build_vc_metadata(self):
         return {"agent_default": True}

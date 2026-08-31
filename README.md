@@ -510,6 +510,8 @@ The control plane is a stateless Go service. Agents connect from anywhere - your
 
 ## Learn More
 
+AgentField sends privacy-minimized installation and lifecycle telemetry by default; no prompts or execution payloads are sent. Set `AGENTFIELD_TELEMETRY_ENABLED=false` to disable it. [Telemetry details](docs/ENVIRONMENT_VARIABLES.md#anonymous-telemetry).
+
 The thinking behind AgentField - essays on AI backends, harness orchestration, and the infrastructure production agents actually need.
 
 <table>

@@ -121,6 +121,21 @@ func (m *mockStatusStorage) StoreExecutionLogEntry(ctx context.Context, entry *t
 func (m *mockStatusStorage) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
 	return nil, nil
 }
+func (m *mockStatusStorage) CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error {
+	return nil
+}
+func (m *mockStatusStorage) GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error) {
+	return &types.UsageStatsAggregation{}, nil
+}
+func (m *mockStatusStorage) GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error) {
+	return &types.UsageTimeseries{}, nil
+}
+func (m *mockStatusStorage) GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error) {
+	return nil, nil
+}
+func (m *mockStatusStorage) GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error) {
+	return nil, 0, nil
+}
 func (m *mockStatusStorage) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
 	return nil
 }
@@ -295,6 +310,7 @@ func (m *mockStatusStorage) GetComponentDID(ctx context.Context, componentID str
 func (m *mockStatusStorage) ListComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
 	return nil, nil
 }
+
 // StoreAgentDIDWithComponents is superseded by the typed version below.
 func (m *mockStatusStorage) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {
 	return nil
@@ -559,19 +575,41 @@ func TestBoolToStatus(t *testing.T) {
 
 // Trigger plugin system stubs — interface fillers for the test mock; not exercised.
 func (m *mockStatusStorage) CreateTrigger(context.Context, *types.Trigger) error { return nil }
-func (m *mockStatusStorage) GetTrigger(context.Context, string) (*types.Trigger, error) { return nil, nil }
-func (m *mockStatusStorage) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) { return nil, nil }
+func (m *mockStatusStorage) GetTrigger(context.Context, string) (*types.Trigger, error) {
+	return nil, nil
+}
+func (m *mockStatusStorage) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) {
+	return nil, nil
+}
 func (m *mockStatusStorage) UpdateTrigger(context.Context, *types.Trigger) error { return nil }
-func (m *mockStatusStorage) DeleteTrigger(context.Context, string) error { return nil }
-func (m *mockStatusStorage) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) { return "", nil }
+func (m *mockStatusStorage) DeleteTrigger(context.Context, string) error         { return nil }
+func (m *mockStatusStorage) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) {
+	return "", nil
+}
 func (m *mockStatusStorage) MarkOrphanedTriggers(context.Context, string, []string) error { return nil }
 func (m *mockStatusStorage) SetTriggerOverride(context.Context, string, bool, bool) error { return nil }
-func (m *mockStatusStorage) ConvertTriggerToUIManaged(context.Context, string) error { return nil }
-func (m *mockStatusStorage) InsertInboundEvent(context.Context, *types.InboundEvent) error { return nil }
-func (m *mockStatusStorage) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) { return false, nil }
-func (m *mockStatusStorage) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
-func (m *mockStatusStorage) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) { return nil, nil }
-func (m *mockStatusStorage) MarkInboundEventProcessed(context.Context, string, string, string, string) error { return nil }
-func (m *mockStatusStorage) SetInboundEventDispatchedWorkflow(context.Context, string, string) error { return nil }
-func (m *mockStatusStorage) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
-func (m *mockStatusStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) { return &types.TriggerMetrics{}, nil }
+func (m *mockStatusStorage) ConvertTriggerToUIManaged(context.Context, string) error      { return nil }
+func (m *mockStatusStorage) InsertInboundEvent(context.Context, *types.InboundEvent) error {
+	return nil
+}
+func (m *mockStatusStorage) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (m *mockStatusStorage) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (m *mockStatusStorage) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) {
+	return nil, nil
+}
+func (m *mockStatusStorage) MarkInboundEventProcessed(context.Context, string, string, string, string) error {
+	return nil
+}
+func (m *mockStatusStorage) SetInboundEventDispatchedWorkflow(context.Context, string, string) error {
+	return nil
+}
+func (m *mockStatusStorage) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (m *mockStatusStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) {
+	return &types.TriggerMetrics{}, nil
+}
