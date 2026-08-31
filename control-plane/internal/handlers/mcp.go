@@ -512,6 +512,7 @@ func (s *mcpServer) toolWaitRun(c *gin.Context, rawArgs json.RawMessage) (map[st
 // the MCP tool. It returns as soon as the job is enqueued.
 func (s *mcpServer) startAsyncRun(ctx context.Context, target string, input map[string]interface{}, headers executionHeaders, callerDID, targetDID string) (runID, execID string, err error) {
 	controller := newExecutionController(s.store, s.payloads, s.webhooks, s.timeout, s.internalToken)
+	// MCP creates an ordinary execution and deliberately leaves RunMetadata nil.
 	plan, err := controller.prepareExecutionForTarget(ctx, target, ExecuteRequest{Input: input}, headers, callerDID, targetDID)
 	if err != nil {
 		return "", "", err
