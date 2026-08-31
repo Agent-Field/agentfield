@@ -289,7 +289,7 @@ Runner (ALL providers):
 
 ### 5.3 Prompt Suffix
 
-Appended to the **end** of the user prompt (recency bias — models weight the end of input most heavily). Not in system prompt — CLI wrappers for Gemini/OpenCode may not expose system prompt control.
+Appended to the **end** of the user prompt (recency bias — models weight the end of input most heavily). OpenCode's Python adapter configures a non-blank system prompt through its per-run `OPENCODE_CONFIG_CONTENT` agent overlay by default; `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` is an opt-in compatibility rollback that transports it inline. Other CLI wrappers may not expose system prompt control. See [the provider contract](../harness-providers.md#opencode-standalone-runs-python) for the OpenCode-specific behavior.
 
 ```
 {user's actual task prompt}

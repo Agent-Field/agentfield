@@ -217,6 +217,55 @@ Pi and OMP accept the same OpenRouter model strings in every SDK, for example
 The `#` separator is safe in model ids: `:` belongs to OpenRouter suffixes like
 `:free`, and `@` to Vertex-style ids, but no provider uses `#`.
 
+### OpenCode standalone runs (Python)
+
+The Python OpenCode adapter uses `opencode run` for each call; it does not use
+`opencode serve` or attach to a session. By default, it selects the fixed
+`agentfield-harness` agent with `--agent` and supplies that agent through the
+child process's `OPENCODE_CONFIG_CONTENT` environment variable. The generated
+overlay sets `$schema` to `https://opencode.ai/config.json`, selects
+`agentfield-harness` as the default agent, and fixes its mode to `primary` with
+`steps` set to `500`. It does not modify shared OpenCode configuration files.
+
+The generated overlay is deep-merged into a caller-provided
+`OPENCODE_CONFIG_CONTENT` value, or into the ambient value when no per-call
+value is supplied. Unrelated providers, agents, MCP servers, and other
+configuration remain intact, while AgentField's generated harness fields take
+precedence where they overlap. The overlay contains no provider credentials or
+API keys. The supplied configuration must be a JSON object; malformed content
+is reported instead of being silently discarded.
+
+A fixed worker instruction is always included, in the default agent overlay
+or in the inline prompt when the rollback is enabled. When a caller supplies a
+non-blank `system_prompt`, it precedes that instruction. The resolved base
+`model` and `reasoningEffort` are included only when available.
+The base model is also passed with `-m`; a resolved `#variant` suffix is
+passed exactly once with `--variant`. AgentField `max_turns` remains a runner
+limit and is not serialized as OpenCode `steps`.
+
+OpenCode's initial permission baseline is headless and compatibility-oriented:
+the wildcard action is allowed. It is followed by a resource-specific `skill`
+denial for `agentfield*`, which prevents the child from loading AgentField
+orchestration skills while leaving unrelated skills available. OpenCode
+evaluates the last matching permission rule, so this ordering is intentional.
+`question` and `task` are also explicitly denied, and no `ask` permission is
+generated. The Python OpenCode provider currently accepts the common
+`tools` and `permission_mode` options but ignores them; it does not translate
+tool names into redundant permission entries, and `permission_mode` does not
+select an OpenCode permission mode. The wildcard behavior is not per-role
+authorization.
+
+For an opt-in rollback or compatibility test, set
+`AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` (in the per-call environment or
+the ambient environment). That path keeps the generated agent selection and
+targeted permissions, removes the selected agent's configured system prompt
+from the merged configuration, and places the caller system prompt, fixed
+worker instruction, and task into one prompt. POSIX sends that prompt as the
+positional argument and Windows sends it over stdin. The default path keeps the
+task prompt (including the runner's schema instructions, when applicable) as
+the only user-facing prompt and configures the system prompt on the generated
+agent.
+
 ## Verify
 
 Check selected providers in a container or CI job before any paid run:

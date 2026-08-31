@@ -253,6 +253,8 @@ On SIGTERM or a graceful `POST /shutdown`, the node immediately stops heartbeats
 
 For Kubernetes, set `terminationGracePeriodSeconds` to a value greater than the shutdown budget. This leaves time for the terminal callback and normal process teardown after the reasoner drain. `app.serve()` owns the production uvicorn-aware signal lifecycle.
 
+Python OpenCode harness runs use the generated per-run agent configuration by default. Set `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` to opt into the legacy inline system-prompt transport for rollback or compatibility testing. This does not change authentication handling or add credentials to the prompt.
+
 ### MiniMax video generation
 
 - `MINIMAX_API_KEY`: API key used by the Python SDK's MiniMax media provider.
