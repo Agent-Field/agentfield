@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -512,26 +511,34 @@ func (s *mcpServer) toolWaitRun(c *gin.Context, rawArgs json.RawMessage) (map[st
 // the MCP tool. It returns as soon as the job is enqueued.
 func (s *mcpServer) startAsyncRun(ctx context.Context, target string, input map[string]interface{}, headers executionHeaders, callerDID, targetDID string) (runID, execID string, err error) {
 	controller := newExecutionController(s.store, s.payloads, s.webhooks, s.timeout, s.internalToken)
-	plan, err := controller.prepareExecutionForTarget(ctx, target, ExecuteRequest{Input: input}, headers, callerDID, targetDID)
-	if err != nil {
-		return "", "", err
+	pool := getAsyncWorkerPool()
+	if !pool.reserve() {
+		return "", "", &executionPreconditionError{code: 503, message: "async execution queue is full; retry later", category: ErrorCategoryConcurrencyLimit}
 	}
+	reserved := true
+	defer func() {
+		if reserved {
+			pool.releaseReservation()
+		}
+	}()
 
-	if err := CheckExecutionPreconditions(plan.target.NodeID, plan.llmEndpoint); err != nil {
-		_ = controller.failExecution(ctx, plan, err, 0, nil)
+	plan, err := controller.prepareExecutionForTargetWithAdmission(ctx, target, ExecuteRequest{Input: input}, headers, callerDID, targetDID, true)
+	if err != nil {
 		return "", "", err
 	}
 
 	controller.publishExecutionStartedEvent(plan)
 
-	pool := getAsyncWorkerPool()
 	job := asyncExecutionJob{controller: controller, plan: *plan}
-	if ok := pool.submit(job); !ok {
-		ReleaseExecutionSlot(plan.target.NodeID)
-		queueErr := errors.New("async execution queue is full; retry later")
+	if ok := pool.submitReserved(job); !ok {
+		if plan.slotHeld {
+			ReleaseExecutionSlot(plan.target.NodeID)
+		}
+		queueErr := &executionPreconditionError{code: 503, message: "async execution queue is full; retry later", category: ErrorCategoryConcurrencyLimit}
 		_ = controller.failExecution(ctx, plan, queueErr, 0, nil)
 		return "", "", queueErr
 	}
+	reserved = false
 
 	return plan.exec.RunID, plan.exec.ExecutionID, nil
 }

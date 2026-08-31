@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -100,6 +101,29 @@ func (m *LLMHealthMonitor) EndpointCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.endpoints)
+}
+
+// RetryAfterSeconds returns the remaining circuit-breaker recovery window.
+func (m *LLMHealthMonitor) RetryAfterSeconds(name string) int {
+	if m == nil {
+		return 30
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	recovery := m.config.RecoveryTimeout
+	if recovery <= 0 {
+		recovery = 30 * time.Second
+	}
+	remaining := recovery
+	if endpoint, ok := m.endpoints[normalizeLLMEndpointName(name)]; ok && endpoint.CircuitState == CircuitOpen && !endpoint.circuitOpenedAt.IsZero() {
+		remaining = recovery - time.Since(endpoint.circuitOpenedAt)
+	}
+	seconds := int(math.Ceil(remaining.Seconds()))
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }
 
 // Start begins the health monitoring loop.

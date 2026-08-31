@@ -69,14 +69,14 @@ func checkLLMEndpointHealth(monitor *services.LLMHealthMonitor, llmEndpoint stri
 			if status.CircuitState != services.CircuitOpen {
 				return nil
 			}
-			return newLLMUnavailableError(fmt.Sprintf("LLM backend %q unavailable", status.Name), status.LastError)
+			return newLLMUnavailableError(fmt.Sprintf("LLM backend %q unavailable", status.Name), status.LastError, monitor.RetryAfterSeconds(status.Name))
 		}
 	}
 
 	statuses := monitor.GetAllStatuses()
 	if monitor.EndpointCount() == 1 {
 		if unavailable := firstUnavailableEndpoint(statuses); unavailable != nil {
-			return newLLMUnavailableError(fmt.Sprintf("LLM backend %q unavailable", unavailable.Name), unavailable.LastError)
+			return newLLMUnavailableError(fmt.Sprintf("LLM backend %q unavailable", unavailable.Name), unavailable.LastError, monitor.RetryAfterSeconds(unavailable.Name))
 		}
 		return nil
 	}
@@ -85,6 +85,7 @@ func checkLLMEndpointHealth(monitor *services.LLMHealthMonitor, llmEndpoint stri
 		return newLLMUnavailableError(
 			fmt.Sprintf("LLM backend health is degraded and request backend could not be determined (endpoint %q unavailable)", unavailable.Name),
 			unavailable.LastError,
+			monitor.RetryAfterSeconds(unavailable.Name),
 		)
 	}
 
@@ -100,14 +101,15 @@ func firstUnavailableEndpoint(statuses []services.LLMEndpointStatus) *services.L
 	return nil
 }
 
-func newLLMUnavailableError(message, lastErr string) error {
+func newLLMUnavailableError(message, lastErr string, retryAfter int) error {
 	if strings.TrimSpace(lastErr) != "" {
 		message += ": " + lastErr
 	}
 	return &executionPreconditionError{
-		code:     503,
-		message:  message,
-		category: ErrorCategoryLLMUnavailable,
+		code:       503,
+		message:    message,
+		category:   ErrorCategoryLLMUnavailable,
+		retryAfter: retryAfter,
 	}
 }
 
@@ -152,10 +154,11 @@ const (
 // (reasoners, skills, permission middleware) for conditions like
 // agent_pending_approval.
 type executionPreconditionError struct {
-	code      int
-	message   string
-	category  ErrorCategory
-	errorCode string
+	code       int
+	message    string
+	category   ErrorCategory
+	errorCode  string
+	retryAfter int
 }
 
 func (e *executionPreconditionError) Error() string {

@@ -197,6 +197,7 @@ type preparedExecution struct {
 	targetType        string
 	executionMode     string
 	llmEndpoint       string
+	slotHeld          bool
 	webhookRegistered bool
 	webhookError      *string
 	// DID context forwarded to the target agent.

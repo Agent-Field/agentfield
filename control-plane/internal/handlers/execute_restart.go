@@ -151,18 +151,24 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 	}
 
 	target := fmt.Sprintf("%s.%s", restartExec.NodeID, restartExec.ReasonerID)
-	plan, err := c.prepareExecutionForTarget(reqCtx, target, ExecuteRequest{
+	pool := getAsyncWorkerPool()
+	if !pool.reserve() {
+		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue is full; retry later")
+		return
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			pool.releaseReservation()
+		}
+	}()
+
+	plan, err := c.prepareExecutionForTargetWithAdmission(reqCtx, target, ExecuteRequest{
 		Input:   input,
 		Context: contextPayload,
 		Webhook: req.Webhook,
-	}, headers, "", "")
+	}, headers, "", "", true)
 	if err != nil {
-		writeExecutionError(ctx, err)
-		return
-	}
-
-	if err := CheckExecutionPreconditions(plan.target.NodeID, plan.llmEndpoint); err != nil {
-		_ = c.failExecution(reqCtx, plan, err, 0, nil)
 		writeExecutionError(ctx, err)
 		return
 	}
@@ -175,20 +181,22 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 
 	c.publishExecutionStartedEvent(plan)
 
-	pool := getAsyncWorkerPool()
 	job := asyncExecutionJob{
 		controller: c,
 		plan:       *plan,
 	}
-	if ok := pool.submit(job); !ok {
-		ReleaseExecutionSlot(plan.target.NodeID)
-		queueErr := errors.New("async execution queue is full; retry later")
+	if ok := pool.submitReserved(job); !ok {
+		if plan.slotHeld {
+			ReleaseExecutionSlot(plan.target.NodeID)
+		}
+		queueErr := &executionPreconditionError{code: http.StatusServiceUnavailable, message: "async execution queue is full; retry later", category: ErrorCategoryConcurrencyLimit}
 		if updateErr := c.failExecution(reqCtx, plan, queueErr, 0, nil); updateErr != nil {
 			logger.Logger.Error().Err(updateErr).Str("execution_id", plan.exec.ExecutionID).Msg("restart: failed to persist queue saturation")
 		}
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": queueErr.Error(), "error_category": "concurrency_limit"})
+		writeExecutionError(ctx, queueErr)
 		return
 	}
+	reserved = false
 
 	createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)
 	var replayBefore *string

@@ -573,9 +573,17 @@ func writeExecutionError(ctx *gin.Context, err error) {
 			body["error"] = code
 			body["message"] = pe.Error()
 		}
-		if pe.Category() == ErrorCategoryConcurrencyLimit || pe.Category() == ErrorCategoryNodeUnavailable {
-			ctx.Header("Retry-After", "1")
-			body["retry_after"] = 1
+		retryAfter := pe.retryAfter
+		if retryAfter <= 0 {
+			retryAfter = map[ErrorCategory]int{
+				ErrorCategoryConcurrencyLimit: 1,
+				ErrorCategoryNodeUnavailable:  1,
+				ErrorCategoryLLMUnavailable:   30,
+			}[pe.Category()]
+		}
+		if retryAfter > 0 {
+			ctx.Header("Retry-After", strconv.Itoa(retryAfter))
+			body["retry_after"] = retryAfter
 		}
 		ctx.JSON(pe.HTTPStatusCode(), body)
 		return
@@ -840,7 +848,7 @@ func (j asyncExecutionJob) process() {
 
 func (j asyncExecutionJob) processWithContext(workerCtx context.Context) {
 	// Release the per-agent concurrency slot when this job finishes
-	if j.plan.target != nil {
+	if j.plan.slotHeld && j.plan.target != nil {
 		defer ReleaseExecutionSlot(j.plan.target.NodeID)
 	}
 
@@ -1051,7 +1059,7 @@ func shutdownPersistenceContext() (context.Context, context.CancelFunc) {
 }
 
 func (j asyncExecutionJob) failForControlPlaneShutdown(ctx context.Context) {
-	if j.plan.target != nil {
+	if j.plan.slotHeld && j.plan.target != nil {
 		ReleaseExecutionSlot(j.plan.target.NodeID)
 	}
 	shutdownErr := &executionPreconditionError{

@@ -266,6 +266,9 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		return
 	}
 	plan.executionMode = "sync"
+	if plan.slotHeld {
+		defer ReleaseExecutionSlot(plan.target.NodeID)
+	}
 
 	if plan.replayHit != nil {
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
@@ -286,14 +289,6 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		})
 		return
 	}
-
-	// Check LLM health and per-agent concurrency limits before proceeding
-	if err := CheckExecutionPreconditions(plan.target.NodeID, plan.llmEndpoint); err != nil {
-		_ = c.failExecution(reqCtx, plan, err, 0, nil)
-		writeExecutionError(ctx, err)
-		return
-	}
-	defer ReleaseExecutionSlot(plan.target.NodeID)
 
 	// Emit execution started event with full reasoner context
 	c.publishExecutionStartedEvent(plan)
@@ -434,8 +429,10 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 func (c *executionController) handleAsync(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
 	pool := getAsyncWorkerPool()
-	// A reservation covers both preparation and time waiting in the queue. The
-	// worker releases it on dequeue so only not-yet-started work consumes capacity.
+	// A reservation covers preparation, queue wait, and the worker's dispatch. It
+	// is released when the worker job returns (early on an agent HTTP 202 ACK).
+	// Workers plus queue capacity bound admitted work; a paused execution pins a
+	// worker and reservation for up to 24 hours.
 	if !pool.reserve() {
 		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue is full; retry later")
 		return
@@ -455,7 +452,6 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 	plan.executionMode = "async"
 
 	if plan.replayHit != nil {
-		ReleaseExecutionSlot(plan.target.NodeID)
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
 			writeExecutionError(ctx, err)
 			return
@@ -496,7 +492,14 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 	}
 
 	if ok := pool.submitReserved(job); !ok {
-		ReleaseExecutionSlot(plan.target.NodeID) // Release since process() won't run
+		// The pool only refuses a reserved submission once it has stopped, i.e.
+		// the control plane is draining. Persist the outcome on a detached
+		// context: the request context is very likely being cancelled by the
+		// same shutdown, and a cancelled write would strand this row in
+		// "running" — exactly the orphan this branch exists to prevent.
+		persistCtx, persistCancel := shutdownPersistenceContext()
+		job.failForControlPlaneShutdown(persistCtx)
+		persistCancel()
 		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue stopped; retry later")
 		return
 	}
