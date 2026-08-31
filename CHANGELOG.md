@@ -6,6 +6,243 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.4] - 2026-08-31
+
+
+### Changed
+
+- Refactor(desktop): share one linear trailing-slash trim (#1021)
+
+#1019 replaced the `/\/+$/` replace in the TypeScript SDK's LocalVerifier
+after CodeQL flagged it as js/polynomial-redos. Four copies of the same
+pattern remained in desktop/: catalog.sourceRepo, cloudUpdate.normalizedUrl
+(twice) and cpClient.request.
+
+CodeQL does not flag those — they take operator config, not attacker
+input, so there is no taint path — but there is no reason to keep four
+copies of a pattern the scanner objects to when one linear helper does
+the job.
+
+Add shared/trimSlashes.ts with the same backward index scan LocalVerifier
+now uses, and route all four call sites through it. Behavior is unchanged
+for every input, interior '//' in catalog source strings included. (7f58f58)
+
+
+
+### Chores
+
+- Chore(pre-commit): repair the ruff hooks, pin them to CI's version (#1022)
+
+The ruff hooks have been dead. `sdk/python/pyproject.toml` selects the
+ASYNC ruleset, which the pinned v0.6.9 does not know, so both hooks
+aborted before linting anything:
+
+    ruff failed
+      Cause: Failed to parse sdk/python/pyproject.toml
+      Cause: TOML parse error at line 136, column 1
+        Unknown rule selector: `ASYNC240`
+
+Every Python commit hit this, which is how #1018 ended up needing
+--no-verify. Pin to v0.15.22, the version .github/workflows/sdk-python.yml
+already installs, so local and CI enforce one contract. 0.16.x stays out
+of scope: it flags ~2700 pre-existing violations repo-wide.
+
+Scope both hooks to ^sdk/python/, matching that workflow's
+working-directory. Unscoped they run from the repo root and surface 53
+pre-existing errors in examples/ and scripts/ that CI has never checked
+— a real backlog, but one that deserves its own PR rather than arriving
+as a side effect of a version bump.
+
+Also switch `ruff` to `ruff-check`; the old id is now a legacy alias.
+
+Verified: `pre-commit run --all-files ruff-check` passes, and the file
+that forced --no-verify on #1018 passes every hook. (d48f40f)
+
+
+
+### Fixed
+
+- Fix(control-plane): bound golden-run name and tag writes into workflow_runs.metadata (#1025)
+
+* fix(control-plane): bound golden-run name and tag writes into run metadata
+
+POST /api/ui/v2/workflow-runs/:run_id/golden wrote the caller-supplied name
+and tag list into workflow_runs.metadata with no bounds at all. The name was
+only TrimSpace'd, so a 1 MiB name persisted verbatim; sanitizeStringList
+trimmed and de-duped but capped neither the entry count nor the entry length,
+and it preallocated its output slice (and an unbounded de-dupe map) straight
+from the attacker-controlled input length. That row is re-read and
+re-serialised on every runs-list page that contains the run, so both are
+stored amplification vectors (#944).
+
+Cap tags at 20 entries of at most 64 runes each, and truncate the name at 200
+runes. Over-long tags are dropped rather than truncated: byte-slicing can land
+mid-rune and json.Marshal silently rewrites the invalid UTF-8 to U+FFFD.
+Lengths are counted with utf8.RuneCountInString so a 64-rune CJK tag survives.
+The output slice and de-dupe map are now sized min(len(values), maxCount) and
+the loop stops once maxCount survivors are collected, so a multi-million-entry
+tag array cannot force a large allocation before the cap applies.
+
+This route is UI-private and its only caller sends one hard-coded tag, so
+oversized input is bounded silently rather than rejected — a 400 would break
+the existing "Save as golden run" button. The name fallback is unchanged: an
+empty name still falls back to run_id, and run_id itself is not truncated.
+
+Forward-only. Nothing re-validates on read, so rows that already hold
+oversized golden metadata keep reading back exactly as they do today.
+
+The caps are named constants so the follow-up run-metadata endpoint can reuse
+the same bounds and the same helper.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover golden-run metadata bounds and forward-only reads
+
+Adds the behaviour tests for the golden-run caps:
+
+- sanitizeStringList: 100 inputs cap to the first 20; a 65-rune ASCII entry is
+  dropped while its 64-rune neighbour survives; a 64-rune CJK entry is kept
+  byte-identical (proving it is not truncated into U+FFFD) while a 65-rune one
+  is dropped; the legacy trim/de-dupe/order behaviour is pinned unchanged; the
+  maxCount<=0 and maxRunes<=0 guards are exercised.
+- A 100k-entry input asserts cap(out) <= 20, which is the allocation contract —
+  a length assertion alone would still pass with the old preallocation.
+- truncateRunes: cut on a rune boundary, result always valid UTF-8 with no
+  replacement character, and the non-positive cap guard.
+- Handler round-trip: a POST with 50 tags plus one over-long tag stores exactly
+  20, a 1 MiB name stores 200 runes and keeps the whole metadata blob under
+  4 KiB, and a blank name still falls back to run_id.
+- Read-back: a pre-seeded row holding 50 tags and a 500-rune name still
+  surfaces in full on both the runs list and the run detail, pinning that this
+  change is forward-only and read paths do not re-validate.
+
+The two pre-existing golden-route tests are left untouched as the
+behaviour-unchanged regression guard.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e1f2831)
+
+
+
+### Performance
+
+- Perf(sdk-python): stop re-serializing oversized structured log records (#1028)
+
+* perf(sdk-python): stop re-serializing oversized structured log records
+
+_bounded_mirror_line serialized the whole record with json.dumps before it
+knew whether the record fit the mirror budget, and serialized it a second
+time at the end to report original_size. A record carrying a multi-megabyte
+string attribute therefore passed that payload to json.dumps twice, and every
+size check did len(<str>.encode("utf-8")), materialising a throwaway
+multi-megabyte bytes copy purely to count.
+
+Three changes, all inside that one private method and the helpers next to it:
+
+* _certainly_exceeds_budget is a shallow O(top-level keys + attributes) sum
+  over str/bytes payloads that skips the speculative whole-record dumps when
+  it can already prove the record is oversized. It is deliberately NOT a
+  recursive walker — a recursive lower-bound walk measured +318% on a fitting
+  14.7 KB record and never aborts early for int-heavy payloads. Nested
+  containers count as zero, so "False" means "unknown, serialize and measure",
+  and any exception falls back to that same path so a mirror line is never
+  dropped because the estimator misbehaved.
+* _record_size reconstructs the full record size arithmetically from the
+  envelope plus the already-computed attributes size instead of re-encoding,
+  which removes the second whole-record dumps. It falls back to a plain dumps
+  when the record has no "attributes" key, because {**record,
+  "attributes": {}} would APPEND the key and overcount the envelope by 14
+  bytes in the reported original_size.
+* _byte_len replaces len(x.encode("utf-8")) everywhere it was used only to
+  count; str.isascii() is an O(1) flag check on CPython's compact-unicode
+  representation, so the common case no longer allocates at all.
+
+_json_key fixes a latent off-by-two while it is in here: json coerces non-str
+dict keys (1 -> "1", True -> "true", None -> "null"), so measuring the raw key
+undercut the attributes size by two bytes per non-str key and could push an
+elision boundary the wrong way. bool is checked before int because
+isinstance(True, int).
+
+Output is unchanged: a 220-case differential harness (hand-picked edges plus
+200 randomised records across budgets 256-16384) produces byte-identical lines
+against the previous implementation, and the record handed to _dispatch_to_cp
+is still only ever shallow-copied. Measured, mean of 5: one 5 MB str attribute
+20.4 ms -> 9.0 ms (json.dumps calls carrying a >=1 MB payload: 2 -> 1),
+200 x 50 KB attributes 46.2 ms -> 18.8 ms, and a fitting 14.7 KB record stays
+at 0.18 ms.
+
+Refs #985
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): guard the bounded mirror line against re-serialization
+
+Regression tests for the mirror-line precheck, derived from the behavior
+contract rather than from the implementation:
+
+* a 5 MB str attribute passes a >=1 MB payload to json.dumps at most once
+  (counting proxy around logger_module.json.dumps) — the deterministic guard
+  that the whole-record dumps is really skipped;
+* a record that FITS the default 16384 budget is emitted byte-identically to
+  a direct json.dumps and its nested values are never measured. The existing
+  many-large-attributes test cannot catch a recursive precheck, because its
+  first 50 KB attribute aborts the scan immediately; this one nests a str
+  subclass whose isascii()/__len__ raise, which CPython's C json encoder
+  never touches but a recursive walker would;
+* non-str attribute keys elide at the same per-attribute boundary and report
+  an aggregate _elided size that matches json.dumps exactly (4030, not the
+  4024 the raw-key measurement produced);
+* a record with no "attributes" key reports its exact size in the
+  minimal-record fallback rather than 14 bytes too many;
+* a payload that raises while being measured falls back to the full-dumps
+  path, so the stdout line is still emitted instead of being dropped;
+* _json_key's coercion table (str / bool / None / float / __str__ fallback).
+
+No wall-clock assertion is added: the post-fix timing has only ~4.6x headroom
+and would be a CI flake source. Every existing structured-mirror test —
+including the exact <4002>/<4004> markers and the elapsed < 0.2 guard — passes
+unmodified.
+
+Refs #985
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): make the mirror perf guards fail on revert
+
+Both new guards passed against main's logger.py, so neither actually
+guarded the behaviour it was named for.
+
+- test_..._serializes_large_string_payload_at_most_once classified
+  json.dumps calls by their *argument* (a >=1MB str). The redundant call
+  this PR removes passes the record *dict*, not the 5 MB string, so both
+  versions showed exactly one big-str argument. Count the *output* size
+  instead: 1 on the branch, 2 on main, 2 with the precheck neutered.
+
+- test_..._fitting_nested_record_is_not_walked_recursively used a
+  tripwire that raised AssertionError, but _certainly_exceeds_budget
+  swallows every exception and falls back to the full-dumps path, so a
+  recursive precheck silently emitted the byte-identical line the test
+  asserted. Record the touches in a list and assert it stays empty; the
+  byte-identical assertion is kept alongside it.
+
+Verified by mutation: with `return False` inserted at the top of
+_certainly_exceeds_budget the first test now fails (2 != 1), and with
+_shallow_payload_bytes made recursive over dicts/lists the second fails
+with 2800 recorded touches. Both were green before this change.
+
+Also applies `ruff format` to the one hunk in
+test_..._non_string_attribute_keys_have_exact_sizes that had drifted, so
+the file stays format-clean.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (5a0d275)
+
 ## [0.1.138-rc.3] - 2026-08-31
 
 
