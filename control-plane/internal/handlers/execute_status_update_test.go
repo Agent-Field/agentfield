@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,7 @@ func TestUpdateExecutionStatusHandler_Success(t *testing.T) {
 		ExecutionID: "exec-1",
 		RunID:       "run-1",
 		AgentNodeID: "node-1",
+		InstanceID:  "instance-1",
 		ReasonerID:  "reasoner-a",
 		Status:      types.ExecutionStatusRunning,
 		StartedAt:   time.Now().UTC(),
@@ -61,6 +63,8 @@ func TestUpdateExecutionStatusHandler_Success(t *testing.T) {
 	var payload ExecutionStatusResponse
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
 	require.Equal(t, "exec-1", payload.ExecutionID)
+	require.Equal(t, "node-1", payload.AgentNodeID)
+	require.Equal(t, "instance-1", payload.InstanceID)
 	require.Equal(t, types.ExecutionStatusSucceeded, payload.Status)
 	require.NotNil(t, payload.CompletedAt)
 
@@ -73,6 +77,108 @@ func TestUpdateExecutionStatusHandler_Success(t *testing.T) {
 	require.NotNil(t, updated.CompletedAt)
 	require.NotNil(t, updated.DurationMS)
 	require.Equal(t, int64(1000), *updated.DurationMS)
+}
+
+func TestGetExecutionStatusHandler_ReturnsAgentAndInstanceIdentifiers(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := newTestExecutionStorage(nil)
+	now := time.Now().UTC()
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: "exec-with-instance",
+		RunID:       "run-1",
+		AgentNodeID: "node-1",
+		InstanceID:  "instance-1",
+		Status:      types.ExecutionStatusRunning,
+		StartedAt:   now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}))
+
+	router := gin.New()
+	router.GET("/api/v1/executions/:execution_id", GetExecutionStatusHandler(store))
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-with-instance", nil))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	var payload map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.Equal(t, "node-1", payload["agent_node_id"])
+	require.Equal(t, "instance-1", payload["instance_id"])
+}
+
+func TestGetExecutionStatusHandler_OmitsEmptyInstanceID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := newTestExecutionStorage(nil)
+	now := time.Now().UTC()
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: "exec-without-instance",
+		RunID:       "run-1",
+		AgentNodeID: "go-node",
+		Status:      types.ExecutionStatusRunning,
+		StartedAt:   now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}))
+
+	router := gin.New()
+	router.GET("/api/v1/executions/:execution_id", GetExecutionStatusHandler(store))
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-without-instance", nil))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	var payload map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.Equal(t, "go-node", payload["agent_node_id"])
+	_, present := payload["instance_id"]
+	require.False(t, present)
+}
+
+type batchStatusFallbackErrorStore struct{ *testExecutionStorage }
+
+func (s *batchStatusFallbackErrorStore) GetExecutionRecordsBatch(context.Context, []string) (map[string]*types.Execution, error) {
+	return nil, fmt.Errorf("batch unavailable")
+}
+
+func (s *batchStatusFallbackErrorStore) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
+	if executionID == "exec-error" {
+		return nil, fmt.Errorf("read failed")
+	}
+	return s.testExecutionStorage.GetExecutionRecord(ctx, executionID)
+}
+
+func TestBatchExecutionStatusHandler_IdentifierFieldsOnlyForFoundExecutions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	base := newTestExecutionStorage(nil)
+	now := time.Now().UTC()
+	require.NoError(t, base.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: "exec-found",
+		RunID:       "run-1",
+		AgentNodeID: "node-1",
+		InstanceID:  "instance-1",
+		Status:      types.ExecutionStatusRunning,
+		StartedAt:   now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}))
+	store := &batchStatusFallbackErrorStore{testExecutionStorage: base}
+	router := gin.New()
+	router.POST("/api/v1/executions/batch-status", BatchExecutionStatusHandler(store))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/batch-status", strings.NewReader(`{"execution_ids":["exec-found","exec-missing","exec-error"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	var payload map[string]map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.Equal(t, "node-1", payload["exec-found"]["agent_node_id"])
+	require.Equal(t, "instance-1", payload["exec-found"]["instance_id"])
+	for _, id := range []string{"exec-missing", "exec-error"} {
+		_, hasAgentNodeID := payload[id]["agent_node_id"]
+		_, hasInstanceID := payload[id]["instance_id"]
+		require.False(t, hasAgentNodeID, id)
+		require.False(t, hasInstanceID, id)
+	}
 }
 
 func TestUpdateExecutionStatusHandler_Failed(t *testing.T) {

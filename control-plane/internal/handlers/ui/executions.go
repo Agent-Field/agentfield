@@ -161,6 +161,7 @@ type ExecutionDetailsResponse struct {
 	SessionID           *string                        `json:"session_id,omitempty"`
 	ActorID             *string                        `json:"actor_id,omitempty"`
 	AgentNodeID         string                         `json:"agent_node_id"`
+	InstanceID          string                         `json:"instance_id,omitempty"`
 	ParentWorkflowID    *string                        `json:"parent_workflow_id,omitempty"`
 	RootWorkflowID      *string                        `json:"root_workflow_id,omitempty"`
 	WorkflowDepth       *int                           `json:"workflow_depth,omitempty"`
@@ -766,6 +767,7 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		SessionID:           exec.SessionID,
 		ActorID:             exec.ActorID,
 		AgentNodeID:         exec.AgentNodeID,
+		InstanceID:          exec.InstanceID,
 		ParentWorkflowID:    exec.ParentExecutionID,
 		RootWorkflowID:      nil,
 		WorkflowDepth:       nil,

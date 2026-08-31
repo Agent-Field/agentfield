@@ -322,6 +322,8 @@ func renderStatus(exec *types.Execution) ExecutionStatusResponse {
 	resp := ExecutionStatusResponse{
 		ExecutionID:       exec.ExecutionID,
 		RunID:             exec.RunID,
+		AgentNodeID:       exec.AgentNodeID,
+		InstanceID:        exec.InstanceID,
 		Status:            exec.Status,
 		StatusReason:      exec.StatusReason,
 		Result:            decodeJSON(exec.ResultPayload),

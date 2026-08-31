@@ -83,6 +83,8 @@ type AsyncExecuteResponse struct {
 type ExecutionStatusResponse struct {
 	ExecutionID       string                         `json:"execution_id"`
 	RunID             string                         `json:"run_id"`
+	AgentNodeID       string                         `json:"agent_node_id,omitempty"`
+	InstanceID        string                         `json:"instance_id,omitempty"`
 	Status            string                         `json:"status"`
 	StatusReason      *string                        `json:"status_reason,omitempty"`
 	Result            interface{}                    `json:"result,omitempty"`
