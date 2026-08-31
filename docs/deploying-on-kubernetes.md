@@ -29,7 +29,9 @@ controlPlane:
 
 Leave the liveness probe on `/api/v1/health`.
 
-The chart already sets `controlPlane.shutdownMinDelay: 5s` and `controlPlane.terminationGracePeriodSeconds: 60`. A `preStop` hook is a useful complement, because it delays SIGTERM itself while endpoint removal propagates. Use an `exec` sleep — a Kubernetes `httpGet` hook can only issue GET, and the control plane exposes no GET shutdown route:
+The chart's readiness probe uses `periodSeconds: 2` and `failureThreshold: 1`. Once the path is switched, the first probe after `BeginDrain` therefore marks the pod Unready within two seconds, leaving about three seconds of the shipped five-second minimum delay for the EndpointSlice change to propagate before the listener closes. If you customize the probe, keep `periodSeconds * failureThreshold` below `AGENTFIELD_SHUTDOWN_MIN_DELAY`; otherwise the listener can close while Kubernetes still considers the pod Ready.
+
+The chart already sets `controlPlane.shutdownMinDelay: 5s` and `controlPlane.terminationGracePeriodSeconds: 60`. A `preStop` hook is a useful complement, because it delays SIGTERM itself while endpoint removal propagates. The shipped control-plane image is distroless and has no `sh` or `sleep` executable, so use Kubernetes' native `sleep` lifecycle action rather than an `exec` hook:
 
 ```yaml
 spec:
@@ -39,11 +41,13 @@ spec:
         - name: control-plane
           lifecycle:
             preStop:
-              exec:
-                command: ["sh", "-c", "sleep 5"]
+              sleep:
+                seconds: 5
 ```
 
-Size the control-plane pod grace as `AGENTFIELD_SHUTDOWN_MIN_DELAY` + `AGENTFIELD_SHUTDOWN_TIMEOUT` + roughly 20 seconds of shutdown tail. The tail is a fresh asynchronous-pool drain budget of at least 5s, plus 5s each for package maintenance, the observability forwarder and the OpenTelemetry tracer, plus an unbounded `adminGRPCServer.GracefulStop()`. With the shipped `5s` minimum delay and the default 30-second `AGENTFIELD_SHUTDOWN_TIMEOUT` that is 55 seconds, hence the chart's `60`. Add the `preStop` sleep on top if you use one.
+The native sleep action was introduced behind the `PodLifecycleSleepAction` feature gate in Kubernetes 1.29, is enabled by default from 1.30, and is GA from 1.34. On 1.29 the cluster administrator must enable that feature gate. On older clusters, or clusters that explicitly disable it, the distroless image cannot run an exec-based sleep; rely on `AGENTFIELD_SHUTDOWN_MIN_DELAY` alone or build a derived image containing a sleep executable and point an `exec` hook directly at that executable.
+
+Size the control-plane pod grace as the `preStop` sleep (if any) + `AGENTFIELD_SHUTDOWN_MIN_DELAY` + `AGENTFIELD_SHUTDOWN_TIMEOUT` + roughly 20 seconds of shutdown tail. The tail is a fresh asynchronous-pool drain budget of at least 5s, plus 5s each for package maintenance, the observability forwarder and the OpenTelemetry tracer, plus an unbounded `adminGRPCServer.GracefulStop()`. Without `preStop`, the shipped `5s` minimum delay and default 30-second shutdown timeout total about 55 seconds, so the chart's `60` leaves about five seconds of headroom. A five-second `preStop` raises the bounded sum to 60 seconds; set `terminationGracePeriodSeconds: 65` to retain that headroom.
 
 The control plane uses `AGENTFIELD_SHUTDOWN_TIMEOUT` (default `30s`) to drain its own HTTP server and its asynchronous execution pool. During shutdown it rejects new queued work, drains active work, and marks work still queued as `failed` with status reason `control_plane_shutdown`.
 

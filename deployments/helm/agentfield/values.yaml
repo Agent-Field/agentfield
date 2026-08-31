@@ -16,6 +16,12 @@ controlPlane:
     # 503 during the shutdown min-delay window, which /api/v1/health
     # deliberately does not.
     path: /api/v1/health
+    # A draining pod must fail readiness before shutdownMinDelay closes the
+    # listener. With one required failure and a two-second period, the next
+    # probe marks it Unready within 2s and leaves about 3s for endpoint
+    # propagation under the shipped 5s delay.
+    periodSeconds: 2
+    failureThreshold: 1
 
   image:
     repository: agentfield/control-plane
@@ -48,6 +54,9 @@ controlPlane:
     AGENTFIELD_CONFIG_FILE: /dev/null
 
   extraEnv: []
+  # AGENTFIELD_SHUTDOWN_MIN_DELAY may be set here instead of
+  # controlPlane.shutdownMinDelay; the template suppresses its generated entry
+  # so the rendered Pod never contains two variables with the same name.
   # - name: AGENTFIELD_AGENT_DRAIN_GRACE
   #   value: "60s"
 

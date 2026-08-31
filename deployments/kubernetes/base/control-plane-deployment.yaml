@@ -50,8 +50,12 @@ spec:
               path: /api/v1/health
               port: http
             initialDelaySeconds: 5
-            periodSeconds: 5
+            # Once the path is switched to /api/v1/health/ready, one failed
+            # probe marks the pod Unready within 2s of BeginDrain. That leaves
+            # about 3s of the 5s minimum delay for endpoint propagation.
+            periodSeconds: 2
             timeoutSeconds: 5
+            failureThreshold: 1
       volumes:
         - name: data
           persistentVolumeClaim:
