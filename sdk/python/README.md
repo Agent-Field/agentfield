@@ -162,6 +162,28 @@ See `examples/python_agent_nodes/waiting_state/` for a complete working example.
 
 See `docs/DEVELOPMENT.md` for instructions on wiring agents to the control plane.
 
+## Running several agents in one process (AgentMesh)
+
+```python
+from agentfield import Agent, AgentMesh
+
+writer = Agent(node_id="writer")
+editor = Agent(node_id="editor")
+
+@editor.reasoner()
+async def revise(text: str) -> dict:
+    return {"text": text.strip()}
+
+@writer.reasoner()
+async def draft(topic: str) -> dict:
+    return await writer.call("editor.revise", text=f"Draft about {topic}")
+
+AgentMesh([writer, editor]).run(port=8000)
+```
+
+AgentMesh v1 is offline-only. See the [AgentMesh guide](../../docs/agent-mesh.md)
+for mount layout, `call_local`, error behavior, and limitations.
+
 ## Testing
 
 ```bash
