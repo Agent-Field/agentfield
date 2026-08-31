@@ -84,7 +84,7 @@ For an agent whose longest reasoner runs about 10 minutes:
 
 - `strategy.rollingUpdate.maxSurge: 0` on the agent Deployment, so the old pod is signalled before the replacement registers;
 - agent env `AGENTFIELD_SHUTDOWN_TIMEOUT: "11m"` — the drain budget must outlast the reasoner;
-- agent pod `terminationGracePeriodSeconds: 690` — `11m` plus the 15-second floor above;
+- agent pod `terminationGracePeriodSeconds: 675` — `11m` plus the 15-second floor above;
 - control-plane env `AGENTFIELD_AGENT_DRAIN_GRACE: "12m"` — `11m` drain + 5s settlement + callback latency + headroom;
 - control-plane env `AGENTFIELD_AGENT_RESTART_GRACE: "15s"` — leave it at the default; see the warning below.
 
