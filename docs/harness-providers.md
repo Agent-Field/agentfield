@@ -198,7 +198,10 @@ result = await app.harness(
 )
 ```
 
-An explicit `variant="high"` keyword wins over the suffix. Per provider:
+An explicit `variant="high"` keyword wins over the suffix. In Python,
+`variant` is also available on `HarnessConfig` and `HarnessRunner.run`; a
+per-call `Agent.harness(..., variant=...)` value overrides the configured
+default. Per provider:
 
 Pi and OMP accept the same OpenRouter model strings in every SDK, for example
 `openrouter/minimax/minimax-m2.7` or

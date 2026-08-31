@@ -393,6 +393,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | System prompt override | `system_prompt="..."` |
 | OpenCode per-run configuration | Preserves caller `OPENCODE_CONFIG_CONTENT` while applying the harness overlay |
 | OpenCode prompt compatibility | `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` enables the opt-in inline rollback |
+| Provider-agnostic reasoning variants | `variant="high"` or a `#high` model suffix |
 | Multi-layer output recovery | Cosmetic repair → retry → full retry |
 
 #### Connector API (Fleet Management)

@@ -3861,6 +3861,7 @@ class Agent(FastAPI):
         schema: Any = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        variant: Optional[str] = None,
         max_turns: Optional[int] = None,
         max_budget_usd: Optional[float] = None,
         tools: Optional[List[str]] = None,
@@ -3885,6 +3886,8 @@ class Agent(FastAPI):
                 "opencode", "grok", "pi", "omp"). Omit to use
                 ``AGENTFIELD_HARNESS_PROVIDER`` when set, otherwise ``aforge``.
             model: Override model identifier. Empty uses the provider's own default.
+            variant: Provider-specific reasoning-effort variant. Wins over a
+                ``#variant`` suffix on the model when supported by the provider.
             max_turns: Maximum agent iterations.
             max_budget_usd: Cost cap in USD.
             tools: Allowed tools list.
@@ -3917,6 +3920,7 @@ class Agent(FastAPI):
             schema=schema,
             provider=provider,
             model=model,
+            variant=variant,
             max_turns=max_turns,
             max_budget_usd=max_budget_usd,
             tools=tools,

@@ -98,6 +98,7 @@ fix = await app.harness(
     "Refactor to async/await",
     provider="codex",      # Override default provider
     model="o3",            # Override default model
+    variant="high",        # Provider-specific reasoning effort
     max_turns=100,
     tools=["Read", "Write", "Edit", "Bash"],
     max_budget_usd=5.0,
@@ -358,6 +359,7 @@ class HarnessConfig(BaseModel):
     # Provider selection: explicit > AGENTFIELD_HARNESS_PROVIDER > "aforge"
     provider: str = "aforge"    # | "claude-code" | "codex" | "gemini" | "opencode" | "pi" | "omp"
     model: Optional[str] = None  # None → the provider's own default
+    variant: Optional[str] = None  # Explicit reasoning-effort variant
     
     # Execution limits
     max_turns: int = 30

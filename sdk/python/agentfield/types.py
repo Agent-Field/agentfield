@@ -296,6 +296,13 @@ class HarnessConfig(BaseModel):
             "(aforge picks its own; claude-code uses sonnet)."
         ),
     )
+    variant: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider-specific reasoning-effort variant (for example, "
+            '"high" or "minimal"). Wins over a #variant model suffix.'
+        ),
+    )
     max_turns: int = Field(default=30, description="Maximum agent iterations.")
     max_budget_usd: Optional[float] = Field(
         default=None, description="Cost cap in USD."
