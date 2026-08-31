@@ -146,6 +146,8 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 		applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 	case c.config.IsInfron():
 		applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+	case c.config.IsOrcaRouter():
+		applyOrcaRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 	}
 
 	// Execute request
@@ -243,6 +245,8 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 			applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 		case c.config.IsInfron():
 			applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+		case c.config.IsOrcaRouter():
+			applyOrcaRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 		}
 
 		// Execute request

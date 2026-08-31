@@ -53,6 +53,7 @@ var vouchedRewriteDomains = []string{
 	"openai.com",       // api.openai.com
 	"openai.azure.com", // <resource>.openai.azure.com
 	"openrouter.ai",
+	"orcarouter.ai", // api.orcarouter.ai (accepts max_completion_tokens)
 }
 
 // isVouchedRewriteEndpoint reports whether baseURL points at an endpoint we
@@ -94,8 +95,9 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 	//
 	// Infron returns that cost at the top level of the body rather than nested
 	// under usage, which Response and StreamChunk normalize on parse (see
-	// normalizeNativeCost).
-	if req.Usage == nil && (c.config.IsOpenRouter() || c.config.IsInfron()) {
+	// normalizeNativeCost). OrcaRouter returns it nested under usage.cost, like
+	// OpenRouter, so no normalization is needed on its path.
+	if req.Usage == nil && (c.config.IsOpenRouter() || c.config.IsInfron() || c.config.IsOrcaRouter()) {
 		req.Usage = &RequestUsage{Include: true}
 	}
 

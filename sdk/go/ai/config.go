@@ -12,6 +12,12 @@ import (
 // refer to the same service, so grepping for either one should land here.
 const defaultInfronBaseURL = "https://llm.onerouter.pro/v1"
 
+// defaultOrcaRouterBaseURL is OrcaRouter's OpenAI-compatible endpoint. The
+// gateway is model-agnostic: like OpenRouter it exposes a `<provider>/<model>`
+// namespace, and the `orcarouter/` prefix is part of the published model id
+// (e.g. "orcarouter/auto"), so it must stay on the wire.
+const defaultOrcaRouterBaseURL = "https://api.orcarouter.ai/v1"
+
 // Config holds AI/LLM configuration for making API calls.
 type Config struct {
 	// API Key for OpenAI or OpenRouter
@@ -21,6 +27,7 @@ type Config struct {
 	// Default: https://api.openai.com/v1
 	// OpenRouter: https://openrouter.ai/api/v1
 	// Infron: https://llm.onerouter.pro/v1
+	// OrcaRouter: https://api.orcarouter.ai/v1
 	BaseURL string
 
 	// Default model to use (e.g., "gpt-4o", "openai/gpt-4o" for OpenRouter)
@@ -46,6 +53,7 @@ type Config struct {
 // It reads from environment variables:
 // - OPENAI_API_KEY or OPENROUTER_API_KEY
 // - INFRON_API_KEY
+// - ORCAROUTER_API_KEY
 // - AI_BASE_URL (defaults to OpenAI)
 // - AI_MODEL (defaults to gpt-4o)
 //
@@ -69,6 +77,15 @@ func DefaultConfig() *Config {
 	if routerKey := os.Getenv("OPENROUTER_API_KEY"); routerKey != "" {
 		apiKey = routerKey
 		baseURL = "https://openrouter.ai/api/v1"
+	}
+
+	// Check for OrcaRouter configuration. Like Infron, it only applies when no
+	// other gateway key already resolved — an existing key keeps precedence so
+	// that adding ORCAROUTER_API_KEY to a configured environment cannot
+	// silently move traffic (and the credential) to a different gateway.
+	if orcaKey := os.Getenv("ORCAROUTER_API_KEY"); orcaKey != "" && apiKey == "" {
+		apiKey = orcaKey
+		baseURL = defaultOrcaRouterBaseURL
 	}
 
 	// Allow override via AI_BASE_URL
@@ -97,6 +114,8 @@ func DefaultConfig() *Config {
 		}
 	case cfg.IsInfron():
 		cfg.SiteURL, cfg.SiteName, _ = resolveInfronAttribution("", "")
+	case cfg.IsOrcaRouter():
+		cfg.SiteURL, cfg.SiteName, _ = resolveOrcaRouterAttribution("", "")
 	}
 	return cfg
 }
@@ -130,4 +149,10 @@ func (c *Config) IsOpenRouter() bool {
 func (c *Config) IsInfron() bool {
 	return strings.Contains(strings.ToLower(c.BaseURL), "onerouter.pro") ||
 		strings.HasPrefix(strings.ToLower(c.Model), infronModelPrefix)
+}
+
+// IsOrcaRouter returns true if the base URL is for the OrcaRouter gateway.
+func (c *Config) IsOrcaRouter() bool {
+	return strings.Contains(strings.ToLower(c.BaseURL), "orcarouter.ai") ||
+		strings.HasPrefix(strings.ToLower(c.Model), "orcarouter/")
 }
