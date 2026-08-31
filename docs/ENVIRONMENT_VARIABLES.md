@@ -116,9 +116,10 @@ The telemetry payload does not include prompts, inputs, outputs, logs, secrets, 
 - `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): Maximum number of asynchronous executions waiting for a worker; non-positive values use the default. Requests arriving once the queue is saturated are rejected with `503`, a `Retry-After` header and a `retry_after` field, and no execution row is persisted for them.
 - `AGENTFIELD_MAX_EXECUTE_BODY_BYTES` (default: `33554432`, 32 MiB): Maximum request body size, in bytes, for POST routes under `/api/v1/execute`. Oversize requests are rejected with `413` before any execution is persisted; other routes are not capped by this setting.
 - `AGENTFIELD_MAX_REGISTER_BODY_BYTES` (default: `8388608`, 8 MiB): Maximum request body size, in bytes, for node registration POST routes (`/api/v1/nodes`, `/api/v1/nodes/register`, and `/api/v1/nodes/register-serverless`). Oversize requests are rejected with `413` before registration handling begins.
-- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control plane HTTP server during shutdown.
+- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control-plane HTTP server. Accepts bare seconds (`30`) and Go duration strings (`30s`, `5m`). The same budget is shared with `StopAsyncWorkerPool`, which is guaranteed a fresh budget of at least 5s, so total shutdown can exceed this value. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
+- `AGENTFIELD_SHUTDOWN_MIN_DELAY` (default: `0`): Control-plane-only delay between SIGTERM/SIGINT and closing the listener; zero preserves existing timing. Accepts bare seconds or a Go duration; invalid or negative values warn and keep the current value. This name is reserved for the control plane so future SDKs do not acquire another dual-meaning shutdown variable. Equivalent YAML: `agentfield.shutdown_min_delay`. It also affects `af server`, the code path the desktop app launches, so a value in `~/.agentfield/agentfield.yaml` slows local Ctrl+C too. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
 - `AGENTFIELD_AGENT_RESTART_GRACE` (default: `15s`): How long an execution waits for an agent process to return during a coordinated restart; a negative duration disables the wait.
-- `AGENTFIELD_AGENT_DRAIN_GRACE` (default: `60s`): How long instance-scoped non-terminal work may keep completing after a replacement agent instance registers, before it is marked `agent_restart_orphaned`. The deferred in-memory timer is lost on a control-plane restart; the stale-execution sweep configured by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` is the backstop. Equivalent YAML: `agentfield.node_health.agent_drain_grace`.
+- `AGENTFIELD_AGENT_DRAIN_GRACE` (default: `60s`): How long instance-scoped non-terminal work may keep completing after a replacement agent instance registers, before it is marked `agent_restart_orphaned`. The deferred in-memory timer is lost on a control-plane restart; the stale-execution sweep configured by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` is the backstop. Equivalent YAML: `agentfield.node_health.agent_drain_grace`. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
 
 For Kubernetes, set `terminationGracePeriodSeconds` above the SDK drain window so the departing pod can return accepted work. Keep the agent `version` stable across rolling updates: changing it creates a separate versioned registration, so its work is recovered only by the stale sweep rather than this re-registration drain timer.
 
@@ -218,7 +219,7 @@ Note that this is the **agent-node** meaning of the variable. The control plane 
 
 The Python SDK's equivalent setting is documented under "Python SDK agents" below.
 
-In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` at least 10 seconds higher than `AGENTFIELD_SHUTDOWN_TIMEOUT` to leave room for post-cancel settlement and the control-plane notification before the container is killed.
+In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` at least 15 seconds higher than `AGENTFIELD_SHUTDOWN_TIMEOUT` to cover five seconds of post-cancel settlement and ten seconds of callback/process-exit headroom.
 
 ### Go SDK agents (example: `examples/go_agent_nodes`)
 
@@ -249,7 +250,7 @@ On SIGTERM or a graceful `POST /shutdown`, the node immediately stops heartbeats
 
 `af stop` waits **at least** the node's shutdown budget, not exactly that duration: its total wait also includes the initial HTTP request and, when needed, the signal fallback after the budget expires.
 
-For Kubernetes, set `terminationGracePeriodSeconds` to a value greater than the shutdown budget. This leaves time for the terminal callback and normal process teardown after the reasoner drain. The older `Agent.setup_signal_handlers()` API is retained for compatibility, but `app.serve()` owns the production uvicorn-aware signal lifecycle.
+For Kubernetes, set `terminationGracePeriodSeconds` to a value greater than the shutdown budget. This leaves time for the terminal callback and normal process teardown after the reasoner drain. `app.serve()` owns the production uvicorn-aware signal lifecycle.
 
 ### MiniMax video generation
 
