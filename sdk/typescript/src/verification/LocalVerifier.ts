@@ -45,7 +45,13 @@ export class LocalVerifier {
     timestampWindow = 300,
     apiKey?: string,
   ) {
-    this.agentFieldUrl = agentFieldUrl.replace(/\/+$/, '');
+    // Trim trailing slashes without a regex: /\/+$/.test-style patterns are
+    // flagged by CodeQL as polynomial-time on uncontrolled input.
+    let url = agentFieldUrl;
+    while (url.endsWith('/')) {
+      url = url.slice(0, -1);
+    }
+    this.agentFieldUrl = url;
     this.refreshInterval = refreshInterval;
     this.timestampWindow = timestampWindow;
     this.apiKey = apiKey;
