@@ -142,20 +142,20 @@ func TestExecutionController_CompletionAndFailureCoverage(t *testing.T) {
 
 		now := time.Now().UTC()
 		require.NoError(t, store.CreateExecutionRecord(context.Background(), &types.Execution{
-			ExecutionID: "exec-success",
-			RunID:       "run-success",
-			AgentNodeID: agent.ID,
-			Status:      types.ExecutionStatusRunning,
+			ExecutionID:  "exec-success",
+			RunID:        "run-success",
+			AgentNodeID:  agent.ID,
+			Status:       types.ExecutionStatusRunning,
 			InputPayload: []byte(`{"prompt":"hello"}`),
-			CreatedAt:   now,
-			StartedAt:   now,
-			UpdatedAt:   now,
+			CreatedAt:    now,
+			StartedAt:    now,
+			UpdatedAt:    now,
 		}))
 
 		plan := &preparedExecution{
 			exec: &types.Execution{
-				ExecutionID: "exec-success",
-				RunID:       "run-success",
+				ExecutionID:  "exec-success",
+				RunID:        "run-success",
 				InputPayload: []byte(`{"prompt":"hello"}`),
 			},
 			agent:  agent,

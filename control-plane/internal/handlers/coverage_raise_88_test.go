@@ -51,10 +51,10 @@ type statusManagerErrorStore struct {
 
 type registerCoverageStore struct {
 	*nodeRESTStorageStub
-	versioned       map[string]*types.AgentNode
-	deleteCalls     []string
-	updateLifeErr   error
-	registerErr     error
+	versioned     map[string]*types.AgentNode
+	deleteCalls   []string
+	updateLifeErr error
+	registerErr   error
 }
 
 func (s *statusManagerErrorStore) GetAgent(ctx context.Context, id string) (*types.AgentNode, error) {
@@ -258,10 +258,12 @@ func TestExecuteReasonerAndSkillHandlers_TransportFailures(t *testing.T) {
 		newHandle func(*reasonerHandlerStorage) gin.HandlerFunc
 	}{
 		{
-			name:      "reasoner",
-			route:     "/reasoners/:reasoner_id",
-			target:    "/reasoners/node-1.ping",
-			newStore:  func() *reasonerHandlerStorage { return newReasonerHandlerStorage(newReasonerAgent("http://127.0.0.1:1")) },
+			name:   "reasoner",
+			route:  "/reasoners/:reasoner_id",
+			target: "/reasoners/node-1.ping",
+			newStore: func() *reasonerHandlerStorage {
+				return newReasonerHandlerStorage(newReasonerAgent("http://127.0.0.1:1"))
+			},
 			newHandle: func(s *reasonerHandlerStorage) gin.HandlerFunc { return ExecuteReasonerHandler(s) },
 		},
 		{
