@@ -8,6 +8,10 @@ Agent registration is keyed by agent node ID and agent `version`. Keep `version`
 
 When a replacement instance registers with the same node ID and version, the control plane stops routing new work to the departing instance and gives its in-flight executions `AGENTFIELD_AGENT_DRAIN_GRACE` (default `60s`) to finish. This grace is implemented by an in-memory timer, so a control-plane restart loses the timer; the stale sweep controlled by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` (default `30m`) remains the backstop. Executions are scoped by `instance_id`, so only work belonging to the departing instance is reaped.
 
+With `replicas > 1` behind one node ID, a sibling replica registering is indistinguishable from a replacement and can cause the first replica's live work to be reaped after the drain grace. Set `AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED=false` for that topology and rely on `AGENTFIELD_EXECUTION_STALE_TIMEOUT` (default `30m`) as the backstop.
+
+Do not treat `instance_id` as guaranteed pod attribution: only the Python SDK reports one today, so Go and TypeScript nodes leave it empty. Where it is reported it is a bare `uuid4().hex` that the SDK never logs. The only current path from that value to a pod is the control plane's re-registration reap log, which records `old_instance_id` and `new_instance_id` from the deferred reap goroutine.
+
 Dispatch to a node whose last heartbeat falls within the drain window is held for `AGENTFIELD_AGENT_RESTART_GRACE` (default `15s`) while a replacement can register. If none does, the request returns HTTP 503.
 
 Python, Go, and TypeScript agents handle SIGTERM by draining in-flight work for `AGENTFIELD_SHUTDOWN_TIMEOUT` (default `30s`). The value accepts bare seconds (`30`) or a duration (`30s`, `5m`). At the deadline, remaining work is cancelled, allowed up to five more seconds to settle, and reported with terminal status `cancelled`. Python and Go also expose `POST /shutdown`; TypeScript uses the process signal. Kubernetes should use SIGTERM directly: do not add an HTTP `preStop` hook, because Kubernetes `httpGet` hooks issue GET while `/shutdown` requires POST.

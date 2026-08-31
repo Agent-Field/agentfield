@@ -47,4 +47,6 @@ Operators polling execution state should branch on the stable category before an
 | `agent_client_error:<status>` | The agent reported a client-facing HTTP 4xx failure. |
 | `llm_unavailable`, `concurrency_limit`, `agent_timeout`, `agent_error`, `agent_unreachable`, `bad_response`, `internal_error`, `validation`, `permission_denied`, `node_unavailable`, `target_not_found` | Canonical failure categories used for operator routing and HTTP mapping. |
 
+The instance-scoped orphan reap also sweeps legacy rows whose `instance_id` is empty. Such a row can therefore have an `agent_restart_orphaned` `status_reason` naming an instance that never owned it. The explicit `instance_id` on execution reads distinguishes that legacy case from an execution created against the departed instance.
+
 Do not emulate restart by re-submitting `/execute`: execute has no idempotency key, creates unrelated executions, and cannot establish restart lineage or replay boundaries.
