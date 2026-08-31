@@ -51,8 +51,8 @@ counterpart of the Go SDK's `CallLocal`.
 - Header-transported child executions have `depth == 0` because
   `ExecutionContext.to_headers()` does not emit depth and `from_request()` does
   not read it. This matches the control-plane HTTP path.
-- Unknown nodes or members raise `MeshTargetNotFound`; validation failures raise
-  `ExecuteError(status_code=422)`; a reasoner exception becomes
-  `ExecutionFailedError`, with the original exception available as `__cause__`.
+- Unknown nodes or members raise `MeshTargetNotFound`; validation and application
+  HTTP failures preserve their status in `ExecuteError`; an unhandled reasoner
+  exception becomes `ExecutionFailedError`, with the original exception available
+  as `__cause__`.
 - The mesh adds no runtime dependency. Dispatch speaks raw ASGI directly.
-

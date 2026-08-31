@@ -1,7 +1,9 @@
+import asyncio
 import signal
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from agentfield import Agent, AgentMesh, MeshTargetNotFound
@@ -112,6 +114,7 @@ async def test_mesh_child_context_lineage():
             "run_id": execution_context.run_id,
             "parent_execution_id": execution_context.parent_execution_id,
             "depth": execution_context.depth,
+            "agent_instance": execution_context.agent_instance.node_id,
         }
 
     AgentMesh([a, b])
@@ -119,11 +122,14 @@ async def test_mesh_child_context_lineage():
         agent_node_id=a.node_id, workflow_name="agent-a_workflow"
     )
     set_execution_context(parent)
+    set_current_agent(a)
+    Agent._current_agent = a
     result = await a.call("agent-b.lineage")
     assert result == {
         "run_id": parent.run_id,
         "parent_execution_id": parent.execution_id,
         "depth": 0,
+        "agent_instance": "agent-b",
     }
 
 
@@ -139,6 +145,55 @@ async def test_mesh_same_node_short_circuit():
     AgentMesh([a])
     assert not a.agentfield_connected
     assert await a.call("agent-a.hello") == {"hello": True}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_mesh_and_call_local_obey_outbound_call_limit():
+    async def exercise(caller, invoke):
+        active = 0
+        max_active = 0
+
+        @caller.reasoner(name="limited")
+        async def limited() -> dict:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return {"ok": True}
+
+        caller._max_concurrent_calls = 1
+        await asyncio.gather(invoke(), invoke())
+        assert max_active == 1
+
+    mesh_caller = make_agent("mesh-caller")
+    mesh_target = make_agent("mesh-target")
+
+    # Register the exercising handler on the target while keeping the limiter
+    # on the caller, which is the owner of outbound-call capacity.
+    active = 0
+    max_active = 0
+
+    @mesh_target.reasoner(name="concurrent")
+    async def concurrent() -> dict:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {"ok": True}
+
+    mesh_caller._max_concurrent_calls = 1
+    AgentMesh([mesh_caller, mesh_target])
+    await asyncio.gather(
+        mesh_caller.call("mesh-target.concurrent"),
+        mesh_caller.call("mesh-target.concurrent"),
+    )
+    assert max_active == 1
+
+    local = make_agent("local")
+    await exercise(local, lambda: local.call_local("limited"))
 
 
 @pytest.mark.unit
@@ -450,6 +505,23 @@ async def test_mesh_reasoner_exception_maps_to_execution_failed_error():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_mesh_application_404_remains_execute_error():
+    a, b = make_agent("a"), make_agent("b")
+
+    @b.reasoner()
+    async def missing_record() -> dict:
+        raise HTTPException(status_code=404, detail="record absent")
+
+    AgentMesh([a, b])
+    with pytest.raises(ExecuteError) as exc:
+        await a.call("b.missing_record")
+    assert exc.value.status_code == 404
+    assert "record absent" in str(exc.value)
+    assert not isinstance(exc.value, MeshTargetNotFound)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_mesh_custom_reasoner_path_resolves():
     a, b = make_agent("a"), make_agent("b")
 
@@ -503,10 +575,11 @@ async def test_mesh_raw_asgi_and_defensive_dispatch_branches(monkeypatch):
         return 404, b'{"detail":"gone"}'
 
     monkeypatch.setattr(mesh_module, "_call_asgi", response_404)
-    with pytest.raises(MeshTargetNotFound):
+    with pytest.raises(ExecuteError) as exc:
         await mesh_module.dispatch_in_process(
             agent, "a.local_skill", {"value": "x"}, {"x-execution-id": "drop"}
         )
+    assert exc.value.status_code == 404
 
 
 @pytest.mark.unit
@@ -580,6 +653,29 @@ def test_mesh_signal_callback_marks_all_members():
             raise RuntimeError
 
     mesh._install_signal_handlers(RuntimeErrorLoop(), server)
+
+
+@pytest.mark.unit
+def test_mesh_serve_applies_budget_and_handles_keyboard_interrupt(monkeypatch):
+    import agentfield.mesh as mesh_module
+
+    member = make_agent("a")
+    mesh = AgentMesh([member])
+    captured = {}
+
+    class Server:
+        def __init__(self, config):
+            captured["config"] = config
+
+        def run(self):
+            raise KeyboardInterrupt
+
+    monkeypatch.setenv("AGENTFIELD_SHUTDOWN_TIMEOUT", "0.25s")
+    monkeypatch.setattr(mesh_module.uvicorn, "Server", Server)
+    mesh.serve(host="127.0.0.1", port=9125)
+
+    assert captured["config"].timeout_graceful_shutdown == 0.25
+    assert member.server_handler._shutdown_timeout == 0.25
 
 
 @pytest.mark.unit

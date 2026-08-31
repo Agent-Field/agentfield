@@ -111,11 +111,21 @@ async def dispatch_in_process(
 
     had_current = hasattr(Agent, "_current_agent")
     previous_current = getattr(Agent, "_current_agent", None)
+
+    async def call_as_target() -> Tuple[int, bytes]:
+        # ``ExecutionContext.from_request`` runs before the endpoint calls
+        # ``target_agent._set_as_current()``. Seed the task-local agent registry
+        # here so the context it builds belongs to the callee, just as it does
+        # when the callee is hosted in its own process. This task gets a copied
+        # ContextVar context, so the caller's ambient agent remains untouched.
+        from .agent_registry import set_current_agent
+
+        set_current_agent(target_agent)
+        return await _call_asgi(target_agent, path, body, send_headers)
+
     try:
         try:
-            status, raw = await asyncio.create_task(
-                _call_asgi(target_agent, path, body, send_headers)
-            )
+            status, raw = await asyncio.create_task(call_as_target())
         except Exception as exc:
             raise ExecutionFailedError(str(exc)) from exc
     finally:
@@ -148,11 +158,6 @@ async def dispatch_in_process(
                         cost_source=item.get("cost_source"),
                     )
         return payload
-    if status == 404:
-        raise MeshTargetNotFound(
-            f"Mesh target '{target}' was not found on node '{node_id}'"
-        )
-
     from .execution_state import ExecuteError
 
     detail = payload.get("detail", payload) if isinstance(payload, dict) else payload
@@ -267,7 +272,11 @@ class AgentMesh:
                 pass
 
     def serve(self, host: str = "0.0.0.0", port: int = 8000, **kwargs: Any) -> None:
-        self._resolve_shutdown_timeout()
+        budget = self._resolve_shutdown_timeout(kwargs.get("timeout_graceful_shutdown"))
+        # Uvicorn drains active HTTP requests before it shuts down the lifespan.
+        # Give it the same budget as the member drains; otherwise a hung mounted
+        # request prevents ``_shutdown`` below from running at all.
+        kwargs["timeout_graceful_shutdown"] = budget
         config = uvicorn.Config(self._app, host=host, port=port, **kwargs)
         server = uvicorn.Server(config)
 
@@ -287,7 +296,13 @@ class AgentMesh:
                 await self._shutdown()
 
         self._app.router.lifespan_context = lifespan
-        server.run()  # pragma: no cover
+        try:
+            server.run()  # pragma: no cover
+        except KeyboardInterrupt:
+            # ``uvicorn.run`` and AgentServer.serve both treat a normal Ctrl+C
+            # as a clean stop. We instantiate Server directly, so mirror that
+            # wrapper behavior here.
+            pass
 
     def run(self, *args: Any, **kwargs: Any) -> None:
         self.serve(*args, **kwargs)

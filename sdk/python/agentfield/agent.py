@@ -4434,7 +4434,8 @@ class Agent(FastAPI):
             workflow_name=f"{self.node_id}_workflow",
         )
         headers = build_child_headers(context)
-        return await dispatch_in_process(self, full_target, final_kwargs, headers)
+        async with self._limit_outbound_calls():
+            return await dispatch_in_process(self, full_target, final_kwargs, headers)
 
     async def call(self, target: str, *args, **kwargs) -> dict:
         """
@@ -4550,7 +4551,8 @@ class Agent(FastAPI):
         # header identically (see docs/agent-mesh.md).
         _mesh = getattr(self, "_mesh", None)
         if _mesh is not None:
-            return await _mesh.dispatch(self, target, final_kwargs, headers)
+            async with self._limit_outbound_calls():
+                return await _mesh.dispatch(self, target, final_kwargs, headers)
 
         # DISABLED: Same-agent call detection - Force all calls through AgentField server
         # This ensures all app.call() requests go through the AgentField server for proper
