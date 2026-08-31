@@ -1036,4 +1036,39 @@ describe("RunDetailPage", () => {
     fireEvent.click(screen.getAllByText("Step")[1]);
     expect(await screen.findByText("Step exec-3")).toBeInTheDocument();
   });
+
+  it("renders safe run metadata in the header", async () => {
+    state.runDag = {
+      data: {
+        ...buildDag(),
+        run_metadata: {
+          display_name: "Release verification",
+          labels: ["one", "two", "three", "four", "five"],
+          links: [
+            { label: "PR", url: "https://x.test/pr" },
+            { label: "Unsafe", url: "javascript:alert(1)" },
+          ],
+        },
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Release verification" })).toBeInTheDocument();
+    expect(screen.getByText("+2")).toBeInTheDocument();
+    expect(screen.getByText("one")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "PR" })).toHaveAttribute("href", "https://x.test/pr");
+    expect(screen.getByRole("link", { name: "PR" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "PR" })).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.queryByRole("link", { name: "Unsafe" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the workflow name when run metadata is absent", async () => {
+    state.runDag = { data: buildDag(), isLoading: false, isError: false, error: null };
+    renderPage();
+    expect(await screen.findByRole("heading", { level: 1, name: "Run Alpha" })).toBeInTheDocument();
+  });
 });

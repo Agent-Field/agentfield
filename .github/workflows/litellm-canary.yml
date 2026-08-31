@@ -1,5 +1,10 @@
 name: LiteLLM Canary
 
+# agentfield/litellm_observability.py reads LiteLLM's private
+# logging_callback_manager and _known_custom_logger_compatible_callbacks.
+# tests/test_litellm_observability.py catches upstream renames here instead of
+# allowing them to surface first in a user's process.
+
 on:
   schedule:
     - cron: '17 9 * * 1'
@@ -29,7 +34,9 @@ jobs:
         working-directory: sdk/python
         run: |
           python -m pip install --upgrade pip
-          pip install ".[dev]" --upgrade litellm
+          # The langfuse extra makes the local ingestion test exercise the real
+          # LiteLLM callback instead of accepting a missing-package no-op.
+          pip install ".[dev,langfuse]" --upgrade litellm
 
       - name: Show LiteLLM version
         id: litellm

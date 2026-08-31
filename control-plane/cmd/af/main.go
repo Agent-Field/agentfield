@@ -243,7 +243,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	fmt.Printf("Press Ctrl+C to exit.\n")
 
 	shutdownCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	if err := drainOnShutdown(shutdownCtx, stopSignals, agentfieldServer.Stop); err != nil {
+	if err := drainOnShutdown(shutdownCtx, stopSignals, agentfieldServer.BeginDrain, cfg.AgentField.ShutdownMinDelay, agentfieldServer.Stop); err != nil {
 		log.Printf("Error during shutdown: %v", err)
 		os.Exit(1)
 	}
@@ -251,13 +251,22 @@ func runServer(cmd *cobra.Command, args []string) {
 
 // drainOnShutdown blocks until ctx is cancelled by a shutdown signal, restores
 // the default signal behavior (so a second signal forces an immediate exit),
-// and then runs the server's bounded shutdown sequence.
-func drainOnShutdown(ctx context.Context, stopSignals func(), stop func() error) error {
+// flips the server to draining so readiness probes start failing, waits out
+// minDelay while the listener keeps serving, and then runs the server's
+// bounded shutdown sequence. minDelay of 0 skips the wait entirely.
+func drainOnShutdown(ctx context.Context, stopSignals func(), beginDrain func(), minDelay time.Duration, stop func() error) error {
 	waitForShutdown(ctx)
 	if stopSignals != nil {
 		stopSignals()
 	}
+	if beginDrain != nil {
+		beginDrain()
+	}
 	fmt.Println("\nShutdown signal received, draining connections...")
+	if minDelay > 0 {
+		log.Printf("Waiting %s before closing the listener", minDelay)
+		time.Sleep(minDelay)
+	}
 	if err := stop(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			log.Printf("Warning: shutdown drain timed out; forced close completed: %v", err)

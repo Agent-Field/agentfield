@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentfield"
-version = "0.1.138-rc.3"
+version = "0.1.138-rc.4"
 description = "Python SDK for the AgentField control plane"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -61,6 +61,12 @@ exclude = ["tests*", "examples*"]
 agentfield = ["py.typed"]
 
 [project.optional-dependencies]
+langfuse = [
+    # LiteLLM's standard `langfuse` callback uses the Langfuse v2 client API.
+    # Keep this aligned with LiteLLM's own proxy-runtime compatibility range;
+    # installing an unbounded Langfuse v3/v4 package silently disables traces.
+    "langfuse>=2.59.7,<3",
+]
 harness-claude = [
     "claude-agent-sdk>=0.1",
 ]
@@ -82,6 +88,8 @@ harness = [
 ]
 dev = [
     "tomli>=2.0; python_version < '3.11'",
+    # Exercise the real optional callback in SDK CI and the LiteLLM canary.
+    "langfuse>=2.59.7,<3",
     "pytest>=9.0.3,<10",
     "pytest-asyncio>=1.3,<2",
     "pytest-cov>=4.1,<5",
@@ -108,7 +116,7 @@ markers = [
     "harness_live: live tests that invoke real coding agents (claude, codex, opencode) — costs real money",
     "httpx_mock: pytest-httpx marker for configuring mock behavior"
 ]
-addopts = "-ra -q -m \"not harness_live and not functional\" --strict-markers --strict-config --cov=agentfield.client --cov=agentfield.agent_field_handler --cov=agentfield.execution_context --cov=agentfield.execution_state --cov=agentfield.memory --cov=agentfield.rate_limiter --cov=agentfield.result_cache --cov-report=term-missing:skip-covered"
+addopts = "-ra -q -m \"not harness_live and not functional\" --strict-markers --strict-config --cov=agentfield.client --cov=agentfield.litellm_observability --cov=agentfield.agent_field_handler --cov=agentfield.execution_context --cov=agentfield.execution_state --cov=agentfield.memory --cov=agentfield.rate_limiter --cov=agentfield.result_cache --cov-report=term-missing:skip-covered"
 asyncio_mode = "auto"
 
 [tool.coverage.run]

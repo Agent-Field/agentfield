@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -320,6 +321,96 @@ func (ls *LocalStorage) GetWorkflowRun(ctx context.Context, runID string) (*type
 	}
 
 	return &run, nil
+}
+
+// UpdateWorkflowRunMetadata applies mutate to the decoded metadata object in one transaction.
+// Untouched namespaces are retained as json.RawMessage values. This deliberately is not
+// StoreWorkflowRun: that full-row upsert resets status, counts and event-version columns.
+func (ls *LocalStorage) UpdateWorkflowRunMetadata(ctx context.Context, runID string, mutate func(map[string]json.RawMessage) error) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return fmt.Errorf("run_id cannot be empty")
+	}
+	if mutate == nil {
+		return fmt.Errorf("metadata mutator cannot be nil")
+	}
+
+	operationID := "UpdateWorkflowRunMetadata:" + runID
+	// SQLite connections use _txlock=immediate, so BeginTx acquires the write
+	// reservation before reading. PostgreSQL first seeds the row conflict-safely,
+	// then locks and re-reads it. Thus every mutator starts from the preceding
+	// writer's committed namespaces on both backends.
+	return ls.retryDatabaseOperation(ctx, operationID, func() error {
+		db := ls.requireSQLDB()
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer rollbackTx(tx, operationID)
+
+		now := time.Now().UTC()
+		// This row exists only to carry metadata. Status and step counts are seeded,
+		// are not kept current, and no read path treats them as authoritative.
+		_, err = tx.ExecContext(ctx, `INSERT INTO workflow_runs (
+			run_id, root_workflow_id, root_execution_id, status, total_steps,
+			completed_steps, failed_steps, state_version, last_event_sequence,
+			metadata, created_at, updated_at
+		) VALUES (?, ?, NULL, 'pending', 0, 0, 0, 0, 0, '{}', ?, ?)
+		ON CONFLICT(run_id) DO NOTHING`, runID, runID, now, now)
+		if err != nil {
+			return err
+		}
+
+		var raw sql.NullString
+		err = tx.QueryRowContext(ctx, `SELECT metadata FROM workflow_runs WHERE run_id = ?`+tx.forUpdate(), runID).Scan(&raw)
+		if err != nil {
+			return err
+		}
+
+		metadata := make(map[string]json.RawMessage)
+		if raw.Valid && strings.TrimSpace(raw.String) != "" {
+			if err := json.Unmarshal([]byte(raw.String), &metadata); err != nil {
+				metadata = make(map[string]json.RawMessage)
+			}
+		}
+		if err := mutate(metadata); err != nil {
+			return err
+		}
+		encoded, err := marshalMetadataNamespaces(metadata)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET metadata = ?, updated_at = ? WHERE run_id = ?`, string(encoded), time.Now().UTC(), runID)
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
+	})
+}
+
+func marshalMetadataNamespaces(metadata map[string]json.RawMessage) ([]byte, error) {
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var encoded bytes.Buffer
+	encoded.WriteByte('{')
+	for i, key := range keys {
+		raw := metadata[key]
+		if !json.Valid(raw) {
+			return nil, fmt.Errorf("metadata namespace %q is invalid JSON", key)
+		}
+		if i > 0 {
+			encoded.WriteByte(',')
+		}
+		encodedKey, _ := json.Marshal(key)
+		encoded.Write(encodedKey)
+		encoded.WriteByte(':')
+		encoded.Write(raw)
+	}
+	encoded.WriteByte('}')
+	return encoded.Bytes(), nil
 }
 
 func (ls *LocalStorage) StoreWorkflowRunEvent(ctx context.Context, event *types.WorkflowRunEvent) error {

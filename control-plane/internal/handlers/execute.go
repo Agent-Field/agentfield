@@ -43,6 +43,9 @@ type ExecuteRequest struct {
 	Input   map[string]interface{} `json:"input"`
 	Context map[string]interface{} `json:"context,omitempty"`
 	Webhook *WebhookRequest        `json:"webhook,omitempty"`
+	// RunMetadata names, labels or links the run started by this request. It is
+	// excluded from replay dedupe and ignored on child executions.
+	RunMetadata *RunMetadataInput `json:"run_metadata,omitempty"`
 }
 
 // WebhookRequest represents webhook registration parameters supplied by the client.
