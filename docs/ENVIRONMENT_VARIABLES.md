@@ -98,6 +98,10 @@ Anonymous usage telemetry is enabled by default to help us improve AgentField. I
 
 The telemetry payload does not include prompts, inputs, outputs, logs, secrets, API keys, IP addresses, hostnames, user IDs, DIDs, or raw error text. Sending is best-effort and does not affect control-plane or execution behavior.
 
+Every event carries a `usage_context` property describing where the control plane is running — `ci` when a CI environment variable is present (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `BUILDKITE`, `CIRCLECI`, or `JENKINS_URL`), `server` for a container or Kubernetes runtime, and `dev_or_local` otherwise. A CI job typically starts on a fresh volume and mints a new install ID, so without this property its activity is indistinguishable from a real first-time user's; filter on it when reading product metrics. Set `AGENTFIELD_TELEMETRY_ENABLED=false` in CI to opt out of reporting entirely.
+
+An execution's terminal outcome is reported once. If a lifecycle event is republished — for example when an agent SDK retries a status callback after a lost response — the control plane suppresses the repeat rather than counting the execution twice.
+
 - `AGENTFIELD_TELEMETRY_ENABLED` (default: `true`): Set to `false` to disable anonymous usage telemetry.
 - `AGENTFIELD_TELEMETRY_ENDPOINT` (default: `https://agentfield.ai/api/oss/telemetry`): Hosted anonymous telemetry endpoint.
 - `AGENTFIELD_TELEMETRY_INSTALL_ID` (optional): Stable externally managed installation ID. Use a random, opaque value—not an email, account name, hostname, or other identifying value. The control plane hashes it before sending.
