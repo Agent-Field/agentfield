@@ -7,7 +7,7 @@ import inspect
 from typing import Any, Tuple, Union, get_args, get_origin, get_type_hints
 
 from agentfield.logger import log_warn
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 def is_pydantic_model(type_hint: Any) -> bool:
@@ -59,6 +59,32 @@ def get_optional_inner_type(type_hint: Any) -> Any:
     return type_hint
 
 
+def type_hint_involves_model(type_hint: Any) -> bool:
+    """
+    Report whether a Pydantic model appears anywhere inside a type hint.
+
+    This recurses through the arguments of composite hints (Union, list,
+    Sequence, tuple, set, dict, ...) so that shapes like ``M1 | M2 | None``,
+    ``list[M]``, ``Sequence[M | None]`` and ``dict[str, M]`` are all detected,
+    not just a bare model or ``Optional[model]``.
+
+    Args:
+        type_hint: The type hint to inspect
+
+    Returns:
+        True if a Pydantic model is reachable within the hint
+    """
+    if is_pydantic_model(type_hint):
+        return True
+
+    args = get_args(type_hint)
+    if not args:
+        return False
+
+    # NoneType (from Optional) and other leaves recurse harmlessly to False.
+    return any(type_hint_involves_model(arg) for arg in args)
+
+
 def convert_dict_to_model(data: Any, model_class: type) -> Any:
     """
     Convert a dictionary to a Pydantic model instance.
@@ -81,19 +107,27 @@ def convert_dict_to_model(data: Any, model_class: type) -> Any:
         # Not a Pydantic model, return original data
         return data
 
-    try:
-        return model_class(**data)
-    except ValidationError as e:
-        # Re-raise with more context
-        raise ValidationError(
-            f"Failed to convert dictionary to {model_class.__name__}: {e}",
-            model=model_class,
-        ) from e
-    except Exception as e:
-        # For any other errors, provide helpful context
-        raise ValueError(
-            f"Unexpected error converting dictionary to {model_class.__name__}: {e}"
-        ) from e
+    # Delegate to Pydantic's validation so nested models and defaults are
+    # resolved the same way as everywhere else. ValidationError propagates
+    # unchanged (its constructor is Pydantic-internal in v2; re-wrapping it
+    # with keyword args raises a TypeError and swallows the real cause).
+    return model_class.model_validate(data)
+
+
+def _convert_with_type_hint(value: Any, type_hint: Any) -> Any:
+    """
+    Coerce ``value`` to ``type_hint`` when the hint involves a Pydantic model.
+
+    Uses ``pydantic.TypeAdapter`` so any composite shape (unions of models,
+    lists/sequences/tuples/dicts of models, and arbitrary nesting) validates
+    losslessly. Hints with no model anywhere are returned untouched, preserving
+    the previous pass-through behaviour for plain ``int`` / ``str`` / ``dict``
+    parameters.
+    """
+    if not type_hint_involves_model(type_hint):
+        return value
+
+    return TypeAdapter(type_hint).validate_python(value)
 
 
 def convert_function_args(
@@ -138,29 +172,11 @@ def convert_function_args(
                 converted_kwargs[param_name] = value
                 continue
 
-            # Handle Optional types
-            actual_type = type_hint
-            if is_optional_type(type_hint):
-                if value is None:
-                    converted_kwargs[param_name] = None
-                    continue
-                actual_type = get_optional_inner_type(type_hint)
-
-            # Convert if it's a Pydantic model
-            if is_pydantic_model(actual_type):
-                try:
-                    converted_kwargs[param_name] = convert_dict_to_model(
-                        value, actual_type
-                    )
-                except ValidationError as e:
-                    # Add parameter context to the error
-                    raise ValidationError(
-                        f"Validation error for parameter '{param_name}': {e}",
-                        model=actual_type,
-                    ) from e
-            else:
-                # Not a Pydantic model, keep original value
-                converted_kwargs[param_name] = value
+            # Let a ValidationError from TypeAdapter propagate unchanged: the SDK
+            # call sites intercept pydantic.ValidationError to route bad payloads
+            # through their safe-validation path (e.g. _HandlerInputError), so
+            # re-wrapping it as another type would bypass that handling.
+            converted_kwargs[param_name] = _convert_with_type_hint(value, type_hint)
 
         # Convert back to args and kwargs based on original call pattern
         final_args = []
@@ -179,13 +195,14 @@ def convert_function_args(
 
         return tuple(final_args), final_kwargs
 
+    except ValidationError:
+        # Validation failures must surface as ValidationError: coercing a model
+        # parameter that does not match its schema is a real error, and callers
+        # intercept ValidationError specifically to handle it safely.
+        raise
     except Exception as e:
-        # If conversion fails completely, return original args
-        # This ensures backward compatibility
-        if isinstance(e, ValidationError):
-            raise  # Re-raise validation errors
-
-        # For other errors, log and return original
+        # Non-validation failures (e.g. unresolved forward refs in a hint) fall
+        # back to the original args for backward compatibility.
         log_warn(f"Failed to convert arguments for {func.__name__}: {e}")
         return args, kwargs
 
@@ -198,7 +215,9 @@ def should_convert_args(func: callable) -> bool:
         func: The function to check
 
     Returns:
-        True if the function has Pydantic model parameters that could benefit from conversion
+        True if the function has parameters whose type hints involve a Pydantic
+        model (directly, via Optional, via a union, or nested inside a
+        container) that could benefit from conversion
     """
     try:
         type_hints = get_type_hints(func)
@@ -212,12 +231,7 @@ def should_convert_args(func: callable) -> bool:
             if type_hint is None:
                 continue
 
-            # Check if it's a Pydantic model or Optional Pydantic model
-            actual_type = type_hint
-            if is_optional_type(type_hint):
-                actual_type = get_optional_inner_type(type_hint)
-
-            if is_pydantic_model(actual_type):
+            if type_hint_involves_model(type_hint):
                 return True
 
         return False
