@@ -30,6 +30,15 @@ PROVIDER_SPECS = {
         install_command="npm install -g @openai/codex",
         auth_env_vars=("OPENAI_API_KEY",),
     ),
+    "cursor": ProviderSpec(
+        # Cursor ships its headless CLI as `agent`, not `cursor`, so this is
+        # the one spec whose binary does not match its provider name. Keep
+        # them in step with CursorProvider's default bin_path.
+        binary="agent",
+        version_args=("--version",),
+        install_command="curl https://cursor.com/install -fsS | bash",
+        auth_env_vars=("CURSOR_API_KEY",),
+    ),
     "gemini": ProviderSpec(
         binary="gemini",
         version_args=("--version",),
