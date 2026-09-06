@@ -10,6 +10,7 @@ SUPPORTED_PROVIDERS = {
     "aforge",
     "claude-code",
     "codex",
+    "cursor",
     "gemini",
     "grok",
     "omp",
@@ -37,6 +38,10 @@ def build_provider(config: "HarnessConfig") -> "HarnessProvider":
         from agentfield.harness.providers.codex import CodexProvider
 
         return CodexProvider(bin_path=getattr(config, "codex_bin", "codex"))
+    if provider_name == "cursor":
+        from agentfield.harness.providers.cursor import CursorProvider
+
+        return CursorProvider(bin_path=getattr(config, "cursor_bin", "agent"))
     if provider_name == "gemini":
         from agentfield.harness.providers.gemini import GeminiProvider
 

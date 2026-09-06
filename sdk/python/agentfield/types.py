@@ -285,7 +285,7 @@ class HarnessConfig(BaseModel):
         default_factory=_default_harness_provider,
         description=(
             'Coding agent provider: "aforge" (default) | "claude-code" | "codex" | '
-            '"gemini" | "opencode" | "grok" | "pi" | "omp". Unset resolves to '
+            '"cursor" | "gemini" | "opencode" | "grok" | "pi" | "omp". Unset resolves to '
             'the AGENTFIELD_HARNESS_PROVIDER env var when present, else "aforge".'
         ),
     )
@@ -341,6 +341,13 @@ class HarnessConfig(BaseModel):
         ),
     )
     codex_bin: str = Field(default="codex", description="Path to codex binary.")
+    cursor_bin: str = Field(
+        default="agent",
+        description=(
+            "Path to the Cursor CLI binary. Named 'agent', not 'cursor': "
+            "that is what Cursor ships its headless agent as."
+        ),
+    )
     gemini_bin: str = Field(default="gemini", description="Path to gemini binary.")
     opencode_bin: str = Field(
         default="opencode", description="Path to opencode binary."
