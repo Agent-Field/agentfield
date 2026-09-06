@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agentfield.harness import ProviderHealth, harness_doctor
+from agentfield.harness._availability import PROVIDER_SPECS
 from agentfield.harness.providers._factory import SUPPORTED_PROVIDERS
 
 
@@ -75,6 +76,64 @@ async def test_doctor_does_not_treat_cli_login_as_missing_auth(monkeypatch):
     assert report.auth == "unknown"
     assert report.usable is True
     assert "auth_not_configured" not in report.issues
+
+
+@pytest.mark.asyncio
+async def test_doctor_probes_cursor_through_its_agent_binary(monkeypatch):
+    """Cursor's CLI is `agent`, so the doctor must not probe for `cursor`."""
+    monkeypatch.setattr(
+        "agentfield.harness._doctor.shutil.which",
+        lambda binary: f"/usr/local/bin/{binary}",
+    )
+
+    async def version_probe(command: list[str]) -> str:
+        assert command == ["agent", "--version"]
+        return "cursor-agent 2026.02.1"
+
+    reports = await harness_doctor(
+        providers=["cursor"],
+        env={"CURSOR_API_KEY": "configured"},
+        version_probe=version_probe,
+    )
+
+    assert reports == [
+        ProviderHealth(
+            provider="cursor",
+            binary="/usr/local/bin/agent",
+            installed=True,
+            version="cursor-agent 2026.02.1",
+            auth="configured",
+            usable=True,
+            install_command="curl https://cursor.com/install -fsS | bash",
+            auth_env_vars=("CURSOR_API_KEY",),
+            issues=(),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_doctor_reports_a_missing_cursor_cli_with_its_install_command(
+    monkeypatch,
+):
+    monkeypatch.setattr("agentfield.harness._doctor.shutil.which", lambda _: None)
+
+    [report] = await harness_doctor(providers=["cursor"], env={})
+
+    assert report.installed is False
+    assert report.usable is False
+    assert report.issues == ("binary_not_found",)
+    assert report.install_command == "curl https://cursor.com/install -fsS | bash"
+
+
+@pytest.mark.asyncio
+async def test_every_supported_provider_has_a_doctor_spec():
+    """`harness_doctor()` indexes PROVIDER_SPECS directly, so a provider added
+    to SUPPORTED_PROVIDERS without a spec is a KeyError at runtime, not an
+    import error. claude-code is the documented exception: it is a Python
+    wrapper, not a CLI, and takes the `_claude_health` branch instead.
+    """
+    specced = set(PROVIDER_SPECS) | {"claude-code"}
+    assert SUPPORTED_PROVIDERS <= specced
 
 
 @pytest.mark.asyncio
