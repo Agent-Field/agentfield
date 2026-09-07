@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.13] - 2026-09-07
+
+
+### Testing
+
+- Test(harness): cover raw result text and failure type serialization (#1043) (0916748)
+
 ## [0.1.138-rc.12] - 2026-09-06
 
 
