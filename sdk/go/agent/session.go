@@ -1,5 +1,7 @@
 package agent
 
+import "reflect"
+
 type SessionDefinition struct {
 	Name         string         `json:"name"`
 	Provider     string         `json:"provider"`
@@ -97,7 +99,81 @@ func (a *Agent) RegisterSession(name string, provider string, transport string, 
 func (a *Agent) SessionDefinitions() []SessionDefinition {
 	sessions := make([]SessionDefinition, 0, len(a.sessions))
 	for _, session := range a.sessions {
-		sessions = append(sessions, session)
+		sessions = append(sessions, cloneSessionDefinition(session))
 	}
 	return sessions
+}
+
+func cloneSessionDefinition(session SessionDefinition) SessionDefinition {
+	cloned := session
+	cloned.Modalities = append([]string(nil), session.Modalities...)
+	cloned.Tools = append([]string(nil), session.Tools...)
+	cloned.Tags = append([]string(nil), session.Tags...)
+	cloned.ProposedTags = append([]string(nil), session.ProposedTags...)
+	cloned.ApprovedTags = append([]string(nil), session.ApprovedTags...)
+	cloned.Metadata = cloneSessionMetadata(session.Metadata)
+	return cloned
+}
+
+type sessionMetadataCopyReference struct {
+	kind   reflect.Kind
+	typeOf reflect.Type
+	ptr    uintptr
+}
+
+// cloneSessionMetadata recursively copies maps and slices stored in metadata.
+// It keeps a copy of each encountered reference so cyclic metadata remains
+// detached without recursing forever.
+func cloneSessionMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	return cloneSessionMetadataValue(
+		reflect.ValueOf(metadata),
+		make(map[sessionMetadataCopyReference]reflect.Value),
+	).Interface().(map[string]any)
+}
+
+func cloneSessionMetadataValue(value reflect.Value, copied map[sessionMetadataCopyReference]reflect.Value) reflect.Value {
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := cloneSessionMetadataValue(value.Elem(), copied)
+		result := reflect.New(value.Type()).Elem()
+		result.Set(cloned)
+		return result
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		ref := sessionMetadataCopyReference{kind: value.Kind(), typeOf: value.Type(), ptr: value.Pointer()}
+		if existing, found := copied[ref]; found {
+			return existing
+		}
+		result := reflect.MakeMapWithSize(value.Type(), value.Len())
+		copied[ref] = result
+		iter := value.MapRange()
+		for iter.Next() {
+			result.SetMapIndex(iter.Key(), cloneSessionMetadataValue(iter.Value(), copied))
+		}
+		return result
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		ref := sessionMetadataCopyReference{kind: value.Kind(), typeOf: value.Type(), ptr: value.Pointer()}
+		if existing, found := copied[ref]; found {
+			return existing
+		}
+		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		copied[ref] = result
+		for i := 0; i < value.Len(); i++ {
+			result.Index(i).Set(cloneSessionMetadataValue(value.Index(i), copied))
+		}
+		return result
+	default:
+		return value
+	}
 }
