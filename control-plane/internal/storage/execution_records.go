@@ -1295,8 +1295,10 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 }
 
 // MarkStaleWorkflowExecutions updates workflow executions stuck in non-terminal states
-// when their updated_at timestamp exceeds the staleAfter threshold. This catches orphaned
-// child executions whose parent failed without cascading cancellation.
+// when both the workflow and its paired execution activity timestamps exceed the
+// staleAfter threshold. This catches orphaned child executions whose parent failed
+// without cascading cancellation while allowing activity recorded in either table
+// to keep the execution alive.
 //
 // See MarkStaleExecutions for the updated_at invariant, the COALESCE fallback
 // rationale, and why a row with a non-terminal child is skipped rather than reaped.
@@ -1311,21 +1313,29 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	cutoff := time.Now().UTC().Add(-staleAfter)
 
 	db := ls.requireSQLDB()
-	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	workflowTSExpr := ls.staleTimestampExpr("COALESCE(w.updated_at, w.created_at, w.started_at)")
+	executionTSExpr := ls.staleTimestampExpr("COALESCE(e.updated_at, e.created_at, e.started_at)")
 	cutoffExpr := ls.staleTimestampExpr("?")
+	// The legacy reaper runs first and makes its row terminal while updating
+	// updated_at. Terminal rows must not shield their still-active workflow row
+	// from this reaper, or the two tables could remain out of sync forever.
 	rows, err := db.QueryContext(ctx, `
-		SELECT execution_id, started_at
+		SELECT w.execution_id, w.started_at
 		FROM workflow_executions w
-		WHERE status IN ('running', 'pending', 'queued', 'waiting')
-		  AND `+tsExpr+` <= `+cutoffExpr+`
-		  AND COALESCE(approval_status, '') != 'pending'
+		LEFT JOIN executions e
+		  ON e.execution_id = w.execution_id
+		 AND e.status IN ('running', 'pending', 'queued', 'waiting')
+		WHERE w.status IN ('running', 'pending', 'queued', 'waiting')
+		  AND `+workflowTSExpr+` <= `+cutoffExpr+`
+		  AND (e.execution_id IS NULL OR `+executionTSExpr+` <= `+cutoffExpr+`)
+		  AND COALESCE(w.approval_status, '') != 'pending'
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
 		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
 		  )
-		ORDER BY `+tsExpr+` ASC
-		LIMIT ?`, cutoff, limit)
+		ORDER BY `+workflowTSExpr+` ASC
+		LIMIT ?`, cutoff, cutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("query stale workflow executions: %w", err)
 	}
