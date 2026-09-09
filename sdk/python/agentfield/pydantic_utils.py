@@ -4,6 +4,7 @@ Provides FastAPI-like automatic conversion of dictionary arguments to Pydantic m
 """
 
 import inspect
+from functools import lru_cache
 from typing import Any, Tuple, Union, get_args, get_origin, get_type_hints
 
 from agentfield.logger import log_warn
@@ -114,6 +115,12 @@ def convert_dict_to_model(data: Any, model_class: type) -> Any:
     return model_class.model_validate(data)
 
 
+@lru_cache(maxsize=512)
+def _adapter_for(type_hint: Any) -> TypeAdapter:
+    """Build and cache a Pydantic adapter for a hashable type hint."""
+    return TypeAdapter(type_hint)
+
+
 def _convert_with_type_hint(value: Any, type_hint: Any) -> Any:
     """
     Coerce ``value`` to ``type_hint`` when the hint involves a Pydantic model.
@@ -124,10 +131,24 @@ def _convert_with_type_hint(value: Any, type_hint: Any) -> Any:
     the previous pass-through behaviour for plain ``int`` / ``str`` / ``dict``
     parameters.
     """
+    if value is None:
+        # Preserve pre-#1035 behaviour for implicit-Optional model parameters
+        # such as ``model: MyModel = None`` and ``items: list[MyModel] = None``.
+        return value
+
     if not type_hint_involves_model(type_hint):
         return value
 
-    return TypeAdapter(type_hint).validate_python(value)
+    try:
+        hash(type_hint)
+    except TypeError:
+        # Some valid hints (for example Annotated with mutable metadata) are
+        # unhashable, so they cannot use lru_cache but must still be coerced.
+        adapter = TypeAdapter(type_hint)
+    else:
+        adapter = _adapter_for(type_hint)
+
+    return adapter.validate_python(value)
 
 
 def convert_function_args(

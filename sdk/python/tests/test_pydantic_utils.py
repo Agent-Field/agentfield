@@ -1,7 +1,9 @@
 import pytest
-from typing import List, Optional, Sequence, Union
+from typing import Annotated, List, Optional, Sequence, Union
 from pydantic import BaseModel, ValidationError
 from agentfield.pydantic_utils import (
+    _adapter_for,
+    _convert_with_type_hint,
     is_pydantic_model,
     is_optional_type,
     get_optional_inner_type,
@@ -181,6 +183,18 @@ def test_convert_sequence_of_optional_models():
     assert kwargs["seq"][1] is None
 
 
+@pytest.mark.parametrize("type_hint", [M1, List[M1]])
+def test_implicit_optional_defaults_preserve_none(type_hint):
+    # Contract item 5: a model-bearing annotation with a None default retains
+    # the pre-#1035 implicit-Optional behaviour for absent and explicit None.
+    def f(value: type_hint = None):
+        return value
+
+    for supplied_kwargs in ({}, {"value": None}):
+        _, kwargs = convert_function_args(f, (), supplied_kwargs)
+        assert kwargs["value"] is None
+
+
 def test_convert_nested_model_roundtrip():
     class Outer(BaseModel):
         inner: M1
@@ -217,3 +231,31 @@ def test_non_model_params_untouched_for_complex_hints():
     _, kwargs = convert_function_args(f, (), {"nums": original, "flag": "hi"})
     assert kwargs["nums"] is original
     assert kwargs["flag"] == "hi"
+
+
+def test_type_adapter_cache_reused_across_valid_coercions():
+    # Contract item 9: repeated calls reuse the adapter while continuing to
+    # validate each payload independently.
+    def f(items: List[M1]):
+        return items
+
+    _adapter_for.cache_clear()
+    _, first = convert_function_args(f, (), {"items": [{"a": 1}]})
+    _, second = convert_function_args(f, (), {"items": [{"a": 2}]})
+
+    assert first["items"][0] == M1(a=1)
+    assert second["items"][0] == M1(a=2)
+    assert _adapter_for.cache_info().misses == 1
+    assert _adapter_for.cache_info().hits == 1
+
+
+def test_unhashable_type_hint_still_coerces():
+    # Contract item 9: an unhashable hint bypasses the cache without bypassing
+    # Pydantic coercion.
+    hint = Annotated[M1, []]
+    with pytest.raises(TypeError):
+        hash(hint)
+
+    converted = _convert_with_type_hint({"a": 7}, hint)
+
+    assert converted == M1(a=7)
