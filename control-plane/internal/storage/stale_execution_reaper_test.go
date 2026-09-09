@@ -372,6 +372,74 @@ func TestMarkStaleWorkflowExecutions_ActivityAfterSelectionSkipsUpdate(t *testin
 	require.Len(t, executionRecord.Notes, 1)
 }
 
+func TestMarkStaleExecutions_ActivityAfterSelectionSkipsUpdate(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+
+	execution := &types.Execution{
+		ExecutionID: "exec-selection-race-legacy",
+		RunID:       "run-selection-race-legacy",
+		AgentNodeID: "agent-1",
+		ReasonerID:  "reasoner.coder",
+		NodeID:      "node-1",
+		Status:      "running",
+		StartedAt:   now.Add(-2 * time.Hour),
+	}
+	require.NoError(t, ls.CreateExecutionRecord(ctx, execution))
+	backdateExecutionUpdatedAt(t, ls, "executions", execution.ExecutionID, now.Add(-1*time.Hour))
+
+	var heartbeatErr error
+	reaped, err := ls.markStaleExecutions(ctx, 30*time.Minute, 100, func() {
+		// This runs after candidate selection and before the conditional update.
+		_, heartbeatErr = ls.UpdateExecutionRecord(ctx, execution.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+			current.Notes = append(current.Notes, types.ExecutionNote{
+				Message:   "heartbeat",
+				Timestamp: now,
+			})
+			return current, nil
+		})
+	})
+	require.NoError(t, heartbeatErr)
+	require.NoError(t, err)
+	require.Equal(t, 0, reaped, "activity after selection must prevent the final timeout update")
+
+	executionRecord, err := ls.GetExecutionRecord(ctx, execution.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "running", executionRecord.Status)
+	require.Len(t, executionRecord.Notes, 1)
+}
+
+func TestMarkStaleExecutions_SeamWithoutActivityStillReaps(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+
+	execution := &types.Execution{
+		ExecutionID: "exec-selection-race-control",
+		RunID:       "run-selection-race-control",
+		AgentNodeID: "agent-1",
+		ReasonerID:  "reasoner.coder",
+		NodeID:      "node-1",
+		Status:      "running",
+		StartedAt:   now.Add(-2 * time.Hour),
+	}
+	require.NoError(t, ls.CreateExecutionRecord(ctx, execution))
+	backdateExecutionUpdatedAt(t, ls, "executions", execution.ExecutionID, now.Add(-1*time.Hour))
+
+	hookRan := false
+	reaped, err := ls.markStaleExecutions(ctx, 30*time.Minute, 100, func() {
+		hookRan = true
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, reaped, "a silent row must still be reaped when the seam writes nothing")
+	require.True(t, hookRan)
+
+	executionRecord, err := ls.GetExecutionRecord(ctx, execution.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "timeout", executionRecord.Status)
+	require.NotNil(t, executionRecord.ErrorMessage)
+	require.Contains(t, *executionRecord.ErrorMessage, "no activity")
+}
+
 func TestMarkStaleWorkflowExecutions_SilentRowsReapAndSyncExecution(t *testing.T) {
 	ls, ctx := setupTestLocalStorage(t)
 	now := time.Now().UTC()
