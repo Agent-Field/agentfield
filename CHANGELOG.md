@@ -6,6 +6,155 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.15] - 2026-09-09
+
+
+### Fixed
+
+- Fix(storage): workflow reaper consults execution activity clock (#1046)
+
+* fix(storage): honor execution activity in workflow reaper
+
+* fix(storage): guard stale workflow update against activity race
+
+* fix(storage): re-check staleness in the execution reaper update
+
+MarkStaleWorkflowExecutions now repeats its candidate predicates in the
+conditional UPDATE, but MarkStaleExecutions still only re-checked status.
+A heartbeat that lands between its candidate selection and that UPDATE
+therefore still flips a live execution row to timeout — the same false
+timeout the workflow reaper just stopped producing, through a narrower
+window (its candidate query reads the clock the heartbeat writes, so the
+race is the millisecond gap between the two statements rather than the
+whole run).
+
+Give it the same treatment: the conditional UPDATE re-evaluates the
+activity clock against the sweep cutoff and the non-terminal-child guard,
+and the body moves behind the same post-selection seam the workflow reaper
+uses so the interleaving is testable without sleeps.
+
+Tests: a real execution-note write landing in that window leaves the row
+running with its note intact; a seam that writes nothing still reaps the
+silent row with the existing "no activity" message.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (78215f1)
+
+- Fix(telemetry): report each terminal outcome once and stamp usage_context on every event (#954)
+
+* fix(telemetry): report each terminal outcome once and stamp usage_context on every event
+
+Two defects let execution_completed count things that were not executions.
+
+Duplicate lifecycle events were forwarded verbatim. A terminal status callback
+re-delivered after a lost 200 used to re-run every side effect, publishing a
+second completed event for an execution that had already been reported (#951
+closed that path in the handler; the SDKs retry a callback up to five times, so
+one execution could report several). The telemetry client had no defense of its
+own: it minted a stable telemetry_event_id and left deduplication entirely to
+the ingest side. It now remembers the terminal outcomes it has reported and
+drops a repeat, so a republished event cannot inflate a count regardless of what
+ingest does with the event ID. Only stable identities are eligible — the random
+ones belong to transitions allowed to recur, such as timeout -> running ->
+timeout, and collapsing those would lose real events. The set is bounded at 8192
+keys with oldest-first eviction; a duplicate arrives within seconds, so eviction
+can only drop keys long past the window where they could suppress anything.
+
+usage_context rode only on control_plane_started. A CI job starts the control
+plane on a fresh volume, so it mints a new install ID and its executions look
+exactly like a real first-time user's — and with the context on the startup
+event alone, nothing downstream could separate them after ingestion. Disabling
+telemetry for the functional-test compose stacks was a fix for one known
+producer; this makes every producer distinguishable at the source. It is now
+stamped on every event, so execution_completed can be filtered to
+dev_or_local/server and CI traffic excluded.
+
+Schema version goes to 3 so the ingest side can tell a build that stamps
+usage_context everywhere from one that does not, and know when the filter is
+trustworthy.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(telemetry): keep the schema version the hosted relay accepts
+
+The relay validates telemetry_schema_version strictly: it accepts only
+1 or 2 (app/api/oss/telemetry/route.ts in Agent-Field/website2.0) and
+returns 400 invalid_telemetry_event for anything else, before ingest. A
+producer declaring 3 would therefore have every payload dropped whole
+rather than degraded, silently zeroing out control-plane telemetry.
+
+Nothing in this branch changes the v2 wire shape -- usage_context is
+additive and already allowlisted by the relay's shared property schema,
+and the duplicate suppression is producer-side and invisible to ingest --
+so the bump bought nothing. Keep it at 2 until a relay that accepts a
+newer version is deployed.
+
+The test asserted the emitted version against the constant, which
+compares the constant to itself; it now pins the literal 2 so a future
+bump has to be a visible test change.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(telemetry): keep a queue-dropped terminal outcome deliverable
+
+observe() recorded the outcome before enqueue() ran, and enqueue drops
+the event when the 256-deep send queue is full (one worker, one network
+POST at a time). The outcome was then marked reported without ever being
+sent, and the republish that would have delivered it was suppressed for
+good -- turning a transient backpressure drop into permanent loss of that
+execution's terminal event, precisely when volume is highest. Before this
+branch that retry got through.
+
+enqueue now reports whether the event actually made it onto the queue,
+and handleExecutionEvent releases the dedupe key when it did not.
+observe stays ahead of the enqueue because it is an atomic test-and-set:
+that is what bounds concurrent republishes to at most one report.
+
+telemetryReportedSet keeps the key's ring slot in the membership map so
+forget can clear both, otherwise a released key would leave a stale ring
+entry that later evicts a freshly re-observed key ahead of its time.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(telemetry): treat a falsy CI variable as not CI
+
+detectUsageContext bucketed the process as `ci` on the mere presence of
+CI, GITHUB_ACTIONS, GITLAB_CI, BUILDKITE, CIRCLECI or JENKINS_URL.
+`CI=false` is a common way to say "not CI" / "turn CI behaviour off", so
+a user who exports it had every event labelled `ci`. Now that
+usage_context rides on every event rather than just control_plane_started,
+that mislabels all of their traffic and filters real usage out of the
+product numbers.
+
+Only a truthy value counts: empty, 0, false, no and off (trimmed,
+case-insensitive) are not CI.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(telemetry): warn when a duplicate terminal event is suppressed
+
+Suppressing a republished terminal outcome keeps the counts right, but
+at Debug it also makes the producer bug that caused the republish
+invisible: the metric stops moving and nothing says why. Warn keeps that
+signal alive for an operator without changing behaviour.
+
+The line stays low-cardinality and carries only the telemetry event name
+-- never the execution ID or the dedupe key, which are exactly what
+eventIdentity exists to keep inside the process.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (366c7ff)
+
 ## [0.1.138-rc.14] - 2026-09-09
 
 
