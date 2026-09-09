@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { constants } from 'node:os';
 import { applyOpenRouterAttributionEnv } from '../ai/openrouterAttribution.js';
 
 export interface CliResult {
@@ -38,7 +39,15 @@ export function runCli(
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
     const [bin, ...args] = cmd;
-    const env = { ...process.env, ...options?.env };
+    const parsedParentDepth = Number.parseInt(process.env.AGENTFIELD_HARNESS_DEPTH ?? '', 10);
+    const parentDepth = Number.isFinite(parsedParentDepth) && parsedParentDepth >= 0
+      ? parsedParentDepth
+      : 0;
+    const env = {
+      ...process.env,
+      AGENTFIELD_HARNESS_DEPTH: String(parentDepth + 1),
+      ...options?.env
+    };
     applyOpenRouterAttributionEnv(env);
     const hasInput = options?.inputText !== undefined;
     // 'ignore' on stdin gives the child an immediate EOF instead of an open
@@ -113,13 +122,18 @@ export function runCli(
       }
     }
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (settled) {
         return;
       }
       settled = true;
       cleanup();
-      resolve({ stdout, stderr, exitCode: code ?? 0 });
+      const signalNumber = signal ? constants.signals[signal] : undefined;
+      resolve({
+        stdout,
+        stderr,
+        exitCode: code ?? (signalNumber === undefined ? 0 : -signalNumber),
+      });
     });
 
     proc.on('error', (err) => {

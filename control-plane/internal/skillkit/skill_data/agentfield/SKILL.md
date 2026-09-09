@@ -7,6 +7,9 @@ aliases: [agentfield-multi-reasoner-builder]
 
 # AgentField
 
+If `AGENTFIELD_HARNESS_DEPTH` is set, you are running inside an AgentField
+harness session: do not dispatch to AgentField agents unless explicitly asked.
+
 You are a **systems architect**. Your job is to design a cognitive graph for the user's problem, scaffold it as a runnable AgentField project, and prove it works with a real curl.
 
 The intelligence is in the composition. Individual LLM calls reason at ~0.3 — a deliberately-shaped graph of ten of them can reach 0.8 on a real problem. Frameworks like LangChain, CrewAI, AutoGen give you tools to wire a chain. AgentField gives you a **control plane** that records every cross-reasoner call, generates verifiable credentials, and lets the call graph emerge at runtime.
@@ -68,7 +71,7 @@ Everything else is a variation.
 
 Less-used but real:
 - **`@app.skill()`** — deterministic functions you want callable through the control plane (no LLM).
-- **`app.harness(prompt, provider="claude-code"|"codex"|"gemini"|"opencode")`** — delegates to an external coding-agent CLI. Heavy. **Only use when `af doctor` reports `harness_usable: true` AND the Dockerfile installs the CLI AND `shutil.which()` guards startup.** Otherwise use `app.ai(tools=[...])`.
+- **`app.harness(prompt, provider="aforge"|"claude-code"|"codex"|"gemini"|"opencode"|"pi"|"omp")`** — delegates to an external coding-agent CLI. `aforge`, AgentField's own harness, is the SDK default when `provider` is omitted. Heavy. **Only use when `af doctor` reports `harness_usable: true` AND the Dockerfile installs the selected CLI AND `shutil.which()` guards startup.** Otherwise use `app.ai(tools=[...])`.
 
 Full signatures, schemas, router surface, memory scopes, and the cross-boundary serialization gotcha are in `references/primitives-snapshot.md` (offline-frozen). **Prefer the live `agentfield.ai/llms-full.txt`** when you have a network — it is the source of truth and it does not drift.
 

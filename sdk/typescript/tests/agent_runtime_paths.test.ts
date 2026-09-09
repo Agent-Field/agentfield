@@ -33,6 +33,8 @@ type AgentInternals = {
   executeReasoner(req: express.Request, res: express.Response, name: string): Promise<void>;
   executeSkill(req: express.Request, res: express.Response, name: string): Promise<void>;
   executeServerlessHttp(req: express.Request, res: express.Response, explicitName?: string): Promise<void>;
+  cancelRegistry: { cancel(executionId: string, reason?: string): boolean };
+  shuttingDown: boolean;
 };
 
 function createAgent(config?: ConstructorParameters<typeof Agent>[0]) {
@@ -383,6 +385,51 @@ describe('Agent runtime paths', () => {
     });
     expect(missingRes.statusCode).toBe(400);
     expect(missingRes.body).toEqual({ error: "Missing 'target' or 'reasoner' in request" });
+  });
+
+  it('executeSkill returns the reasoner shutdown response after shutdown begins', async () => {
+    const agent = createAgent();
+    agent.skill('format', async () => ({ ok: true }));
+    (agent as unknown as AgentInternals).shuttingDown = true;
+    const response = createResponse();
+
+    await (agent as unknown as AgentInternals).executeSkill(
+      createRequest({ path: '/api/v1/skills/format' }), response, 'format'
+    );
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toEqual({ error: 'agent shutting down' });
+  });
+
+  it.each([
+    ['shutdown_timeout', 'shutdown timeout exceeded'],
+    ['cancelled_by_control_plane', 'cancelled']
+  ])('reports cooperative cancellation reason %s', async (cancelReason, statusReason) => {
+    const agent = createAgent();
+    const report = vi.spyOn(AgentFieldClient.prototype, 'reportExecutionResult').mockResolvedValue(true);
+    agent.reasoner('waiting', async ctx => {
+      await new Promise<void>((_resolve, reject) => {
+        ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true });
+      });
+    });
+    const response = createResponse();
+    const internals = agent as unknown as AgentInternals;
+
+    await internals.executeReasoner(createRequest({
+      body: {},
+      headers: { 'x-execution-id': 'exec-cancel', 'x-run-id': 'run-cancel' }
+    }), response, 'waiting');
+    expect(response.statusCode).toBe(202);
+    expect(internals.cancelRegistry.cancel('exec-cancel', cancelReason)).toBe(true);
+    await vi.waitFor(() => expect(report).toHaveBeenCalled());
+
+    expect(report).toHaveBeenCalledWith('exec-cancel', expect.objectContaining({
+      status: 'cancelled',
+      error: cancelReason === 'shutdown_timeout'
+        ? 'cancelled during graceful shutdown'
+        : 'cancelled_by_control_plane',
+      statusReason
+    }));
   });
 
   it('call() executes local reasoners, publishes workflow states, and propagates failures', async () => {

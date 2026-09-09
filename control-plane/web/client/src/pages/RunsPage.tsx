@@ -98,6 +98,7 @@ import {
 import { useSidebar } from "@/components/ui/sidebar";
 import { SortableHeaderCell } from "@/components/ui/CompactTable";
 import { SourceIcon } from "@/components/triggers/SourceIcon";
+import { safeExternalUrl } from "@/utils/safeExternalUrl";
 import { getExecutionDetails } from "@/services/executionsApi";
 import { getWorkflowDAGLightweight } from "@/services/workflowsApi";
 import { JsonHighlightedPre } from "@/components/ui/json-syntax-highlight";
@@ -612,6 +613,8 @@ export function RunsPage() {
 
   /** Human-readable label for a run — e.g. `demo-runs.slow_task`. */
   const runDisplayLabel = useCallback((run: WorkflowSummary) => {
+    const customName = run.run_metadata?.display_name?.trim();
+    if (customName) return customName;
     const reasoner = run.root_reasoner || run.display_name || "run";
     return run.agent_id ? `${run.agent_id}.${reasoner}` : reasoner;
   }, []);
@@ -1742,7 +1745,7 @@ function RunRow({
   onRestartRun,
 }: RunRowProps) {
   const agentLabel = run.agent_id || run.agent_name || "";
-  const reasonerLabel = run.root_reasoner || run.display_name || "—";
+  const reasonerLabel = run.run_metadata?.display_name?.trim() || run.root_reasoner || run.display_name || "—";
   const [copied, setCopied] = useState(false);
   const errorMeta =
     (run.root_execution_status ?? run.status) === "failed"
@@ -1881,6 +1884,20 @@ function RunRow({
               {run.lineage.kind === "fork" ? "Forked" : "Restarted"}
             </Link>
           ) : null}
+          {run.run_metadata?.labels?.slice(0, 3).map((label) => (
+            <span key={label} className={cn(badgeVariants({ variant: "metadata", size: "sm" }), "h-5")}>{label}</span>
+          ))}
+          {(run.run_metadata?.labels?.length ?? 0) > 3 ? (
+            <span className={cn(badgeVariants({ variant: "metadata", size: "sm" }), "h-5")}>+{(run.run_metadata?.labels?.length ?? 0) - 3}</span>
+          ) : null}
+          {run.run_metadata?.links?.map((link) => {
+            const href = safeExternalUrl(link.url);
+            return href ? (
+              <a key={link.url} href={href} target="_blank" rel="noopener noreferrer" className={cn(badgeVariants({ variant: "outline", size: "sm" }), "h-5")} onClick={(e) => e.stopPropagation()}>
+                {link.label || link.url}
+              </a>
+            ) : null;
+          })}
           <button
             type="button"
             className={cn(

@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +47,6 @@ func TestQueryRunSummariesParsesTextTimestamps(t *testing.T) {
 	for _, exec := range executions {
 		require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
 	}
-
 	results, _, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
@@ -107,6 +108,22 @@ func TestQueryRunSummariesSearchFilter(t *testing.T) {
 	for _, exec := range executions {
 		require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
 	}
+	require.NoError(t, ls.UpdateWorkflowRunMetadata(ctx, "run-beta", func(namespaces map[string]json.RawMessage) error {
+		namespaces[types.RunMetadataNamespace] = json.RawMessage(`{
+			"display_name":"Outbound Release",
+			"labels":["priority-customer","fulfillment"],
+			"links":[{"label":"Do not search links","url":"https://metadata-link-only.test"}]
+		}`)
+		return nil
+	}))
+	require.NoError(t, ls.StoreWorkflowRun(ctx, &types.WorkflowRun{
+		RunID: "run-alpha", RootWorkflowID: "run-alpha", Status: "succeeded",
+		Metadata: json.RawMessage(`not-json`), CreatedAt: base, UpdatedAt: base,
+	}))
+	require.NoError(t, ls.StoreWorkflowRun(ctx, &types.WorkflowRun{
+		RunID: "run-gamma", RootWorkflowID: "run-gamma", Status: "succeeded",
+		Metadata: json.RawMessage(`{"run":{"labels":"legacy-wrong-shape"}}`), CreatedAt: base, UpdatedAt: base,
+	}))
 
 	// Sanity: no filter returns all three runs.
 	all, _, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{})
@@ -142,12 +159,48 @@ func TestQueryRunSummariesSearchFilter(t *testing.T) {
 	require.Equal(t, 2, total)
 	require.ElementsMatch(t, []string{"run-alpha", "run-gamma"}, runIDs(got))
 
+	// Match on the client-settable display name.
+	term = "Outbound Release"
+	got, total, err = ls.QueryRunSummaries(ctx, types.ExecutionFilter{Search: &term})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.ElementsMatch(t, []string{"run-beta"}, runIDs(got))
+
+	// Match on a client-settable label.
+	term = "priority-customer"
+	got, total, err = ls.QueryRunSummaries(ctx, types.ExecutionFilter{Search: &term})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.ElementsMatch(t, []string{"run-beta"}, runIDs(got))
+
+	// Links and provenance are intentionally not part of identity search.
+	term = "metadata-link-only"
+	got, total, err = ls.QueryRunSummaries(ctx, types.ExecutionFilter{Search: &term})
+	require.NoError(t, err)
+	require.Zero(t, total)
+	require.Empty(t, got)
+
 	// No match → empty result set, not an error.
 	term = "nonexistent-needle"
 	got, total, err = ls.QueryRunSummaries(ctx, types.ExecutionFilter{Search: &term})
 	require.NoError(t, err)
 	require.Equal(t, 0, total)
 	require.Empty(t, got)
+}
+
+func TestRunMetadataSearchPredicatesCoverSQLiteAndPostgres(t *testing.T) {
+	sqlitePredicate := runMetadataSearchPredicate("local")
+	require.Contains(t, sqlitePredicate, "json_valid")
+	require.Contains(t, sqlitePredicate, "json_each")
+	require.NotContains(t, sqlitePredicate, "jsonb_array_elements_text")
+	require.Equal(t, 2, strings.Count(sqlitePredicate, "?"))
+
+	postgresPredicate := runMetadataSearchPredicate("postgres")
+	require.Contains(t, postgresPredicate, "metadata->'run'->>'display_name'")
+	require.Contains(t, postgresPredicate, "jsonb_array_elements_text")
+	require.Contains(t, postgresPredicate, "jsonb_typeof")
+	require.NotContains(t, postgresPredicate, "json_each")
+	require.Equal(t, 2, strings.Count(postgresPredicate, "?"))
 }
 
 func TestQueryRunSummariesIncludesRootErrorFields(t *testing.T) {
@@ -160,17 +213,17 @@ func TestQueryRunSummariesIncludesRootErrorFields(t *testing.T) {
 	rootExecutionID := "exec-root"
 
 	root := &types.Execution{
-		ExecutionID: rootExecutionID,
-		RunID:       runID,
-		AgentNodeID: "test-slow",
-		ReasonerID:  "slow_task",
-		NodeID:      "node-root",
-		Status:      string(types.ExecutionStatusFailed),
+		ExecutionID:  rootExecutionID,
+		RunID:        runID,
+		AgentNodeID:  "test-slow",
+		ReasonerID:   "slow_task",
+		NodeID:       "node-root",
+		Status:       string(types.ExecutionStatusFailed),
 		StatusReason: &rootCategory,
 		ErrorMessage: &rootMessage,
-		StartedAt:   base,
-		CreatedAt:   base,
-		UpdatedAt:   base,
+		StartedAt:    base,
+		CreatedAt:    base,
+		UpdatedAt:    base,
 	}
 	child := &types.Execution{
 		ExecutionID:       "exec-child",

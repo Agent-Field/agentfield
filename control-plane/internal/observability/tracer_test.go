@@ -2,11 +2,52 @@ package observability
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInitTracer_ExportsToFullHTTPURL(t *testing.T) {
+	var requests atomic.Int32
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/traces", r.URL.Path)
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer collector.Close()
+
+	tracer, shutdown, err := InitTracer(context.Background(), TracerConfig{
+		Enabled: true, Exporter: "otlp-http", Endpoint: collector.URL,
+	})
+	require.NoError(t, err)
+	_, span := tracer.StartExecutionSpan(context.Background(), "exec-1", "run-1", "agent-1")
+	span.End()
+	require.NoError(t, tracer.provider.ForceFlush(context.Background()))
+	require.NoError(t, shutdown(context.Background()))
+	require.Positive(t, requests.Load())
+}
+
+func TestInitTracer_EndpointAndExporterValidation(t *testing.T) {
+	_, _, err := InitTracer(context.Background(), TracerConfig{Enabled: true, Endpoint: "http://[bad"})
+	require.ErrorContains(t, err, "invalid OTLP endpoint")
+
+	tracer, shutdown, err := InitTracer(context.Background(), TracerConfig{
+		Enabled: true, Exporter: "otlp-grpc", Endpoint: "http://127.0.0.1:4317",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, tracer)
+	require.NoError(t, shutdown(context.Background()))
+}
+
+func TestResolveTraceEndpoint_DefaultsByExporter(t *testing.T) {
+	assert.Equal(t, "localhost:4318", resolveTraceEndpoint("otlp-http", ""))
+	assert.Equal(t, "localhost:4317", resolveTraceEndpoint("otlp-grpc", ""))
+}
 
 func TestInitTracer_Disabled(t *testing.T) {
 	cfg := TracerConfig{Enabled: false}

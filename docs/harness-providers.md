@@ -5,7 +5,8 @@ writes, and edits files, then reports back through the same structured-output
 contract as `app.ai()`. AgentField ships its own harness, **AForge**, and it is
 the default: a call with no provider set runs `aforge`. Naming a different
 provider swaps the worker without changing the surrounding loop, which is how
-you orchestrate Claude Code, Codex, Gemini CLI, or OpenCode from a reasoner.
+you orchestrate Claude Code, Codex, Gemini CLI, OpenCode, Pi, or OMP from a
+reasoner.
 
 ## Default: AForge
 
@@ -59,7 +60,7 @@ report = await app.harness(task, schema=Report)
 # Orchestrate Claude Code instead
 report = await app.harness(task, schema=Report, provider="claude-code")
 
-# ...or Codex, Gemini CLI, OpenCode
+# ...or Codex, Gemini CLI, OpenCode, Pi, OMP
 report = await app.harness(task, schema=Report, provider="codex")
 ```
 
@@ -78,6 +79,8 @@ Python, `agent.HarnessConfig{Provider: "codex"}` in Go).
 | `gemini` | `npm install -g @google/gemini-cli` | None | `gemini` | Gemini login, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
 | `opencode` | `curl -fsSL https://opencode.ai/install \| bash` | `agentfield[harness-opencode]` | `opencode` | Provider credentials configured in OpenCode |
 | `grok` | Install the Grok Build CLI, then `grok login` | None | `grok` | `XAI_API_KEY` |
+| `pi` | `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` | None | `pi` | Provider login or API key such as `OPENROUTER_API_KEY` |
+| `omp` | `curl -fsSL https://omp.sh/install \| sh` | None | `omp` | Provider login or API key such as `OPENROUTER_API_KEY` |
 
 Install every Python wrapper with:
 
@@ -101,7 +104,8 @@ The pinned build, its download host and the opt-out are documented under
 The extras install Python wrappers. They do not replace the runtime preflight:
 AForge and Gemini are CLI-only, and Codex or OpenCode may still require a
 separately available executable depending on the wrapper and platform. `grok`
-is available in the Python SDK only.
+is available in the Python SDK only. Pi and OMP are CLI-only: install their
+upstream binaries as shown below.
 
 ### AForge adapter contract
 
@@ -135,6 +139,50 @@ used, Python reads it at import time — so export it before starting the agent
 rather than mutating the environment mid-run. The TypeScript OpenCode provider
 has no limiter and ignores the variable.
 
+Install Pi or OMP directly from their official distributions:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+curl -fsSL https://omp.sh/install | sh
+```
+
+For reproducible containers and CI, run the chosen upstream installer in the
+image build, then gate startup with `af harness doctor`. If the executable is
+missing at dispatch time, all three SDKs return an actionable provider error
+containing the same upstream install command instead of attempting a mutation.
+
+## Provider parity
+
+Pi and OMP implement the same provider-neutral harness surface as OpenCode.
+The SDK translates that surface to each CLI's native flags rather than exposing
+CLI-specific command construction to application code.
+
+| Capability | OpenCode | Pi | OMP |
+| --- | --- | --- | --- |
+| Model and `#variant` | `-m`, `--variant` | `--model`, `--thinking` | `--model`, `--thinking` |
+| Project root | `--dir` | process working directory | `--cwd` plus process working directory |
+| One-shot machine output | JSON output | stdin + JSON event stream | stdin + JSON event stream |
+| System prompt | Native prompt option | Native prompt option | Native prompt option |
+| Tool allowlist | Ignored today | Normalized Pi tool names | Normalized OMP tool names |
+| Plan / auto permissions | Ignored today | Read-only tools / no approval flag | Read-only tools / `--auto-approve` |
+| Session resume | Native session option | `--session` | `--resume` |
+| Structured output | Isolated schema file protocol | Same protocol | Same protocol |
+| Metrics | Sessions, turns, tokens, cost, duration | Same normalized fields | Same normalized fields |
+| Runtime controls | Env, timeout, retries, binary override | Same | Same |
+
+The contract is equivalent, not flag-identical. Pi calls its filesystem search
+tool `find`, OMP calls it `glob`, and each CLI has its own resume flag. Only OMP
+has an approval flag: `--tools` is Pi's documented read-only mechanism and it has
+no approval flag at all, so `permission_mode="auto"` adds nothing for Pi. These
+differences stay inside the provider adapters. Unsupported native concepts are
+handled consistently: plan mode removes mutating tools, explicit model variants
+override `#variant`, and provider-reported metrics are normalized into the shared
+result type.
+
+OpenCode currently receives only the selected model, project directory, and
+prompt. Its adapters ignore `tools` and `permission_mode`; they do not translate
+either option to native OpenCode flags today.
+
 ## Model selection and reasoning-effort variants
 
 Every provider accepts a `model` option on `.harness()` calls. Leaving it unset
@@ -150,7 +198,14 @@ result = await app.harness(
 )
 ```
 
-An explicit `variant="high"` keyword wins over the suffix. Per provider:
+An explicit `variant="high"` keyword wins over the suffix. In Python,
+`variant` is also available on `HarnessConfig` and `HarnessRunner.run`; a
+per-call `Agent.harness(..., variant=...)` value overrides the configured
+default. Per provider:
+
+Pi and OMP accept the same OpenRouter model strings in every SDK, for example
+`openrouter/minimax/minimax-m2.7` or
+`openrouter/google/gemini-2.5-flash#low`.
 
 | Provider | Model flag | Variant handling |
 | --- | --- | --- |
@@ -159,16 +214,67 @@ An explicit `variant="high"` keyword wins over the suffix. Per provider:
 | Codex | `-m <model>` | `-c model_reasoning_effort=<v>` |
 | Claude Code | SDK `model` option | No effort control — variant is dropped with a debug log |
 | Gemini | `-m <model>` | No effort control — variant is dropped |
+| Pi | `--model <model>` | `--thinking <v>` |
+| OMP | `--model <model>` | `--thinking <v>` |
 
 The `#` separator is safe in model ids: `:` belongs to OpenRouter suffixes like
 `:free`, and `@` to Vertex-style ids, but no provider uses `#`.
+
+### OpenCode standalone runs (Python)
+
+The Python OpenCode adapter uses `opencode run` for each call; it does not use
+`opencode serve` or attach to a session. By default, it selects the fixed
+`agentfield-harness` agent with `--agent` and supplies that agent through the
+child process's `OPENCODE_CONFIG_CONTENT` environment variable. The generated
+overlay sets `$schema` to `https://opencode.ai/config.json`, selects
+`agentfield-harness` as the default agent, and fixes its mode to `primary` with
+`steps` set to `500`. It does not modify shared OpenCode configuration files.
+
+The generated overlay is deep-merged into a caller-provided
+`OPENCODE_CONFIG_CONTENT` value, or into the ambient value when no per-call
+value is supplied. Unrelated providers, agents, MCP servers, and other
+configuration remain intact, while AgentField's generated harness fields take
+precedence where they overlap. The overlay contains no provider credentials or
+API keys. The supplied configuration must be a JSON object; malformed content
+is reported instead of being silently discarded.
+
+A fixed worker instruction is always included, in the default agent overlay
+or in the inline prompt when the rollback is enabled. When a caller supplies a
+non-blank `system_prompt`, it precedes that instruction. The resolved base
+`model` and `reasoningEffort` are included only when available.
+The base model is also passed with `-m`; a resolved `#variant` suffix is
+passed exactly once with `--variant`. AgentField `max_turns` remains a runner
+limit and is not serialized as OpenCode `steps`.
+
+OpenCode's initial permission baseline is headless and compatibility-oriented:
+the wildcard action is allowed. It is followed by a resource-specific `skill`
+denial for `agentfield*`, which prevents the child from loading AgentField
+orchestration skills while leaving unrelated skills available. OpenCode
+evaluates the last matching permission rule, so this ordering is intentional.
+`question` and `task` are also explicitly denied, and no `ask` permission is
+generated. The Python OpenCode provider currently accepts the common
+`tools` and `permission_mode` options but ignores them; it does not translate
+tool names into redundant permission entries, and `permission_mode` does not
+select an OpenCode permission mode. The wildcard behavior is not per-role
+authorization.
+
+For an opt-in rollback or compatibility test, set
+`AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` (in the per-call environment or
+the ambient environment). That path keeps the generated agent selection and
+targeted permissions, removes the selected agent's configured system prompt
+from the merged configuration, and places the caller system prompt, fixed
+worker instruction, and task into one prompt. POSIX sends that prompt as the
+positional argument and Windows sends it over stdin. The default path keeps the
+task prompt (including the runner's schema instructions, when applicable) as
+the only user-facing prompt and configures the system prompt on the generated
+agent.
 
 ## Verify
 
 Check selected providers in a container or CI job before any paid run:
 
 ```bash
-af harness doctor --provider codex,opencode --json
+af harness doctor --provider codex,opencode,pi,omp --json
 ```
 
 The command exits non-zero if a requested provider is missing, its version
@@ -178,7 +284,7 @@ CI can archive the report when the command fails.
 Python applications can use the same preflight data:
 
 ```python
-reports = await app.harness_doctor(providers=["codex", "opencode"])
+reports = await app.harness_doctor(providers=["codex", "opencode", "pi", "omp"])
 for report in reports:
     print(report.provider, report.usable, report.issues)
 ```
@@ -186,6 +292,9 @@ for report in reports:
 The preflight currently ships in the Python SDK and the `af` CLI. Equivalent
 TypeScript and Go SDK APIs are planned follow-ups (see #685) and are not
 available yet.
+
+For a complete Go workflow that fans one task out to Pi and OMP concurrently,
+see `examples/go_agent_nodes/cmd/harness_duo`.
 
 Each report includes the provider name, resolved binary, installed state,
 version, auth state, usability, installation command, recognized auth variables,

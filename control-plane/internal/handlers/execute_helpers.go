@@ -322,6 +322,8 @@ func renderStatus(exec *types.Execution) ExecutionStatusResponse {
 	resp := ExecutionStatusResponse{
 		ExecutionID:       exec.ExecutionID,
 		RunID:             exec.RunID,
+		AgentNodeID:       exec.AgentNodeID,
+		InstanceID:        exec.InstanceID,
 		Status:            exec.Status,
 		StatusReason:      exec.StatusReason,
 		Result:            decodeJSON(exec.ResultPayload),
@@ -404,6 +406,7 @@ func (c *executionController) buildWorkflowExecutionRecord(ctx context.Context, 
 		SessionID:           exec.SessionID,
 		ActorID:             exec.ActorID,
 		AgentNodeID:         exec.AgentNodeID,
+		InstanceID:          exec.InstanceID,
 		ParentWorkflowID:    parentWorkflowID,
 		ParentExecutionID:   exec.ParentExecutionID,
 		RootWorkflowID:      rootWorkflowID,
@@ -528,6 +531,12 @@ func writeExecutionError(ctx *gin.Context, err error) {
 		return
 	}
 
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+		return
+	}
+
 	var ce *callError
 	if errors.As(err, &ce) {
 		category := classifyCallError(ce, err)
@@ -555,16 +564,9 @@ func writeExecutionError(ctx *gin.Context, err error) {
 
 	var pe *executionPreconditionError
 	if errors.As(err, &pe) {
-		body := gin.H{
-			"error":          pe.Error(),
-			"error_category": string(pe.Category()),
-		}
-		// When a stable machine code is set, promote it to `error` and move
-		// the human-readable text to `message` — matching the contract used
-		// by reasoners.go / skills.go / permission middleware.
-		if code := pe.ErrorCode(); code != "" {
-			body["error"] = code
-			body["message"] = pe.Error()
+		body, retryAfter := renderExecutionPreconditionError(pe)
+		if retryAfter > 0 {
+			ctx.Header("Retry-After", strconv.Itoa(retryAfter))
 		}
 		ctx.JSON(pe.HTTPStatusCode(), body)
 		return
@@ -580,6 +582,33 @@ func writeExecutionError(ctx *gin.Context, err error) {
 		"error":          err.Error(),
 		"error_category": string(category),
 	})
+}
+
+func renderExecutionPreconditionError(pe *executionPreconditionError) (gin.H, int) {
+	body := gin.H{
+		"error":          pe.Error(),
+		"error_category": string(pe.Category()),
+	}
+	// When a stable machine code is set, promote it to `error` and move the
+	// human-readable text to `message` — matching the contract used by sibling
+	// handlers.
+	if code := pe.ErrorCode(); code != "" {
+		body["error"] = code
+		body["message"] = pe.Error()
+	}
+	retryAfter := pe.retryAfter
+	if retryAfter <= 0 {
+		retryAfter = map[ErrorCategory]int{
+			ErrorCategoryConcurrencyLimit:     1,
+			ErrorCategoryNodeUnavailable:      1,
+			ErrorCategoryLLMUnavailable:       30,
+			ErrorCategoryControlPlaneShutdown: 1,
+		}[pe.Category()]
+	}
+	if retryAfter > 0 {
+		body["retry_after"] = retryAfter
+	}
+	return body, retryAfter
 }
 
 // classifyExecutionError determines the error category from any execution error.
@@ -816,20 +845,25 @@ func (c *executionController) savePayload(ctx context.Context, data []byte) *str
 		logger.Logger.Warn().Err(err).Int("bytes", len(data)).Msg("failed to persist payload; proceeding without URI")
 		return nil
 	}
+	if record == nil {
+		return nil
+	}
 	uri := record.URI
 	return &uri
 }
 
 func (j asyncExecutionJob) process() {
+	j.processWithContext(context.Background())
+}
+
+func (j asyncExecutionJob) processWithContext(workerCtx context.Context) {
 	// Release the per-agent concurrency slot when this job finishes
-	if j.plan.target != nil {
-		defer ReleaseExecutionSlot(j.plan.target.NodeID)
-	}
+	defer j.plan.releaseSlot()
 
 	// Use a bounded context so that paused executions do not block goroutines
 	// indefinitely if the resume/cancel event is never delivered (e.g. event bus
 	// crash, server restart). 24 hours is generous but prevents permanent leaks.
-	bgCtx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	bgCtx, cancel := context.WithTimeout(workerCtx, 24*time.Hour)
 	defer cancel()
 
 	currentExec, err := j.controller.store.GetExecutionRecord(bgCtx, j.plan.exec.ExecutionID)
@@ -852,6 +886,12 @@ func (j asyncExecutionJob) process() {
 	}
 
 	resultBody, elapsed, asyncAccepted, callErr := j.controller.callAgent(bgCtx, &j.plan)
+	if workerCtx.Err() != nil {
+		persistCtx, persistCancel := shutdownPersistenceContext()
+		j.failForControlPlaneShutdown(persistCtx, newControlPlaneShutdownError("execution was interrupted because the control plane shut down"))
+		persistCancel()
+		return
+	}
 	if callErr == nil && asyncAccepted {
 		logger.Logger.Info().
 			Str("execution_id", j.plan.exec.ExecutionID).
@@ -899,14 +939,32 @@ func (j asyncExecutionJob) process() {
 }
 
 func newAsyncWorkerPool(workerCount, queueCapacity int) *asyncWorkerPool {
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	admissionCapacity := workerCount + queueCapacity
 	pool := &asyncWorkerPool{
-		queue: make(chan asyncExecutionJob, queueCapacity),
+		queue:         make(chan asyncExecutionJob, admissionCapacity),
+		reservations:  make(chan struct{}, admissionCapacity),
+		workerCtx:     workerCtx,
+		cancelWorkers: cancelWorkers,
 	}
 
 	for i := 0; i < workerCount; i++ {
 		go func(workerID int) {
 			for job := range pool.queue {
-				job.process()
+				func() {
+					defer pool.releaseReservation()
+					defer pool.jobs.Done()
+					pool.mu.RLock()
+					stopped := pool.stopped
+					pool.mu.RUnlock()
+					if stopped {
+						persistCtx, cancel := shutdownPersistenceContext()
+						job.terminateForControlPlaneShutdownWithContext(persistCtx, newControlPlaneShutdownError("execution was not started before the control plane shut down"))
+						cancel()
+					} else {
+						job.processWithContext(pool.workerCtx)
+					}
+				}()
 			}
 		}(i)
 	}
@@ -920,19 +978,156 @@ func newAsyncWorkerPool(workerCount, queueCapacity int) *asyncWorkerPool {
 }
 
 func (p *asyncWorkerPool) submit(job asyncExecutionJob) bool {
-	select {
-	case p.queue <- job:
-		return true
-	default:
+	if !p.reserve() {
 		return false
 	}
+	if !p.submitReserved(job) {
+		p.releaseReservation()
+		return false
+	}
+	return true
+}
+
+func (p *asyncWorkerPool) reserve() bool {
+	reserved, _ := p.reserveForAdmission()
+	return reserved
+}
+
+// reserveForAdmission distinguishes saturation from a pool that has stopped so
+// callers can return the stable control_plane_shutdown contract.
+func (p *asyncWorkerPool) reserveForAdmission() (reserved, stopped bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.stopped {
+		return false, true
+	}
+	select {
+	case p.reservations <- struct{}{}:
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+func (p *asyncWorkerPool) releaseReservation() {
+	select {
+	case <-p.reservations:
+	default:
+	}
+}
+
+func (p *asyncWorkerPool) submitReserved(job asyncExecutionJob) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.stopped {
+		return false
+	}
+	p.jobs.Add(1)
+	p.queue <- job
+	return true
+}
+
+// StopAsyncWorkerPool prevents new admission and drains the process-wide pool.
+func StopAsyncWorkerPool(ctx context.Context) {
+	if asyncPool != nil {
+		asyncPool.Stop(ctx)
+	}
+}
+
+// Stop rejects new work, lets accepted work finish until ctx expires, then
+// honestly terminates any jobs which have not started.
+func (p *asyncWorkerPool) Stop(ctx context.Context) {
+	p.mu.Lock()
+	if !p.stopped {
+		p.stopped = true
+		close(p.queue)
+	}
+	p.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		p.jobs.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+
+	p.cancelWorkers()
+	persistCtx, cancel := shutdownPersistenceContext()
+	defer cancel()
+	for job := range p.queue {
+		p.releaseReservation()
+		job.terminateForControlPlaneShutdownWithContext(persistCtx, newControlPlaneShutdownError("execution was not started before the control plane shut down"))
+		p.jobs.Done()
+	}
+	select {
+	case <-done:
+	case <-persistCtx.Done():
+	}
+}
+
+func shutdownPersistenceContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Second)
+}
+
+func (j *asyncExecutionJob) terminateForControlPlaneShutdown(shutdownErr *executionPreconditionError) {
+	persistCtx, cancel := shutdownPersistenceContext()
+	defer cancel()
+	j.terminateForControlPlaneShutdownWithContext(persistCtx, shutdownErr)
+}
+
+func (j *asyncExecutionJob) terminateForControlPlaneShutdownWithContext(ctx context.Context, shutdownErr *executionPreconditionError) {
+	defer j.plan.releaseSlot()
+	j.failForControlPlaneShutdown(ctx, shutdownErr)
+}
+
+func (j asyncExecutionJob) failForControlPlaneShutdown(ctx context.Context, shutdownErr *executionPreconditionError) {
+	nodeID := ""
+	if j.plan.target != nil {
+		nodeID = j.plan.target.NodeID
+	}
+	if shutdownErr == nil {
+		shutdownErr = newControlPlaneShutdownError("execution was not started before the control plane shut down")
+	}
+	if err := j.controller.failExecution(ctx, &j.plan, shutdownErr, 0, nil); err != nil {
+		logger.Logger.Warn().Err(err).Str("node_id", nodeID).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to terminate queued execution during shutdown")
+		return
+	}
+	// failExecution deliberately preserves cancellation/waiting. Re-read the
+	// execution after that atomic update and mirror the state that won the race
+	// instead of blindly overwriting workflow_executions with failed.
+	updatedExec, err := j.controller.store.GetExecutionRecord(ctx, j.plan.exec.ExecutionID)
+	if err != nil || updatedExec == nil {
+		logger.Logger.Warn().Err(err).Str("node_id", nodeID).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to load terminal execution during shutdown reconciliation")
+		return
+	}
+	if err := j.controller.store.UpdateWorkflowExecution(ctx, j.plan.exec.ExecutionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+		if current == nil {
+			return nil, fmt.Errorf("workflow execution %s not found", j.plan.exec.ExecutionID)
+		}
+		current.Status = string(updatedExec.Status)
+		current.StatusReason = updatedExec.StatusReason
+		current.CompletedAt = updatedExec.CompletedAt
+		current.UpdatedAt = updatedExec.UpdatedAt
+		return current, nil
+	}); err != nil {
+		logger.Logger.Warn().Err(err).Str("node_id", nodeID).Str("execution_id", j.plan.exec.ExecutionID).Msg("failed to record shutdown reason on queued workflow execution")
+	}
+}
+
+func writeAsyncAdmissionError(ctx *gin.Context, status int, message string) {
+	ctx.Header("Retry-After", "1")
+	ctx.JSON(status, gin.H{"error": message, "error_category": "concurrency_limit", "retry_after": 1})
 }
 
 func getAsyncWorkerPool() *asyncWorkerPool {
 	asyncPoolOnce.Do(func() {
-		workerCount := resolveIntFromEnv("AGENTFIELD_EXEC_ASYNC_WORKERS", runtime.NumCPU())
+		workerCount := resolveIntFromEnv("AGENTFIELD_EXEC_ASYNC_WORKERS", max(runtime.NumCPU(), 16))
 		if workerCount <= 0 {
-			workerCount = runtime.NumCPU()
+			workerCount = max(runtime.NumCPU(), 16)
 		}
 
 		queueCapacity := resolveIntFromEnv("AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY", 1024)

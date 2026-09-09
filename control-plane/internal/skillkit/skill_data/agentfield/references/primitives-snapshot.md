@@ -16,7 +16,7 @@ This is a minimal cheat sheet of the five primitives so an offline build can sti
 | `@app.skill()` | Registers a deterministic function (no LLM) | Sort, parse, dedupe, score-with-formula |
 | `app.ai(...)` | Single call OR multi-turn tool-using LLM call when `tools=` is passed | Classification, routing, structured analysis, stateful tool-using |
 | `app.call(target, **kwargs)` | Call another reasoner THROUGH the control plane. Returns `dict`. Tracks the workflow DAG | All inter-reasoner traffic |
-| `app.harness(prompt, provider=...)` | Delegate to an external coding-agent CLI (claude-code / codex / gemini / opencode) | When you need a real coding agent to write files / run shell |
+| `app.harness(prompt, provider=...)` | Delegate to a coding-agent CLI (aforge by default; claude-code / codex / gemini / opencode / pi / omp) | When you need a real coding agent to write files / run shell |
 
 ---
 
@@ -157,7 +157,7 @@ Default canonical pattern: `AgentRouter(prefix="", tags=["domain"])`. `prefix="c
 result = await app.harness(
     prompt: str,
     schema: type[BaseModel] | None = None,
-    provider: "claude-code" | "codex" | "gemini" | "opencode" | None = None,
+    provider: "aforge" | "claude-code" | "codex" | "gemini" | "opencode" | "pi" | "omp" | None = None,  # None -> "aforge"
     model: str | None = None,
     max_turns: int | None = None,
     max_budget_usd: float | None = None,

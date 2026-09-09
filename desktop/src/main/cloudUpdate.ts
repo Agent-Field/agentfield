@@ -16,6 +16,7 @@ import type {
   RailwayImageAutoUpdates
 } from './railwayApi'
 import { compareAppVersions } from './updates'
+import { stripTrailingSlashes } from '../shared/trimSlashes'
 
 const APPLY_TIMEOUT_MS = 6 * 60_000
 const POLL_INTERVAL_MS = 5_000
@@ -48,9 +49,9 @@ function normalizedUrl(value: string | null | undefined): string | null {
   if (!value) return null
   try {
     const url = new URL(value)
-    return `${url.origin}${url.pathname.replace(/\/+$/, '')}`
+    return `${url.origin}${stripTrailingSlashes(url.pathname)}`
   } catch {
-    return value.trim().replace(/\/+$/, '') || null
+    return stripTrailingSlashes(value.trim()) || null
   }
 }
 

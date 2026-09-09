@@ -31,11 +31,33 @@ type scriptedQueryResponse struct {
 }
 
 type scriptedSQLState struct {
-	mu      sync.Mutex
-	execs   []scriptedExecResponse
-	queries []scriptedQueryResponse
-	begin   []error
-	commit  []error
+	mu              sync.Mutex
+	execs           []scriptedExecResponse
+	queries         []scriptedQueryResponse
+	begin           []error
+	commit          []error
+	executedQueries []string
+	queriedQueries  []string
+	executedArgs    [][]driver.NamedValue
+	queriedArgs     [][]driver.NamedValue
+}
+
+func cloneNamedValues(values []driver.NamedValue) []driver.NamedValue {
+	return append([]driver.NamedValue(nil), values...)
+}
+
+func (s *scriptedSQLState) recordExec(query string, args []driver.NamedValue) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executedQueries = append(s.executedQueries, query)
+	s.executedArgs = append(s.executedArgs, cloneNamedValues(args))
+}
+
+func (s *scriptedSQLState) recordQuery(query string, args []driver.NamedValue) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queriedQueries = append(s.queriedQueries, query)
+	s.queriedArgs = append(s.queriedArgs, cloneNamedValues(args))
 }
 
 func (s *scriptedSQLState) nextExec() (scriptedExecResponse, error) {
@@ -150,9 +172,13 @@ func (scriptedDriver) Open(name string) (driver.Conn, error) {
 	return &scriptedConn{state: raw.(*scriptedSQLState)}, nil
 }
 
-func (c *scriptedConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("prepare not supported") }
-func (c *scriptedConn) Close() error                        { return nil }
-func (c *scriptedConn) Begin() (driver.Tx, error)          { return c.BeginTx(context.Background(), driver.TxOptions{}) }
+func (c *scriptedConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not supported")
+}
+func (c *scriptedConn) Close() error { return nil }
+func (c *scriptedConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
 
 func (c *scriptedConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
 	if err := c.state.nextBegin(); err != nil {
@@ -161,7 +187,8 @@ func (c *scriptedConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, er
 	return &scriptedTx{state: c.state}, nil
 }
 
-func (c *scriptedConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+func (c *scriptedConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	c.state.recordExec(query, args)
 	resp, err := c.state.nextExec()
 	if err != nil {
 		return nil, err
@@ -172,7 +199,8 @@ func (c *scriptedConn) ExecContext(context.Context, string, []driver.NamedValue)
 	return resp.result, resp.err
 }
 
-func (c *scriptedConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+func (c *scriptedConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	c.state.recordQuery(query, args)
 	resp, err := c.state.nextQuery()
 	if err != nil {
 		return nil, err
@@ -384,7 +412,7 @@ func TestPostgresVectorStoreSuccessPaths(t *testing.T) {
 				name: "bad embedding element",
 				response: scriptedQueryResponse{
 					columns: []string{"embedding", "metadata", "created_at", "updated_at"},
-					rows: [][]driver.Value{{"[bad]", []byte(`{}`), now, now}},
+					rows:    [][]driver.Value{{"[bad]", []byte(`{}`), now, now}},
 				},
 				wantErr: "parse embedding element",
 			},
@@ -392,7 +420,7 @@ func TestPostgresVectorStoreSuccessPaths(t *testing.T) {
 				name: "bad metadata",
 				response: scriptedQueryResponse{
 					columns: []string{"embedding", "metadata", "created_at", "updated_at"},
-					rows: [][]driver.Value{{"[1,2]", []byte(`{`), now, now}},
+					rows:    [][]driver.Value{{"[1,2]", []byte(`{`), now, now}},
 				},
 				wantErr: "unmarshal metadata",
 			},
@@ -637,6 +665,7 @@ func TestWorkflowCleanupAndTxInsertCoverage(t *testing.T) {
 
 func workflowExecutionDriverRow(executionID, status string, now time.Time) []driver.Value {
 	return []driver.Value{
+		int64(42),
 		"wf-scripted",
 		executionID,
 		"req-scripted",
@@ -644,6 +673,7 @@ func workflowExecutionDriverRow(executionID, status string, now time.Time) []dri
 		nil,
 		nil,
 		"agent-scripted",
+		"", // instance_id (COALESCE)
 		nil,
 		nil,
 		nil,
@@ -684,7 +714,7 @@ func workflowExecutionDriverRow(executionID, status string, now time.Time) []dri
 }
 
 func workflowExecutionDriverResponse(executionID, status string, now time.Time) scriptedQueryResponse {
-	columns := append([]string(nil), workflowExecutionLifecycleColumns...)
+	columns := append([]string{"id"}, workflowExecutionLifecycleColumns...)
 	return scriptedQueryResponse{
 		columns: columns,
 		rows:    [][]driver.Value{workflowExecutionDriverRow(executionID, status, now)},
@@ -713,8 +743,8 @@ func TestWorkflowExecutionRetryCoverage(t *testing.T) {
 					queries: []scriptedQueryResponse{
 						{err: sql.ErrNoRows},
 					},
-					execs:   []scriptedExecResponse{{}},
-					commit:  []error{errors.New("database is locked")},
+					execs:  []scriptedExecResponse{{}},
+					commit: []error{errors.New("database is locked")},
 				},
 				wantErr: "failed to commit workflow execution transaction",
 			},

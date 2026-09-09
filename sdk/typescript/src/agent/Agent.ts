@@ -40,6 +40,7 @@ import { SkillContext } from '../context/SkillContext.js';
 import { AIClient } from '../ai/AIClient.js';
 import { AgentFieldClient } from '../client/AgentFieldClient.js';
 import type { HarnessRunner } from '../harness/runner.js';
+import { resolveProviderName } from '../harness/providers/factory.js';
 import type { HarnessOptions, HarnessResult } from '../harness/types.js';
 import { splitModelVariant } from '../harness/modelVariant.js';
 import { MemoryClient } from '../memory/MemoryClient.js';
@@ -76,6 +77,7 @@ import {
   type SessionDefinition,
   type SessionOptions
 } from '../session.js';
+import { parseShutdownTimeout, type ServeOptions } from './signals.js';
 
 interface WildcardParams extends ParamsDictionary {
   0: string;
@@ -83,6 +85,7 @@ interface WildcardParams extends ParamsDictionary {
 class TargetNotFoundError extends Error {}
 
 const AGENTFIELD_TS_SDK_VERSION = '0.1.82';
+const POST_CANCEL_SETTLEMENT_MS = 5000;
 
 const harnessRunners = new WeakMap<object, HarnessRunner>();
 
@@ -124,6 +127,10 @@ export class Agent {
   readonly skills = new SkillRegistry();
   private server?: http.Server;
   private heartbeatTimer?: NodeJS.Timeout;
+  private shutdownPromise?: Promise<void>;
+  private readonly inFlightExecutions = new Map<string, Promise<void>>();
+  private shuttingDown = false;
+  private signalHandlers?: { SIGTERM: () => void; SIGINT: () => void };
   private readonly aiClient: AIClient;
   private readonly agentFieldClient: AgentFieldClient;
   private readonly memoryClient: MemoryClient;
@@ -412,7 +419,7 @@ export class Agent {
         return;
       }
 
-      const providerName = options?.provider ?? this.config.harnessConfig?.provider;
+      const providerName = resolveProviderName(options?.provider ?? this.config.harnessConfig?.provider);
       const harnessName = providerName ? String(providerName).replace(/-/g, '_') : null;
       // Usage is recorded against the base model — a "#variant"
       // reasoning-effort suffix on the configured model never reaches the
@@ -638,7 +645,7 @@ export class Agent {
     };
   }
 
-  async serve(): Promise<void> {
+  async serve(options: ServeOptions = {}): Promise<void> {
     await this.registerWithControlPlane();
 
     // Perform a blocking initial refresh for local verification before accepting requests
@@ -664,21 +671,73 @@ export class Agent {
     });
     this.memoryEventClient.start();
     this.startHeartbeat();
+    if (options.handleSignals !== false) this.installSignalHandlers();
   }
 
-  async shutdown(): Promise<void> {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-    }
-    // Unblock any reasoner still parked in ctx.pause() so shutdown doesn't hang.
-    this.pauseManager.cancelAll();
-    await new Promise<void>((resolve, reject) => {
-      this.server?.close((err) => {
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shuttingDown = true;
+    this.shutdownPromise = this.performShutdown();
+    return this.shutdownPromise;
+  }
+
+  private async performShutdown(): Promise<void> {
+    const timeoutMs = parseShutdownTimeout(process.env.AGENTFIELD_SHUTDOWN_TIMEOUT);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<'timeout'>(resolve => {
+      timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    });
+    const listenerClosed = new Promise<void>((resolve, reject) => {
+      if (!this.server) return resolve();
+      this.server.close((err) => {
         if (err) reject(err);
         else resolve();
       });
+      this.server.closeIdleConnections?.();
     });
+    try { await this.agentFieldClient.shutdown(this.config.nodeId); }
+    catch (err) { console.warn('[Agent] Failed to notify control plane of shutdown:', err); }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+    }
+    const drained = Promise.allSettled([...this.inFlightExecutions.values()]).then(() => 'drained' as const);
+    const listenerSettled = listenerClosed.catch((err) => {
+      console.warn('[Agent] HTTP listener close failed during shutdown:', err);
+    });
+    const closedAndDrained = Promise.all([listenerSettled, drained]).then(() => 'drained' as const);
+    if (await Promise.race([closedAndDrained, timeout]) === 'timeout') {
+      this.server?.closeAllConnections?.();
+      for (const executionId of this.inFlightExecutions.keys()) {
+        this.cancelRegistry.cancel(executionId, 'shutdown_timeout');
+      }
+      this.pauseManager.cancelAll();
+      let settlementTimer: NodeJS.Timeout | undefined;
+      const settlementTimeout = new Promise<void>(resolve => {
+        settlementTimer = setTimeout(resolve, POST_CANCEL_SETTLEMENT_MS);
+      });
+      await Promise.race([
+        Promise.allSettled([...this.inFlightExecutions.values()]),
+        settlementTimeout
+      ]);
+      if (settlementTimer) clearTimeout(settlementTimer);
+    }
+    if (timer) clearTimeout(timer);
     this.memoryEventClient.stop();
+    if (this.signalHandlers) {
+      process.off('SIGTERM', this.signalHandlers.SIGTERM);
+      process.off('SIGINT', this.signalHandlers.SIGINT);
+      this.signalHandlers = undefined;
+    }
+  }
+
+  private installSignalHandlers(): void {
+    if (this.signalHandlers) return;
+    const handle = (signal: 'SIGTERM' | 'SIGINT') => () => {
+      void this.shutdown().finally(() => { process.exit(signal === 'SIGTERM' ? 143 : 130); });
+    };
+    this.signalHandlers = { SIGTERM: handle('SIGTERM'), SIGINT: handle('SIGINT') };
+    process.on('SIGTERM', this.signalHandlers.SIGTERM);
+    process.on('SIGINT', this.signalHandlers.SIGINT);
   }
 
   async call(target: string, input: any) {
@@ -1174,6 +1233,10 @@ export class Agent {
   }
 
   private async executeReasoner(req: express.Request, res: express.Response, name: string) {
+    if (this.shuttingDown) {
+      res.status(503).json({ error: 'agent shutting down' });
+      return;
+    }
     const metadata = this.buildMetadata(req);
     const reasoner = this.reasoners.get(name);
 
@@ -1187,7 +1250,9 @@ export class Agent {
     if (reasoner && this.shouldRunAsync(req)) {
       res.status(202).json({ status: 'processing', execution_id: metadata.executionId });
       // Detached — do not await; runReasonerAsync reports its own terminal status.
-      void this.runReasonerAsync(reasoner, { targetName: name, input: req.body, metadata });
+      const execution = this.runReasonerAsync(reasoner, { targetName: name, input: req.body, metadata });
+      this.inFlightExecutions.set(metadata.executionId, execution);
+      void execution.finally(() => this.inFlightExecutions.delete(metadata.executionId));
       return;
     }
 
@@ -1215,6 +1280,10 @@ export class Agent {
   }
 
   private async executeSkill(req: express.Request, res: express.Response, name: string) {
+    if (this.shuttingDown) {
+      res.status(503).json({ error: 'agent shutting down' });
+      return;
+    }
     try {
       await this.executeInvocation({
         targetName: name,
@@ -1243,6 +1312,10 @@ export class Agent {
   }
 
   private async executeServerlessHttp(req: express.Request, res: express.Response, explicitName?: string) {
+    if (this.shuttingDown) {
+      res.status(503).json({ error: 'agent shutting down' });
+      return;
+    }
     const invocation = this.extractInvocationDetails({
       path: req.path,
       explicitTarget: explicitName,
@@ -1724,10 +1797,12 @@ export class Agent {
         });
       } else if (controller.signal.aborted) {
         // External cooperative cancel arrived via the cancel dispatcher.
+        const shutdownCancel = controller.signal.reason === 'shutdown_timeout';
         await this.agentFieldClient.reportExecutionResult(executionId, {
           status: 'cancelled',
-          error: 'cancelled_by_control_plane',
-          errorDetails: { reason: 'cancelled' },
+          error: shutdownCancel ? 'cancelled during graceful shutdown' : 'cancelled_by_control_plane',
+          statusReason: shutdownCancel ? 'shutdown timeout exceeded' : 'cancelled',
+          errorDetails: { reason: shutdownCancel ? 'shutdown' : 'cancelled' },
           durationMs,
           completedAt: completedAt(),
           reasoner: reasonerName,

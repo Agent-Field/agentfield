@@ -42,6 +42,32 @@ PROVIDER_SPECS = {
         install_command="curl -fsSL https://opencode.ai/install | bash",
         auth_env_vars=(),
     ),
+    "pi": ProviderSpec(
+        binary="pi",
+        version_args=("--version",),
+        install_command=(
+            "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+        ),
+        auth_env_vars=(
+            "OPENROUTER_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+        ),
+    ),
+    "omp": ProviderSpec(
+        binary="omp",
+        version_args=("--version",),
+        install_command="curl -fsSL https://omp.sh/install | sh",
+        auth_env_vars=(
+            "OPENROUTER_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+        ),
+    ),
     "grok": ProviderSpec(
         binary="grok",
         version_args=("--version",),

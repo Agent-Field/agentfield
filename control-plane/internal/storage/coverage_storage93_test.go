@@ -42,13 +42,13 @@ func (s stubDBTX) QueryRow(string, ...interface{}) *sql.Row        { return nil 
 
 func testAgentNode(now time.Time) *types.AgentNode {
 	return &types.AgentNode{
-		ID:         "agent-storage93",
-		GroupID:    "group-storage93",
-		TeamID:     "team-storage93",
-		BaseURL:    "https://agent-storage93.example",
-		Version:    "",
-		Reasoners:  []types.ReasonerDefinition{{ID: "reasoner.storage93"}},
-		Skills:     []types.SkillDefinition{{ID: "skill.storage93"}},
+		ID:              "agent-storage93",
+		GroupID:         "group-storage93",
+		TeamID:          "team-storage93",
+		BaseURL:         "https://agent-storage93.example",
+		Version:         "",
+		Reasoners:       []types.ReasonerDefinition{{ID: "reasoner.storage93"}},
+		Skills:          []types.SkillDefinition{{ID: "skill.storage93"}},
 		HealthStatus:    types.HealthStatusActive,
 		LifecycleStatus: types.AgentStatusReady,
 		LastHeartbeat:   now,
@@ -64,9 +64,9 @@ func TestStorage93DeleteHelpersReturnExpectedErrors(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name    string
-		run     func(DBTX) (int, error)
-		empty   func() (int, error)
+		name  string
+		run   func(DBTX) (int, error)
+		empty func() (int, error)
 	}{
 		{
 			name:  "execution vcs",
@@ -94,13 +94,17 @@ func TestStorage93DeleteHelpersReturnExpectedErrors(t *testing.T) {
 			empty: func() (int, error) { return ls.deleteExecutions(ctx, stubDBTX{}, nil) },
 		},
 		{
-			name:  "workflow executions",
-			run:   func(tx DBTX) (int, error) { return ls.deleteWorkflowExecutions(ctx, tx, []string{"wf-1"}, []string{"run-1"}) },
+			name: "workflow executions",
+			run: func(tx DBTX) (int, error) {
+				return ls.deleteWorkflowExecutions(ctx, tx, []string{"wf-1"}, []string{"run-1"})
+			},
 			empty: func() (int, error) { return ls.deleteWorkflowExecutions(ctx, stubDBTX{}, nil, nil) },
 		},
 		{
-			name:  "workflow runs",
-			run:   func(tx DBTX) (int, error) { return ls.deleteWorkflowRuns(ctx, tx, "wf-1", []string{"wf-2"}, []string{"run-1"}) },
+			name: "workflow runs",
+			run: func(tx DBTX) (int, error) {
+				return ls.deleteWorkflowRuns(ctx, tx, "wf-1", []string{"wf-2"}, []string{"run-1"})
+			},
 			empty: func() (int, error) { return ls.deleteWorkflowRuns(ctx, stubDBTX{}, "", nil, nil) },
 		},
 		{
@@ -159,10 +163,9 @@ func TestStorage93AgentAndQueryBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, agents, 2)
 
-	byVersion, err := ls.GetAgentVersion(ctx, versioned.ID, versioned.Version)
 	_, err = ls.db.ExecContext(ctx, `UPDATE agent_nodes SET deployment_type = '' WHERE id = ? AND version = ?`, versioned.ID, versioned.Version)
 	require.NoError(t, err)
-	byVersion, err = ls.GetAgentVersion(ctx, versioned.ID, versioned.Version)
+	byVersion, err := ls.GetAgentVersion(ctx, versioned.ID, versioned.Version)
 	require.NoError(t, err)
 	require.Equal(t, "serverless", byVersion.DeploymentType)
 	require.NotNil(t, byVersion.InvocationURL)
@@ -361,15 +364,15 @@ func TestStorage93ExecutionRecordAndWebhookBranches(t *testing.T) {
 	endTime := now
 	sortBy := "status"
 	summaries, total, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{
-		SessionID:       &sessionID,
-		ActorID:         &actorID,
-		StartTime:       &startTime,
-		EndTime:         &endTime,
-		Search:          &search,
-		SortBy:          sortBy,
-		SortDescending:  false,
-		Limit:           10,
-		Offset:          -1,
+		SessionID:      &sessionID,
+		ActorID:        &actorID,
+		StartTime:      &startTime,
+		EndTime:        &endTime,
+		Search:         &search,
+		SortBy:         sortBy,
+		SortDescending: false,
+		Limit:          10,
+		Offset:         -1,
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, total)

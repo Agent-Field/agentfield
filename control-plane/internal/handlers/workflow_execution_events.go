@@ -250,7 +250,12 @@ func applyEventToExecution(current *types.Execution, req *WorkflowExecutionEvent
 		current.RunID = firstNonEmpty(req.RunID, req.WorkflowID, current.RunID)
 	}
 
-	if payload := marshalJSON(req.InputData); len(payload) > 0 {
+	// Gateway-created executions already contain the authoritative persisted
+	// request envelope (input plus optional context). SDK lifecycle events carry
+	// only the reasoner's raw input, so replacing a non-empty payload here loses
+	// context and makes later restart/replay matching impossible. Event-created
+	// executions still receive their input in buildExecutionRecordFromEvent.
+	if payload := marshalJSON(req.InputData); len(current.InputPayload) == 0 && len(payload) > 0 {
 		current.InputPayload = payload
 	}
 	if result := marshalJSON(req.Result); len(result) > 0 {

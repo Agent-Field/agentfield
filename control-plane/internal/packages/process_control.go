@@ -234,10 +234,11 @@ func StopRecordedProcessWithAssessment(ctx context.Context, name string, entry I
 
 	httpSupported := !packageUsesGo(entry)
 	if httpSupported && entry.Runtime.Port != nil {
+		shutdownBudget := agentShutdownBudget(entry)
 		result.HTTPAttempted = true
-		result.HTTPAccepted, result.HTTPTimedOut = requestHTTPShutdown(ctx, *entry.Runtime.Port)
+		result.HTTPAccepted, result.HTTPTimedOut = requestHTTPShutdown(ctx, *entry.Runtime.Port, shutdownBudget)
 		if result.HTTPAccepted {
-			if waitForProcessExit(*entry.Runtime.PID, gracefulExitWait) {
+			if waitForProcessExit(*entry.Runtime.PID, shutdownBudget) {
 				return result, nil
 			}
 		}
@@ -271,6 +272,39 @@ func StopRecordedProcessWithAssessment(ctx context.Context, name string, entry I
 	return result, nil
 }
 
+const defaultAgentShutdownBudget = 30 * time.Second
+
+func agentShutdownBudget(entry InstalledPackage) time.Duration {
+	return agentShutdownBudgetWith(entry, processEnvironment)
+}
+
+func agentShutdownBudgetWith(entry InstalledPackage, environment func(int) []string) time.Duration {
+	if entry.Runtime.PID == nil || *entry.Runtime.PID <= 0 {
+		return defaultAgentShutdownBudget
+	}
+	for _, item := range environment(*entry.Runtime.PID) {
+		key, value, found := strings.Cut(item, "=")
+		if found && key == "AGENTFIELD_SHUTDOWN_TIMEOUT" {
+			if seconds, err := time.ParseDuration(value); err == nil && seconds >= 0 {
+				return seconds
+			}
+			if seconds, err := time.ParseDuration(value + "s"); err == nil && seconds >= 0 {
+				return seconds
+			}
+			return defaultAgentShutdownBudget
+		}
+	}
+	return defaultAgentShutdownBudget
+}
+
+func processEnvironment(pid int) []string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	if err != nil {
+		return nil
+	}
+	return strings.Split(string(data), "\x00")
+}
+
 func stopProcessWith(
 	pid int,
 	graceful func(int) error,
@@ -301,10 +335,10 @@ func packageUsesGo(entry InstalledPackage) bool {
 	return err == nil && metadata.IsGo()
 }
 
-func requestHTTPShutdown(ctx context.Context, port int) (accepted bool, timedOut bool) {
+func requestHTTPShutdown(ctx context.Context, port int, shutdownBudget time.Duration) (accepted bool, timedOut bool) {
 	requestBody, err := json.Marshal(map[string]interface{}{
 		"graceful":        true,
-		"timeout_seconds": 30,
+		"timeout_seconds": shutdownBudget.Seconds(),
 	})
 	if err != nil {
 		return false, false

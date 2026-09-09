@@ -106,6 +106,11 @@ func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 		}
 		merged[key] = value
 	}
+	parentDepth, err := strconv.Atoi(merged["AGENTFIELD_HARNESS_DEPTH"])
+	if err != nil || parentDepth < 0 {
+		parentDepth = 0
+	}
+	merged["AGENTFIELD_HARNESS_DEPTH"] = strconv.Itoa(parentDepth + 1)
 	for k, v := range env {
 		if v == "" {
 			delete(merged, k)

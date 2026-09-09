@@ -1098,4 +1098,47 @@ describe("RunsPage", () => {
     );
     expect(screen.getByText("Node status")).toHaveAttribute("href", "/agents");
   });
+
+  it("renders safe run metadata and preserves the no-metadata fallback", () => {
+    const maliciousLabel = "<script>alert(1)</script>";
+    useRunsMock.mockReturnValue({
+      data: {
+        workflows: [
+          {
+            ...baseRuns[0],
+            run_metadata: {
+              display_name: "Release verification",
+              labels: [maliciousLabel, "two", "three", "four", "five"],
+              links: [
+                { label: "PR", url: "https://x.test/pr" },
+                { label: "Unsafe", url: "javascript:alert(1)" },
+              ],
+            },
+          },
+          baseRuns[1],
+        ],
+        total_count: 2,
+        total_pages: 1,
+      },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<RunsPage />);
+
+    const customRow = screen.getByText("Release verification").closest("tr")!;
+    expect(screen.queryByText("alpha")).not.toBeInTheDocument();
+    expect(screen.getByText(maliciousLabel)).toBeInTheDocument();
+    expect(customRow.querySelector("script")).toBeNull();
+    expect(screen.getByText("+2")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "PR" })).toHaveAttribute("href", "https://x.test/pr");
+    expect(screen.getByRole("link", { name: "PR" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "PR" })).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.queryByRole("link", { name: "Unsafe" })).not.toBeInTheDocument();
+    const fallbackRow = screen.getByText("beta").closest("tr")!;
+    expect(fallbackRow).not.toHaveTextContent("+2");
+    expect(fallbackRow).toHaveTextContent("beta");
+  });
 });

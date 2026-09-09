@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,41 @@ import (
 type mcpTestStore struct {
 	*testExecutionStorage
 	agents []*types.AgentNode
+}
+
+type stopPoolOnCreateMCPStore struct {
+	*mcpTestStore
+	pool      *asyncWorkerPool
+	cancel    context.CancelFunc
+	updateErr error
+	updated   bool
+}
+
+type panicOnCreateMCPStore struct {
+	*mcpTestStore
+}
+
+func (s *panicOnCreateMCPStore) CreateExecutionRecord(context.Context, *types.Execution) error {
+	panic("injected MCP execution persistence panic")
+}
+
+func (s *stopPoolOnCreateMCPStore) CreateExecutionRecord(ctx context.Context, execution *types.Execution) error {
+	s.pool.mu.Lock()
+	s.pool.stopped = true
+	s.pool.mu.Unlock()
+	err := s.mcpTestStore.CreateExecutionRecord(ctx, execution)
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return err
+}
+
+func (s *stopPoolOnCreateMCPStore) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
+	s.updated = true
+	if s.updateErr != nil {
+		return nil, s.updateErr
+	}
+	return s.mcpTestStore.UpdateExecutionRecord(ctx, executionID, update)
 }
 
 func newMCPTestStore(agents ...*types.AgentNode) *mcpTestStore {
@@ -340,6 +376,135 @@ func TestMCP_ExecuteReasoner(t *testing.T) {
 		require.NotEmpty(t, execs)
 		require.Equal(t, "plan", execs[0].ReasonerID)
 	})
+}
+
+func TestMCP_ExecuteReasonerConcurrencyRejectionHasNoPersistence(t *testing.T) {
+	oldLimiter := concurrencyLimiter
+	concurrencyLimiter = &AgentConcurrencyLimiter{maxPerAgent: 1}
+	require.NoError(t, concurrencyLimiter.Acquire("planner"))
+	defer func() { concurrencyLimiter = oldLimiter }()
+	useAsyncPoolForTest(t, newAsyncWorkerPool(0, 2))
+	store := newMCPTestStore(mcpActiveAgent())
+	router := newMCPTestRouter(t, store)
+
+	payload, isErr := mcpCallTool(t, router, "execute_reasoner", map[string]interface{}{
+		"target": "planner.plan",
+		"input":  map[string]interface{}{"goal": "ship"},
+	})
+	require.True(t, isErr)
+	require.Contains(t, payload["text"], "reached max concurrent executions")
+	execs, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Empty(t, execs)
+}
+
+func TestMCP_ExecuteReasonerAlreadyStoppedPoolReturnsShutdownWithoutPersistence(t *testing.T) {
+	pool := newAsyncWorkerPool(0, 2)
+	pool.mu.Lock()
+	pool.stopped = true
+	pool.mu.Unlock()
+	useAsyncPoolForTest(t, pool)
+	store := newMCPTestStore(mcpActiveAgent())
+	server := &mcpServer{store: store, payloads: services.NewFilePayloadStore(t.TempDir()), timeout: time.Second}
+
+	_, _, err := server.startAsyncRun(context.Background(), "planner.plan", map[string]interface{}{"goal": "ship"}, executionHeaders{}, "", "")
+	var admissionErr *executionPreconditionError
+	require.ErrorAs(t, err, &admissionErr)
+	require.Equal(t, ErrorCategoryControlPlaneShutdown, admissionErr.category)
+	require.Equal(t, 1, admissionErr.retryAfter)
+	execs, queryErr := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, queryErr)
+	require.Empty(t, execs)
+}
+
+func TestMCP_ExecuteReasonerPersistencePanicReleasesSlot(t *testing.T) {
+	oldLimiter := concurrencyLimiter
+	concurrencyLimiter = &AgentConcurrencyLimiter{maxPerAgent: 1}
+	t.Cleanup(func() { concurrencyLimiter = oldLimiter })
+	useAsyncPoolForTest(t, newAsyncWorkerPool(0, 2))
+	store := &panicOnCreateMCPStore{mcpTestStore: newMCPTestStore(mcpActiveAgent())}
+	server := &mcpServer{store: store, payloads: services.NewFilePayloadStore(t.TempDir()), timeout: time.Second}
+
+	require.Panics(t, func() {
+		_, _, _ = server.startAsyncRun(context.Background(), "planner.plan", map[string]interface{}{"goal": "ship"}, executionHeaders{}, "", "")
+	})
+	require.Zero(t, concurrencyLimiter.GetRunningCount("planner"))
+}
+
+func TestMCP_ExecuteReasonerPoolStoppedTerminatesPersistedRowsWithCancelledRequest(t *testing.T) {
+	pool := newAsyncWorkerPool(0, 2)
+	useAsyncPoolForTest(t, pool)
+	reqCtx, cancel := context.WithCancel(context.Background())
+	base := newMCPTestStore(mcpActiveAgent())
+	store := &stopPoolOnCreateMCPStore{mcpTestStore: base, pool: pool, cancel: cancel}
+	server := &mcpServer{store: store, payloads: services.NewFilePayloadStore(t.TempDir()), timeout: time.Second}
+
+	_, _, err := server.startAsyncRun(reqCtx, "planner.plan", map[string]interface{}{"goal": "ship"}, executionHeaders{}, "", "")
+	require.Error(t, err)
+	var admissionErr *executionPreconditionError
+	require.ErrorAs(t, err, &admissionErr)
+	require.Equal(t, http.StatusServiceUnavailable, admissionErr.code)
+	require.Equal(t, ErrorCategoryControlPlaneShutdown, admissionErr.category)
+	require.Equal(t, 1, admissionErr.retryAfter)
+
+	execs, err := base.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Len(t, execs, 1)
+	require.Equal(t, types.ExecutionStatusFailed, execs[0].Status)
+	require.NotNil(t, execs[0].StatusReason)
+	require.Equal(t, string(ErrorCategoryControlPlaneShutdown), *execs[0].StatusReason)
+	workflows, err := base.QueryWorkflowExecutions(context.Background(), types.WorkflowExecutionFilters{})
+	require.NoError(t, err)
+	require.Len(t, workflows, 1)
+	require.Equal(t, string(types.ExecutionStatusFailed), workflows[0].Status)
+	require.NotNil(t, workflows[0].StatusReason)
+	require.Equal(t, string(ErrorCategoryControlPlaneShutdown), *workflows[0].StatusReason)
+	require.Equal(t, string(execs[0].Status), workflows[0].Status)
+}
+
+func TestMCP_ExecuteReasonerPoolStoppedReturnsStructuredShutdownContract(t *testing.T) {
+	pool := newAsyncWorkerPool(0, 2)
+	useAsyncPoolForTest(t, pool)
+	base := newMCPTestStore(mcpActiveAgent())
+	store := &stopPoolOnCreateMCPStore{mcpTestStore: base, pool: pool}
+	router := newMCPTestRouter(t, store)
+
+	reqBody, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name": "execute_reasoner",
+			"arguments": map[string]interface{}{
+				"target": "planner.plan",
+				"input":  map[string]interface{}{"goal": "ship"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	w := mcpPost(t, router, string(reqBody))
+	require.Equal(t, "1", w.Header().Get("Retry-After"))
+	resp := mcpDecode(t, w)
+	result := resp["result"].(map[string]interface{})
+	require.Equal(t, true, result["isError"])
+	structured := result["structuredContent"].(map[string]interface{})
+	require.Equal(t, string(ErrorCategoryControlPlaneShutdown), structured["error_category"])
+	require.Equal(t, float64(1), structured["retry_after"])
+}
+
+func TestMCP_ExecuteReasonerPoolStoppedExercisesPersistenceFailure(t *testing.T) {
+	pool := newAsyncWorkerPool(0, 2)
+	useAsyncPoolForTest(t, pool)
+	base := newMCPTestStore(mcpActiveAgent())
+	store := &stopPoolOnCreateMCPStore{mcpTestStore: base, pool: pool, updateErr: errors.New("update failed")}
+	server := &mcpServer{store: store, payloads: services.NewFilePayloadStore(t.TempDir()), timeout: time.Second}
+
+	_, _, err := server.startAsyncRun(context.Background(), "planner.plan", map[string]interface{}{"goal": "ship"}, executionHeaders{}, "", "")
+	require.Error(t, err)
+	var admissionErr *executionPreconditionError
+	require.ErrorAs(t, err, &admissionErr)
+	require.Equal(t, http.StatusServiceUnavailable, admissionErr.code)
+	require.True(t, store.updated)
 }
 
 func TestMCP_ExecuteReasonerAuthorizesAndBindsRunToVerifiedCaller(t *testing.T) {

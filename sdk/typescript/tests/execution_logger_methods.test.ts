@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ExecutionLogger,
   createExecutionLogger,
@@ -9,6 +9,13 @@ import {
 } from '../src/observability/ExecutionLogger.js';
 
 describe('ExecutionLogger exported API', () => {
+  beforeEach(() => {
+    vi.stubEnv('AGENTFIELD_LOG_STDOUT', undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   it('normalizes and serializes entries including bigint and circular attributes', () => {
     const circular: { self?: unknown } = {};
     circular.self = circular;

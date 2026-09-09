@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -12,6 +15,22 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWaitForShutdownReturnsWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		waitForShutdown(ctx)
+		close(done)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("waitForShutdown did not return after cancellation")
+	}
+}
 
 // serverCommandWithConfig writes an agentfield.yaml, runs the real CLI tree
 // (the one main() builds) with `--config <file> server`, and returns the
@@ -97,4 +116,75 @@ func TestServerConfigLoadWithoutLoggingSectionStaysAtInfo(t *testing.T) {
 	require.Equal(t, 7001, cfg.AgentField.Port, "the config file must actually have been read")
 	require.True(t, logger.Logger.Info().Enabled(), "info stays on when nothing is configured")
 	require.False(t, logger.Logger.Debug().Enabled(), "debug stays off when nothing is configured")
+}
+
+func TestDrainOnShutdownRunsStopAfterSignalAndRestoresSignals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	restored := false
+	stops := 0
+	done := make(chan error, 1)
+	go func() {
+		done <- drainOnShutdown(ctx, func() { restored = true }, nil, 0, func() error { stops++; return nil })
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("drainOnShutdown returned before the context was cancelled: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("drainOnShutdown did not return after cancellation")
+	}
+	if !restored {
+		t.Fatal("signal handling was not restored before draining")
+	}
+	if stops != 1 {
+		t.Fatalf("stop called %d times, want 1", stops)
+	}
+}
+
+func TestDrainOnShutdownPropagatesStopError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	want := errors.New("drain failed")
+	if err := drainOnShutdown(ctx, nil, nil, 0, func() error { return want }); !errors.Is(err, want) {
+		t.Fatalf("got %v, want %v", err, want)
+	}
+}
+
+func TestDrainOnShutdownTreatsTimeoutAsSuccessfulExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, drainOnShutdown(ctx, nil, nil, 0, func() error {
+		return context.DeadlineExceeded
+	}))
+}
+
+func TestDrainOnShutdownBeginsDrainBeforeMinimumDelayAndStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	drained := false
+	signalsRestored := false
+	require.NoError(t, drainOnShutdown(ctx, func() { signalsRestored = true }, func() {
+		require.True(t, signalsRestored, "signal disposition must be restored before draining")
+		drained = true
+	}, 50*time.Millisecond, func() error {
+		require.True(t, drained)
+		require.GreaterOrEqual(t, time.Since(started), 50*time.Millisecond)
+		return nil
+	}))
+}
+
+func TestDrainOnShutdownZeroDelayStopsImmediately(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	require.NoError(t, drainOnShutdown(ctx, nil, func() {}, 0, func() error { return nil }))
+	require.Less(t, time.Since(started), 40*time.Millisecond)
 }

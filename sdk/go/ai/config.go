@@ -40,6 +40,21 @@ type Config struct {
 
 	// Optional: Site name for OpenRouter rankings
 	SiteName string
+
+	// Rate limiting configuration. When RateLimitMaxRetries > 0, AI calls are
+	// automatically retried on rate-limit responses (HTTP 429/503) with
+	// exponential backoff and jitter. Zero values fall back to sensible
+	// defaults inside the rate limiter.
+	RateLimitMaxRetries   int
+	RateLimitBaseDelay    time.Duration
+	RateLimitMaxDelay     time.Duration
+	RateLimitJitterFactor float64
+
+	// Circuit breaker configuration. When CircuitBreakerThreshold > 0, the
+	// client stops issuing requests after that many consecutive rate-limit
+	// failures until CircuitBreakerTimeout elapses.
+	CircuitBreakerThreshold int
+	CircuitBreakerTimeout   time.Duration
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -130,4 +145,21 @@ func (c *Config) IsOpenRouter() bool {
 func (c *Config) IsInfron() bool {
 	return strings.Contains(strings.ToLower(c.BaseURL), "onerouter.pro") ||
 		strings.HasPrefix(strings.ToLower(c.Model), infronModelPrefix)
+}
+
+// RateLimitEnabled reports whether automatic rate-limit retries are configured.
+func (c *Config) RateLimitEnabled() bool {
+	return c.RateLimitMaxRetries > 0
+}
+
+// rateLimiterConfig maps the public Config fields onto a RateLimiterConfig.
+func (c *Config) rateLimiterConfig() RateLimiterConfig {
+	return RateLimiterConfig{
+		MaxRetries:              c.RateLimitMaxRetries,
+		BaseDelay:               c.RateLimitBaseDelay,
+		MaxDelay:                c.RateLimitMaxDelay,
+		JitterFactor:            c.RateLimitJitterFactor,
+		CircuitBreakerThreshold: c.CircuitBreakerThreshold,
+		CircuitBreakerTimeout:   c.CircuitBreakerTimeout,
+	}
 }

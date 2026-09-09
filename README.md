@@ -191,7 +191,7 @@ af init my-agent --defaults --language typescript && cd my-agent && npm install 
 docker run -p 8080:8080 agentfield/control-plane:latest
 ```
 
-[Deployment guide →](https://agentfield.ai/docs/reference/deploy?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deploy) for Docker Compose, Kubernetes, and production setups.
+[Deployment guide →](https://agentfield.ai/docs/reference/deploy?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deploy) for Docker Compose and production setups, or use the repository's [Kubernetes deployment guide](docs/deploying-on-kubernetes.md).
 
 </details>
 
@@ -231,12 +231,12 @@ Most agent tools help you **write** agent logic. AgentField is what **runs** it 
 
 ## How it scales
 
-The control plane is a stateless Go service. You put more of them behind a load balancer and the fleet grows horizontally. Work lands in a durable PostgreSQL queue with lease-based processing, so a crash or a restart resumes where it left off instead of dropping the job.
+The control plane is a stateless Go service. You put more of them behind a load balancer and the fleet grows horizontally. Work is admitted into a bounded in-process queue with backpressure (`429`/`503` plus `Retry-After`). On graceful shutdown, in-flight executions are terminated with `status_reason` `control_plane_shutdown` rather than silently dropped.
 
 | Property | What it means |
 |---|---|
 | Stateless Go control plane | Horizontal scaling behind a load balancer. Add replicas to add capacity. |
-| Durable PostgreSQL queue | Lease-based processing. Jobs survive crashes and restarts. |
+| Bounded in-process admission | Backpressure returns `429`/`503` with `Retry-After`; graceful shutdown records `control_plane_shutdown`. |
 | Async execution | Webhooks and SSE, no timeout limits. A single run can go for hours or days. |
 | Backpressure | Queue-depth limits and circuit breakers keep a fan-out from overwhelming downstream agents. |
 | Routing overhead | Roughly 100-200ms per cross-agent hop. It matters when a branch does little work per hop, so keep hops coarse when latency is tight. |
@@ -251,7 +251,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 - **[Reasoners & Skills](https://agentfield.ai/docs/build/building-blocks/reasoners?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-reasoners)** - `@app.reasoner()` for AI judgment, `@app.skill()` for deterministic code
 - **[Structured AI](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-structured-ai)** - `app.ai(schema=MyModel)` → typed Pydantic/Zod output from any LLM
-- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to AForge, AgentField's own coding harness — no setup. Add `provider="claude-code"` (or `codex`, `gemini`, `opencode`) to orchestrate someone else's.
+- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to AForge, AgentField's own coding harness — no setup. Add `provider="claude-code"` (or `codex`, `gemini`, `opencode`, `pi`, `omp`) to orchestrate someone else's.
 - **[Cross-Agent Calls](https://agentfield.ai/docs/build/coordination/cross-agent-calls?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-cross-agent-calls)** - `app.call("other-agent.func")` routes through the control plane with full tracing
 - **[Discovery](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-discovery)** - `app.discover(tags=["ml*"])` finds agents and capabilities across the mesh. `tools="discover"` lets LLMs auto-invoke them.
 - **[Memory](https://agentfield.ai/docs/build/coordination/shared-memory?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-memory)** - `app.memory.set()` / `.get()` / `.similarity_search()` - KV + vector search, four scopes, no Redis needed
@@ -284,7 +284,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 |---|---|
 | Structured output (Pydantic/Zod) | `app.ai(schema=MyModel)` |
 | Multi-turn coding agents | `app.harness("task")` — AForge by default |
-| Orchestrate another harness | `app.harness("task", provider="claude-code")` |
+| Orchestrate another harness | `app.harness("task", provider="claude-code")` (also `codex`, `gemini`, `opencode`, `pi`, `omp`) |
 | LLM auto-discovers agents and tools | `app.ai(tools="discover")` |
 | Multimodal (text, image, audio) | `app.ai("Describe", image_url="...")` |
 | Streaming responses | `app.ai("...", stream=True)` |
@@ -307,17 +307,19 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 | Feature | How |
 |---|---|
-| Sync execution (REST) | `POST /api/v1/execute/{agent}.{func}` |
-| Async (fire-and-forget) | `POST /api/v1/execute/async/{agent}.{func}` |
+| Sync execution (REST) | [`POST /api/v1/execute/{agent}.{func}`](docs/api/EXECUTE.md) |
+| Async (fire-and-forget) | [`POST /api/v1/execute/async/{agent}.{func}`](docs/api/EXECUTE.md) |
 | Webhooks + HMAC-SHA256 signing | `AsyncConfig(webhook_url="...", secret="...")` |
 | SSE streaming (real-time) | `/api/v1/execute/stream/{id}` |
 | No timeout limits (hours/days) | Control plane allows unlimited duration |
 | Execution polling | `GET /api/v1/executions/{id}` |
+| Restart/replay | [`POST /api/v1/executions/{id}/restart`](docs/api/EXECUTION_RESTART.md) |
+| Run naming, labels, links | [`POST /api/v1/runs/{id}/metadata`](docs/api/RUN_METADATA.md) |
 | Batch status checks | `POST /api/v1/executions/batch-status` |
 | Progress updates mid-execution | Intermediate payloads during long tasks |
 | Auto retries + exponential backoff | Transparent - control plane handles |
 | Backpressure + queue depth limits | Fair scheduling, circuit breakers |
-| Durable queue (PostgreSQL) | Atomic lease-based processing |
+| Bounded in-process queue | Backpressure and explicit graceful-shutdown termination |
 
 #### Memory (Distributed State)
 
@@ -381,7 +383,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Feature | How |
 |---|---|
 | Zero-setup default harness | AForge (`aforge`), installed alongside `af` |
-| Swap the worker, keep the loop | `provider="claude-code"` \| `"codex"` \| `"gemini"` \| `"opencode"` |
+| Swap the worker, keep the loop | `provider="claude-code"` \| `"codex"` \| `"gemini"` \| `"opencode"` \| `"pi"` \| `"omp"` |
 | Fleet-wide default override | `AGENTFIELD_HARNESS_PROVIDER=codex` |
 | Schema-constrained output | `schema=ResultModel` (Pydantic/Zod) |
 | Cost capping | `max_budget_usd=3.0` |
@@ -389,6 +391,9 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Tool access control | `tools=["Read", "Write", "Bash"]` |
 | Environment injection | `env={"KEY": "value"}` |
 | System prompt override | `system_prompt="..."` |
+| OpenCode per-run configuration | Preserves caller `OPENCODE_CONFIG_CONTENT` while applying the harness overlay |
+| OpenCode prompt compatibility | `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` enables the opt-in inline rollback |
+| Provider-agnostic reasoning variants | `variant="high"` or a `#high` model suffix |
 | Multi-layer output recovery | Cosmetic repair → retry → full retry |
 
 #### Connector API (Fleet Management)

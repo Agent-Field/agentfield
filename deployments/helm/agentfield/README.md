@@ -91,5 +91,5 @@ curl -H "X-API-Key: change-me" http://localhost:8080/api/v1/nodes
 
 ## Notes
 
-- The chart defaults `AGENTFIELD_CONFIG_FILE=/dev/null` so the control plane uses built-in defaults + environment variables.
+- The chart defaults `AGENTFIELD_CONFIG_FILE=/dev/null` so the control plane uses built-in defaults + environment variables. YAML-only settings therefore do not apply unless you mount a config file and change this variable. This includes the `agentfield.rate_limit` block (enabled and per-route/global RPS and burst limits) and `agentfield.execution_cleanup.max_retries` / `retry_backoff`.
 - Admin gRPC listens on `(AGENTFIELD_PORT + 100)` and is exposed via the Service port named `grpc`.

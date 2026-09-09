@@ -104,6 +104,7 @@ class TestAgentHarnessMethod:
                 "task",
                 provider="codex",
                 model="o3",
+                variant="high",
                 max_turns=10,
                 max_budget_usd=5.0,
                 tools=["Read"],
@@ -115,6 +116,7 @@ class TestAgentHarnessMethod:
             _, kwargs = mock_run.call_args
             assert kwargs["provider"] == "codex"
             assert kwargs["model"] == "o3"
+            assert kwargs["variant"] == "high"
             assert kwargs["max_turns"] == 10
             assert kwargs["max_budget_usd"] == 5.0
             assert kwargs["tools"] == ["Read"]

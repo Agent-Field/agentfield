@@ -1,7 +1,15 @@
 import type { HarnessProvider } from './base.js';
 import type { HarnessConfig } from '../types.js';
 
-export const SUPPORTED_PROVIDERS = new Set(['aforge', 'claude-code', 'codex', 'gemini', 'opencode']);
+export const SUPPORTED_PROVIDERS = new Set([
+  'aforge',
+  'claude-code',
+  'codex',
+  'gemini',
+  'omp',
+  'opencode',
+  'pi',
+]);
 export const DEFAULT_HARNESS_PROVIDER = 'aforge';
 export const HARNESS_PROVIDER_ENV_VAR = 'AGENTFIELD_HARNESS_PROVIDER';
 
@@ -46,6 +54,14 @@ export async function buildProvider(config: HarnessConfig): Promise<HarnessProvi
   if (provider === 'opencode') {
     const { OpenCodeProvider } = await import('./opencode.js');
     return new OpenCodeProvider(config.opencodeBin ?? 'opencode');
+  }
+  if (provider === 'pi') {
+    const { PiProvider } = await import('./pi.js');
+    return new PiProvider(config.piBin ?? 'pi');
+  }
+  if (provider === 'omp') {
+    const { OMPProvider } = await import('./pi.js');
+    return new OMPProvider(config.ompBin ?? 'omp');
   }
   throw new Error(`Provider "${provider}" is not yet implemented.`);
 }

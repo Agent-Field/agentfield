@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -71,8 +72,8 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 // transaction will write the row back, "" for plain reads.
 func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DBTX, executionID string, suffix string) (*types.WorkflowExecution, error) {
 	query := `
-		SELECT workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
-		       agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
+		SELECT id, workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
+		       agent_node_id, COALESCE(instance_id, ''), parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
 		       reasoner_id, input_data, output_data, input_size, output_size,
 		       status, started_at, completed_at, duration_ms,
 		       state_version, last_event_sequence, active_children, pending_children,
@@ -96,8 +97,8 @@ func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DB
 	var approvalRequestID, approvalRequestURL, approvalStatus, approvalResponse, approvalCallbackURL sql.NullString
 	var approvalRequestedAt, approvalRespondedAt, approvalExpiresAt sql.NullTime
 	err := row.Scan(
-		&execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
-		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID,
+		&execution.ID, &execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
+		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID, &execution.InstanceID,
 		&execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID, &execution.WorkflowDepth,
 		&execution.ReasonerID, &inputData, &outputData,
 		&execution.InputSize, &execution.OutputSize, &execution.Status,
@@ -320,6 +321,96 @@ func (ls *LocalStorage) GetWorkflowRun(ctx context.Context, runID string) (*type
 	}
 
 	return &run, nil
+}
+
+// UpdateWorkflowRunMetadata applies mutate to the decoded metadata object in one transaction.
+// Untouched namespaces are retained as json.RawMessage values. This deliberately is not
+// StoreWorkflowRun: that full-row upsert resets status, counts and event-version columns.
+func (ls *LocalStorage) UpdateWorkflowRunMetadata(ctx context.Context, runID string, mutate func(map[string]json.RawMessage) error) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return fmt.Errorf("run_id cannot be empty")
+	}
+	if mutate == nil {
+		return fmt.Errorf("metadata mutator cannot be nil")
+	}
+
+	operationID := "UpdateWorkflowRunMetadata:" + runID
+	// SQLite connections use _txlock=immediate, so BeginTx acquires the write
+	// reservation before reading. PostgreSQL first seeds the row conflict-safely,
+	// then locks and re-reads it. Thus every mutator starts from the preceding
+	// writer's committed namespaces on both backends.
+	return ls.retryDatabaseOperation(ctx, operationID, func() error {
+		db := ls.requireSQLDB()
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer rollbackTx(tx, operationID)
+
+		now := time.Now().UTC()
+		// This row exists only to carry metadata. Status and step counts are seeded,
+		// are not kept current, and no read path treats them as authoritative.
+		_, err = tx.ExecContext(ctx, `INSERT INTO workflow_runs (
+			run_id, root_workflow_id, root_execution_id, status, total_steps,
+			completed_steps, failed_steps, state_version, last_event_sequence,
+			metadata, created_at, updated_at
+		) VALUES (?, ?, NULL, 'pending', 0, 0, 0, 0, 0, '{}', ?, ?)
+		ON CONFLICT(run_id) DO NOTHING`, runID, runID, now, now)
+		if err != nil {
+			return err
+		}
+
+		var raw sql.NullString
+		err = tx.QueryRowContext(ctx, `SELECT metadata FROM workflow_runs WHERE run_id = ?`+tx.forUpdate(), runID).Scan(&raw)
+		if err != nil {
+			return err
+		}
+
+		metadata := make(map[string]json.RawMessage)
+		if raw.Valid && strings.TrimSpace(raw.String) != "" {
+			if err := json.Unmarshal([]byte(raw.String), &metadata); err != nil {
+				metadata = make(map[string]json.RawMessage)
+			}
+		}
+		if err := mutate(metadata); err != nil {
+			return err
+		}
+		encoded, err := marshalMetadataNamespaces(metadata)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET metadata = ?, updated_at = ? WHERE run_id = ?`, string(encoded), time.Now().UTC(), runID)
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
+	})
+}
+
+func marshalMetadataNamespaces(metadata map[string]json.RawMessage) ([]byte, error) {
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var encoded bytes.Buffer
+	encoded.WriteByte('{')
+	for i, key := range keys {
+		raw := metadata[key]
+		if !json.Valid(raw) {
+			return nil, fmt.Errorf("metadata namespace %q is invalid JSON", key)
+		}
+		if i > 0 {
+			encoded.WriteByte(',')
+		}
+		encodedKey, _ := json.Marshal(key)
+		encoded.Write(encodedKey)
+		encoded.WriteByte(':')
+		encoded.Write(raw)
+	}
+	encoded.WriteByte('}')
+	return encoded.Bytes(), nil
 }
 
 func (ls *LocalStorage) StoreWorkflowRunEvent(ctx context.Context, event *types.WorkflowRunEvent) error {
@@ -1767,7 +1858,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 // sqliteWorkflowExecutionInsertQuery captures the column order for workflow execution inserts.
 const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
 	workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
-	agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
+	agent_node_id, instance_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
 	reasoner_id, input_data, output_data, input_size, output_size,
 	status, started_at, completed_at, duration_ms,
 	state_version, last_event_sequence, active_children, pending_children,
@@ -1777,7 +1868,7 @@ const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
 	approval_requested_at, approval_responded_at, approval_callback_url, approval_expires_at,
 	workflow_name, workflow_tags, notes, created_at, updated_at
 ) VALUES (
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?
@@ -1832,7 +1923,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 			execution.ApprovalRequestID, execution.ApprovalRequestURL, execution.ApprovalStatus,
 			execution.ApprovalResponse, execution.ApprovalRequestedAt, execution.ApprovalRespondedAt,
 			execution.ApprovalCallbackURL, execution.ApprovalExpiresAt,
-			notesJSON, time.Now(), execution.ExecutionID)
+			notesJSON, time.Now().UTC(), execution.ExecutionID)
 
 		if err != nil {
 			return fmt.Errorf("failed to update workflow execution: %w", err)
@@ -1856,18 +1947,20 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 		return fmt.Errorf("failed to marshal notes: %w", err)
 	}
 
-	// Set default timestamps if not provided
+	// Set default timestamps if not provided. Persist in UTC so the stored
+	// text carries no local zone offset: a non-UTC offset breaks the reaper's
+	// timestamp comparison on SQLite (#1040).
 	if execution.CreatedAt.IsZero() {
-		execution.CreatedAt = time.Now()
+		execution.CreatedAt = time.Now().UTC()
 	}
 	if execution.UpdatedAt.IsZero() {
-		execution.UpdatedAt = time.Now()
+		execution.UpdatedAt = time.Now().UTC()
 	}
 
 	// Execute INSERT query using the DBTX interface
 	_, err = q.ExecContext(ctx, insertQuery,
 		execution.WorkflowID, execution.ExecutionID, execution.AgentFieldRequestID, execution.RunID,
-		execution.SessionID, execution.ActorID, execution.AgentNodeID,
+		execution.SessionID, execution.ActorID, execution.AgentNodeID, execution.InstanceID,
 		execution.ParentWorkflowID, execution.ParentExecutionID, execution.RootWorkflowID, execution.WorkflowDepth,
 		execution.ReasonerID, execution.InputData, execution.OutputData,
 		execution.InputSize, execution.OutputSize,
@@ -2016,12 +2109,13 @@ func (ls *LocalStorage) executeWorkflowInsertWithTx(ctx context.Context, tx DBTX
 			total_duration_ms = excluded.total_duration_ms,
 			updated_at = excluded.updated_at`
 
-	// Set default timestamps if not provided
+	// Set default timestamps if not provided. Persist in UTC so the stored
+	// text carries no local zone offset (see #1040).
 	if workflow.CreatedAt.IsZero() {
-		workflow.CreatedAt = time.Now()
+		workflow.CreatedAt = time.Now().UTC()
 	}
 	if workflow.UpdatedAt.IsZero() {
-		workflow.UpdatedAt = time.Now()
+		workflow.UpdatedAt = time.Now().UTC()
 	}
 
 	// Marshal workflow tags
@@ -2139,7 +2233,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		SELECT
 			workflow_executions.id, workflow_executions.workflow_id, workflow_executions.execution_id,
 			workflow_executions.agentfield_request_id, workflow_executions.run_id, workflow_executions.session_id, workflow_executions.actor_id,
-			workflow_executions.agent_node_id, workflow_executions.parent_workflow_id, workflow_executions.parent_execution_id,
+			workflow_executions.agent_node_id, COALESCE(workflow_executions.instance_id, ''), workflow_executions.parent_workflow_id, workflow_executions.parent_execution_id,
 			workflow_executions.root_workflow_id, workflow_executions.workflow_depth,
 			workflow_executions.reasoner_id, workflow_executions.input_data, workflow_executions.output_data,
 			workflow_executions.input_size, workflow_executions.output_size,
@@ -2286,7 +2380,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		err := rows.Scan(
 			&execution.ID, &execution.WorkflowID, &execution.ExecutionID,
 			&execution.AgentFieldRequestID, &runID, &execution.SessionID, &execution.ActorID,
-			&execution.AgentNodeID, &execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID,
+			&execution.AgentNodeID, &execution.InstanceID, &execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID,
 			&execution.WorkflowDepth, &execution.ReasonerID, &inputData,
 			&outputData, &execution.InputSize, &execution.OutputSize,
 			&execution.Status, &execution.StartedAt, &execution.CompletedAt,
@@ -2517,50 +2611,91 @@ func (ls *LocalStorage) QueryWorkflowDAG(ctx context.Context, rootWorkflowID str
 	return executions, nil
 }
 
-// CleanupOldExecutions removes old completed workflow executions based on retention period
+// ListExpiredExecutionPayloadURIs returns only payload references for the next
+// retention batch. It intentionally does not load inline payload columns.
+func (ls *LocalStorage) ListExpiredExecutionPayloadURIs(ctx context.Context, retentionPeriod time.Duration, batchSize int) ([]string, error) {
+	if retentionPeriod <= 0 {
+		return nil, nil
+	}
+	cutoff := time.Now().UTC().Add(-retentionPeriod)
+	rows, err := ls.db.QueryContext(ctx, `
+		SELECT input_uri, result_uri FROM executions
+		WHERE status IN ('succeeded','failed','cancelled','timeout','completed','revoked')
+		  AND completed_at IS NOT NULL AND completed_at < ?
+		ORDER BY completed_at ASC LIMIT ?`, cutoff, batchSize)
+	if err != nil {
+		return nil, fmt.Errorf("query expired execution payload URIs: %w", err)
+	}
+	defer rows.Close()
+	var uris []string
+	for rows.Next() {
+		var input, result sql.NullString
+		if err := rows.Scan(&input, &result); err != nil {
+			return nil, fmt.Errorf("scan expired execution payload URIs: %w", err)
+		}
+		if input.Valid && input.String != "" {
+			uris = append(uris, input.String)
+		}
+		if result.Valid && result.String != "" {
+			uris = append(uris, result.String)
+		}
+	}
+	return uris, rows.Err()
+}
+
+// ListPayloadURIs returns all live file references without loading payload data.
+// The orphan sweep materializes every referenced URI in memory once per pass;
+// keep its call frequency bounded because this cost grows with executions.
+func (ls *LocalStorage) ListPayloadURIs(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := ls.db.QueryContext(ctx, `SELECT input_uri, result_uri FROM executions WHERE input_uri IS NOT NULL OR result_uri IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("query payload URIs: %w", err)
+	}
+	defer rows.Close()
+	refs := make(map[string]struct{})
+	for rows.Next() {
+		var input, result sql.NullString
+		if err := rows.Scan(&input, &result); err != nil {
+			return nil, fmt.Errorf("scan payload URIs: %w", err)
+		}
+		if input.Valid && input.String != "" {
+			refs[input.String] = struct{}{}
+		}
+		if result.Valid && result.String != "" {
+			refs[result.String] = struct{}{}
+		}
+	}
+	return refs, rows.Err()
+}
+
+// EffectiveExecutionRetention returns the age an execution must reach before
+// pruning. Both retention and the preserve-recent window must have elapsed.
+func EffectiveExecutionRetention(retentionPeriod, preserveRecent time.Duration) time.Duration {
+	if retentionPeriod <= 0 {
+		return retentionPeriod
+	}
+	if preserveRecent > retentionPeriod {
+		return preserveRecent
+	}
+	return retentionPeriod
+}
+
+// CleanupOldExecutions removes old finished executions based on retention period.
 func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPeriod time.Duration, batchSize int) (int, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("context cancelled during cleanup old executions: %w", err)
 	}
 
-	// Calculate cutoff time
-	cutoffTime := time.Now().UTC().Add(-retentionPeriod)
-
-	// Query to find old completed executions to delete
-	// Only delete executions that are completed or failed and older than retention period
-	query := `
-		SELECT execution_id
-		FROM workflow_executions
-		WHERE (status = 'completed' OR status = 'failed')
-		  AND completed_at IS NOT NULL
-		  AND completed_at < ?
-		ORDER BY completed_at ASC
-		LIMIT ?`
-
-	rows, err := ls.db.QueryContext(ctx, query, cutoffTime, batchSize)
-	if err != nil {
-		return 0, fmt.Errorf("failed to query old executions for cleanup: %w", err)
-	}
-	defer rows.Close()
-
-	var executionIDs []string
-	for rows.Next() {
-		var executionID string
-		if err := rows.Scan(&executionID); err != nil {
-			return 0, fmt.Errorf("failed to scan execution ID for cleanup: %w", err)
-		}
-		executionIDs = append(executionIDs, executionID)
-	}
-
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("error after querying old executions for cleanup: %w", err)
-	}
-
-	// If no executions to clean up, return early
-	if len(executionIDs) == 0 {
+	if retentionPeriod <= 0 {
 		return 0, nil
 	}
+	if batchSize <= 0 {
+		return 0, nil
+	}
+
+	// Calculate cutoff time
+	cutoffTime := time.Now().UTC().Add(-retentionPeriod)
 
 	// Begin transaction for atomic cleanup
 	tx, err := ls.db.BeginTx(ctx, nil)
@@ -2569,27 +2704,91 @@ func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPerio
 	}
 	defer rollbackTx(tx, "cleanupOldExecutions")
 
-	// Delete executions in batch
-	// Use placeholders for safe deletion
-	placeholders := make([]string, len(executionIDs))
-	args := make([]interface{}, len(executionIDs))
-	for i, id := range executionIDs {
-		placeholders[i] = "?"
-		args[i] = id
+	selectIDs := func(table string, limit int) ([]string, error) {
+		rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT execution_id FROM %s
+			WHERE status IN ('succeeded','failed','cancelled','timeout','completed','revoked')
+			AND completed_at IS NOT NULL AND completed_at < ? ORDER BY completed_at ASC LIMIT ?`, table), cutoffTime, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		return ids, rows.Err()
 	}
-
-	deleteQuery := fmt.Sprintf(`
-		DELETE FROM workflow_executions
-		WHERE execution_id IN (%s)`, strings.Join(placeholders, ","))
-
-	result, err := tx.ExecContext(ctx, deleteQuery, args...)
-	if err != nil {
-		return 0, fmt.Errorf("failed to delete old executions: %w", err)
+	deleteIDs := func(table string, ids []string) (int64, error) {
+		if len(ids) == 0 {
+			return 0, nil
+		}
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+		args := make([]interface{}, len(ids))
+		for i := range ids {
+			args[i] = ids[i]
+		}
+		result, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE execution_id IN (%s)", table, placeholders), args...)
+		if err != nil {
+			return 0, err
+		}
+		return result.RowsAffected()
 	}
-
-	deletedCount, err := result.RowsAffected()
+	executionIDs, err := selectIDs("executions", batchSize)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get deleted rows count: %w", err)
+		return 0, fmt.Errorf("select expired executions: %w", err)
+	}
+	remaining := batchSize - len(executionIDs)
+	workflowIDs, err := selectIDs("workflow_executions", remaining)
+	if err != nil {
+		return 0, fmt.Errorf("select expired workflow executions: %w", err)
+	}
+	var runIDs []string
+	if len(workflowIDs) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(workflowIDs)), ",")
+		args := make([]interface{}, len(workflowIDs))
+		for i := range workflowIDs {
+			args[i] = workflowIDs[i]
+		}
+		rows, err := tx.QueryContext(ctx, fmt.Sprintf("SELECT DISTINCT run_id FROM workflow_executions WHERE execution_id IN (%s) AND run_id IS NOT NULL", placeholders), args...)
+		if err != nil {
+			return 0, fmt.Errorf("select cleanup workflow runs: %w", err)
+		}
+		for rows.Next() {
+			var runID string
+			if err := rows.Scan(&runID); err != nil {
+				rows.Close()
+				return 0, fmt.Errorf("scan cleanup workflow run: %w", err)
+			}
+			runIDs = append(runIDs, runID)
+		}
+		if err := rows.Close(); err != nil {
+			return 0, fmt.Errorf("close cleanup workflow runs: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM workflow_steps WHERE execution_id IN (%s)", placeholders), args...); err != nil {
+			return 0, fmt.Errorf("delete workflow steps: %w", err)
+		}
+	}
+	deletedExecutions, err := deleteIDs("executions", executionIDs)
+	if err != nil {
+		return 0, fmt.Errorf("delete executions: %w", err)
+	}
+	deletedWorkflows, err := deleteIDs("workflow_executions", workflowIDs)
+	if err != nil {
+		return 0, fmt.Errorf("delete workflow executions: %w", err)
+	}
+	if len(runIDs) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(runIDs)), ",")
+		args := make([]interface{}, len(runIDs))
+		for i := range runIDs {
+			args[i] = runIDs[i]
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM workflow_runs WHERE run_id IN (%s) AND NOT EXISTS (SELECT 1 FROM workflow_executions WHERE workflow_executions.run_id = workflow_runs.run_id)`, placeholders), args...); err != nil {
+			return 0, fmt.Errorf("delete empty workflow runs: %w", err)
+		}
 	}
 
 	// Commit transaction
@@ -2597,7 +2796,7 @@ func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPerio
 		return 0, fmt.Errorf("failed to commit cleanup transaction: %w", err)
 	}
 
-	return int(deletedCount), nil
+	return int(deletedExecutions + deletedWorkflows), nil
 }
 
 // CleanupWorkflow deletes all data related to a specific workflow ID or workflow run identifier

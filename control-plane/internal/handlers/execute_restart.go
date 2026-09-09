@@ -50,7 +50,7 @@ type restartExecutionResponse struct {
 }
 
 type workflowRunMetadataStore interface {
-	StoreWorkflowRun(ctx context.Context, run *types.WorkflowRun) error
+	UpdateWorkflowRunMetadata(context.Context, string, func(map[string]json.RawMessage) error) error
 }
 
 // RestartExecutionHandler starts a new execution/run from an existing workflow
@@ -151,21 +151,35 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 	}
 
 	target := fmt.Sprintf("%s.%s", restartExec.NodeID, restartExec.ReasonerID)
-	plan, err := c.prepareExecutionForTarget(reqCtx, target, ExecuteRequest{
+	pool := getAsyncWorkerPool()
+	if reserved, stopped := pool.reserveForAdmission(); !reserved {
+		if stopped {
+			writeExecutionError(ctx, newControlPlaneShutdownError("async execution queue stopped; retry later"))
+			return
+		}
+		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue is full; retry later")
+		return
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			pool.releaseReservation()
+		}
+	}()
+
+	// Restarts mint a new run identity and deliberately leave RunMetadata nil.
+	plan, err := c.prepareExecutionForTargetWithAdmission(reqCtx, target, ExecuteRequest{
 		Input:   input,
 		Context: contextPayload,
 		Webhook: req.Webhook,
-	}, headers, "", "")
+	}, headers, "", "", true)
 	if err != nil {
 		writeExecutionError(ctx, err)
 		return
 	}
-
-	if err := CheckExecutionPreconditions(plan.target.NodeID, plan.llmEndpoint); err != nil {
-		_ = c.failExecution(reqCtx, plan, err, 0, nil)
-		writeExecutionError(ctx, err)
-		return
-	}
+	// Keep ownership in the handler until the job copy is ready. Gin recovery
+	// can then release the slot if metadata/event publication panics.
+	defer plan.releaseSlot()
 
 	kind := "restart"
 	if req.Fork || req.Input != nil || req.Context != nil {
@@ -175,20 +189,25 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 
 	c.publishExecutionStartedEvent(plan)
 
-	pool := getAsyncWorkerPool()
 	job := asyncExecutionJob{
 		controller: c,
 		plan:       *plan,
 	}
-	if ok := pool.submit(job); !ok {
-		ReleaseExecutionSlot(plan.target.NodeID)
-		queueErr := errors.New("async execution queue is full; retry later")
-		if updateErr := c.failExecution(reqCtx, plan, queueErr, 0, nil); updateErr != nil {
-			logger.Logger.Error().Err(updateErr).Str("execution_id", plan.exec.ExecutionID).Msg("restart: failed to persist queue saturation")
+	plan.slotHeld = false // ownership transferred to job
+	submitted := false
+	defer func() {
+		if !submitted {
+			job.plan.releaseSlot()
 		}
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": queueErr.Error(), "error_category": "concurrency_limit"})
+	}()
+	if ok := pool.submitReserved(job); !ok {
+		shutdownErr := newControlPlaneShutdownError("async execution queue stopped; retry later")
+		job.terminateForControlPlaneShutdown(shutdownErr)
+		writeExecutionError(ctx, shutdownErr)
 		return
 	}
+	submitted = true
+	reserved = false
 
 	createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)
 	var replayBefore *string
@@ -247,40 +266,31 @@ func (c *executionController) persistRestartRunMetadata(ctx context.Context, pla
 	if !ok {
 		return
 	}
-	now := time.Now().UTC()
-	metadata := map[string]interface{}{
-		"lineage": map[string]interface{}{
-			"kind":                   kind,
-			"source_run_id":          sourceExec.RunID,
-			"source_execution_id":    sourceExec.ExecutionID,
-			"restarted_execution_id": restartExec.ExecutionID,
-			"reuse":                  reuse,
-			"scope":                  scope,
-		},
+	lineage := map[string]interface{}{
+		"kind":                   kind,
+		"source_run_id":          sourceExec.RunID,
+		"source_execution_id":    sourceExec.ExecutionID,
+		"restarted_execution_id": restartExec.ExecutionID,
+		"reuse":                  reuse,
+		"scope":                  scope,
 	}
+	var encodedReason json.RawMessage
 	if trimmed := strings.TrimSpace(reason); trimmed != "" {
-		metadata["reason"] = trimmed
+		encodedReason, _ = json.Marshal(trimmed)
 	}
-	encoded, err := json.Marshal(metadata)
+	encoded, err := json.Marshal(lineage)
 	if err != nil {
 		logger.Logger.Warn().Err(err).Str("run_id", plan.exec.RunID).Msg("failed to encode restart run metadata")
 		return
 	}
-	// This workflow_runs row exists only to carry lineage/golden metadata for the
-	// new run; it is the sole writer of this row for restart runs. Status and
-	// TotalSteps are seeded at enqueue time and are NOT kept current as the run
-	// progresses — every UI read path (run list, run detail, DAG) derives live
-	// status and step counts from execution aggregation and only reads the
-	// lineage/golden fields here. Do not treat these columns as authoritative.
-	if err := store.StoreWorkflowRun(ctx, &types.WorkflowRun{
-		RunID:           plan.exec.RunID,
-		RootWorkflowID:  plan.exec.RunID,
-		RootExecutionID: &plan.exec.ExecutionID,
-		Status:          string(types.ExecutionStatusQueued),
-		TotalSteps:      1,
-		Metadata:        json.RawMessage(encoded),
-		CreatedAt:       now,
-		UpdatedAt:       now,
+	if err := store.UpdateWorkflowRunMetadata(ctx, plan.exec.RunID, func(namespaces map[string]json.RawMessage) error {
+		namespaces["lineage"] = encoded
+		if encodedReason != nil {
+			namespaces["reason"] = encodedReason
+		} else {
+			delete(namespaces, "reason")
+		}
+		return nil
 	}); err != nil {
 		logger.Logger.Warn().Err(err).Str("run_id", plan.exec.RunID).Msg("failed to persist restart run metadata")
 	}

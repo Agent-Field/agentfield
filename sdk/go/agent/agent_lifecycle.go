@@ -2,18 +2,23 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/types"
 )
+
+var postCancelSettlementTimeout = 5 * time.Second
 
 // Initialize registers the agent with the AgentField control plane without starting a listener.
 func (a *Agent) Initialize(ctx context.Context) error {
@@ -120,6 +125,8 @@ func (a *Agent) Serve(ctx context.Context) error {
 			"signal":  sig.String(),
 		})
 		return a.shutdown(context.Background())
+	case <-a.shutdownDone:
+		return nil
 	}
 }
 
@@ -332,20 +339,55 @@ func (a *Agent) startLeaseLoop() {
 }
 
 func (a *Agent) shutdown(ctx context.Context) error {
+	return a.shutdownWithOptions(ctx, true, a.cfg.ShutdownTimeout)
+}
+
+func resolveShutdownTimeout(value string, logger interface{ Printf(string, ...any) }) time.Duration {
+	const fallback = 30 * time.Second
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if duration, err := time.ParseDuration(value); err == nil && duration >= 0 {
+		return duration
+	}
+	logger.Printf("invalid AGENTFIELD_SHUTDOWN_TIMEOUT %q; using %s", value, fallback)
+	return fallback
+}
+
+type shutdownRequest struct {
+	Graceful       bool `json:"graceful"`
+	TimeoutSeconds int  `json:"timeout_seconds"`
+}
+
+func (a *Agent) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	req := shutdownRequest{Graceful: true}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid shutdown request", http.StatusBadRequest)
+			return
+		}
+	}
+	timeout := a.cfg.ShutdownTimeout
+	if req.TimeoutSeconds > 0 {
+		timeout = time.Duration(req.TimeoutSeconds) * time.Second
+	}
+	w.WriteHeader(http.StatusAccepted)
+	go func() { _ = a.shutdownWithOptions(context.Background(), req.Graceful, timeout) }()
+}
+
+func (a *Agent) shutdownWithOptions(ctx context.Context, graceful bool, timeout time.Duration) error {
 	a.logExecutionInfo(ctx, "agent.shutdown.start", "shutting down agent", map[string]any{
 		"node_id": a.cfg.NodeID,
 	})
-	select {
-	case <-a.stopLease:
-	default:
-		close(a.stopLease)
-	}
-
-	// Unblock any reasoner still parked in Agent.Pause() so shutdown does not
-	// hang waiting on an approval callback that will never arrive.
-	if a.pauseManager != nil {
-		a.pauseManager.CancelAll()
-	}
+	a.stopLeaseOnce.Do(func() { close(a.stopLease) })
 
 	if a.client != nil {
 		if _, err := a.client.Shutdown(ctx, a.cfg.NodeID, types.ShutdownRequest{Reason: "shutdown", Version: a.cfg.Version}); err != nil {
@@ -356,21 +398,61 @@ func (a *Agent) shutdown(ctx context.Context) error {
 			})
 		}
 	}
-
+	a.shutdownMu.Lock()
+	a.shuttingDown = true
+	a.shutdownMu.Unlock()
 	a.serverMu.RLock()
 	server := a.server
 	a.serverMu.RUnlock()
 
 	if server != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			return err
+		if !graceful {
+			if err := server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				a.logger.Printf("failed to close HTTP server during immediate shutdown: %v", err)
+			}
 		}
+	}
+	if graceful {
+		shutdownCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if server != nil {
+			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				a.logger.Printf("failed to drain HTTP server during shutdown: %v", err)
+			}
+		}
+		done := make(chan struct{})
+		go func() { a.executionWG.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-shutdownCtx.Done():
+			a.cancelMu.Lock()
+			for _, cancel := range a.cancelFuncs {
+				cancel()
+			}
+			a.cancelMu.Unlock()
+			if a.pauseManager != nil {
+				a.pauseManager.CancelAll()
+			}
+			select {
+			case <-done:
+			case <-time.After(postCancelSettlementTimeout):
+				a.cancelMu.Lock()
+				abandoned := len(a.cancelFuncs)
+				a.cancelMu.Unlock()
+				a.logger.Printf("shutdown proceeding with %d execution(s) abandoned after cancellation", abandoned)
+			}
+		}
+	} else {
+		a.cancelMu.Lock()
+		for _, cancel := range a.cancelFuncs {
+			cancel()
+		}
+		a.cancelMu.Unlock()
 	}
 	a.logExecutionInfo(ctx, "agent.shutdown.complete", "agent shutdown complete", map[string]any{
 		"node_id": a.cfg.NodeID,
 	})
+	a.shutdownOnce.Do(func() { close(a.shutdownDone) })
 	return nil
 }
 

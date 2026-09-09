@@ -28,12 +28,14 @@ func (s *configStoreStub) GetConfig(_ context.Context, key string) (*storage.Con
 }
 
 func baseConfigForDBTests() config.Config {
+	orphanReapEnabled := true
 	return config.Config{
 		AgentField: config.AgentFieldConfig{
 			Port: 8080,
 			NodeHealth: config.NodeHealthConfig{
-				CheckInterval: 10 * time.Second,
-				CheckTimeout:  5 * time.Second,
+				CheckInterval:          10 * time.Second,
+				CheckTimeout:           5 * time.Second,
+				AgentOrphanReapEnabled: &orphanReapEnabled,
 			},
 			ExecutionCleanup: config.ExecutionCleanupConfig{
 				Enabled:                true,
@@ -120,13 +122,20 @@ func TestMergeDBConfigPreservesStorageSection(t *testing.T) {
 
 func TestMergeDBConfigAppliesNonZeroDBValues(t *testing.T) {
 	cfg := baseConfigForDBTests()
+	orphanReapEnabled := false
 
 	dbCfg := &config.Config{
 		AgentField: config.AgentFieldConfig{
 			Port: 9090,
 			NodeHealth: config.NodeHealthConfig{
-				CheckInterval: 15 * time.Second,
-				CheckTimeout:  7 * time.Second,
+				CheckInterval:           15 * time.Second,
+				CheckTimeout:            7 * time.Second,
+				ConsecutiveFailures:     4,
+				RecoveryDebounce:        8 * time.Second,
+				HeartbeatStaleThreshold: 90 * time.Second,
+				AgentRestartGrace:       20 * time.Second,
+				AgentDrainGrace:         2 * time.Minute,
+				AgentOrphanReapEnabled:  &orphanReapEnabled,
 			},
 			ExecutionCleanup: config.ExecutionCleanupConfig{
 				Enabled:                false,
@@ -274,15 +283,93 @@ func TestOverlayDBConfigInvalidYAMLDoesNotMutateLoadedConfig(t *testing.T) {
 	require.Equal(t, original, cfg)
 }
 
+func TestOverlayDBConfigPartialNodeHealthPreservesOmittedValues(t *testing.T) {
+	cfg := baseConfigForDBTests()
+	cfg.AgentField.NodeHealth.ConsecutiveFailures = 3
+	cfg.AgentField.NodeHealth.RecoveryDebounce = 5 * time.Second
+	cfg.AgentField.NodeHealth.HeartbeatStaleThreshold = time.Minute
+	cfg.AgentField.NodeHealth.AgentRestartGrace = 15 * time.Second
+	cfg.AgentField.NodeHealth.AgentDrainGrace = time.Minute
+
+	err := overlayDBConfig(&cfg, &configStoreStub{entry: &storage.ConfigEntry{
+		Key: dbConfigKey,
+		Value: `agentfield:
+  node_health:
+    check_interval: 20s
+    check_timeout: 7s
+    agent_drain_grace: 90s
+`,
+		Version:   1,
+		UpdatedAt: time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC),
+	}})
+	require.NoError(t, err)
+
+	require.Equal(t, 20*time.Second, cfg.AgentField.NodeHealth.CheckInterval)
+	require.Equal(t, 7*time.Second, cfg.AgentField.NodeHealth.CheckTimeout)
+	require.Equal(t, 3, cfg.AgentField.NodeHealth.ConsecutiveFailures)
+	require.Equal(t, 5*time.Second, cfg.AgentField.NodeHealth.RecoveryDebounce)
+	require.Equal(t, time.Minute, cfg.AgentField.NodeHealth.HeartbeatStaleThreshold)
+	require.Equal(t, 15*time.Second, cfg.AgentField.NodeHealth.AgentRestartGrace)
+	require.Equal(t, 90*time.Second, cfg.AgentField.NodeHealth.AgentDrainGrace)
+	require.True(t, cfg.AgentField.NodeHealth.EffectiveAgentOrphanReapEnabled())
+}
+
+func TestOverlayDBConfigExplicitOrphanReapFalseWithoutCheckInterval(t *testing.T) {
+	cfg := baseConfigForDBTests()
+
+	err := overlayDBConfig(&cfg, &configStoreStub{entry: &storage.ConfigEntry{
+		Key: dbConfigKey,
+		Value: `agentfield:
+  node_health:
+    agent_orphan_reap_enabled: false
+`,
+		Version:   1,
+		UpdatedAt: time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC),
+	}})
+	require.NoError(t, err)
+	require.False(t, cfg.AgentField.NodeHealth.EffectiveAgentOrphanReapEnabled())
+	require.NotNil(t, cfg.AgentField.NodeHealth.AgentOrphanReapEnabled)
+}
+
+func TestOverlayDBConfigEnvironmentWinsOrphanReapSetting(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		dbValue  string
+		want     bool
+	}{
+		{name: "environment false beats database true", envValue: "false", dbValue: "true", want: false},
+		{name: "environment true beats database false", envValue: "true", dbValue: "false", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED", tt.envValue)
+			cfg := baseConfigForDBTests()
+			config.ApplyEnvOverrides(&cfg)
+
+			err := overlayDBConfig(&cfg, &configStoreStub{entry: &storage.ConfigEntry{
+				Key:       dbConfigKey,
+				Value:     "agentfield:\n  node_health:\n    agent_orphan_reap_enabled: " + tt.dbValue + "\n",
+				Version:   1,
+				UpdatedAt: time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC),
+			}})
+			require.NoError(t, err)
+			require.Equal(t, tt.want, cfg.AgentField.NodeHealth.EffectiveAgentOrphanReapEnabled())
+		})
+	}
+}
+
 func TestOverlayDBConfigRoundTripPreservesStorageAndMergesExpected(t *testing.T) {
 	cfg := baseConfigForDBTests()
+	orphanReapEnabled := true
 
 	dbCfg := config.Config{
 		AgentField: config.AgentFieldConfig{
 			Port: 7070,
 			NodeHealth: config.NodeHealthConfig{
-				CheckInterval: 20 * time.Second,
-				CheckTimeout:  9 * time.Second,
+				CheckInterval:          20 * time.Second,
+				CheckTimeout:           9 * time.Second,
+				AgentOrphanReapEnabled: &orphanReapEnabled,
 			},
 			ExecutionCleanup: config.ExecutionCleanupConfig{
 				Enabled:                false,

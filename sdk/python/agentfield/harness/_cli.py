@@ -288,6 +288,11 @@ async def run_cli(
     the final JSONL result/usage events remain parseable.
     """
     merged_env = {**os.environ}
+    try:
+        parent_depth = int(merged_env.get("AGENTFIELD_HARNESS_DEPTH", "0"))
+    except ValueError:
+        parent_depth = 0
+    merged_env["AGENTFIELD_HARNESS_DEPTH"] = str(max(parent_depth, 0) + 1)
     if env:
         merged_env.update(env)
     apply_subprocess_env(merged_env)

@@ -417,6 +417,17 @@ func (s *mcpServer) toolExecuteReasoner(c *gin.Context, rawArgs json.RawMessage)
 	}
 	runID, execID, err := s.startAsyncRun(ctx, target, input, headers, callerDID, targetDID)
 	if err != nil {
+		var admissionErr *executionPreconditionError
+		if errors.As(err, &admissionErr) {
+			body, retryAfter := renderExecutionPreconditionError(admissionErr)
+			// Preserve the legacy human-readable MCP field while adding the stable
+			// category/retry contract for programmatic clients.
+			body["text"] = "failed to start execution: " + admissionErr.Error()
+			if retryAfter > 0 {
+				c.Header("Retry-After", fmt.Sprint(retryAfter))
+			}
+			return mcpToolErrorValue(body), nil
+		}
 		return mcpToolError("failed to start execution: " + err.Error()), nil
 	}
 
@@ -512,35 +523,46 @@ func (s *mcpServer) toolWaitRun(c *gin.Context, rawArgs json.RawMessage) (map[st
 // the MCP tool. It returns as soon as the job is enqueued.
 func (s *mcpServer) startAsyncRun(ctx context.Context, target string, input map[string]interface{}, headers executionHeaders, callerDID, targetDID string) (runID, execID string, err error) {
 	controller := newExecutionController(s.store, s.payloads, s.webhooks, s.timeout, s.internalToken)
-	plan, err := controller.prepareExecutionForTarget(ctx, target, ExecuteRequest{Input: input}, headers, callerDID, targetDID)
+	pool := getAsyncWorkerPool()
+	if reserved, stopped := pool.reserveForAdmission(); !reserved {
+		if stopped {
+			return "", "", newControlPlaneShutdownError("async execution queue stopped; retry later")
+		}
+		return "", "", &executionPreconditionError{code: 503, message: "async execution queue is full; retry later", category: ErrorCategoryConcurrencyLimit}
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			pool.releaseReservation()
+		}
+	}()
+
+	// MCP creates an ordinary execution and deliberately leaves RunMetadata nil.
+	plan, err := controller.prepareExecutionForTargetWithAdmission(ctx, target, ExecuteRequest{Input: input}, headers, callerDID, targetDID, true)
 	if err != nil {
 		return "", "", err
 	}
-
-	if err := CheckExecutionPreconditions(plan.target.NodeID, plan.llmEndpoint); err != nil {
-		_ = controller.failExecution(ctx, plan, err, 0, nil)
-		return "", "", err
-	}
+	defer plan.releaseSlot()
 
 	controller.publishExecutionStartedEvent(plan)
 
-	pool := getAsyncWorkerPool()
 	job := asyncExecutionJob{controller: controller, plan: *plan}
-	if ok := pool.submit(job); !ok {
-		ReleaseExecutionSlot(plan.target.NodeID)
-		queueErr := errors.New("async execution queue is full; retry later")
-		_ = controller.failExecution(ctx, plan, queueErr, 0, nil)
-		return "", "", queueErr
+	plan.slotHeld = false // ownership transferred to job
+	submitted := false
+	defer func() {
+		if !submitted {
+			job.plan.releaseSlot()
+		}
+	}()
+	if ok := pool.submitReserved(job); !ok {
+		shutdownErr := newControlPlaneShutdownError("async execution queue stopped; retry later")
+		job.terminateForControlPlaneShutdown(shutdownErr)
+		return "", "", shutdownErr
 	}
+	submitted = true
+	reserved = false
 
 	return plan.exec.RunID, plan.exec.ExecutionID, nil
-}
-
-// buildRunView aggregates all executions for a run into the shape get_run and
-// wait_run return. terminal reports whether every execution has reached a
-// terminal state; found reports whether the run exists at all.
-func (s *mcpServer) buildRunView(ctx context.Context, runID string) (view map[string]interface{}, terminal, found bool, err error) {
-	return s.buildRunViewForCaller(ctx, runID, "")
 }
 
 // buildRunViewForCaller limits DID-authenticated callers to runs they own. MCP
@@ -710,6 +732,22 @@ func mcpToolError(msg string) map[string]interface{} {
 			{"type": "text", "text": msg},
 		},
 		"isError": true,
+	}
+}
+
+// mcpToolErrorValue preserves a structured execution rejection inside the MCP
+// tool result while retaining the standard HTTP-200 JSON-RPC transport.
+func mcpToolErrorValue(v interface{}) map[string]interface{} {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return mcpToolError("failed to encode error: " + err.Error())
+	}
+	return map[string]interface{}{
+		"content": []map[string]interface{}{
+			{"type": "text", "text": string(b)},
+		},
+		"structuredContent": v,
+		"isError":           true,
 	}
 }
 

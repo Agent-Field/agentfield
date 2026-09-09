@@ -1,4 +1,5 @@
 import type { HarnessProvider } from './base.js';
+import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
 import { runCli, parseJsonl, extractFinalText } from '../cli.js';
@@ -13,9 +14,10 @@ export class CodexProvider implements HarnessProvider {
 
   async execute(prompt: string, options: Record<string, unknown>): Promise<RawResult> {
     const cmd = [this.bin, 'exec', '--json'];
+    const root = resolveRoot(options);
 
-    if (options.cwd) {
-      cmd.push('-C', String(options.cwd));
+    if (root) {
+      cmd.push('-C', root);
     }
     if (options.permissionMode === 'auto') {
       cmd.push('--full-auto');
@@ -39,7 +41,7 @@ export class CodexProvider implements HarnessProvider {
     try {
       const { stdout, stderr, exitCode } = await runCli(cmd, {
         env: options.env as Record<string, string> | undefined,
-        cwd: options.cwd as string | undefined,
+        cwd: root,
       });
 
       const events = parseJsonl(stdout);

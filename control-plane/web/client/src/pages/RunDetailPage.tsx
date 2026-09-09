@@ -87,6 +87,7 @@ import { WorkflowDAGViewer } from "@/components/WorkflowDAG";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ExecutionObservabilityPanel } from "@/components/execution";
 import { normalizeExecutionStatus, isTerminalStatus } from "@/utils/status";
+import { safeExternalUrl } from "@/utils/safeExternalUrl";
 import { StatusPill } from "@/components/ui/status-pill";
 import type {
   TriggerInfo,
@@ -595,6 +596,7 @@ export function RunDetailPage() {
     dag?.timeline.find((n) => n.workflow_depth === 0) ?? dag?.timeline[0];
   const restartNodeForActions = pickRestartNode(dag?.timeline);
   const actionRunLabel =
+    dag?.run_metadata?.display_name?.trim() ||
     dag?.workflow_name?.trim() ||
     (rootNodeForActions?.agent_node_id && rootNodeForActions?.reasoner_id
       ? `${rootNodeForActions.agent_node_id}.${rootNodeForActions.reasoner_id}`
@@ -906,7 +908,7 @@ export function RunDetailPage() {
     vcChain?.workflow_vc?.issuer_did?.trim() ||
     "";
 
-  const runTitle = dag.workflow_name?.trim() || rootNode?.reasoner_id || "Run";
+  const runTitle = dag.run_metadata?.display_name?.trim() || dag.workflow_name?.trim() || rootNode?.reasoner_id || "Run";
   const runTitleDisplay = truncateEnd(runTitle, RUN_DETAIL_TITLE_MAX_CHARS);
 
   const metaParts: string[] = [];
@@ -1005,6 +1007,20 @@ export function RunDetailPage() {
                 {lineage.kind === "fork" ? "Forked" : "Restarted"}
               </Link>
             ) : null}
+            {dag.run_metadata?.labels?.slice(0, 3).map((label) => (
+              <Badge key={label} variant="metadata" size="sm" showIcon={false}>{label}</Badge>
+            ))}
+            {(dag.run_metadata?.labels?.length ?? 0) > 3 ? (
+              <Badge variant="metadata" size="sm" showIcon={false}>+{(dag.run_metadata?.labels?.length ?? 0) - 3}</Badge>
+            ) : null}
+            {dag.run_metadata?.links?.map((link) => {
+              const href = safeExternalUrl(link.url);
+              return href ? (
+                <a key={link.url} href={href} target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center rounded-md border px-1.5 py-0 text-micro font-medium">
+                  {link.label || link.url}
+                </a>
+              ) : null;
+            })}
           </div>
 
           {sessionTrim ? (

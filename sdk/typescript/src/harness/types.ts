@@ -4,7 +4,7 @@ export interface HarnessConfig {
    * When unset, `AGENTFIELD_HARNESS_PROVIDER` is consulted before the default.
    * An explicit value always wins.
    */
-  provider?: 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode';
+  provider?: 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
   /** Model identifier. Empty means the provider's own default. */
   model?: string;
   /**
@@ -28,6 +28,8 @@ export interface HarnessConfig {
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
+  piBin?: string;
+  ompBin?: string;
 }
 
 export interface HarnessOptions {
@@ -60,6 +62,10 @@ export interface HarnessOptions {
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
+  piBin?: string;
+  ompBin?: string;
+  resumeSessionId?: string;
+  timeout?: number;
   schema?: unknown;
 }
 

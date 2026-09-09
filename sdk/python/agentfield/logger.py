@@ -44,6 +44,20 @@ class LogLevel(Enum):
     ERROR = "ERROR"
 
 
+class _DynamicStdoutHandler(logging.Handler):
+    """A handler that resolves stdout at emit time so a later tee sees logs."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            sys.stdout.write(self.format(record) + self.terminator)
+            sys.stdout.flush()
+        except Exception:
+            # Logging is always best-effort and must not fail SDK callers.
+            self.handleError(record)
+
+    terminator = "\n"
+
+
 class AgentFieldLogger:
     """
     Centralized logger for AgentField SDK with configurable verbosity and payload truncation.
@@ -68,7 +82,6 @@ class AgentFieldLogger:
             os.getenv("AGENTFIELD_LOG_TRACKING", "false").lower() == "true"
         )
         self.show_fire = os.getenv("AGENTFIELD_LOG_FIRE", "false").lower() == "true"
-
         # Set logger level based on configuration
         self.logger.setLevel(_LEVEL_TO_LOGGING.get(self.log_level, logging.WARNING))
 
@@ -82,7 +95,7 @@ class AgentFieldLogger:
         """Setup logger with console handler if not already configured"""
 
         if not self.logger.handlers:
-            handler = logging.StreamHandler(stream=sys.stdout)
+            handler = _DynamicStdoutHandler()
             formatter = logging.Formatter("%(message)s")
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
@@ -176,12 +189,197 @@ class AgentFieldLogger:
         }
 
     def _emit_structured_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        line = json.dumps(
+        try:
+            if self._stdout_mirror_enabled():
+                line = self._bounded_mirror_line(record)
+                print(line, file=sys.stdout, flush=True)
+        except Exception:
+            # Broken stdout and capture-ring contention must never affect execution.
+            pass
+        try:
+            self._dispatch_to_cp(record)
+        except Exception:
+            pass
+        return record
+
+    @staticmethod
+    def _stdout_mirror_enabled() -> bool:
+        value = os.getenv("AGENTFIELD_LOG_STDOUT", "true").strip().lower()
+        return value not in ("0", "false", "no", "off")
+
+    @staticmethod
+    def _json_line(record: Dict[str, Any]) -> str:
+        return json.dumps(
             record, ensure_ascii=False, separators=(",", ":"), default=str
         )
-        print(line, file=sys.stdout, flush=True)
-        self._dispatch_to_cp(record)
-        return record
+
+    @staticmethod
+    def _byte_len(text: str) -> int:
+        """UTF-8 length without materialising a throwaway bytes copy.
+
+        ``str.isascii()`` is an O(1) flag check on CPython's compact-unicode
+        representation, so the common ASCII case never allocates.
+        """
+        return len(text) if text.isascii() else len(text.encode("utf-8"))
+
+    @staticmethod
+    def _json_key(key: Any) -> str:
+        """The string json.dumps() will actually emit for a dict key.
+
+        json coerces non-string keys (``1`` -> ``"1"``, ``True`` -> ``"true"``,
+        ``None`` -> ``"null"``); measuring the raw key instead undercounts by
+        the two quote bytes and can push an elision boundary the wrong way.
+        ``bool`` is checked before ``int`` because ``isinstance(True, int)``.
+        """
+        if isinstance(key, str):
+            return key
+        if isinstance(key, bool):
+            return "true" if key else "false"
+        if key is None:
+            return "null"
+        if isinstance(key, (int, float)):
+            return json.dumps(key)
+        return str(key)
+
+    @classmethod
+    def _shallow_payload_bytes(cls, value: Any) -> int:
+        """Lower bound on the JSON size of one value, without recursing."""
+        if isinstance(value, str):
+            return cls._byte_len(value)
+        if isinstance(value, (bytes, bytearray)):
+            return len(value)
+        return 0
+
+    @classmethod
+    def _certainly_exceeds_budget(cls, record: Dict[str, Any], budget: int) -> bool:
+        """True only when a shallow scan already proves the record is oversized.
+
+        Deliberately shallow: it sums the top-level str/bytes payloads (the
+        record's own values plus one level of ``attributes``) and aborts as
+        soon as the running total passes the budget. Nested containers count
+        as zero, so a False answer means "unknown, serialize and measure".
+        Any exception falls back to that same path — a mirror line is never
+        dropped because the estimator misbehaved.
+        """
+        try:
+            total = 0
+            for key, value in record.items():
+                total += cls._shallow_payload_bytes(value)
+                if total > budget:
+                    return True
+                if key == "attributes" and isinstance(value, dict):
+                    for attribute_value in value.values():
+                        total += cls._shallow_payload_bytes(attribute_value)
+                        if total > budget:
+                            return True
+            return False
+        except Exception:
+            return False
+
+    def _record_size(self, record: Dict[str, Any], attributes_size: int) -> int:
+        """len(_json_line(record)) without re-encoding the attributes payload."""
+        if "attributes" not in record:
+            # {**record, "attributes": {}} would APPEND the key and overcount.
+            return self._byte_len(self._json_line(record))
+        envelope = self._byte_len(self._json_line({**record, "attributes": {}}))
+        return envelope - 2 + attributes_size  # -2 drops the "{}" placeholder
+
+    def _bounded_mirror_line(self, record: Dict[str, Any]) -> str:
+        """Serialize a valid JSON view while leaving the dispatched record untouched."""
+        from .node_logs import max_line_bytes
+
+        budget = max_line_bytes()
+        line: Optional[str] = None
+        record_size: Optional[int] = None
+        if not self._certainly_exceeds_budget(record, budget):
+            line = self._json_line(record)
+            record_size = self._byte_len(line)
+            if record_size <= budget:
+                return line
+
+        # Shallow copies are enough: attribute values are replaced, never
+        # mutated, and a deepcopy of a multi-megabyte (or non-copyable)
+        # payload is exactly the cost this view exists to avoid.
+        view = dict(record)
+        attributes = view.get("attributes")
+        if isinstance(attributes, dict):
+            attributes = dict(attributes)
+            view["attributes"] = attributes
+            encoded_sizes = [
+                (
+                    self._byte_len(self._json_line(value)),
+                    self._byte_len(self._json_line(self._json_key(key))),
+                    key,
+                )
+                for key, value in attributes.items()
+            ]
+            attributes_size = 2 + sum(
+                key_size + 1 + value_size
+                for value_size, key_size, _key in encoded_sizes
+            )
+            if encoded_sizes:
+                attributes_size += len(encoded_sizes) - 1
+            if record_size is None:
+                record_size = self._record_size(record, attributes_size)
+
+            estimated_size = record_size
+            for size, _key_size, key in sorted(
+                encoded_sizes, key=lambda item: item[0], reverse=True
+            ):
+                marker = f"<{size} bytes elided>"
+                marker_size = self._byte_len(self._json_line(marker))
+                attributes[key] = marker
+                estimated_size -= size - marker_size
+                if estimated_size <= budget:
+                    break
+
+            if estimated_size > budget:
+                view["attributes"] = {"_elided": f"<{attributes_size} bytes elided>"}
+        else:
+            size = self._byte_len(self._json_line(attributes))
+            if record_size is None:
+                record_size = self._record_size(record, size)
+            view["attributes"] = f"<{size} bytes elided>"
+
+        line = self._json_line(view)
+        if self._byte_len(line) <= budget:
+            return line
+
+        message = str(view.get("message", ""))
+        message_size = self._byte_len(message)
+        low, high = 0, len(message)
+        while low <= high:
+            keep = (low + high) // 2
+            elided = message_size - self._byte_len(message[:keep])
+            view["message"] = f"{message[:keep]}…[{elided} bytes elided]"
+            line = self._json_line(view)
+            if self._byte_len(line) <= budget:
+                low = keep + 1
+            else:
+                high = keep - 1
+        if high >= 0:
+            kept = message[:high]
+            elided = message_size - self._byte_len(kept)
+            view["message"] = f"{kept}…[{elided} bytes elided]"
+            line = self._json_line(view)
+            if self._byte_len(line) <= budget:
+                return line
+
+        original_size = record_size
+
+        def bounded_scalar(value: Any) -> Any:
+            return value if self._byte_len(self._json_line(value)) <= 32 else "<elided>"
+
+        minimal = {
+            "timestamp": bounded_scalar(record.get("ts")),
+            "level": bounded_scalar(record.get("level")),
+            "logger": bounded_scalar(self.logger.name),
+            "message": f"<record elided: {original_size} bytes>",
+        }
+        line = self._json_line(minimal)
+        # max_line_bytes() has a 256-byte floor; this fixed envelope is smaller.
+        assert self._byte_len(line) <= budget
+        return line
 
     def _dispatch_to_cp(self, record: Dict[str, Any]) -> None:
         """Send the structured log record to the control plane (best-effort, non-blocking).

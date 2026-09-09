@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # pyright: reportMissingImports=false
 
+import json
 from typing import Any
 from unittest.mock import patch
 
@@ -64,18 +65,331 @@ async def test_opencode_provider_constructs_command_and_maps_result(
         "run",
         "--format",
         "json",
+        "--agent",
+        "agentfield-harness",
         "--dir",
         "/tmp/work",
         "hello",
     ]
     assert captured["env"]["A"] == "1"
     assert "XDG_DATA_HOME" in captured["env"]
+    overlay = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert overlay["default_agent"] == "agentfield-harness"
+    assert overlay["agent"]["agentfield-harness"] == {
+        "mode": "primary",
+        "steps": 500,
+        "permission": {
+            "*": "allow",
+            "skill": {"agentfield*": "deny"},
+            "question": "deny",
+            "task": "deny",
+        },
+        "prompt": (
+            "You are an AgentField-launched worker. Complete the assigned prompt directly. "
+            "Do not invoke AgentField orchestration, the `af` CLI, `swe-planner.plan`, "
+            "or delegate work back to AgentField."
+        ),
+    }
     # Note: cwd is None because we use --dir in command instead of cwd param
     assert raw.is_error is False
     assert raw.result == "final text"
     assert raw.metrics.session_id == ""
     assert raw.metrics.num_turns == 1
     assert raw.messages == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_overlay_configures_agent_and_run_options(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = cwd, timeout, input_text
+        captured["cmd"] = cmd
+        captured["env"] = env
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    task = "inspect the repository"
+    provider = OpenCodeProvider()
+    await provider.execute(
+        task,
+        {
+            "model": "openai/gpt-5#low",
+            "variant": "max",
+            "system_prompt": "  Work autonomously.  ",
+            "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+            "permission_mode": "plan",
+            "max_turns": 7,
+            "env": {"OPENAI_API_KEY": "secret", "DEPLOYMENT": "local"},
+        },
+    )
+
+    overlay = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    agent = overlay["agent"]["agentfield-harness"]
+    assert overlay["$schema"] == "https://opencode.ai/config.json"
+    assert overlay["default_agent"] == "agentfield-harness"
+    assert agent["mode"] == "primary"
+    assert agent["steps"] == 500
+    assert agent["prompt"].startswith("Work autonomously.\n\n")
+    assert "Do not invoke AgentField orchestration" in agent["prompt"]
+    assert "the `af` CLI" in agent["prompt"]
+    assert agent["model"] == "openai/gpt-5"
+    assert agent["reasoningEffort"] == "max"
+    assert agent["permission"] == {
+        "*": "allow",
+        "skill": {"agentfield*": "deny"},
+        "question": "deny",
+        "task": "deny",
+    }
+    permission_keys = list(agent["permission"])
+    assert permission_keys.index("*") < permission_keys.index("skill")
+    assert agent["permission"]["skill"] == {"agentfield*": "deny"}
+    assert "ask" not in agent["permission"]
+    assert "max_turns" not in agent
+
+    assert captured["cmd"] == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--agent",
+        "agentfield-harness",
+        "-m",
+        "openai/gpt-5",
+        "--variant",
+        "max",
+        task,
+    ]
+    assert captured["cmd"].count("--variant") == 1
+    assert "SYSTEM INSTRUCTIONS:" not in captured["cmd"]
+    assert captured["env"]["OPENAI_API_KEY"] == "secret"
+    assert captured["env"]["DEPLOYMENT"] == "local"
+
+
+@pytest.mark.asyncio
+async def test_opencode_overlay_merges_per_call_config_without_clobbering(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = cmd, cwd, timeout, input_text
+        captured["env"] = env
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    monkeypatch.setenv(
+        "OPENCODE_CONFIG_CONTENT",
+        json.dumps({"provider": {"ambient": {"model": "ambient"}}}),
+    )
+    caller_config = json.dumps(
+        {
+            "provider": {
+                "openai": {"options": {"timeout": 45}},
+                "keep-me": {"npm": "custom/provider"},
+            },
+            "agent": {
+                "custom-agent": {"prompt": "preserve this agent"},
+                "agentfield-harness": {
+                    "permission": {"read": "deny", "skill": {"other*": "allow"}},
+                    "temperature": 0.2,
+                },
+            },
+            "mcp": {"local": {"type": "local", "command": ["tool"]}},
+        }
+    )
+
+    await OpenCodeProvider().execute(
+        "hello",
+        {
+            "model": "openai/gpt-5",
+            "env": {"OPENCODE_CONFIG_CONTENT": caller_config},
+        },
+    )
+
+    merged = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert merged["provider"]["openai"]["options"]["timeout"] == 45
+    assert "ambient" not in merged["provider"]
+    assert merged["provider"]["keep-me"] == {"npm": "custom/provider"}
+    assert merged["mcp"]["local"]["command"] == ["tool"]
+    assert merged["agent"]["custom-agent"] == {"prompt": "preserve this agent"}
+    generated_agent = merged["agent"]["agentfield-harness"]
+    assert generated_agent["model"] == "openai/gpt-5"
+    assert generated_agent["temperature"] == 0.2
+    assert generated_agent["permission"]["read"] == "deny"
+    assert generated_agent["permission"]["skill"] == {
+        "other*": "allow",
+        "agentfield*": "deny",
+    }
+    assert generated_agent["permission"]["*"] == "allow"
+    assert generated_agent["permission"]["question"] == "deny"
+    assert generated_agent["permission"]["task"] == "deny"
+    permission_keys = list(generated_agent["permission"])
+    assert permission_keys.index("*") < permission_keys.index("skill")
+    assert permission_keys.index("skill") < permission_keys.index("question")
+    assert permission_keys.index("question") < permission_keys.index("task")
+    assert list(generated_agent["permission"]["skill"]) == [
+        "other*",
+        "agentfield*",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_opencode_overlay_merges_ambient_config(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = cmd, cwd, timeout, input_text
+        captured["env"] = env
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    monkeypatch.setenv(
+        "OPENCODE_CONFIG_CONTENT",
+        json.dumps({"provider": {"custom": {"options": {"baseURL": "http://local"}}}}),
+    )
+
+    await OpenCodeProvider().execute("hello", {})
+
+    merged = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert merged["provider"]["custom"]["options"]["baseURL"] == "http://local"
+    assert merged["default_agent"] == "agentfield-harness"
+
+
+@pytest.mark.asyncio
+async def test_opencode_overlay_rejects_malformed_config(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_run_cli(*_args, **_kwargs):
+        raise AssertionError("the subprocess must not start")
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    with pytest.raises(ValueError, match="OPENCODE_CONFIG_CONTENT must be valid JSON"):
+        await OpenCodeProvider().execute(
+            "hello",
+            {"env": {"OPENCODE_CONFIG_CONTENT": "{not-json"}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_opencode_inline_system_prompt_rollback_preserves_config(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        captured["cmd"] = cmd
+        captured["env"] = env
+        captured["input_text"] = input_text
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    caller_config = json.dumps(
+        {"provider": {"custom": {"model": "keep", "apiKey": "test-secret"}}}
+    )
+
+    await OpenCodeProvider().execute(
+        "complete the task",
+        {
+            "system_prompt": "  caller instructions  ",
+            "env": {
+                "AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT": "1",
+                "OPENCODE_CONFIG_CONTENT": caller_config,
+            },
+        },
+    )
+
+    assert captured["cmd"][captured["cmd"].index("--agent") + 1] == (
+        "agentfield-harness"
+    )
+    assert captured["cmd"][-1] == (
+        "SYSTEM INSTRUCTIONS:\n"
+        "caller instructions\n\n"
+        "You are an AgentField-launched worker. Complete the assigned prompt directly. "
+        "Do not invoke AgentField orchestration, the `af` CLI, `swe-planner.plan`, "
+        "or delegate work back to AgentField.\n\n"
+        "---\n\n"
+        "USER REQUEST:\ncomplete the task"
+    )
+    merged = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert merged["provider"]["custom"] == {
+        "model": "keep",
+        "apiKey": "test-secret",
+    }
+    assert merged["agent"]["agentfield-harness"]["permission"] == {
+        "*": "allow",
+        "skill": {"agentfield*": "deny"},
+        "question": "deny",
+        "task": "deny",
+    }
+    assert "prompt" not in merged["agent"]["agentfield-harness"]
+    assert "test-secret" not in captured["cmd"][-1]
+
+
+@pytest.mark.asyncio
+async def test_opencode_inline_system_prompt_uses_stdin_for_large_windows_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        captured["cmd"] = cmd
+        captured["input_text"] = input_text
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    monkeypatch.setattr(
+        "agentfield.harness.providers.opencode._prompt_via_stdin", lambda: True
+    )
+    large_prompt = "request-" + ("x" * 65536)
+
+    await OpenCodeProvider().execute(
+        large_prompt,
+        {"env": {"AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT": "true"}},
+    )
+
+    assert captured["cmd"][captured["cmd"].index("--agent") + 1] == (
+        "agentfield-harness"
+    )
+    assert large_prompt in captured["input_text"]
+    assert "You are an AgentField-launched worker" in captured["input_text"]
+    assert all(large_prompt not in part for part in captured["cmd"])
+
+
+@pytest.mark.asyncio
+async def test_opencode_overlay_preserves_large_system_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        captured["cmd"] = cmd
+        captured["env"] = env
+        _ = cwd, timeout, input_text
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    large_system_prompt = "system-" + ("x" * 65536)
+
+    await OpenCodeProvider().execute(
+        "request",
+        {"system_prompt": large_system_prompt},
+    )
+
+    overlay = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert overlay["agent"]["agentfield-harness"]["prompt"] == (
+        f"{large_system_prompt}\n\n"
+        "You are an AgentField-launched worker. Complete the assigned prompt directly. "
+        "Do not invoke AgentField orchestration, the `af` CLI, `swe-planner.plan`, "
+        "or delegate work back to AgentField."
+    )
+    assert captured["cmd"][-1] == "request"
 
 
 @pytest.mark.asyncio
@@ -143,6 +457,8 @@ async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
         "run",
         "--format",
         "json",
+        "--agent",
+        "agentfield-harness",
         "-m",
         "openai/gpt-5",
         "hello",
@@ -497,6 +813,7 @@ async def test_opencode_v14_cli_shape_no_deprecated_flags(
     # Must use `run` subcommand
     assert captured_cmd[1] == "run", "Must use 'opencode run' subcommand (v1.4+)"
     assert "--format" in captured_cmd, "Must request JSON stream for metrics parsing"
+    assert captured_cmd[captured_cmd.index("--agent") + 1] == "agentfield-harness"
     assert "json" in captured_cmd, "Must request JSON output format"
     # Must NOT use deprecated -p flag
     assert "-p" not in captured_cmd, "Must not use deprecated -p flag (v1.4+)"
@@ -624,11 +941,18 @@ async def test_opencode_windows_hands_prompt_over_stdin(
     )
 
     assert raw.is_error is False
-    # The prompt (with the system prompt folded in) went over stdin...
-    assert "a prompt far too large" in (captured["input_text"] or "")
-    assert "SYSTEM INSTRUCTIONS:" in (captured["input_text"] or "")
+    # The task prompt went over stdin without a folded system prompt.
+    assert captured["input_text"] == "a prompt far too large for a cmd.exe command line"
+    assert "SYSTEM INSTRUCTIONS:" not in (captured["input_text"] or "")
     # ...and argv carries only the fixed flags, no positional prompt.
-    assert captured["cmd"][:4] == ["opencode", "run", "--format", "json"]
+    assert captured["cmd"][:6] == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--agent",
+        "agentfield-harness",
+    ]
     assert all("too large" not in part for part in captured["cmd"])
 
 
@@ -653,6 +977,8 @@ async def test_opencode_model_variant_suffix_maps_to_variant_flag(
         "run",
         "--format",
         "json",
+        "--agent",
+        "agentfield-harness",
         "-m",
         "openrouter/z-ai/glm-5.2",
         "--variant",

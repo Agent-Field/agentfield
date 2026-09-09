@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,9 +22,6 @@ func newInvariantUoW() *unitOfWorkImpl {
 
 // nopOp is a no-op database operation used when the DB is irrelevant to the invariant being tested.
 func nopOp(tx DBTX) error { return nil }
-
-// failOp always returns an error, used to simulate a failing operation.
-func failOp(tx DBTX) error { return errors.New("simulated operation failure") }
 
 // ---------------------------------------------------------------------------
 // Ordering invariant

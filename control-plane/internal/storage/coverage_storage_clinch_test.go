@@ -103,7 +103,7 @@ func TestStorageClinchCleanupOldExecutionsBranches(t *testing.T) {
 		require.Zero(t, deleted)
 	})
 
-	t.Run("surfaces query failure when sql db is closed", func(t *testing.T) {
+	t.Run("surfaces transaction failure when sql db is closed", func(t *testing.T) {
 		tempDir := t.TempDir()
 		rawDB, err := sql.Open("sqlite3", filepath.Join(tempDir, "closed.db"))
 		require.NoError(t, err)
@@ -114,7 +114,7 @@ func TestStorageClinchCleanupOldExecutionsBranches(t *testing.T) {
 		ls := &LocalStorage{db: newSQLDatabase(rawDB, "local"), mode: "local"}
 		deleted, err := ls.CleanupOldExecutions(context.Background(), time.Hour, 1)
 		require.Zero(t, deleted)
-		require.ErrorContains(t, err, "failed to query old executions for cleanup")
+		require.ErrorContains(t, err, "failed to begin cleanup transaction")
 	})
 }
 
@@ -333,39 +333,39 @@ func TestStorageClinchRegisterWorkflowAndDIDBranches(t *testing.T) {
 		ls, ctx := setupLocalStorage(t)
 
 		badReasoner := &types.AgentNode{
-			ID:                 "agent-bad-reasoner",
-			BaseURL:            "https://agent.example.com",
-			DeploymentType:     "long_running",
-			HealthStatus:       types.HealthStatusActive,
-			LifecycleStatus:    types.AgentStatusReady,
-			LastHeartbeat:      time.Now().UTC(),
-			RegisteredAt:       time.Now().UTC(),
+			ID:                  "agent-bad-reasoner",
+			BaseURL:             "https://agent.example.com",
+			DeploymentType:      "long_running",
+			HealthStatus:        types.HealthStatusActive,
+			LifecycleStatus:     types.AgentStatusReady,
+			LastHeartbeat:       time.Now().UTC(),
+			RegisteredAt:        time.Now().UTC(),
 			CommunicationConfig: types.CommunicationConfig{Protocols: []string{"http"}},
-			Reasoners:          []types.ReasonerDefinition{{ID: "r1", InputSchema: json.RawMessage(`{`)}},
+			Reasoners:           []types.ReasonerDefinition{{ID: "r1", InputSchema: json.RawMessage(`{`)}},
 		}
 		require.EqualError(t, ls.RegisterAgent(ctx, badReasoner), "failed to marshal reasoners: json: error calling MarshalJSON for type json.RawMessage: unexpected end of JSON input")
 
 		badSkill := &types.AgentNode{
-			ID:                 "agent-bad-skill",
-			BaseURL:            "https://agent.example.com",
-			DeploymentType:     "long_running",
-			HealthStatus:       types.HealthStatusActive,
-			LifecycleStatus:    types.AgentStatusReady,
-			LastHeartbeat:      time.Now().UTC(),
-			RegisteredAt:       time.Now().UTC(),
+			ID:                  "agent-bad-skill",
+			BaseURL:             "https://agent.example.com",
+			DeploymentType:      "long_running",
+			HealthStatus:        types.HealthStatusActive,
+			LifecycleStatus:     types.AgentStatusReady,
+			LastHeartbeat:       time.Now().UTC(),
+			RegisteredAt:        time.Now().UTC(),
 			CommunicationConfig: types.CommunicationConfig{Protocols: []string{"http"}},
-			Skills:             []types.SkillDefinition{{ID: "s1", InputSchema: json.RawMessage(`{`)}},
+			Skills:              []types.SkillDefinition{{ID: "s1", InputSchema: json.RawMessage(`{`)}},
 		}
 		require.EqualError(t, ls.RegisterAgent(ctx, badSkill), "failed to marshal skills: json: error calling MarshalJSON for type json.RawMessage: unexpected end of JSON input")
 
 		badMetadata := &types.AgentNode{
-			ID:                 "agent-bad-metadata",
-			BaseURL:            "https://agent.example.com",
-			DeploymentType:     "long_running",
-			HealthStatus:       types.HealthStatusActive,
-			LifecycleStatus:    types.AgentStatusReady,
-			LastHeartbeat:      time.Now().UTC(),
-			RegisteredAt:       time.Now().UTC(),
+			ID:                  "agent-bad-metadata",
+			BaseURL:             "https://agent.example.com",
+			DeploymentType:      "long_running",
+			HealthStatus:        types.HealthStatusActive,
+			LifecycleStatus:     types.AgentStatusReady,
+			LastHeartbeat:       time.Now().UTC(),
+			RegisteredAt:        time.Now().UTC(),
 			CommunicationConfig: types.CommunicationConfig{Protocols: []string{"http"}},
 			Metadata: types.AgentMetadata{
 				Custom: map[string]interface{}{"bad": func() {}},

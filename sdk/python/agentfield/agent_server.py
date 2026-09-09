@@ -15,6 +15,32 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 
+DEFAULT_SHUTDOWN_TIMEOUT = 30.0
+SHUTDOWN_SETTLEMENT_SECONDS = 5.0
+
+
+def parse_shutdown_timeout(
+    value: object, default: float = DEFAULT_SHUTDOWN_TIMEOUT
+) -> float:
+    """Parse a shutdown budget expressed as seconds, ``Ns``, or ``Nm``."""
+    if value is None:
+        return default
+    raw = str(value).strip().lower()
+    multiplier = 1.0
+    if raw.endswith("s"):
+        raw = raw[:-1]
+    elif raw.endswith("m"):
+        raw = raw[:-1]
+        multiplier = 60.0
+    try:
+        parsed = float(raw) * multiplier
+        if parsed < 0:
+            raise ValueError
+        return parsed
+    except (TypeError, ValueError):
+        log_warn(f"Invalid AGENTFIELD_SHUTDOWN_TIMEOUT={value!r}; using {default:g}s")
+        return default
+
 
 class AgentServer:
     """Server management functionality for AgentField Agent"""
@@ -28,6 +54,9 @@ class AgentServer:
         """
         self.agent = agent_instance
         self._in_flight_tasks: set[asyncio.Task] = set()
+        self._shutdown_timeout = DEFAULT_SHUTDOWN_TIMEOUT
+        self._uvicorn_server = None
+        self._shutdown_notification_task = None
 
     def _track_task(self, task: asyncio.Task) -> asyncio.Task:
         """Track an in-flight task until completion."""
@@ -86,7 +115,7 @@ class AgentServer:
                 )
             if tail_lines <= 0 and since_seq <= 0 and not follow:
                 tail_lines = 200
-            gen = node_logs.iter_tail_ndjson(tail_lines, since_seq, follow)
+            gen = node_logs.async_iter_tail_ndjson(tail_lines, since_seq, follow)
             return StreamingResponse(
                 gen,
                 media_type="application/x-ndjson",
@@ -186,43 +215,61 @@ class AgentServer:
                 # Set shutdown status
                 from agentfield.agent import AgentStatus
 
+                first_shutdown_request = not getattr(
+                    self.agent, "_shutdown_requested", False
+                )
                 self.agent._shutdown_requested = True
                 self.agent._current_status = AgentStatus.OFFLINE
 
-                # Notify AgentField server of shutdown initiation
-                try:
-                    success = self.agent.client.notify_graceful_shutdown_sync(
-                        self.agent.node_id
-                    )
-                    if self.agent.dev_mode:
-                        state = "sent" if success else "failed"
-                        log_info(f"Shutdown notification {state}")
-                except Exception as e:
-                    if self.agent.dev_mode:
-                        log_error(f"Shutdown notification error: {e}")
+                if first_shutdown_request:
+                    # Notify AgentField server of shutdown initiation
+                    try:
+                        success = self.agent.client.notify_graceful_shutdown_sync(
+                            self.agent.node_id,
+                            reason="http",
+                            timeout_seconds=timeout_seconds,
+                        )
+                        if self.agent.dev_mode:
+                            state = "sent" if success else "failed"
+                            log_info(f"Shutdown notification {state}")
+                    except Exception as e:
+                        if self.agent.dev_mode:
+                            log_error(f"Shutdown notification error: {e}")
 
                 # Schedule graceful shutdown
                 if graceful:
-                    self._track_task(
-                        asyncio.create_task(self._graceful_shutdown(timeout_seconds))
-                    )
+                    if first_shutdown_request:
+                        self._track_task(
+                            asyncio.create_task(
+                                self._graceful_shutdown(timeout_seconds)
+                            )
+                        )
 
-                    return {
-                        "status": "shutting_down",
-                        "graceful": True,
-                        "timeout_seconds": timeout_seconds,
-                        "estimated_shutdown_time": datetime.now().isoformat(),
-                        "message": "Graceful shutdown initiated",
-                    }
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "status": "shutting_down",
+                            "graceful": True,
+                            "timeout_seconds": timeout_seconds,
+                            "estimated_shutdown_time": datetime.now().isoformat(),
+                            "message": "Graceful shutdown initiated",
+                        },
+                    )
                 else:
                     # Immediate shutdown
-                    self._track_task(asyncio.create_task(self._immediate_shutdown()))
+                    if first_shutdown_request:
+                        self._track_task(
+                            asyncio.create_task(self._immediate_shutdown())
+                        )
 
-                    return {
-                        "status": "shutting_down",
-                        "graceful": False,
-                        "message": "Immediate shutdown initiated",
-                    }
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "status": "shutting_down",
+                            "graceful": False,
+                            "message": "Immediate shutdown initiated",
+                        },
+                    )
 
             except Exception as e:
                 if self.agent.dev_mode:
@@ -403,7 +450,9 @@ class AgentServer:
                 if self.agent.dev_mode:
                     log_error(f"Registry clear error: {e}")
 
-            # Drain in-flight tasks, then force-cancel anything that misses the deadline.
+            await self._drain_reasoner_tasks(timeout_seconds)
+
+            # Drain server-owned housekeeping tasks too.
             tracked_tasks: set[asyncio.Task] = set(self._in_flight_tasks)
 
             current_task = asyncio.current_task()
@@ -426,7 +475,17 @@ class AgentServer:
                 if pending:
                     for task in list(pending):
                         task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
+                    settled, abandoned = await asyncio.wait(
+                        pending, timeout=SHUTDOWN_SETTLEMENT_SECONDS
+                    )
+                    if settled:
+                        await asyncio.gather(*settled, return_exceptions=True)
+                    if abandoned:
+                        log_warn(
+                            "Abandoning "
+                            f"{len(abandoned)} server task(s) after "
+                            f"{SHUTDOWN_SETTLEMENT_SECONDS:g}s shutdown settlement"
+                        )
 
             # Clear tracked registries after drain/cancel pass.
             self._in_flight_tasks.clear()
@@ -445,6 +504,60 @@ class AgentServer:
                 log_error(f"Graceful shutdown error: {e}")
             # Fallback to immediate shutdown
             await self._immediate_shutdown()
+
+    async def _drain_reasoner_tasks(self, timeout_seconds: float) -> None:
+        """Wait for dispatched reasoners, then cancel and await terminal callbacks."""
+        current = asyncio.current_task()
+        tasks = {
+            task
+            for task in getattr(self.agent, "_background_tasks", set())
+            if task is not current and not task.done()
+        }
+        if not tasks:
+            return
+
+        done, pending = await asyncio.wait(tasks, timeout=max(0, timeout_seconds))
+        if pending:
+            self.agent._shutdown_cancelling = True
+            for task in pending:
+                task.cancel()
+            settled, abandoned = await asyncio.wait(
+                pending, timeout=SHUTDOWN_SETTLEMENT_SECONDS
+            )
+            if settled:
+                await asyncio.gather(*settled, return_exceptions=True)
+            if abandoned:
+                log_warn(
+                    "Abandoning "
+                    f"{len(abandoned)} reasoner task(s) after "
+                    f"{SHUTDOWN_SETTLEMENT_SECONDS:g}s shutdown settlement"
+                )
+        if self.agent.dev_mode:
+            log_debug(
+                f"Reasoner shutdown drain: done={len(done)} pending={len(pending)}"
+            )
+
+    def _begin_signal_shutdown(self, signum: int) -> None:
+        """Mark the node stopping before asking uvicorn to begin its drain."""
+        from agentfield.agent import AgentStatus
+
+        if not self.agent._shutdown_requested:
+            self.agent._shutdown_requested = True
+            self.agent._current_status = AgentStatus.OFFLINE
+            try:
+                self.agent.agentfield_handler.stop_heartbeat()
+            except Exception as exc:
+                log_warn(f"Failed to stop heartbeat during shutdown: {exc}")
+            loop = asyncio.get_running_loop()
+            self._shutdown_notification_task = loop.create_task(
+                self.agent.client.notify_graceful_shutdown(
+                    self.agent.node_id,
+                    reason="signal",
+                    timeout_seconds=self._shutdown_timeout,
+                )
+            )
+        if self._uvicorn_server is not None:
+            self._uvicorn_server.handle_exit(signum, None)
 
     async def _immediate_shutdown(self):
         """
@@ -595,42 +708,6 @@ class AgentServer:
             deps["orjson"] = True
 
         return deps
-
-    def setup_signal_handlers(self) -> None:
-        """
-        Setup signal handlers for graceful shutdown.
-
-        This method registers signal handlers for SIGTERM and SIGINT
-        to ensure proper cleanup when the agent shuts down.
-        """
-        try:
-            # Register signal handlers for graceful shutdown
-            signal.signal(signal.SIGTERM, self.signal_handler)
-            signal.signal(signal.SIGINT, self.signal_handler)
-
-            if self.agent.dev_mode:
-                log_debug("Signal handlers registered for graceful shutdown")
-
-        except Exception as e:
-            if self.agent.dev_mode:
-                log_error(f"Failed to setup signal handlers: {e}")
-            # Continue without signal handlers - not critical
-
-    def signal_handler(self, signum: int, frame) -> None:
-        """
-        Handle shutdown signals gracefully.
-
-        Args:
-            signum: Signal number
-            frame: Current stack frame
-        """
-        signal_name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
-
-        if self.agent.dev_mode:
-            log_warn(f"{signal_name} received, shutting down gracefully...")
-
-        # Exit gracefully
-        os._exit(0)
 
     def serve(
         self,
@@ -807,11 +884,26 @@ class AgentServer:
         async def internal_lifespan(app: FastAPI):
             # Add startup event handler for resilient lifecycle
             await startup_resilient_lifecycle()
+            loop = asyncio.get_running_loop()
+            installed_signals = []
+            if hasattr(loop, "add_signal_handler"):
+                for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
+                    try:
+                        loop.add_signal_handler(
+                            shutdown_signal,
+                            self._begin_signal_shutdown,
+                            shutdown_signal,
+                        )
+                        installed_signals.append(shutdown_signal)
+                    except (NotImplementedError, RuntimeError):
+                        pass
             try:
                 yield
             finally:
                 # Add shutdown event handler for cleanup
                 await shutdown_cleanup()
+                for shutdown_signal in installed_signals:
+                    loop.remove_signal_handler(shutdown_signal)
 
         existing_lifespan = self.agent.router.lifespan_context
 
@@ -910,6 +1002,16 @@ class AgentServer:
         async def shutdown_cleanup():
             """Cleanup all resources when FastAPI shuts down"""
 
+            await self._drain_reasoner_tasks(self._shutdown_timeout)
+
+            if self._shutdown_notification_task is not None:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(self._shutdown_notification_task), timeout=2.0
+                    )
+                except (asyncio.TimeoutError, Exception) as exc:
+                    log_warn(f"Failed to notify AgentField of shutdown: {exc}")
+
             # Stop connection manager
             if self.agent.connection_manager:
                 await self.agent.connection_manager.stop()
@@ -931,6 +1033,14 @@ class AgentServer:
             clear_current_agent()
 
         # Configure uvicorn parameters based on environment and requirements
+        env_timeout = os.getenv("AGENTFIELD_SHUTDOWN_TIMEOUT")
+        configured_timeout = parse_shutdown_timeout(env_timeout)
+        explicit_timeout = kwargs.get("timeout_graceful_shutdown")
+        self._shutdown_timeout = (
+            configured_timeout
+            if env_timeout is not None
+            else parse_shutdown_timeout(explicit_timeout, configured_timeout)
+        )
         uvicorn_config = {
             "host": host,
             "port": port,
@@ -939,7 +1049,7 @@ class AgentServer:
             "access_log": access_log,
             "log_level": log_level,
             "ws": "websockets-sansio",
-            "timeout_graceful_shutdown": 30,  # Allow 30 seconds for graceful shutdown
+            "timeout_graceful_shutdown": configured_timeout,
             **kwargs,
         }
 
@@ -1012,7 +1122,10 @@ class AgentServer:
 
         try:
             # Start FastAPI server with production-ready configuration
-            uvicorn.run(self.agent, **uvicorn_config)
+            config = uvicorn.Config(self.agent, **uvicorn_config)
+            server = uvicorn.Server(config)
+            self._uvicorn_server = server
+            server.run()
         except OSError as e:
             if "Address already in use" in str(e):
                 log_error(

@@ -630,6 +630,23 @@ func TestGetExecutionNotesHandler_AuthorizesOwnerRead(t *testing.T) {
 	require.Equal(t, "owner-visible", payload.Notes[0].Message)
 }
 
+func TestGetExecutionNotesHandler_APIKeyOperatorWithoutAgentIdentity(t *testing.T) {
+	storage := newTestExecutionStorage(nil)
+	require.NoError(t, storage.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: "exec-operator", AgentNodeID: "agent-a",
+		Notes: []types.ExecutionNote{{Message: "operator-visible"}}, UpdatedAt: time.Now(),
+	}))
+	router := gin.New()
+	router.Use(middleware.APIKeyAuth(middleware.AuthConfig{APIKey: "secret-key"}))
+	router.GET("/api/v1/executions/:execution_id/notes", GetExecutionNotesHandler(storage, true))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-operator/notes", nil)
+	req.Header.Set("X-API-Key", "secret-key")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "operator-visible")
+}
+
 func TestGetExecutionNotesHandler_RejectsCrossAgentRead(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -754,7 +771,7 @@ func TestGetExecutionNotesHandler_SpoofedHeaderRejectedWhenEnforced(t *testing.T
 	require.Equal(t, http.StatusForbidden, resp.Code)
 	require.Contains(t, resp.Body.String(), "caller agent identity is required to read notes for this execution")
 	require.NotContains(t, resp.Body.String(), "must not leak")
-	require.Equal(t, 0, storage.getCalls)
+	require.Equal(t, 1, storage.getCalls)
 }
 
 func TestGetExecutionNotesHandler_UnauthenticatedRequestRejectedBeforeFetch(t *testing.T) {

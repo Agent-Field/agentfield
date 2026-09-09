@@ -26,6 +26,9 @@ type Runner struct {
 
 // NewRunner creates a harness runner with default options.
 func NewRunner(defaults Options) *Runner {
+	// The provider is deliberately NOT resolved here: Run() applies the
+	// explicit > AGENTFIELD_HARNESS_PROVIDER > DefaultProvider chain at
+	// dispatch time, so an env change is picked up by an existing runner.
 	return &Runner{
 		DefaultOptions: defaults,
 		Logger:         log.New(io.Discard, "[harness] ", log.LstdFlags),

@@ -113,6 +113,38 @@ An execution's terminal outcome is reported once. If a lifecycle event is republ
 - `AGENTFIELD_LOG_LEVEL` (default: `info`): Minimum severity written to stderr — `debug`, `info`, `warn` or `error`. Equivalent YAML: `logging.level`. The `--verbose` flag on `af` overrides both. A value that is not one of those four is reported once at `warn` on startup (`unrecognized log level, falling back to info`) and the server runs at `info`. Successful HTTP requests are logged at `debug`; a `404` at `info` (a request for a route that does not exist is routine noise, not an operator signal); the other 4xx responses at `warn` and 5xx at `error`, so failures stay visible at the default level and alerting keyed on `warn` is not tripped by scanners. Every request is logged, including the ones rejected before they reach a route: a disallowed `Origin` is answered with `403` by the CORS middleware and still produces one `warn` line.
 - `AGENTFIELD_LOG_REDACT_PAYLOADS` (default: `true`): When `true`, execution inputs/outputs and agent response bodies are kept out of log events and internal event-bus payloads; log lines carry the media type, byte length and a short keyed digest (an HMAC under a key minted at process start, so the digest correlates repeats within a run without committing to the plaintext) instead. Set to `false` only for local debugging. Equivalent YAML: `logging.redact_payloads`.
 
+### Miscellaneous control-plane knobs
+
+- `AGENTFIELD_MAX_CONCURRENT_PER_AGENT` (default: `0`): Maximum concurrent executions dispatched to one agent; `0` means unlimited.
+- `AGENTFIELD_EXEC_ASYNC_WORKERS` (default: the greater of the available CPU count and `16`): Worker count for asynchronous execution and restart jobs, which are I/O-bound; non-positive values use the default.
+- `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): Additional admitted asynchronous work beyond the worker count; `workers + queue_capacity` bounds work across preparation, queue wait, and worker dispatch. A paused execution pins a worker and reservation for up to 24 hours. Non-positive values use the default. Requests arriving once admission is saturated are rejected with `503`, a `Retry-After` header and a `retry_after` field, and no execution row is persisted for them.
+- `AGENTFIELD_MAX_EXECUTE_BODY_BYTES` (default: `33554432`, 32 MiB): Maximum request body size, in bytes, for POST routes under `/api/v1/execute`. Oversize requests are rejected with `413` before any execution is persisted; other routes are not capped by this setting.
+- `AGENTFIELD_MAX_REGISTER_BODY_BYTES` (default: `8388608`, 8 MiB): Maximum request body size, in bytes, for node registration POST routes (`/api/v1/nodes`, `/api/v1/nodes/register`, and `/api/v1/nodes/register-serverless`). Oversize requests are rejected with `413` before registration handling begins.
+- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control-plane HTTP server. Accepts bare seconds (`30`) and Go duration strings (`30s`, `5m`). The same budget is shared with `StopAsyncWorkerPool`, which is guaranteed a fresh budget of at least 5s, so total shutdown can exceed this value. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
+- `AGENTFIELD_SHUTDOWN_MIN_DELAY` (default: `0`): Control-plane-only delay between SIGTERM/SIGINT and closing the listener; zero preserves existing timing. Accepts bare seconds or a Go duration; invalid or negative values warn and keep the current value. This name is reserved for the control plane so future SDKs do not acquire another dual-meaning shutdown variable. Equivalent YAML: `agentfield.shutdown_min_delay`. It also affects `af server`, the code path the desktop app launches, so a value in `~/.agentfield/agentfield.yaml` slows local Ctrl+C too. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
+- `AGENTFIELD_AGENT_RESTART_GRACE` (default: `15s`): How long an execution waits for an agent process to return during a coordinated restart; a negative duration disables the wait.
+- `AGENTFIELD_AGENT_DRAIN_GRACE` (default: `60s`): How long instance-scoped non-terminal work may keep completing after a replacement agent instance registers, before it is marked `agent_restart_orphaned`. The deferred in-memory timer is lost on a control-plane restart; the stale-execution sweep configured by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` is the backstop. Equivalent YAML: `agentfield.node_health.agent_drain_grace`. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
+- `AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED` (default: `true`): Whether re-registration starts the deferred reap of the departing instance's in-flight executions. Set this to `false` when `replicas > 1` share one node ID, because a sibling registering is indistinguishable from a replacement and can otherwise reap still-running work. The stale-execution sweep remains the backstop. Invalid values keep the default `true` and log a warning. Equivalent YAML: `agentfield.node_health.agent_orphan_reap_enabled`.
+
+For Kubernetes, set `terminationGracePeriodSeconds` above the SDK drain window so the departing pod can return accepted work. Keep the agent `version` stable across rolling updates: changing it creates a separate versioned registration, so its work is recovered only by the stale sweep rather than this re-registration drain timer.
+
+Rate limiting is off by default and has no dedicated environment-variable overrides. Configure the YAML-only `agentfield.rate_limit` block with `enabled`, `execute_rps`, `execute_burst`, `discovery_rps`, `discovery_burst`, `bulk_status_rps`, `bulk_status_burst`, `global_rps`, and `global_burst`.
+
+Execution cleanup also has YAML keys `agentfield.execution_cleanup.max_retries` (default `0`) and `retry_backoff` (default `30s`), with environment overrides `AGENTFIELD_EXECUTION_MAX_RETRIES` and `AGENTFIELD_EXECUTION_RETRY_BACKOFF`. Despite its name, `max_retries` only rewinds stale workflow rows to `pending`; nothing re-dispatches those rows, so do not rely on it for execution retries.
+
+### Execution cleanup and retention (control plane)
+
+- `AGENTFIELD_EXECUTION_CLEANUP_ENABLED` (default: `true`): Runs stale-execution maintenance, terminal-row retention and payload garbage collection. Cleanup is on unless `agentfield.execution_cleanup.enabled` is set explicitly to `false`.
+- `AGENTFIELD_EXECUTION_CLEANUP_INTERVAL` (default: `5m`): Interval between cleanup passes. Zero or negative values fall back to the default rather than spinning the ticker.
+- `AGENTFIELD_EXECUTION_STALE_TIMEOUT` (default: `30m`): Age after which an inactive running execution is marked timed out.
+- `AGENTFIELD_EXECUTION_RETENTION_PERIOD` (default: `0s`): How long finished execution rows are kept. `0s` keeps them forever — deletion is opt-in; `72h` prunes finished rows older than three days.
+- `AGENTFIELD_EXECUTION_CLEANUP_BATCH_SIZE` (default: `200`): Maximum finished execution rows removed in one database transaction.
+- `AGENTFIELD_EXECUTION_PRESERVE_RECENT` (default: `1h`): Window of recent executions that retention never deletes.
+- `AGENTFIELD_PAYLOAD_ORPHAN_GRACE` (default: `1h`): Minimum age before an unreferenced payload file may be swept, so in-flight writes are not removed.
+- `AGENTFIELD_AGENT_CALL_TIMEOUT` (default: `90s`): Timeout for HTTP calls from the control plane to agent nodes. Set to `0s` or a negative duration such as `-1s` to disable the timeout through the dispatch layer. Equivalent YAML: `agentfield.execution_queue.agent_call_timeout`.
+
+All durations use Go duration syntax (`30s`, `5m`, `72h`). The same settings are available in YAML under `agentfield.execution_cleanup`; environment variables take precedence. `AGENTFIELD_EXECUTION_MAX_RETRIES` and `AGENTFIELD_EXECUTION_RETRY_BACKOFF` are described under Miscellaneous control-plane knobs above. The effective values are logged once at startup.
+
 ### CORS (HTTP API)
 
 These map to `api.cors.*` in config. When set via env, use comma-separated values.
@@ -164,6 +196,15 @@ AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT=false
 
 ## Agent Nodes
 
+### Structured logging (SDKs)
+
+- `AGENTFIELD_LOGS_ENABLED` (default: `true`): Enables Python, Go, and TypeScript agent-node stdout/stderr capture and the `/agentfield/v1/logs` endpoint. This controls capture, not control-plane execution-log dispatch.
+- `AGENTFIELD_LOG_STDOUT` (read by Python, Go, and TypeScript; default: on): Controls whether structured execution records are mirrored to stdout as JSON. Set to `0`, `false`, `no`, or `off` (case-insensitive, surrounding whitespace ignored) to suppress the mirror; control-plane dispatch continues unchanged for records carrying an execution ID. Any other value — including `1`, `true`, `yes`, an unset variable and a set-but-empty one — keeps the mirror on, so a typo cannot silently drop log output. All three SDKs skip control-plane dispatch for a record with no execution id, so such records are stdout-only and disabling the mirror drops them entirely. Because the node-log ring behind `GET /agentfield/v1/logs` is fed by the process's captured stdout, disabling the mirror also removes structured records from that ring.
+- `AGENTFIELD_LOG_TRUNCATE` (Python default: `200` characters): Truncates human-readable plain log messages and visible plain-log payloads. It does not truncate structured records.
+- `AGENTFIELD_LOG_PAYLOADS` (Python default: `false`): Shows payloads in human-readable plain logs when `true`. Structured execution attributes are unaffected.
+- `AGENTFIELD_LOG_MAX_LINE_BYTES` (default: `16384`): Maximum process-log line size in bytes. Python clamps every integer below 256 (including zero and negatives) to 256; Go and TypeScript instead reject values below 256 and use the 16384-byte default. Python and Go reject non-integers, while TypeScript prefix-parses them (`512abc` becomes `512`). Thus a value of `100` yields an effective cap of 256 in Python and 16384 in Go and TypeScript: in those two SDKs there is no minimum, only a rejection *upward* to the default, so asking for a smaller cap silently gives you a 64x larger one. In Python this cap applies both to the stdout/stderr tee feeding `/agentfield/v1/logs` and to structured-mirror elision; the mirror elides attributes, then the message or entire record as needed so the complete JSON envelope remains valid JSON within the cap.
+- `AGENTFIELD_LOG_BUFFER_BYTES` (default: `4194304`): Approximate total byte capacity of the in-memory process-log capture ring; oldest entries are discarded when full.
+
 Agent nodes run as separate processes/pods and register with the control plane. The most important Kubernetes-specific concept is:
 
 - The **control plane must be able to reach the agent** at the URL the agent registers (its callback/public URL).
@@ -173,6 +214,18 @@ The same concept applies to **Docker**:
 
 - If the control plane runs in a container and the agent runs on your host, set the agent’s callback/public URL to `host.docker.internal` (or the Docker host gateway on Linux).
 - If both run in the same Docker network/Compose project, set the callback/public URL to the agent service name (for example `http://demo-go-agent:8001`).
+
+### Graceful shutdown (Go & TypeScript SDK agents)
+
+- `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): How long a Go or TypeScript **agent node** waits for its in-flight executions to drain during graceful shutdown, triggered by SIGTERM or SIGINT. The Go SDK also exposes `POST /shutdown`; this is not a TypeScript SDK route. The setting accepts bare seconds (`30`) or a duration string (`30s`, `5m`); an invalid value logs a warning and falls back to the default. In the Go SDK, `Config.ShutdownTimeout` takes precedence over this variable.
+
+When the deadline expires the agent cancels whatever is still running and allows up to 5 additional seconds for those executions to settle and report terminal status. Total shutdown time is therefore the configured timeout, plus up to 5 seconds of post-cancel settlement, plus the time required to notify the control plane.
+
+Note that this is the **agent-node** meaning of the variable. The control plane reads the same variable name for a different purpose — the grace period for draining its own HTTP server (see "Miscellaneous control-plane knobs" above). They are separate processes, so one exported value applies to each independently; give them different values by setting the variable per process rather than globally.
+
+The Python SDK's equivalent setting is documented under "Python SDK agents" below.
+
+In Kubernetes, set the agent pod's `terminationGracePeriodSeconds` at least 15 seconds higher than `AGENTFIELD_SHUTDOWN_TIMEOUT` to cover five seconds of post-cancel settlement and ten seconds of callback/process-exit headroom.
 
 ### Go SDK agents (example: `examples/go_agent_nodes`)
 
@@ -187,6 +240,8 @@ The same concept applies to **Docker**:
 - `AGENTFIELD_URL` (recommended): Control plane base URL.
 - `AGENT_NODE_ID` (optional): Node id.
 - `AGENT_CALLBACK_URL` (recommended in Docker/Kubernetes): URL the control plane will call back to (examples: `http://my-agent:8001`, or for host-run agents with Dockerized control plane: `http://host.docker.internal:8001`).
+- `AGENTFIELD_LOG_STDOUT`: see "Structured logging (SDKs)" above; it applies to the Python, Go, and TypeScript SDKs alike.
+- `AGENTFIELD_SHUTDOWN_TIMEOUT` (optional, default `30s`): Graceful-shutdown budget for both direct HTTP requests and control-plane-dispatched reasoners. Accepts bare seconds (`30`), seconds (`30s`), or minutes (`5m`). `app.serve(timeout_graceful_shutdown=N)` remains supported and sets both budgets unless this environment variable is explicitly set; when both are set, the `serve()` argument still controls uvicorn's direct-HTTP drain while this variable controls dispatched reasoners.
 - `AGENTFIELD_DISABLE_IP_DETECTION` (optional, default off): Set to `1`, `true` or `yes` (case-insensitive, surrounding whitespace ignored) to stop the Python SDK from probing the cloud metadata services (`169.254.169.254` for AWS/Azure, `metadata.google.internal` for GCP) and `https://api.ipify.org` for the node's public address. On Kubernetes those requests are typically denied by a `NetworkPolicy` and show up as deny-log noise. In detail:
   - **What it disables.** The probe is one step of callback-URL discovery (`_detect_container_ip()`, whose only caller is `_build_callback_candidates()`), and it only runs when the SDK believes it is inside a container — `/.dockerenv` exists, `/proc/1/cgroup` mentions docker/containerd/kubepods, any `KUBERNETES_*` variable is set, or `CONTAINER` / `DOCKER_CONTAINER` / `RAILWAY_ENVIRONMENT` is set. This variable gates that single call site, so with it on the SDK makes no metadata or `api.ipify.org` request on any code path.
   - **When you would set it.** Discovery already skips the probe on its own as soon as it has a callback URL to start from — the `callback_url=` constructor argument or `AGENT_CALLBACK_URL` — so most deployments need nothing. Note also that in the current SDK an agent started with `app.serve()` only enters callback discovery when it was constructed with `callback_url=...`; given `AGENT_CALLBACK_URL`, or neither, `serve()` derives `base_url` itself and never calls the discovery helpers. Set this variable when you want the no-egress guarantee to hold regardless of how the agent is constructed, or when your code calls `_build_callback_candidates()` / `_resolve_callback_url()` / `AgentFieldHandler.register_with_agentfield_server()` directly.
@@ -194,6 +249,16 @@ The same concept applies to **Docker**:
   - **What it costs.** Only the public-IP entry disappears from the callback candidate list. The Railway internal hostname, the node's local-network address, the container hostname, `host.docker.internal` and the localhost fallbacks are all still offered.
 
 Many Python examples also require model provider credentials (for example `OPENAI_API_KEY`), depending on the `AIConfig` you choose.
+
+### Graceful shutdown (Python SDK)
+
+On SIGTERM or a graceful `POST /shutdown`, the node immediately stops heartbeats, notifies the control plane that it is stopping, and drains in-progress reasoners before closing the callback client. A reasoner still running when `AGENTFIELD_SHUTDOWN_TIMEOUT` expires is cancelled and receives a terminal `cancelled` status whose reason identifies shutdown, so the execution is not left running indefinitely.
+
+`af stop` waits **at least** the node's shutdown budget, not exactly that duration: its total wait also includes the initial HTTP request and, when needed, the signal fallback after the budget expires.
+
+For Kubernetes, set `terminationGracePeriodSeconds` to a value greater than the shutdown budget. This leaves time for the terminal callback and normal process teardown after the reasoner drain. `app.serve()` owns the production uvicorn-aware signal lifecycle.
+
+Python OpenCode harness runs use the generated per-run agent configuration by default. Set `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` to opt into the legacy inline system-prompt transport for rollback or compatibility testing. This does not change authentication handling or add credentials to the prompt.
 
 ### MiniMax video generation
 
@@ -226,3 +291,39 @@ Attribution is sent as `HTTP-Referer` and `X-Title`:
 - `AGENTFIELD_INFRON_ATTRIBUTION=false`: Disable Infron attribution headers.
 
 When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution values are used as fallbacks, so a deployment that already declares its identity keeps it after switching gateways: `AGENTFIELD_OPENROUTER_SITE_URL`, `OR_SITE_URL`, `AGENTFIELD_OPENROUTER_APP_NAME`, `OR_APP_NAME`. The opt-out travels with them: when `AGENTFIELD_OPENROUTER_ATTRIBUTION=false`, these values are not inherited and the Infron defaults apply instead. To control Infron attribution specifically, set the `AGENTFIELD_INFRON_*` vars explicitly or disable it with `AGENTFIELD_INFRON_ATTRIBUTION=false`.
+
+### Harness (SDKs)
+
+- `AGENTFIELD_HARNESS_DEPTH`: Marks subprocesses running inside an AgentField
+  harness session. The SDKs set it to `1` for a first-level child and increment
+  an inherited numeric value for nested sessions. An explicit per-call `env`
+  value wins over the derived depth.
+
+### LLM observability (Python SDK)
+
+- `AGENTFIELD_LITELLM_CALLBACKS`: Comma-separated LiteLLM callback names. When
+  unset or empty, AgentField registers nothing. Setting it also opts into the
+  execution-correlation metadata stamp for `app.ai` text completions.
+- `AGENTFIELD_LITELLM_METADATA=true`: Opt into the execution-correlation stamp
+  without configuring an AgentField-managed callback. Set it to `false` to
+  disable the stamp while retaining callback registration. When neither
+  observability variable is configured, stamping is off.
+
+See [LLM observability](llm-observability.md) for metadata fields, scope, and
+callback behavior.
+
+### Tracing (control plane)
+
+- `AGENTFIELD_TRACING_ENABLED`: Set to `true` or `1` to enable tracing. Setting any of the endpoint variables below also enables it.
+- `AGENTFIELD_TRACING_EXPORTER`: `otlp-http` (default) or `otlp-grpc`. For any other value, the control plane logs a startup warning, continues running, and leaves tracing disabled.
+- `AGENTFIELD_TRACING_ENDPOINT`: AgentField-native endpoint setting (the env equivalent of `features.tracing.endpoint` in YAML).
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: Standard generic OTLP endpoint.
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`: Standard trace-specific OTLP endpoint.
+- `AGENTFIELD_TRACING_INSECURE`: Set to `true` or `1` to force plaintext transport for a bare `host:port` endpoint. An explicit `http://` URL is already plaintext; `https://` retains TLS.
+- `OTEL_SERVICE_NAME`: Service name attached to exported spans (default `agentfield`).
+
+Endpoint precedence, highest first: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`, then `AGENTFIELD_TRACING_ENDPOINT`. When none is set, the default is `localhost:4318` for `otlp-http` and `localhost:4317` for `otlp-grpc`.
+
+Each endpoint accepts either a bare `host:port` or a full `http://` / `https://` URL. For an invalid endpoint or unsupported scheme, the control plane logs a startup warning, continues running, and leaves tracing disabled. For HTTP export a URL without a path sends the trace signal to `/v1/traces`.
+
+For a local OpenTelemetry Collector, use `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. For Langfuse through an OTel Collector, point this variable at the collector's OTLP/HTTP listener and configure the collector's authenticated Langfuse export pipeline; use `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces` when specifying the trace signal URL directly.

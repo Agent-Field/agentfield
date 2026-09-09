@@ -43,6 +43,9 @@ type ExecuteRequest struct {
 	Input   map[string]interface{} `json:"input"`
 	Context map[string]interface{} `json:"context,omitempty"`
 	Webhook *WebhookRequest        `json:"webhook,omitempty"`
+	// RunMetadata names, labels or links the run started by this request. It is
+	// excluded from replay dedupe and ignored on child executions.
+	RunMetadata *RunMetadataInput `json:"run_metadata,omitempty"`
 }
 
 // WebhookRequest represents webhook registration parameters supplied by the client.
@@ -83,6 +86,8 @@ type AsyncExecuteResponse struct {
 type ExecutionStatusResponse struct {
 	ExecutionID       string                         `json:"execution_id"`
 	RunID             string                         `json:"run_id"`
+	AgentNodeID       string                         `json:"agent_node_id,omitempty"`
+	InstanceID        string                         `json:"instance_id,omitempty"`
 	Status            string                         `json:"status"`
 	StatusReason      *string                        `json:"status_reason,omitempty"`
 	Result            interface{}                    `json:"result,omitempty"`
@@ -150,7 +155,13 @@ type asyncExecutionJob struct {
 }
 
 type asyncWorkerPool struct {
-	queue chan asyncExecutionJob
+	queue         chan asyncExecutionJob
+	reservations  chan struct{}
+	workerCtx     context.Context
+	cancelWorkers context.CancelFunc
+	mu            sync.RWMutex
+	stopped       bool
+	jobs          sync.WaitGroup
 }
 
 type completionJob struct {
@@ -229,10 +240,6 @@ func UpdateExecutionStatusHandler(store ExecutionStore, payloads services.Payloa
 }
 
 func newExecutionController(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string, readARDConfig ...func() config.ARDConfig) *executionController {
-	// Use default timeout if not provided (0 or negative)
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
 	var ardConfigReader func() config.ARDConfig
 	if len(readARDConfig) > 0 {
 		ardConfigReader = readARDConfig[0]
@@ -264,6 +271,7 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		return
 	}
 	plan.executionMode = "sync"
+	defer plan.releaseSlot()
 
 	if plan.replayHit != nil {
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
@@ -284,14 +292,6 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		})
 		return
 	}
-
-	// Check LLM health and per-agent concurrency limits before proceeding
-	if err := CheckExecutionPreconditions(plan.target.NodeID, plan.llmEndpoint); err != nil {
-		_ = c.failExecution(reqCtx, plan, err, 0, nil)
-		writeExecutionError(ctx, err)
-		return
-	}
-	defer ReleaseExecutionSlot(plan.target.NodeID)
 
 	// Emit execution started event with full reasoner context
 	c.publishExecutionStartedEvent(plan)
@@ -431,12 +431,36 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 
 func (c *executionController) handleAsync(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
-	plan, err := c.prepareExecution(reqCtx, ctx)
+	pool := getAsyncWorkerPool()
+	// A reservation covers preparation, queue wait, and the worker's dispatch. It
+	// is released when the worker job returns (early on an agent HTTP 202 ACK).
+	// Workers plus queue capacity bound admitted work; a paused execution pins a
+	// worker and reservation for up to 24 hours.
+	if reserved, stopped := pool.reserveForAdmission(); !reserved {
+		if stopped {
+			writeExecutionError(ctx, newControlPlaneShutdownError("async execution queue stopped; retry later"))
+			return
+		}
+		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue is full; retry later")
+		return
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			pool.releaseReservation()
+		}
+	}()
+
+	plan, err := c.prepareAsyncExecution(reqCtx, ctx)
 	if err != nil {
 		writeExecutionError(ctx, err)
 		return
 	}
 	plan.executionMode = "async"
+	// Preparation owns the slot until it is deliberately transferred to the
+	// worker job below. This also protects the recovered-panic interval between
+	// persistence and submission.
+	defer plan.releaseSlot()
 
 	if plan.replayHit != nil {
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
@@ -467,38 +491,37 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 		return
 	}
 
-	// Check LLM health and per-agent concurrency limits before proceeding
-	if err := CheckExecutionPreconditions(plan.target.NodeID, plan.llmEndpoint); err != nil {
-		_ = c.failExecution(reqCtx, plan, err, 0, nil)
-		writeExecutionError(ctx, err)
-		return
-	}
-	// Note: slot is released in asyncExecutionJob.process() after completion
+	// The slot was acquired before persistence. process releases it when the
+	// agent call returns (including an HTTP 202 acknowledgement).
 
 	// Emit execution started event with full reasoner context
 	c.publishExecutionStartedEvent(plan)
 
-	pool := getAsyncWorkerPool()
 	job := asyncExecutionJob{
 		controller: c,
 		plan:       *plan,
 	}
-
-	if ok := pool.submit(job); !ok {
-		ReleaseExecutionSlot(plan.target.NodeID) // Release since process() won't run
-		queueErr := errors.New("async execution queue is full; retry later")
-		if updateErr := c.failExecution(reqCtx, plan, queueErr, 0, nil); updateErr != nil {
-			logger.Logger.Error().
-				Err(updateErr).
-				Str("execution_id", plan.exec.ExecutionID).
-				Msg("failed to persist execution failure after queue saturation")
+	plan.slotHeld = false // ownership transferred to job
+	submitted := false
+	defer func() {
+		if !submitted {
+			job.plan.releaseSlot()
 		}
-		logger.Logger.Warn().
-			Str("execution_id", plan.exec.ExecutionID).
-			Msg("async execution rejected due to queue saturation")
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": queueErr.Error(), "error_category": "concurrency_limit"})
+	}()
+
+	if ok := pool.submitReserved(job); !ok {
+		// The pool only refuses a reserved submission once it has stopped, i.e.
+		// the control plane is draining. Persist the outcome on a detached
+		// context: the request context is very likely being cancelled by the
+		// same shutdown, and a cancelled write would strand this row in
+		// "running" — exactly the orphan this branch exists to prevent.
+		shutdownErr := newControlPlaneShutdownError("async execution queue stopped; retry later")
+		job.terminateForControlPlaneShutdown(shutdownErr)
+		writeExecutionError(ctx, shutdownErr)
 		return
 	}
+	submitted = true
+	reserved = false
 
 	createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)
 	targetLabel := fmt.Sprintf("%s.%s", plan.target.NodeID, plan.target.TargetName)

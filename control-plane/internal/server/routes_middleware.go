@@ -58,7 +58,7 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 	// because EventSource and WebSocket clients cannot set custom headers.
 	// Note: The approval webhook callback is authenticated via HMAC signature,
 	// not the global API key. Always bypass API-key auth on that endpoint.
-	skipPaths := append(append([]string{}, s.config.API.Auth.SkipPaths...), "/api/v1/webhooks/approval-response")
+	skipPaths := append(append([]string{}, s.config.API.Auth.SkipPaths...), "/api/v1/webhooks/approval-response", "/readyz", "/api/v1/health/ready")
 	skipPrefixes := []string{}
 	if s.config.AgentField.ARD.Enabled && s.config.AgentField.ARD.Publish.Enabled {
 		skipPaths = append(skipPaths, "/.well-known/ai-catalog.json")
@@ -89,6 +89,8 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 				"/health",
 				"/metrics",
 				"/api/v1/health",
+				"/readyz",
+				"/api/v1/health/ready",
 			},
 		}
 		s.Router.Use(middleware.DIDAuthMiddleware(s.didWebService, didAuthConfig))

@@ -216,7 +216,7 @@ type StorageProvider interface {
 	// in-process wait_for_execution_result poll died with the process). The
 	// reasonMessage is written to the row's error_message / status_reason.
 	// Returns total rows updated across both tables.
-	MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error)
+	MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID, reasonMessage string) (int, error)
 
 	// Workflow cleanup operations - deletes all data related to a workflow ID
 	// CleanupWorkflow removes all stored data associated with a workflow.

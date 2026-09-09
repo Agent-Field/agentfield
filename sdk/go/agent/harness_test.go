@@ -40,7 +40,8 @@ func TestHarnessRunner_LazyInitialization(t *testing.T) {
 }
 
 func TestHarnessRunner_DefaultOptions(t *testing.T) {
-	// Agent with no HarnessConfig — runner gets zero-value Options
+	// Agent with no HarnessConfig — runner gets zero-value Options; the
+	// provider is resolved at dispatch time (explicit > env > "aforge").
 	a := newTestAgentForHarness(t)
 
 	runner := a.HarnessRunner()

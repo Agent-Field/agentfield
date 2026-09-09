@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildPromptSuffix, cleanupTempFiles, getOutputPath, parseAndValidate } from './schema.js';
 import { buildProvider, resolveProviderName } from './providers/factory.js';
-import type { HarnessProvider } from './providers/base.js';
+import { resolveRoot, type HarnessProvider } from './providers/base.js';
 import {
   createHarnessResult,
   createRawResult,
@@ -48,6 +48,8 @@ type RunnerOptions = Omit<HarnessOptions, 'schema'> & {
   codexBin?: string;
   geminiBin?: string;
   opencodeBin?: string;
+  piBin?: string;
+  ompBin?: string;
 };
 
 export class HarnessRunner {
@@ -59,8 +61,7 @@ export class HarnessRunner {
     resolved.provider = resolveProviderName(resolved.provider);
 
     const provider = await this.buildProvider(resolved.provider, resolved);
-    const cwd = resolved.cwd ?? '.';
-    const outputRoot = resolved.projectDir ?? cwd;
+    const outputRoot = resolveRoot(resolved as Record<string, unknown>) ?? '.';
     let outputDir: string | undefined;
     if (schema !== undefined) {
       fs.mkdirSync(outputRoot, { recursive: true });
@@ -120,6 +121,8 @@ export class HarnessRunner {
         'codexBin',
         'geminiBin',
         'opencodeBin',
+        'piBin',
+        'ompBin',
       ] as const) {
         const value = config[key];
         if (value !== undefined && value !== null) {

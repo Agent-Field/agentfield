@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const payloadURIPrefix = "payload://"
@@ -31,9 +32,77 @@ type PayloadStore interface {
 	Remove(ctx context.Context, uri string) error
 }
 
+// NopPayloadStore is a no-op implementation of PayloadStore used when payloads
+// are persisted inline (e.g. in Postgres) and disk storage is unnecessary.
+type NopPayloadStore struct{}
+
+func (NopPayloadStore) SaveFromReader(context.Context, io.Reader) (*PayloadRecord, error) {
+	return nil, nil
+}
+func (NopPayloadStore) SaveBytes(context.Context, []byte) (*PayloadRecord, error) { return nil, nil }
+func (NopPayloadStore) Open(context.Context, string) (io.ReadCloser, error) {
+	return nil, errors.New("nop payload store does not support Open")
+}
+func (NopPayloadStore) Remove(context.Context, string) error { return nil }
+
 // FilePayloadStore persists payloads on the local filesystem under a base directory.
 type FilePayloadStore struct {
 	baseDir string
+}
+
+// Sweep removes unreferenced payload files older than grace, up to limit.
+// It returns the number inspected and removed.
+func (s *FilePayloadStore) Sweep(ctx context.Context, referenced map[string]struct{}, grace time.Duration, limit int) (int, int, error) {
+	if s == nil || limit <= 0 {
+		return 0, 0, nil
+	}
+	dir, err := os.Open(s.baseDir)
+	if os.IsNotExist(err) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("open payload directory: %w", err)
+	}
+	defer dir.Close()
+	cutoff := time.Now().Add(-grace)
+	inspected, removed := 0, 0
+	for removed < limit {
+		entries, readErr := dir.ReadDir(256)
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return inspected, removed, err
+			}
+			if entry.IsDir() {
+				continue
+			}
+			inspected++
+			uri := payloadURIPrefix + entry.Name()
+			if _, ok := referenced[uri]; ok {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return inspected, removed, fmt.Errorf("stat payload orphan: %w", err)
+			}
+			if info.ModTime().After(cutoff) {
+				continue
+			}
+			if err := s.Remove(ctx, uri); err != nil {
+				return inspected, removed, err
+			}
+			removed++
+			if removed >= limit {
+				break
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return inspected, removed, fmt.Errorf("read payload directory: %w", readErr)
+		}
+	}
+	return inspected, removed, nil
 }
 
 // NewFilePayloadStore creates a payload store rooted at baseDir. The directory must exist.

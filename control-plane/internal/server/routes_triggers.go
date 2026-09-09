@@ -39,7 +39,7 @@ func (s *AgentFieldServer) registerTriggerRoutes(agentAPI *gin.RouterGroup) {
 	triggers.GET("/:trigger_id/secret-status", s.triggerHandlers.GetSecretStatus())
 	triggers.POST("/:trigger_id/test", s.triggerHandlers.TestTrigger())
 	// SSE: live inbound-event stream for one trigger.
-	triggers.GET("/:trigger_id/events/stream", s.triggerHandlers.StreamTriggerEvents())
+	triggers.GET("/:trigger_id/events/stream", s.streamHandler(s.triggerHandlers.StreamTriggerEvents()))
 
 	// Plugin catalog — UI uses this to render the "new trigger" form.
 	agentAPI.GET("/sources", handlers.ListSourcesHandler())

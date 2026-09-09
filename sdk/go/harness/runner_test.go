@@ -603,6 +603,8 @@ func TestBuildProvider(t *testing.T) {
 		{"codex", "codex", "*harness.CodexProvider", false},
 		{"gemini", "gemini", "*harness.GeminiProvider", false},
 		{"opencode", "opencode", "*harness.OpenCodeProvider", false},
+		{"pi", "pi", "*harness.PiProvider", false},
+		{"omp", "omp", "*harness.OMPProvider", false},
 		{"unknown", "unknown-agent", "", true},
 	}
 
@@ -622,15 +624,12 @@ func TestBuildProvider(t *testing.T) {
 
 func TestRunner_BuildProvider_UsesFactory(t *testing.T) {
 	// Verify the runner can build every registered provider.
-	for _, name := range []string{"aforge", "claude-code", "codex", "gemini", "opencode"} {
+	for _, name := range []string{"aforge", "claude-code", "codex", "gemini", "opencode", "pi", "omp"} {
 		t.Run(name, func(t *testing.T) {
 			runner := NewRunner(Options{Provider: name})
-			_, err := runner.Run(context.Background(), "test", nil, nil, Options{})
-			// Should fail at execution (binary not found), not at provider creation
-			// The error should NOT be "unknown harness provider"
-			if err != nil {
-				assert.NotContains(t, err.Error(), "unknown harness provider")
-			}
+			provider, err := runner.buildProvider(runner.DefaultOptions)
+			require.NoError(t, err)
+			assert.NotNil(t, provider)
 		})
 	}
 }

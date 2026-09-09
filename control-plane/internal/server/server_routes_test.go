@@ -657,6 +657,52 @@ func TestSetupRoutesRegistersHealthEndpoint(t *testing.T) {
 	})
 }
 
+func TestReadinessTurnsUnavailableDuringDrainWhileLivenessStaysHealthy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	srv := &AgentFieldServer{
+		Router:            gin.New(),
+		storage:           newStubStorage(),
+		payloadStore:      &stubPayloadStore{},
+		webhookDispatcher: &stubWebhookDispatcher{},
+		config: &config.Config{
+			UI:  config.UIConfig{Enabled: false},
+			API: config.APIConfig{Auth: config.AuthConfig{APIKey: "super-secret-key"}},
+		},
+		storageHealthOverride: func(context.Context) gin.H { return gin.H{"status": "healthy"} },
+	}
+	srv.setupRoutes()
+
+	assertStatuses := func(wantReady int) {
+		t.Helper()
+		for _, path := range []string{"/readyz", "/api/v1/health/ready"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			w := httptest.NewRecorder()
+			srv.Router.ServeHTTP(w, req)
+			require.Equal(t, wantReady, w.Code, path)
+		}
+		for _, path := range []string{"/health", "/api/v1/health"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			w := httptest.NewRecorder()
+			srv.Router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code, path)
+		}
+	}
+
+	assertStatuses(http.StatusOK)
+	srv.BeginDrain()
+	require.True(t, srv.IsDraining())
+	assertStatuses(http.StatusServiceUnavailable)
+
+	// Draining only changes readiness: ordinary authenticated traffic is still
+	// accepted and answered for the whole minimum-delay window, because the
+	// listener is not closed until Stop() runs.
+	served := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+	served.Header.Set("X-API-Key", "super-secret-key")
+	servedRecorder := httptest.NewRecorder()
+	srv.Router.ServeHTTP(servedRecorder, served)
+	require.Equal(t, http.StatusOK, servedRecorder.Code, "requests must keep being served while draining")
+}
+
 func TestSetupRoutesRegistersAuthenticatedVersionEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

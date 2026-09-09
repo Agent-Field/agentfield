@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
@@ -237,8 +241,45 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("AgentField server running on http://localhost:%d\n", cfg.AgentField.Port)
 	fmt.Printf("Press Ctrl+C to exit.\n")
-	// Keep main goroutine alive
-	select {}
+
+	shutdownCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	if err := drainOnShutdown(shutdownCtx, stopSignals, agentfieldServer.BeginDrain, cfg.AgentField.ShutdownMinDelay, agentfieldServer.Stop); err != nil {
+		log.Printf("Error during shutdown: %v", err)
+		os.Exit(1)
+	}
+}
+
+// drainOnShutdown blocks until ctx is cancelled by a shutdown signal, restores
+// the default signal behavior (so a second signal forces an immediate exit),
+// flips the server to draining so readiness probes start failing, waits out
+// minDelay while the listener keeps serving, and then runs the server's
+// bounded shutdown sequence. minDelay of 0 skips the wait entirely.
+func drainOnShutdown(ctx context.Context, stopSignals func(), beginDrain func(), minDelay time.Duration, stop func() error) error {
+	waitForShutdown(ctx)
+	if stopSignals != nil {
+		stopSignals()
+	}
+	if beginDrain != nil {
+		beginDrain()
+	}
+	fmt.Println("\nShutdown signal received, draining connections...")
+	if minDelay > 0 {
+		log.Printf("Waiting %s before closing the listener", minDelay)
+		time.Sleep(minDelay)
+	}
+	if err := stop(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("Warning: shutdown drain timed out; forced close completed: %v", err)
+			return nil
+		}
+		return err
+	}
+	fmt.Println("Server stopped gracefully.")
+	return nil
+}
+
+func waitForShutdown(ctx context.Context) {
+	<-ctx.Done()
 }
 
 // loadConfig loads configuration with sensible defaults for user experience
@@ -291,6 +332,7 @@ func loadConfig(configFile string) (*config.Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	config.MarkExecutionCleanupEnabledIfSet(viper.GetViper(), &cfg)
 
 	config.ApplyDefaults(&cfg)
 	config.ApplyEnvOverrides(&cfg)

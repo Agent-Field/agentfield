@@ -62,9 +62,10 @@ type WorkflowDAGResponse struct {
 	// Trigger describes the inbound webhook (or schedule) that originated
 	// this run, when one exists. Populated by walking the root execution's
 	// VC chain back to the parent trigger_event VC.
-	Trigger *types.TriggerEventMetadata `json:"trigger,omitempty"`
-	Lineage *RunLineageMetadata         `json:"lineage,omitempty"`
-	Golden  *GoldenRunMetadata          `json:"golden,omitempty"`
+	Trigger     *types.TriggerEventMetadata `json:"trigger,omitempty"`
+	Lineage     *RunLineageMetadata         `json:"lineage,omitempty"`
+	Golden      *GoldenRunMetadata          `json:"golden,omitempty"`
+	RunMetadata *types.RunMetadata          `json:"run_metadata,omitempty"`
 }
 
 type RunLineageMetadata struct {
@@ -160,9 +161,10 @@ type WorkflowDAGLightweightResponse struct {
 	WebhookFailures []WebhookFailurePreview `json:"webhook_failures,omitempty"`
 	// Trigger describes the inbound webhook (or schedule) that originated
 	// this run, when one exists.
-	Trigger *types.TriggerEventMetadata `json:"trigger,omitempty"`
-	Lineage *RunLineageMetadata         `json:"lineage,omitempty"`
-	Golden  *GoldenRunMetadata          `json:"golden,omitempty"`
+	Trigger     *types.TriggerEventMetadata `json:"trigger,omitempty"`
+	Lineage     *RunLineageMetadata         `json:"lineage,omitempty"`
+	Golden      *GoldenRunMetadata          `json:"golden,omitempty"`
+	RunMetadata *types.RunMetadata          `json:"run_metadata,omitempty"`
 }
 
 type workflowRunMetadataGetter interface {
@@ -196,7 +198,7 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 	}
 
 	rootExecID := findRootExecutionID(executions)
-	lineage, golden := s.loadRunMetadata(ctx, runID)
+	lineage, golden, runMetadata := s.loadRunMetadata(ctx, runID)
 
 	if isLightweightRequest(c) {
 		timeline, workflowStatus, workflowName, sessionID, actorID, maxDepth := buildLightweightExecutionDAG(executions)
@@ -224,6 +226,7 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 			Trigger:            TriggerForRun(ctx, s.store, runID, rootExecID),
 			Lineage:            lineage,
 			Golden:             golden,
+			RunMetadata:        runMetadata,
 		}
 
 		c.JSON(http.StatusOK, response)
@@ -251,23 +254,24 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 		Trigger:        TriggerForRun(ctx, s.store, runID, rootExecID),
 		Lineage:        lineage,
 		Golden:         golden,
+		RunMetadata:    runMetadata,
 	}
 
 	c.JSON(http.StatusOK, response)
 }
 
-func (s *executionGraphService) loadRunMetadata(ctx context.Context, runID string) (*RunLineageMetadata, *GoldenRunMetadata) {
+func (s *executionGraphService) loadRunMetadata(ctx context.Context, runID string) (*RunLineageMetadata, *GoldenRunMetadata, *types.RunMetadata) {
 	getter, ok := s.store.(workflowRunMetadataGetter)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	run, err := getter.GetWorkflowRun(ctx, runID)
 	if err != nil || run == nil || len(run.Metadata) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var raw map[string]interface{}
 	if err := json.Unmarshal(run.Metadata, &raw); err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var lineage *RunLineageMetadata
 	if value, ok := raw["lineage"]; ok {
@@ -287,7 +291,7 @@ func (s *executionGraphService) loadRunMetadata(ctx context.Context, runID strin
 			}
 		}
 	}
-	return lineage, golden
+	return lineage, golden, types.ParseRunMetadata(run.Metadata)
 }
 
 // findRootExecutionID returns the execution_id of the root node — the

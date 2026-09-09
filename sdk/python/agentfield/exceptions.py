@@ -33,6 +33,18 @@ class ExecutionFailedError(AgentFieldClientError):
     pass
 
 
+class MeshTargetNotFound(AgentFieldClientError):
+    """An in-process (AgentMesh / call_local) target could not be resolved.
+
+    Raised instead of the generic "AgentField server unavailable" error so a
+    typo in a mesh target is reported as a routing mistake rather than a
+    connectivity problem, and instead of a 404 ExecuteError so callers can tell
+    "this node/reasoner does not exist here" from "the call ran and failed".
+    """
+
+    pass
+
+
 class ReasonerFailed(AgentFieldError):
     """Raised *inside* a reasoner to report that the work ran but failed.
 
@@ -142,6 +154,7 @@ __all__ = [
     "AgentFieldError",
     "AgentFieldClientError",
     "ExecutionFailedError",
+    "MeshTargetNotFound",
     "ReasonerFailed",
     "ExecutionTimeoutError",
     "ExecutionCancelledError",

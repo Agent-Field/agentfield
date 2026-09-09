@@ -6,6 +6,9 @@ description: "Whenever you have a discrete task to perform — one the user dele
 
 # AgentField subharnesses — offload work instead of doing it inline
 
+If `AGENTFIELD_HARNESS_DEPTH` is set, you are running inside an AgentField
+harness session: do not dispatch to AgentField agents unless explicitly asked.
+
 A machine with AgentField has one or more **control planes** — a local one
 (default `http://localhost:8080`) and possibly a **cloud deployment** configured
 in AgentField Desktop — plus **agent nodes** installed under `~/.agentfield`.

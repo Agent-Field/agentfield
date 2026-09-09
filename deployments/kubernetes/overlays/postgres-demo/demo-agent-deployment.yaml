@@ -12,6 +12,7 @@ spec:
       labels:
         app.kubernetes.io/component: demo-agent
     spec:
+      terminationGracePeriodSeconds: 45
       initContainers:
         - name: wait-control-plane
           image: curlimages/curl:8.12.1

@@ -87,6 +87,36 @@ async def test_run_cli_works_without_explicit_env(monkeypatch):
     assert stdout.strip() == "still_there"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("parent_depth", "expected"), [(None, "1"), ("4", "5")])
+async def test_run_cli_sets_harness_depth(monkeypatch, parent_depth, expected):
+    if parent_depth is None:
+        monkeypatch.delenv("AGENTFIELD_HARNESS_DEPTH", raising=False)
+    else:
+        monkeypatch.setenv("AGENTFIELD_HARNESS_DEPTH", parent_depth)
+
+    stdout, _stderr, returncode = await run_cli(
+        ["bash", "-c", "echo $AGENTFIELD_HARNESS_DEPTH"], timeout=10.0
+    )
+
+    assert returncode == 0
+    assert stdout.strip() == expected
+
+
+@pytest.mark.asyncio
+async def test_run_cli_caller_harness_depth_wins(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_HARNESS_DEPTH", "4")
+
+    stdout, _stderr, returncode = await run_cli(
+        ["bash", "-c", "echo $AGENTFIELD_HARNESS_DEPTH"],
+        env={"AGENTFIELD_HARNESS_DEPTH": "99"},
+        timeout=10.0,
+    )
+
+    assert returncode == 0
+    assert stdout.strip() == "99"
+
+
 def test_run_cli_merges_openrouter_attribution_defaults(monkeypatch):
     monkeypatch.delenv("AGENTFIELD_OPENROUTER_SITE_URL", raising=False)
     monkeypatch.delenv("AGENTFIELD_OPENROUTER_APP_NAME", raising=False)

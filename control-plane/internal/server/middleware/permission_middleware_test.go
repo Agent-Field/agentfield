@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
@@ -67,18 +64,6 @@ func (s *testPolicyService) EvaluateAccess(callerTags, targetTags []string, func
 		return s.result
 	}
 	return &types.PolicyEvaluationResult{Matched: false}
-}
-
-func signRequestBody(body []byte, did string, privateKey ed25519.PrivateKey, ts time.Time) (map[string]string, error) {
-	timestamp := fmt.Sprintf("%d", ts.Unix())
-	bodyHash := sha256.Sum256(body)
-	payload := fmt.Sprintf("%s:%x", timestamp, bodyHash)
-	signature := ed25519.Sign(privateKey, []byte(payload))
-	return map[string]string{
-		"X-Caller-DID":    did,
-		"X-DID-Signature": base64.StdEncoding.EncodeToString(signature),
-		"X-DID-Timestamp": timestamp,
-	}, nil
 }
 
 // --- Test Helpers ---

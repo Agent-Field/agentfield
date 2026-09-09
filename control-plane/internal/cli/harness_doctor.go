@@ -47,6 +47,8 @@ var harnessProviderSpecs = []harnessProviderSpec{
 	{Name: "gemini", Binary: "gemini", InstallCommand: "npm install -g @google/gemini-cli", AuthEnvVars: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 	{Name: "opencode", Binary: "opencode", InstallCommand: "curl -fsSL https://opencode.ai/install | bash", AuthEnvVars: []string{}},
 	{Name: "grok", Binary: "grok", InstallCommand: "Install the Grok Build CLI, then run: grok login", AuthEnvVars: []string{"XAI_API_KEY"}},
+	{Name: "pi", Binary: "pi", InstallCommand: "npm install -g --ignore-scripts @earendil-works/pi-coding-agent", AuthEnvVars: []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}},
+	{Name: "omp", Binary: "omp", InstallCommand: "curl -fsSL https://omp.sh/install | sh", AuthEnvVars: []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 }
 
 // NewHarnessCommand builds harness-related environment checks.
@@ -95,7 +97,7 @@ func newHarnessDoctorCommand() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check: aforge, claude-code, codex, gemini, opencode, grok")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check, default all: aforge, claude-code, codex, gemini, opencode, grok, pi, omp")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output structured JSON")
 	return cmd
 }

@@ -1350,7 +1350,13 @@ class AgentFieldClient:
         except Exception:
             return False
 
-    async def notify_graceful_shutdown(self, node_id: str) -> bool:
+    async def notify_graceful_shutdown(
+        self,
+        node_id: str,
+        *,
+        reason: Optional[str] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> bool:
         """
         Notify AgentField server that the agent is shutting down gracefully.
 
@@ -1363,9 +1369,15 @@ class AgentFieldClient:
         try:
             headers = {"Content-Type": "application/json"}
             headers.update(self._get_auth_headers())
+            payload = {}
+            if reason is not None:
+                payload["reason"] = reason
+            if timeout_seconds is not None:
+                payload["timeout_seconds"] = timeout_seconds
             response = await self._async_request(
                 "POST",
                 f"{self.api_base}/nodes/{node_id}/shutdown",
+                json=payload or None,
                 headers=headers,
                 timeout=5.0,
             )
@@ -1374,7 +1386,13 @@ class AgentFieldClient:
         except Exception:
             return False
 
-    def notify_graceful_shutdown_sync(self, node_id: str) -> bool:
+    def notify_graceful_shutdown_sync(
+        self,
+        node_id: str,
+        *,
+        reason: Optional[str] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> bool:
         """
         Synchronous version of graceful shutdown notification.
 
@@ -1387,8 +1405,14 @@ class AgentFieldClient:
         try:
             headers = {"Content-Type": "application/json"}
             headers.update(self._get_auth_headers())
+            payload = {}
+            if reason is not None:
+                payload["reason"] = reason
+            if timeout_seconds is not None:
+                payload["timeout_seconds"] = timeout_seconds
             response = requests.post(
                 f"{self.api_base}/nodes/{node_id}/shutdown",
+                json=payload or None,
                 headers=headers,
                 timeout=5.0,
             )

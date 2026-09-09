@@ -198,7 +198,7 @@ func TestNodeActionAckHandler_ValidationErrors(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		var resp map[string]string
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, "action_id and status are required", resp["error"])
 	})
 }

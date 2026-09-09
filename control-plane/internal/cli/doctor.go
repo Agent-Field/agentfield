@@ -79,16 +79,31 @@ var providerEnvVars = []struct {
 	{Name: "google", EnvVar: "GOOGLE_API_KEY", Model: "gemini-1.5-pro"},
 }
 
-// harnessProviders is the canonical list of CLIs `app.harness()` knows how to drive.
-var harnessProviders = []struct {
-	Name      string   // value passed to provider= in app.harness()
-	Binary    string   // executable name to look up on PATH
-	ProbeArgs []string // minimal one-shot invocation used by `--probe`
-}{
+// doctorHarnessProvider describes one CLI `app.harness()` knows how to drive,
+// as `af doctor` surveys it.
+type doctorHarnessProvider struct {
+	Name       string   // value passed to provider= in app.harness()
+	Binary     string   // executable name to look up on PATH
+	ProbeArgs  []string // minimal one-shot invocation used by `--probe`; empty means "never probe"
+	ProbeStdin string   // prompt fed over stdin, mirroring how the SDK adapters invoke this CLI
+	// JSONLStream marks providers whose probe stdout is a JSON event stream
+	// rather than plain text, so a non-empty stdout does not by itself mean
+	// the provider completed anything.
+	JSONLStream bool
+}
+
+// harnessProviders is the canonical list of CLIs `app.harness()` knows how to
+// drive. aforge leads it: it is the SDK's default provider and ships with `af`.
+var harnessProviders = []doctorHarnessProvider{
+	// aforge declares no ProbeArgs on purpose — see runHarnessProbes.
+	{Name: "aforge", Binary: "aforge"},
 	{Name: "claude-code", Binary: "claude", ProbeArgs: []string{"-p", "Say OK"}},
 	{Name: "codex", Binary: "codex", ProbeArgs: []string{"exec", "Say OK"}},
 	{Name: "gemini", Binary: "gemini", ProbeArgs: []string{"-p", "Say OK"}},
 	{Name: "opencode", Binary: "opencode", ProbeArgs: []string{"run", "Say OK"}},
+	// Keep pi/omp stdin prompt delivery coupled to the SDK adapters.
+	{Name: "pi", Binary: "pi", ProbeArgs: []string{"--print", "--mode", "json"}, ProbeStdin: "Say OK", JSONLStream: true},
+	{Name: "omp", Binary: "omp", ProbeArgs: []string{"--print", "--mode", "json"}, ProbeStdin: "Say OK", JSONLStream: true},
 }
 
 // harnessProbeTimeout bounds a single provider smoke test. Coding-agent CLIs
@@ -119,7 +134,7 @@ func NewDoctorCommand() *cobra.Command {
 		Long: `Doctor inspects the local environment and reports what's available for
 building AgentField multi-reasoner systems:
 
-  • Available harness provider CLIs (claude-code, codex, gemini, opencode)
+  • Available harness provider CLIs (aforge, claude-code, codex, gemini, opencode, pi, omp)
   • Provider API keys set in the environment (without leaking values)
   • Docker availability and whether the control-plane image is locally cached
   • Whether a local control plane is reachable
@@ -175,17 +190,23 @@ func runHarnessProbes(report DoctorReport) map[string]HarnessProbeResult {
 		if !report.HarnessProviders[h.Name].Available {
 			continue
 		}
-		results[h.Name] = probeHarnessProvider(h.Name, h.Binary, h.ProbeArgs, harnessProbeTimeout)
+		// Every other probe is one trivial completion. Aforge's only one-shot is
+		// a full coding-agent run with working-directory write access, so `af
+		// doctor` must not start it; `af harness doctor` reports its health.
+		if len(h.ProbeArgs) == 0 {
+			continue
+		}
+		results[h.Name] = probeHarnessProvider(h.Name, h.Binary, h.ProbeArgs, h.ProbeStdin, harnessProbeTimeout, h.JSONLStream)
 	}
 	return results
 }
 
 // probeHarnessProvider runs one provider CLI's minimal one-shot invocation and
 // classifies the outcome.
-func probeHarnessProvider(name, binary string, args []string, timeout time.Duration) HarnessProbeResult {
+func probeHarnessProvider(name, binary string, args []string, stdin string, timeout time.Duration, jsonlStream bool) HarnessProbeResult {
 	start := time.Now()
-	stdout, stderr, exitCode, timedOut := runProbeCommand(binary, args, timeout)
-	status := classifyProbe(exitCode, stdout, timedOut)
+	stdout, stderr, exitCode, timedOut := runProbeCommand(binary, args, stdin, timeout)
+	status := classifyProbe(exitCode, stdout, timedOut, jsonlStream)
 
 	result := HarnessProbeResult{
 		Provider:   name,
@@ -196,6 +217,9 @@ func probeHarnessProvider(name, binary string, args []string, timeout time.Durat
 	switch status {
 	case "error":
 		result.Detail = firstLine(stderr)
+		if result.Detail == "" && jsonlStream {
+			_, result.Detail = piProbeOutcome(stdout)
+		}
 	case "timeout":
 		result.Detail = fmt.Sprintf("no response within %s", timeout)
 	case "empty":
@@ -207,11 +231,14 @@ func probeHarnessProvider(name, binary string, args []string, timeout time.Durat
 // runProbeCommand executes bin with args under a timeout, returning stdout,
 // stderr, the process exit code, and whether the timeout fired. A timeout is
 // reported distinctly so it is never misclassified as a plain error.
-func runProbeCommand(bin string, args []string, timeout time.Duration) (stdout, stderr string, exitCode int, timedOut bool) {
+func runProbeCommand(bin string, args []string, stdin string, timeout time.Duration) (stdout, stderr string, exitCode int, timedOut bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, args...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	var outBuf, errBuf strings.Builder
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -232,20 +259,86 @@ func runProbeCommand(bin string, args []string, timeout time.Duration) (stdout, 
 }
 
 // classifyProbe maps a probe outcome to a status. Order matters: a timeout is
-// checked before the exit code (a killed process also exits non-zero), and an
-// empty completion on a clean exit is the real-world "silently broken provider"
-// case that a mere PATH check misses.
-func classifyProbe(exitCode int, stdout string, timedOut bool) string {
+// checked before the exit code (a killed process also exits non-zero). Plain
+// text probes require non-empty stdout; JSONL probes require successful
+// assistant completion text rather than merely any event.
+func classifyProbe(exitCode int, stdout string, timedOut bool, jsonlStream bool) string {
 	switch {
 	case timedOut:
 		return "timeout"
 	case exitCode != 0:
 		return "error"
-	case strings.TrimSpace(stdout) == "":
-		return "empty"
-	default:
+	}
+	if jsonlStream {
+		hasAssistantText, providerError := piProbeOutcome(stdout)
+		if providerError != "" {
+			return "error"
+		}
+		if !hasAssistantText {
+			return "empty"
+		}
 		return "ok"
 	}
+	if strings.TrimSpace(stdout) == "" {
+		return "empty"
+	}
+	return "ok"
+}
+
+// piProbeOutcome inspects a Pi-family JSON event stream the way the SDK
+// adapters do. A completion requires assistant text, and only the last
+// assistant message_end determines whether the provider stopped with an error.
+func piProbeOutcome(stdout string) (hasAssistantText bool, providerError string) {
+	type message struct {
+		Role         string          `json:"role"`
+		Content      json.RawMessage `json:"content"`
+		StopReason   string          `json:"stopReason"`
+		ErrorMessage string          `json:"errorMessage"`
+	}
+	type event struct {
+		Type    string  `json:"type"`
+		Message message `json:"message"`
+	}
+	type contentPart struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var e event
+		if err := json.Unmarshal([]byte(line), &e); err != nil || e.Type != "message_end" || e.Message.Role != "assistant" {
+			continue
+		}
+
+		var text string
+		if err := json.Unmarshal(e.Message.Content, &text); err != nil {
+			var parts []contentPart
+			if json.Unmarshal(e.Message.Content, &parts) == nil {
+				for _, part := range parts {
+					if part.Type == "text" {
+						text += part.Text
+					}
+				}
+			}
+		}
+		if strings.TrimSpace(text) != "" {
+			hasAssistantText = true
+		}
+
+		switch e.Message.StopReason {
+		case "error", "aborted":
+			providerError = e.Message.ErrorMessage
+			if providerError == "" {
+				providerError = fmt.Sprintf("stopped with reason %q", e.Message.StopReason)
+			}
+		default:
+			providerError = ""
+		}
+	}
+	return hasAssistantText, providerError
 }
 
 // firstLine returns the first non-empty line of s, trimmed, for compact error
@@ -279,7 +372,20 @@ func buildDoctorReport(controlPlaneURL string) DoctorReport {
 	// Harness CLIs
 	availableHarness := []string{}
 	for _, h := range harnessProviders {
-		status := checkTool(h.Binary, "--version")
+		// Share the harness doctor's provider-specific version arguments and its
+		// $AGENTFIELD_HOME/bin fallback wherever a binary-backed spec exists, so
+		// both doctors agree on what "installed" means. aforge in particular
+		// answers `version`, not `--version`, and `af aforge ensure` puts it in
+		// AgentField's own bin directory rather than on PATH. claude-code has no
+		// binary in that table (it is the pip-package wrapper), so it keeps the
+		// plain PATH check.
+		spec := findHarnessProviderSpec(h.Name)
+		var status ToolStatus
+		if spec != nil && spec.Binary != "" {
+			status = probeHarnessBinary(*spec)
+		} else {
+			status = checkTool(h.Binary, "--version")
+		}
 		report.HarnessProviders[h.Name] = status
 		if status.Available {
 			availableHarness = append(availableHarness, h.Name)

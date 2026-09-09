@@ -161,6 +161,7 @@ type ExecutionDetailsResponse struct {
 	SessionID           *string                        `json:"session_id,omitempty"`
 	ActorID             *string                        `json:"actor_id,omitempty"`
 	AgentNodeID         string                         `json:"agent_node_id"`
+	InstanceID          string                         `json:"instance_id,omitempty"`
 	ParentWorkflowID    *string                        `json:"parent_workflow_id,omitempty"`
 	RootWorkflowID      *string                        `json:"root_workflow_id,omitempty"`
 	WorkflowDepth       *int                           `json:"workflow_depth,omitempty"`
@@ -766,6 +767,7 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		SessionID:           exec.SessionID,
 		ActorID:             exec.ActorID,
 		AgentNodeID:         exec.AgentNodeID,
+		InstanceID:          exec.InstanceID,
 		ParentWorkflowID:    exec.ParentExecutionID,
 		RootWorkflowID:      nil,
 		WorkflowDepth:       nil,
@@ -783,7 +785,7 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		DurationMS:          durationPtr,
 		ErrorMessage:        exec.ErrorMessage,
 		RetryCount:          0,
-		CreatedAt:           exec.StartedAt.Format(time.RFC3339),
+		CreatedAt:           exec.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:           &updated,
 		Notes:               notes,
 		NotesCount:          len(notes),
@@ -795,6 +797,8 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 	// Enrich with approval fields from workflow execution (if available)
 	if h.storage != nil {
 		if wfExec, err := h.storage.GetWorkflowExecution(ctx, exec.ExecutionID); err == nil && wfExec != nil {
+			resp.ID = wfExec.ID
+			resp.RetryCount = wfExec.RetryCount
 			resp.ApprovalRequestID = wfExec.ApprovalRequestID
 			resp.ApprovalRequestURL = wfExec.ApprovalRequestURL
 			resp.ApprovalStatus = wfExec.ApprovalStatus

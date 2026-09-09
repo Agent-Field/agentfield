@@ -7,6 +7,8 @@ func DefaultEntries() []EndpointEntry {
 		// --- Health ---
 		{Method: "GET", Path: "/health", Group: "health", Summary: "Server health check", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
 		{Method: "GET", Path: "/api/v1/health", Group: "health", Summary: "API health check", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
+		{Method: "GET", Path: "/readyz", Group: "health", Summary: "Shutdown-aware readiness probe", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
+		{Method: "GET", Path: "/api/v1/health/ready", Group: "health", Summary: "Shutdown-aware API readiness probe", AuthLevel: "public", Tags: []string{"health", "monitoring"}},
 		{Method: "GET", Path: "/metrics", Group: "health", Summary: "Prometheus metrics", AuthLevel: "public", Tags: []string{"metrics", "monitoring", "prometheus"}},
 
 		// --- Discovery ---
@@ -57,10 +59,13 @@ func DefaultEntries() []EndpointEntry {
 		},
 		{Method: "GET", Path: "/api/ui/v1/settings/node-log-proxy", Group: "ui-settings", Summary: "Effective node log proxy limits and env lock flags", AuthLevel: "api_key", Tags: []string{"ui", "settings", "logs"}},
 		{Method: "PUT", Path: "/api/ui/v1/settings/node-log-proxy", Group: "ui-settings", Summary: "Update node log proxy limits (persisted to DB config blob)", AuthLevel: "api_key", Tags: []string{"ui", "settings", "logs"}},
+		{Method: "GET", Path: "/api/ui/v1/executions/:execution_id/details", Group: "ui-executions", Summary: "Get full execution details for the UI", AuthLevel: "api_key", Tags: []string{"ui", "executions", "details"},
+			Parameters: []ParamEntry{{Name: "execution_id", In: "path", Required: true, Type: "string", Desc: "Execution ID"}},
+		},
 
 		// --- Execute ---
 		{Method: "POST", Path: "/api/v1/execute/:target", Group: "execute", Summary: "Execute a reasoner or skill synchronously", AuthLevel: "api_key", Tags: []string{"execute", "reasoner", "skill", "sync"},
-			Parameters: []ParamEntry{{Name: "target", In: "path", Required: true, Type: "string", Desc: "Target in format agent_id.reasoner_id or agent_id.skill_id"}},
+			Parameters:  []ParamEntry{{Name: "target", In: "path", Required: true, Type: "string", Desc: "Target in format agent_id.reasoner_id or agent_id.skill_id"}},
 			RequestBody: &BodyEntry{ContentType: "application/json", Fields: map[string]string{"input": "object - Input payload", "session_id": "string - Optional session ID", "run_id": "string - Optional run ID", "workflow_id": "string - Optional workflow ID"}},
 		},
 		{Method: "POST", Path: "/api/v1/execute/async/:target", Group: "execute", Summary: "Execute a reasoner or skill asynchronously", AuthLevel: "api_key", Tags: []string{"execute", "reasoner", "skill", "async"},
@@ -86,6 +91,12 @@ func DefaultEntries() []EndpointEntry {
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/pause", Group: "executions", Summary: "Pause an execution", AuthLevel: "api_key", Tags: []string{"executions", "pause"}},
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/resume", Group: "executions", Summary: "Resume a paused execution", AuthLevel: "api_key", Tags: []string{"executions", "resume"}},
 		{Method: "POST", Path: "/api/v1/workflows/:workflowId/cancel-tree", Group: "workflows", Summary: "Cancel every non-terminal execution in a run (bottom-up)", AuthLevel: "api_key", Tags: []string{"workflows", "executions", "cancel"}},
+
+		// --- Runs ---
+		{Method: "POST", Path: "/api/v1/runs/:run_id/metadata", Group: "runs", Summary: "Set run display name, labels and links", AuthLevel: "api_key", Tags: []string{"runs", "metadata", "labels"},
+			Parameters:  []ParamEntry{{Name: "run_id", In: "path", Required: true, Type: "string", Desc: "Run ID"}},
+			RequestBody: &BodyEntry{ContentType: "application/json", Fields: map[string]string{"display_name": "string|null", "labels": "string[]|null", "links": "array|null"}},
+		},
 
 		// --- Approval ---
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/request-approval", Group: "approval", Summary: "Request approval for an execution", AuthLevel: "api_key", Tags: []string{"approval", "request"}},

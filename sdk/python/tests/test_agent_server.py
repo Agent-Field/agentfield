@@ -1,9 +1,11 @@
 """
 Tests for agentfield.agent_server — AgentServer route registration and utility methods.
 """
+
 from __future__ import annotations
 
 import asyncio
+import signal
 import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -141,6 +143,8 @@ async def test_info_endpoint():
 
 def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
     events = []
+    installed_signals = []
+    removed_signals = []
 
     @asynccontextmanager
     async def existing_lifespan(app):
@@ -155,26 +159,60 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
     app.lifecycle_events = events
     app.agentfield_handler = SimpleNamespace(
         start_heartbeat=lambda interval: events.append("heartbeat-start"),
-        setup_fast_lifecycle_signal_handlers=lambda: events.append(
-            "signal-handlers"
-        ),
+        setup_fast_lifecycle_signal_handlers=lambda: events.append("signal-handlers"),
         stop_heartbeat=lambda: events.append("heartbeat-stop"),
         send_enhanced_heartbeat=AsyncMock(return_value=True),
         enhanced_heartbeat_loop=AsyncMock(),
     )
     app.connection_manager = None
     app.memory_event_client = None
-    app.client = SimpleNamespace(aclose=AsyncMock())
+    app._background_tasks = set()
 
-    def fake_uvicorn_run(served_app, **config):
-        async def exercise_lifespan():
-            async with served_app.router.lifespan_context(served_app):
-                events.append("serving")
+    async def close_client():
+        events.append("client-close")
 
-        asyncio.run(exercise_lifespan())
+    app.client = SimpleNamespace(aclose=AsyncMock(side_effect=close_client))
 
-    monkeypatch.setattr("agentfield.connection_manager.ConnectionManager", _FakeConnectionManager)
-    monkeypatch.setattr("agentfield.agent_server.uvicorn.run", fake_uvicorn_run)
+    class SignalLoop:
+        def add_signal_handler(self, signum, callback, *args):
+            installed_signals.append((signum, callback, args))
+
+        def remove_signal_handler(self, signum):
+            removed_signals.append(signum)
+
+    class FakeConfig:
+        def __init__(self, served_app, **config):
+            self.app = served_app
+            self.options = config
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+
+        def run(self):
+            async def exercise_lifespan():
+                app = self.config.app
+                async with app.router.lifespan_context(app):
+                    events.append("serving")
+
+                    async def dispatched_reasoner():
+                        await asyncio.sleep(0)
+                        events.append("terminal-callback")
+
+                    task = asyncio.create_task(dispatched_reasoner())
+                    app._background_tasks.add(task)
+                    task.add_done_callback(app._background_tasks.discard)
+
+            asyncio.run(exercise_lifespan())
+
+    monkeypatch.setattr(
+        "agentfield.connection_manager.ConnectionManager", _FakeConnectionManager
+    )
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Config", FakeConfig)
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Server", FakeServer)
+    monkeypatch.setattr(
+        "agentfield.agent_server.asyncio.get_running_loop", lambda: SignalLoop()
+    )
 
     AgentServer(app).serve(port=8001)
 
@@ -185,10 +223,48 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
         "caller-start",
         "serving",
         "caller-stop",
+        "terminal-callback",
         "agentfield-stop",
+        "client-close",
         "heartbeat-stop",
     ]
+    assert [item[0] for item in installed_signals] == [signal.SIGTERM, signal.SIGINT]
+    assert all(
+        item[1].__name__ == "_begin_signal_shutdown" for item in installed_signals
+    )
+    assert removed_signals == [signal.SIGTERM, signal.SIGINT]
     app.client.aclose.assert_awaited_once()
+
+
+def test_serve_applies_shutdown_timeout_from_environment(monkeypatch):
+    app = make_agent_app()
+    app.agentfield_handler = SimpleNamespace(
+        start_heartbeat=MagicMock(),
+        setup_fast_lifecycle_signal_handlers=MagicMock(),
+        stop_heartbeat=MagicMock(),
+    )
+    captured = {}
+
+    class FakeConfig:
+        def __init__(self, served_app, **config):
+            captured.update(config)
+
+    class FakeServer:
+        def __init__(self, config):
+            pass
+
+        def run(self):
+            pass
+
+    monkeypatch.setenv("AGENTFIELD_SHUTDOWN_TIMEOUT", "17s")
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Config", FakeConfig)
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Server", FakeServer)
+
+    server = AgentServer(app)
+    server.serve(port=8001)
+
+    assert server._shutdown_timeout == 17.0
+    assert captured["timeout_graceful_shutdown"] == 17.0
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +284,7 @@ async def test_shutdown_graceful():
             json={"graceful": True, "timeout_seconds": 5},
             headers={"content-type": "application/json"},
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     data = resp.json()
     assert data["graceful"] is True
     assert data["status"] == "shutting_down"
@@ -227,7 +303,7 @@ async def test_shutdown_immediate():
     with patch.object(AgentServer, "_immediate_shutdown", fake_immediate):
         resp = await _post(app, "/shutdown", json={"graceful": False})
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     assert resp.json()["graceful"] is False
     await asyncio.sleep(0)
     assert triggered.get("called") is True
@@ -249,7 +325,7 @@ async def test_shutdown_notification_failure():
             json={"graceful": True},
             headers={"content-type": "application/json"},
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
 
 
 @pytest.mark.asyncio
@@ -327,7 +403,9 @@ async def test_status_endpoint_shutdown_requested():
         def num_threads(self):
             return 1
 
-    with patch.dict(sys.modules, {"psutil": SimpleNamespace(Process=lambda: DummyProcess())}):
+    with patch.dict(
+        sys.modules, {"psutil": SimpleNamespace(Process=lambda: DummyProcess())}
+    ):
         resp = await _get(app, "/status")
 
     assert resp.json()["status"] == "stopping"
@@ -501,7 +579,12 @@ class TestValidateSSLConfig:
 
     def test_nonexistent_files(self, tmp_path):
         s = self._server(dev_mode=True)
-        assert s._validate_ssl_config(str(tmp_path / "nope.key"), str(tmp_path / "nope.crt")) is False
+        assert (
+            s._validate_ssl_config(
+                str(tmp_path / "nope.key"), str(tmp_path / "nope.crt")
+            )
+            is False
+        )
 
     def test_valid_files(self, tmp_path):
         key = tmp_path / "server.key"
@@ -566,8 +649,10 @@ async def test_logs_endpoint_disabled():
 async def test_logs_endpoint_unauthorized():
     app = make_agent_app()
     _setup_server(app)
-    with patch("agentfield.node_logs.logs_enabled", return_value=True), \
-         patch("agentfield.node_logs.verify_internal_bearer", return_value=False):
+    with (
+        patch("agentfield.node_logs.logs_enabled", return_value=True),
+        patch("agentfield.node_logs.verify_internal_bearer", return_value=False),
+    ):
         resp = await _get(app, "/agentfield/v1/logs")
     assert resp.status_code == 401
 
@@ -577,8 +662,10 @@ async def test_logs_endpoint_tail_too_large(monkeypatch):
     app = make_agent_app()
     _setup_server(app)
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_TAIL_LINES", "100")
-    with patch("agentfield.node_logs.logs_enabled", return_value=True), \
-         patch("agentfield.node_logs.verify_internal_bearer", return_value=True):
+    with (
+        patch("agentfield.node_logs.logs_enabled", return_value=True),
+        patch("agentfield.node_logs.verify_internal_bearer", return_value=True),
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -594,9 +681,11 @@ async def test_logs_endpoint_success():
     async def fake_iter(tail, since, follow):
         yield '{"line": 1}\n'
 
-    with patch("agentfield.node_logs.logs_enabled", return_value=True), \
-         patch("agentfield.node_logs.verify_internal_bearer", return_value=True), \
-         patch("agentfield.node_logs.iter_tail_ndjson", side_effect=fake_iter):
+    with (
+        patch("agentfield.node_logs.logs_enabled", return_value=True),
+        patch("agentfield.node_logs.verify_internal_bearer", return_value=True),
+        patch("agentfield.node_logs.async_iter_tail_ndjson", side_effect=fake_iter),
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -671,8 +760,7 @@ async def test_debug_tasks_endpoint_captures_pending_coroutines():
         joined = "\n".join(body["tasks"])
         assert "simulated-hung-llm-call" in joined, (
             "/debug/tasks must surface tasks suspended on Futures so we can "
-            "diagnose deadlocks in production. Found tasks: "
-            + joined[:500]
+            "diagnose deadlocks in production. Found tasks: " + joined[:500]
         )
     finally:
         pending_event.set()

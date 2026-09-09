@@ -136,7 +136,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 		{
 			uiNodesHandler := ui.NewNodesHandler(s.uiService)
 			nodes.GET("/summary", uiNodesHandler.GetNodesSummaryHandler)
-			nodes.GET("/events", uiNodesHandler.StreamNodeEventsHandler)
+			nodes.GET("/events", s.streamHandler(uiNodesHandler.StreamNodeEventsHandler))
 
 			// Unified status endpoints
 			nodes.GET("/:nodeId/status", uiNodesHandler.GetNodeStatusHandler)
@@ -190,7 +190,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 			executions.GET("/summary", uiExecutionsHandler.GetExecutionsSummaryHandler)
 			executions.GET("/stats", uiExecutionsHandler.GetExecutionStatsHandler)
 			executions.GET("/enhanced", uiExecutionsHandler.GetEnhancedExecutionsHandler)
-			executions.GET("/events", uiExecutionsHandler.StreamExecutionEventsHandler)
+			executions.GET("/events", s.streamHandler(uiExecutionsHandler.StreamExecutionEventsHandler))
 
 			// Timeline endpoint for hourly aggregated data
 			timelineHandler := ui.NewExecutionTimelineHandler(s.storage)
@@ -217,7 +217,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 				return s.config.AgentField.ExecutionLogs
 			})
 			executions.GET("/:execution_id/logs", execLogsHandler.GetExecutionLogsHandler)
-			executions.GET("/:execution_id/logs/stream", execLogsHandler.StreamExecutionLogsHandler)
+			executions.GET("/:execution_id/logs/stream", s.streamHandler(execLogsHandler.StreamExecutionLogsHandler))
 
 			// DID and VC management endpoints for executions
 			didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
@@ -267,7 +267,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 
 			// Workflow notes SSE streaming
 			workflowNotesHandler := ui.NewExecutionHandler(s.storage, s.payloadStore, s.webhookDispatcher)
-			workflows.GET("/:workflowId/notes/events", workflowNotesHandler.StreamWorkflowNodeNotesHandler)
+			workflows.GET("/:workflowId/notes/events", s.streamHandler(workflowNotesHandler.StreamWorkflowNodeNotesHandler))
 		}
 
 		// Reasoners management group
@@ -275,7 +275,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 		{
 			reasonersHandler := ui.NewReasonersHandler(s.storage)
 			reasoners.GET("/all", reasonersHandler.GetAllReasonersHandler)
-			reasoners.GET("/events", reasonersHandler.StreamReasonerEventsHandler)
+			reasoners.GET("/events", s.streamHandler(reasonersHandler.StreamReasonerEventsHandler))
 			reasoners.GET("/:reasonerId/details", reasonersHandler.GetReasonerDetailsHandler)
 			reasoners.GET("/:reasonerId/metrics", reasonersHandler.GetPerformanceMetricsHandler)
 			reasoners.GET("/:reasonerId/executions", reasonersHandler.GetExecutionHistoryHandler)

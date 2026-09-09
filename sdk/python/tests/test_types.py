@@ -510,6 +510,8 @@ class TestHarnessConfig:
         assert hc.codex_bin == "codex"
         assert hc.gemini_bin == "gemini"
         assert hc.opencode_bin == "opencode"
+        assert hc.pi_bin == "pi"
+        assert hc.omp_bin == "omp"
 
     def test_optional_fields(self):
         hc = HarnessConfig(provider="p")

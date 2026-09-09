@@ -13,6 +13,10 @@ const (
 	ProviderCodex = "codex"
 	// ProviderGemini is the provider name for Gemini CLI.
 	ProviderGemini = "gemini"
+	// ProviderPi is the provider name for the Pi coding-agent CLI.
+	ProviderPi = "pi"
+	// ProviderOMP is the provider name for the Oh My Pi coding-agent CLI.
+	ProviderOMP = "omp"
 )
 
 const (
@@ -36,9 +40,10 @@ type Provider interface {
 // Options control a single harness invocation. Fields are optional;
 // zero values mean "use default".
 type Options struct {
-	// Provider name: "aforge", "opencode", "claude-code", "codex", or
-	// "gemini". An explicit value wins over AGENTFIELD_HARNESS_PROVIDER;
-	// when both are empty, the provider defaults to "aforge".
+	// Provider name: "aforge", "opencode", "claude-code", "codex",
+	// "gemini", "pi", or "omp". An explicit value wins over
+	// AGENTFIELD_HARNESS_PROVIDER; when both are empty, the provider
+	// defaults to "aforge".
 	Provider string
 
 	// Model identifier passed to the coding agent. It may carry a

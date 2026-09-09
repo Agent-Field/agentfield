@@ -162,6 +162,37 @@ See `examples/python_agent_nodes/waiting_state/` for a complete working example.
 
 See `docs/DEVELOPMENT.md` for instructions on wiring agents to the control plane.
 
+## Running several agents in one process (AgentMesh)
+
+```python
+from agentfield import Agent, AgentMesh
+
+writer = Agent(node_id="writer")
+editor = Agent(node_id="editor")
+
+@editor.reasoner()
+async def revise(text: str) -> dict:
+    return {"text": text.strip()}
+
+@writer.reasoner()
+async def draft(topic: str) -> dict:
+    return await writer.call("editor.revise", text=f"Draft about {topic}")
+
+AgentMesh([writer, editor]).run(port=8000)
+```
+
+AgentMesh v1 is offline-only. See the [AgentMesh guide](../../docs/agent-mesh.md)
+for mount layout, `call_local`, error behavior, and limitations.
+
+## Logging
+
+- `AGENTFIELD_LOG_STDOUT` controls the on-by-default structured JSON mirror. Set it to `0`, `false`, `no`, or `off` to disable the mirror; execution-scoped records still dispatch to the control plane.
+- `AGENTFIELD_LOG_MAX_LINE_BYTES` defaults to 16384 bytes and clamps any integer below 256 to 256. It limits both captured stdout/stderr lines and structured-mirror records; non-integers use the default.
+- `AGENTFIELD_LOGS_ENABLED` controls stdout/stderr capture and the node logs endpoint only, not control-plane execution-log dispatch.
+- `AGENTFIELD_LOG_LEVEL` controls human-readable Python SDK logging and defaults to `WARNING`.
+
+See the [environment-variable reference](https://github.com/Agent-Field/agentfield/blob/main/docs/ENVIRONMENT_VARIABLES.md) and [agent-node logs API](https://github.com/Agent-Field/agentfield/blob/main/docs/api/AGENT_NODE_LOGS.md) for details.
+
 ## Testing
 
 ```bash

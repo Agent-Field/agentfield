@@ -15,6 +15,7 @@ services:
       retries: 10
 
   control-plane:
+    stop_grace_period: 45s
     build:
       context: ../..
       dockerfile: deployments/docker/Dockerfile.control-plane
@@ -46,6 +47,7 @@ services:
       - agentfield-data:/data
 
   demo-go-agent:
+    stop_grace_period: 45s
     build:
       context: ../..
       dockerfile: deployments/docker/Dockerfile.demo-go-agent
@@ -62,6 +64,7 @@ services:
       - control-plane
 
   demo-python-agent:
+    stop_grace_period: 45s
     profiles: ["python-demo"]
     build:
       context: ../..

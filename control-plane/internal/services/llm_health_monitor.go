@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -35,18 +36,21 @@ type LLMEndpointStatus struct {
 	TotalFailures       int64        `json:"total_failures"`
 	// Circuit breaker internals
 	circuitOpenedAt   time.Time
+	nextProbeAt       time.Time
 	halfOpenSuccesses int
 }
 
 // LLMHealthMonitor monitors LLM backend health using circuit breaker pattern.
 type LLMHealthMonitor struct {
-	config     config.LLMHealthConfig
-	httpClient *http.Client
-	endpoints  map[string]*LLMEndpointStatus
-	mu         sync.RWMutex
-	stopCh     chan struct{}
-	stopOnce   sync.Once
-	uiService  *UIService
+	config      config.LLMHealthConfig
+	httpClient  *http.Client
+	endpoints   map[string]*LLMEndpointStatus
+	mu          sync.RWMutex
+	stopCh      chan struct{}
+	stopOnce    sync.Once
+	uiService   *UIService
+	now         func() time.Time
+	nextCheckAt time.Time
 }
 
 // NewLLMHealthMonitor creates a new LLM health monitor.
@@ -84,6 +88,7 @@ func NewLLMHealthMonitor(cfg config.LLMHealthConfig, uiService *UIService) *LLMH
 		endpoints:  endpoints,
 		stopCh:     make(chan struct{}),
 		uiService:  uiService,
+		now:        time.Now,
 	}
 }
 
@@ -102,6 +107,36 @@ func (m *LLMHealthMonitor) EndpointCount() int {
 	return len(m.endpoints)
 }
 
+// RetryAfterSeconds returns the remaining circuit-breaker recovery window.
+func (m *LLMHealthMonitor) RetryAfterSeconds(name string) int {
+	if m == nil {
+		return 30
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	recovery := m.config.RecoveryTimeout
+	if recovery <= 0 {
+		recovery = 30 * time.Second
+	}
+	remaining := recovery
+	if endpoint, ok := m.endpoints[normalizeLLMEndpointName(name)]; ok && endpoint.CircuitState == CircuitOpen && !endpoint.circuitOpenedAt.IsZero() {
+		nextProbeAt := endpoint.nextProbeAt
+		if nextProbeAt.IsZero() {
+			// A circuit can transition only on a health-check tick. Without a
+			// recorded scheduler deadline, use the conservative end of the next
+			// check interval rather than promising recovery at the raw timeout.
+			nextProbeAt = endpoint.circuitOpenedAt.Add(recovery + m.config.CheckInterval)
+		}
+		remaining = nextProbeAt.Sub(m.currentTime())
+	}
+	seconds := int(math.Ceil(remaining.Seconds()))
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
+}
+
 // Start begins the health monitoring loop.
 func (m *LLMHealthMonitor) Start() {
 	if !m.config.Enabled || len(m.config.Endpoints) == 0 {
@@ -117,6 +152,7 @@ func (m *LLMHealthMonitor) Start() {
 
 	ticker := time.NewTicker(m.config.CheckInterval)
 	defer ticker.Stop()
+	m.setNextCheckAt(m.currentTime().Add(m.config.CheckInterval))
 
 	// Initial check
 	m.checkAllEndpoints()
@@ -126,7 +162,8 @@ func (m *LLMHealthMonitor) Start() {
 		case <-m.stopCh:
 			logger.Logger.Info().Msg("LLM health monitor stopped")
 			return
-		case <-ticker.C:
+		case tickAt := <-ticker.C:
+			m.setNextCheckAt(tickAt.Add(m.config.CheckInterval))
 			m.checkAllEndpoints()
 		}
 	}
@@ -216,8 +253,9 @@ func (m *LLMHealthMonitor) checkEndpoint(epCfg config.LLMEndpoint) {
 
 	// If circuit is open, check if recovery timeout has elapsed
 	if ep.CircuitState == CircuitOpen {
-		if time.Since(ep.circuitOpenedAt) >= m.config.RecoveryTimeout {
+		if m.currentTime().Sub(ep.circuitOpenedAt) >= m.config.RecoveryTimeout {
 			ep.CircuitState = CircuitHalfOpen
+			ep.nextProbeAt = time.Time{}
 			ep.halfOpenSuccesses = 0
 			logger.Logger.Info().
 				Str("endpoint", ep.Name).
@@ -264,8 +302,39 @@ func normalizeLLMEndpointName(name string) string {
 	return strings.TrimSpace(strings.ToLower(name))
 }
 
+func (m *LLMHealthMonitor) currentTime() time.Time {
+	if m != nil && m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
+func (m *LLMHealthMonitor) setNextCheckAt(next time.Time) {
+	m.mu.Lock()
+	m.nextCheckAt = next
+	m.mu.Unlock()
+}
+
+// nextCircuitProbeAtLocked returns the first scheduled check at or after the
+// recovery deadline. m.mu must be held by the caller.
+func (m *LLMHealthMonitor) nextCircuitProbeAtLocked(openedAt time.Time) time.Time {
+	deadline := openedAt.Add(m.config.RecoveryTimeout)
+	interval := m.config.CheckInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	candidate := m.nextCheckAt
+	if candidate.IsZero() || !candidate.After(openedAt) {
+		candidate = openedAt.Add(interval)
+	}
+	for candidate.Before(deadline) {
+		candidate = candidate.Add(interval)
+	}
+	return candidate
+}
+
 func (m *LLMHealthMonitor) handleSuccess(ep *LLMEndpointStatus) {
-	ep.LastSuccess = time.Now()
+	ep.LastSuccess = m.currentTime()
 	ep.ConsecutiveFailures = 0
 
 	switch ep.CircuitState {
@@ -273,6 +342,7 @@ func (m *LLMHealthMonitor) handleSuccess(ep *LLMEndpointStatus) {
 		ep.halfOpenSuccesses++
 		if ep.halfOpenSuccesses >= m.config.HalfOpenMaxProbes {
 			ep.CircuitState = CircuitClosed
+			ep.nextProbeAt = time.Time{}
 			ep.Healthy = true
 			logger.Logger.Info().
 				Str("endpoint", ep.Name).
@@ -292,7 +362,8 @@ func (m *LLMHealthMonitor) handleFailure(ep *LLMEndpointStatus) {
 		if ep.ConsecutiveFailures >= m.config.FailureThreshold {
 			ep.CircuitState = CircuitOpen
 			ep.Healthy = false
-			ep.circuitOpenedAt = time.Now()
+			ep.circuitOpenedAt = m.currentTime()
+			ep.nextProbeAt = m.nextCircuitProbeAtLocked(ep.circuitOpenedAt)
 			logger.Logger.Error().
 				Str("endpoint", ep.Name).
 				Int("consecutive_failures", ep.ConsecutiveFailures).
@@ -303,7 +374,8 @@ func (m *LLMHealthMonitor) handleFailure(ep *LLMEndpointStatus) {
 		// Any failure in half-open immediately re-opens the circuit
 		ep.CircuitState = CircuitOpen
 		ep.Healthy = false
-		ep.circuitOpenedAt = time.Now()
+		ep.circuitOpenedAt = m.currentTime()
+		ep.nextProbeAt = m.nextCircuitProbeAtLocked(ep.circuitOpenedAt)
 		ep.halfOpenSuccesses = 0
 		logger.Logger.Warn().
 			Str("endpoint", ep.Name).

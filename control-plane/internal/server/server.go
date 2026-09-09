@@ -1,17 +1,21 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
@@ -110,9 +114,13 @@ type AgentFieldServer struct {
 	// Native scope-aware RAG knowledge store (embed-on-write/search).
 	knowledgeService *knowledge.Service
 	// HTTP server for graceful shutdown support
-	httpServerMu sync.RWMutex
-	httpServer   *http.Server
-	stopping     bool
+	httpServerMu      sync.RWMutex
+	httpServer        *http.Server
+	stopping          bool
+	draining          atomic.Bool
+	streamCtx         context.Context
+	cancelStreams     context.CancelFunc
+	cancelStreamsOnce sync.Once
 }
 
 // newRouter builds the gin engine the control plane serves from, with the
@@ -131,6 +139,24 @@ func newRouter() *gin.Engine {
 	router := gin.New()
 	useStructuredRequestLogging(router)
 	return router
+}
+
+func configureAgentRestartSettings(nodeHealth config.NodeHealthConfig) {
+	if grace := nodeHealth.AgentRestartGrace; grace != 0 {
+		handlers.SetAgentRestartGrace(grace)
+	}
+	if grace := nodeHealth.AgentDrainGrace; grace != 0 {
+		handlers.SetAgentDrainGrace(grace)
+	}
+	orphanReapEnabled := nodeHealth.EffectiveAgentOrphanReapEnabled()
+	handlers.SetAgentOrphanReapEnabled(orphanReapEnabled)
+	if !orphanReapEnabled {
+		logger.Logger.Warn().Msg("agent orphan reap on re-registration is disabled (AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED=false); in-flight executions of a departing instance are left to the stale-execution sweep")
+	}
+	logger.Logger.Info().
+		Dur("agent_restart_grace", handlers.AgentRestartGrace()).
+		Dur("agent_drain_grace", handlers.AgentDrainGrace()).
+		Msg("configured agent restart and drain grace windows")
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
@@ -165,9 +191,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 	// Configure execution event payload redaction from logging config.
 	handlers.SetRedactPayloads(cfg.Logging.ShouldRedactPayloads())
-	if grace := cfg.AgentField.NodeHealth.AgentRestartGrace; grace != 0 {
-		handlers.SetAgentRestartGrace(grace)
-	}
+	configureAgentRestartSettings(cfg.AgentField.NodeHealth)
 
 	Router := newRouter()
 
@@ -429,7 +453,12 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		})
 	}
 
-	payloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
+	var payloadStore services.PayloadStore
+	if cfg.Storage.Mode == "postgres" {
+		payloadStore = services.NopPayloadStore{}
+	} else {
+		payloadStore = services.NewFilePayloadStore(dirs.PayloadsDir)
+	}
 
 	// Configure SSRF-safe webhook client allowlist. Hosts/CIDRs listed here
 	// bypass the private-IP check (e.g. for internal Docker/K8s service names).
@@ -507,7 +536,9 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	handlers.InitConcurrencyLimiter(cfg.AgentField.ExecutionQueue.MaxConcurrentPerAgent)
 
 	// Initialize execution cleanup service
-	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.AgentField.ExecutionCleanup)
+	cleanupPayloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
+	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.AgentField.ExecutionCleanup, cleanupPayloadStore)
+	logger.Logger.Info().Dur("agent_call_timeout", cfg.AgentField.ExecutionQueue.AgentCallTimeout).Msg("effective agent call timeout")
 
 	adminPort := cfg.AgentField.Port + 100
 	if envPort := os.Getenv("AGENTFIELD_ADMIN_GRPC_PORT"); envPort != "" {
@@ -540,6 +571,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		Msg("knowledge store embedding provider initialized")
 	knowledgeService := knowledge.NewService(storageProvider, embedder)
 
+	streamCtx, cancelStreams := context.WithCancel(context.Background())
 	return &AgentFieldServer{
 		storage:                storageProvider,
 		cache:                  cacheProvider,
@@ -571,6 +603,8 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		observabilityForwarder: observabilityForwarder,
 		executionTracer:        executionTracer,
 		tracerShutdown:         tracerShutdown,
+		streamCtx:              streamCtx,
+		cancelStreams:          cancelStreams,
 		telemetryService:       telemetryService,
 		registryWatcherCancel:  nil,
 		adminGRPCPort:          adminPort,
@@ -708,10 +742,7 @@ func (s *AgentFieldServer) Start() error {
 
 	// Start HTTP server (using net/http.Server for graceful shutdown support)
 	addr := ":" + strconv.Itoa(s.config.AgentField.Port)
-	httpServer := &http.Server{
-		Addr:    addr,
-		Handler: s.Router,
-	}
+	httpServer := s.newHTTPServer(addr)
 	if !s.setHTTPServer(httpServer) {
 		return nil
 	}
@@ -730,6 +761,77 @@ func (s *AgentFieldServer) Start() error {
 	return nil
 }
 
+func (s *AgentFieldServer) newHTTPServer(addr string) *http.Server {
+	maxExecuteBodyBytes := int64(32 << 20)
+	if raw := strings.TrimSpace(os.Getenv("AGENTFIELD_MAX_EXECUTE_BODY_BYTES")); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			maxExecuteBodyBytes = parsed
+		} else {
+			logger.Logger.Warn().Str("value", raw).Msg("invalid AGENTFIELD_MAX_EXECUTE_BODY_BYTES; using 32 MiB")
+		}
+	}
+	maxRegisterBodyBytes := int64(8 << 20)
+	if raw := strings.TrimSpace(os.Getenv("AGENTFIELD_MAX_REGISTER_BODY_BYTES")); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			maxRegisterBodyBytes = parsed
+		} else {
+			logger.Logger.Warn().Str("value", raw).Msg("invalid AGENTFIELD_MAX_REGISTER_BODY_BYTES; using 8 MiB")
+		}
+	}
+	handler := maxRequestBodyHandler(s.Router, maxExecuteBodyBytes, maxRegisterBodyBytes)
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+}
+
+func maxExecuteBodyHandler(next http.Handler, limit int64) http.Handler {
+	return maxRequestBodyHandler(next, limit, 0)
+}
+
+func maxRequestBodyHandler(next http.Handler, executeLimit, registerLimit int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isExecuteRoute := r.URL.Path == "/api/v1/execute" || strings.HasPrefix(r.URL.Path, "/api/v1/execute/")
+		if r.Method == http.MethodPost && isExecuteRoute {
+			if r.ContentLength > executeLimit {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_, _ = w.Write([]byte(`{"error":"request body too large"}`))
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, executeLimit)
+		}
+		isRegisterRoute := r.URL.Path == "/api/v1/nodes/register" || r.URL.Path == "/api/v1/nodes" || r.URL.Path == "/api/v1/nodes/register-serverless"
+		if r.Method == http.MethodPost && isRegisterRoute && registerLimit > 0 {
+			if r.ContentLength > registerLimit {
+				writeBodyTooLarge(w)
+				return
+			}
+			body, err := io.ReadAll(io.LimitReader(r.Body, registerLimit+1))
+			if err != nil {
+				http.Error(w, "failed to read request body", http.StatusBadRequest)
+				return
+			}
+			if int64(len(body)) > registerLimit {
+				writeBodyTooLarge(w)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeBodyTooLarge(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusRequestEntityTooLarge)
+	_, _ = w.Write([]byte(`{"error":"request body too large"}`))
+}
+
 func (s *AgentFieldServer) setHTTPServer(httpServer *http.Server) bool {
 	s.httpServerMu.Lock()
 	defer s.httpServerMu.Unlock()
@@ -746,21 +848,11 @@ func (s *AgentFieldServer) getHTTPServer() *http.Server {
 	return s.httpServer
 }
 
-func (s *AgentFieldServer) shutdownHTTPServer() error {
+func (s *AgentFieldServer) shutdownHTTPServerWithContext(ctx context.Context) error {
 	httpServer := s.getHTTPServer()
 	if httpServer == nil {
 		return nil
 	}
-
-	var shutdownTimeout time.Duration
-	if s.config != nil {
-		shutdownTimeout = s.config.AgentField.ShutdownTimeout
-	}
-	if shutdownTimeout <= 0 {
-		shutdownTimeout = 30 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
 	if err := httpServer.Shutdown(ctx); err != nil {
 		logger.Logger.Error().Err(err).Msg("HTTP server shutdown timed out, forcing close")
 		_ = httpServer.Close()
@@ -830,11 +922,26 @@ func (s *AgentFieldServer) ListReasoners(ctx context.Context, _ *adminpb.ListRea
 
 // Stop gracefully shuts down the AgentFieldServer.
 func (s *AgentFieldServer) Stop() error {
+	s.BeginDrain()
 	s.httpServerMu.Lock()
 	s.stopping = true
 	s.httpServerMu.Unlock()
+	s.cancelStreamsOnce.Do(func() {
+		if s.cancelStreams != nil {
+			s.cancelStreams()
+		}
+	})
 
-	httpShutdownErr := s.shutdownHTTPServer()
+	shutdownTimeout := 30 * time.Second
+	if s.config != nil && s.config.AgentField.ShutdownTimeout > 0 {
+		shutdownTimeout = s.config.AgentField.ShutdownTimeout
+	}
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancelShutdown()
+	httpShutdownErr := s.shutdownHTTPServerWithContext(shutdownCtx)
+	asyncCtx, cancelAsync := asyncDrainContext(shutdownCtx)
+	handlers.StopAsyncWorkerPool(asyncCtx)
+	cancelAsync()
 
 	if s.adminGRPCServer != nil {
 		s.adminGRPCServer.GracefulStop()
@@ -936,6 +1043,39 @@ func (s *AgentFieldServer) Stop() error {
 
 	// TODO: Implement graceful shutdown for WebSocket
 	return httpShutdownErr
+}
+
+// BeginDrain marks the control plane as shutting down so readiness probes
+// start failing while the HTTP listener is still open and still serving. It
+// is safe to call more than once and never blocks. Liveness (/health,
+// /api/v1/health) is deliberately untouched: the process is alive and must
+// not be killed by the kubelet mid-drain.
+func (s *AgentFieldServer) BeginDrain() {
+	s.draining.Store(true)
+}
+
+// IsDraining reports whether shutdown draining has begun.
+func (s *AgentFieldServer) IsDraining() bool {
+	return s.draining.Load()
+}
+
+func (s *AgentFieldServer) streamHandler(handler gin.HandlerFunc) gin.HandlerFunc {
+	if s.streamCtx == nil {
+		s.streamCtx, s.cancelStreams = context.WithCancel(context.Background())
+	}
+	return handlers.WithStreamContext(s.streamCtx, handler)
+}
+
+func asyncDrainContext(shutdownCtx context.Context) (context.Context, context.CancelFunc) {
+	budget := 5 * time.Second
+	if deadline, ok := shutdownCtx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > budget {
+			budget = remaining
+		}
+	}
+	// The async pool always gets a useful drain window, so total shutdown may
+	// exceed AGENTFIELD_SHUTDOWN_TIMEOUT by up to five seconds.
+	return context.WithTimeout(context.Background(), budget)
 }
 
 // setupRoutes composes the full HTTP surface by delegating to focused

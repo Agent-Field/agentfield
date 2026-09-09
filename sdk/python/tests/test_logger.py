@@ -1,15 +1,91 @@
+import io
+import json
 import logging
 import threading
+import time
+from unittest.mock import Mock
 
 import pytest
 
 import agentfield.logger as logger_module
 from agentfield.logger import (
+    AgentFieldLogger,
     get_logger,
     log_info,
     set_cp_client,
     set_log_level,
 )
+
+
+@pytest.mark.unit
+def test_structured_stdout_can_be_disabled(monkeypatch, capsys):
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", "false")
+    logger = AgentFieldLogger("structured.stdout.disabled")
+
+    logger._emit_structured_record({"event_type": "test"})
+
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.unit
+def test_structured_stdout_disabled_skips_serialization(monkeypatch, capsys):
+    class Unserializable:
+        def __str__(self):
+            raise AssertionError(
+                "structured stdout should not serialize disabled records"
+            )
+
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", "false")
+    logger = AgentFieldLogger("structured.stdout.no-serialization")
+
+    logger._emit_structured_record({"event_type": "test", "payload": Unserializable()})
+
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.unit
+def test_structured_stdout_is_enabled_by_default(capsys):
+    logger = AgentFieldLogger("structured.stdout.default")
+
+    logger._emit_structured_record({"event_type": "test"})
+
+    assert '"event_type":"test"' in capsys.readouterr().out
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["false", "FALSE", "  False  ", "0", "no", "off"])
+def test_structured_stdout_disabled_for_every_falsy_spelling(
+    monkeypatch, capsys, value
+):
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", value)
+    logger = AgentFieldLogger(f"structured.stdout.off.{value.strip().lower()}")
+
+    logger._emit_structured_record({"event_type": "test"})
+
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value", ["true", "TRUE", "  True  ", "1", "yes", "on", "", "ture"]
+)
+def test_structured_stdout_stays_on_unless_explicitly_disabled(
+    monkeypatch, capsys, value
+):
+    """Only the documented falsy values silence the mirror.
+
+    ``1``/``yes``/``on`` are truthy everywhere else in the SDK, and a
+    set-but-empty or misspelt value must not silently drop log output -- the
+    default has to fail towards keeping records visible.
+    """
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", value)
+    logger = AgentFieldLogger(
+        f"structured.stdout.on.{value.strip().lower() or 'empty'}"
+    )
+
+    logger._emit_structured_record({"event_type": "test"})
+
+    assert '"event_type":"test"' in capsys.readouterr().out
 
 
 @pytest.fixture(autouse=True)
@@ -203,3 +279,313 @@ def test_set_cp_client_none_clears_forwarding_for_future_loggers():
     set_cp_client(None)
 
     assert get_logger("agentfield.created.after.reset")._cp_client is None
+
+
+@pytest.mark.unit
+def test_structured_mirror_is_bounded_valid_json_and_cp_receives_full_record(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    logger = AgentFieldLogger("bounded-structured")
+    dispatch = Mock()
+    monkeypatch.setattr(logger, "_dispatch_to_cp", dispatch)
+    record = logger._build_execution_record(
+        message="kept",
+        level="INFO",
+        event_type="reasoner.completed",
+        source="test.source",
+        attributes={"result": "x" * 4000},
+    )
+    record["execution_id"] = "exec-1"
+    record["run_id"] = "run-1"
+
+    logger._emit_structured_record(record)
+
+    line = stream.getvalue().rstrip("\n")
+    mirrored = json.loads(line)
+    assert len(line.encode()) <= 512
+    for key in ("execution_id", "run_id", "level", "event_type", "message", "source"):
+        assert mirrored[key] == record[key]
+    assert mirrored["attributes"]["result"] == "<4002 bytes elided>"
+    dispatch.assert_called_once_with(record)
+    assert record["attributes"]["result"] == "x" * 4000
+
+
+@pytest.mark.unit
+def test_structured_mirror_elides_oversized_message(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+
+    AgentFieldLogger("oversized-message").log_execution(
+        "λ" * 4000, event_type="test.oversized-message"
+    )
+
+    line = stream.getvalue().rstrip("\n")
+    mirrored = json.loads(line)
+    assert len(line.encode("utf-8")) <= 512
+    assert "bytes elided]" in mirrored["message"]
+
+
+@pytest.mark.unit
+def test_structured_mirror_elides_oversized_non_dict_attributes(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    logger = AgentFieldLogger("non-dict-attributes")
+    record = logger._build_execution_record(
+        message="kept", level="INFO", event_type="test.non-dict"
+    )
+    record["attributes"] = ["x" * 4000]
+
+    logger._emit_structured_record(record)
+
+    line = stream.getvalue().rstrip("\n")
+    mirrored = json.loads(line)
+    assert len(line.encode("utf-8")) <= 512
+    assert mirrored["attributes"] == "<4004 bytes elided>"
+
+
+@pytest.mark.unit
+def test_structured_mirror_many_large_attributes_stays_fast(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "4000")
+    monkeypatch.setattr(logger_module.sys, "stdout", io.StringIO())
+    attributes = {f"key-{index}": "x" * 50_000 for index in range(200)}
+
+    start = time.perf_counter()
+    AgentFieldLogger("many-attributes").log_execution(
+        "bounded", event_type="test.many-attributes", attributes=attributes
+    )
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.2
+
+
+@pytest.mark.unit
+def test_structured_mirror_serializes_large_string_payload_at_most_once(monkeypatch):
+    budget = 16384
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", str(budget))
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    calls = []
+    real_dumps = logger_module.json.dumps
+
+    def counting_dumps(obj, **kwargs):
+        result = real_dumps(obj, **kwargs)
+        # Classify by OUTPUT size: the redundant call this guards against
+        # serializes the whole record, not the oversized string itself.
+        calls.append(len(result))
+        return result
+
+    monkeypatch.setattr(logger_module.json, "dumps", counting_dumps)
+    record = {
+        "message": "bounded",
+        "attributes": {"binary": b"x", "payload": "x" * 5_000_000},
+    }
+
+    AgentFieldLogger("large-string-once")._emit_structured_record(record)
+
+    line = stream.getvalue().rstrip("\n")
+    json.loads(line)
+    assert len(line.encode("utf-8")) <= budget
+    assert sum(1 for size in calls if size >= 1_000_000) == 1
+    assert record["attributes"]["payload"] == "x" * 5_000_000
+
+
+@pytest.mark.unit
+def test_structured_mirror_fitting_nested_record_is_not_walked_recursively(
+    monkeypatch,
+):
+    walked = []
+
+    class _TripwireStr(str):
+        """A nested string a recursive precheck would touch; json.dumps does not."""
+
+        # Recording rather than raising is deliberate: _certainly_exceeds_budget
+        # swallows every exception and falls back to the full-dumps path, so a
+        # raising tripwire would be invisible to the caller.
+        def isascii(self):
+            walked.append("isascii")
+            return str.isascii(self)
+
+        def __len__(self):
+            walked.append("len")
+            return str.__len__(self)
+
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "16384")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    record = {
+        "message": "bounded",
+        "attributes": {
+            "rows": [{"i": index, "n": _TripwireStr("x")} for index in range(700)]
+        },
+    }
+    expected = json.dumps(
+        record, ensure_ascii=False, separators=(",", ":"), default=str
+    )
+
+    AgentFieldLogger("fitting-nested")._emit_structured_record(record)
+
+    line = stream.getvalue().rstrip("\n")
+    mirrored = json.loads(line)
+    assert line == expected
+    assert walked == []
+    assert len(mirrored["attributes"]["rows"]) == 700
+
+
+@pytest.mark.unit
+def test_structured_mirror_non_string_attribute_keys_have_exact_sizes(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    attributes = {0: "x" * 4000, True: "y", None: "z"}
+    logger = AgentFieldLogger("non-string-keys")
+
+    logger._emit_structured_record({"message": "kept", "attributes": attributes})
+    line = stream.getvalue().rstrip("\n")
+    assert json.loads(line)["attributes"]["0"] == "<4002 bytes elided>"
+
+    stream.seek(0)
+    stream.truncate(0)
+    logger._emit_structured_record({"message": "z" * 100_000, "attributes": attributes})
+    line = stream.getvalue().rstrip("\n")
+    attributes_size = len(
+        json.dumps(attributes, ensure_ascii=False, separators=(",", ":"), default=str)
+    )
+    assert json.loads(line)["attributes"]["_elided"] == (
+        f"<{attributes_size} bytes elided>"
+    )
+
+
+@pytest.mark.unit
+def test_structured_mirror_without_attributes_reports_exact_original_size(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "256")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    record = {
+        "ts": "t" * 1000,
+        "level": "info",
+        "message": "z" * 100_000,
+    }
+    expected_size = len(
+        json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str)
+    )
+
+    AgentFieldLogger("missing-attributes")._emit_structured_record(record)
+
+    line = stream.getvalue().rstrip("\n")
+    assert json.loads(line)["message"] == f"<record elided: {expected_size} bytes>"
+
+
+@pytest.mark.unit
+def test_structured_mirror_precheck_exception_falls_back_to_serialization(monkeypatch):
+    class _TripwireStr(str):
+        def isascii(self):
+            raise RecursionError("precheck measurement failed")
+
+        def __len__(self):
+            raise RecursionError("precheck measurement failed")
+
+    budget = 512
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", str(budget))
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    record = {"message": "kept", "attributes": {"value": _TripwireStr("safe")}}
+
+    AgentFieldLogger("precheck-exception")._emit_structured_record(record)
+
+    line = stream.getvalue().rstrip("\n")
+    assert json.loads(line)["attributes"]["value"] == "safe"
+    assert len(line.encode("utf-8")) <= budget
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [("key", "key"), (False, "false"), (None, "null"), (1.5, "1.5")],
+)
+def test_json_key_matches_json_dict_key_coercion(key, expected):
+    assert AgentFieldLogger._json_key(key) == expected
+
+
+@pytest.mark.unit
+def test_json_key_falls_back_to_string_for_unknown_key_type():
+    class Key:
+        def __str__(self):
+            return "custom"
+
+    assert AgentFieldLogger._json_key(Key()) == "custom"
+
+
+@pytest.mark.unit
+def test_public_structured_logger_emits_only_bounded_json_lines(monkeypatch):
+    cap = 512
+    monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", str(cap))
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", "true")
+    stream = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    logger = get_logger("agentfield")
+    set_log_level("INFO")
+
+    logger.log_execution("short", event_type="test.short", attributes={"ok": True})
+    logger.log_execution(
+        "x" * 4000,
+        event_type="test.large",
+        attributes={"payload": "y" * 4000},
+    )
+
+    lines = stream.getvalue().splitlines()
+    assert len(lines) == 2
+    for line in lines:
+        json.loads(line)
+        assert len(line.encode("utf-8")) <= cap
+
+
+@pytest.mark.unit
+def test_structured_stdout_false_skips_serialization_but_dispatches(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", "false")
+    logger = AgentFieldLogger("no-structured-stdout")
+    dispatch = Mock()
+    monkeypatch.setattr(logger, "_dispatch_to_cp", dispatch)
+    dumps = Mock(side_effect=AssertionError("mirror serialization must be skipped"))
+    monkeypatch.setattr(logger_module.json, "dumps", dumps)
+    record = {"execution_id": "exec-1", "attributes": {"large": "x" * 1000}}
+
+    logger._emit_structured_record(record)
+
+    dumps.assert_not_called()
+    dispatch.assert_called_once_with(record)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("error", [BrokenPipeError(), OSError("closed")])
+def test_structured_stdout_errors_never_escape(monkeypatch, error):
+    class BrokenStream:
+        def write(self, _value):
+            raise error
+
+        def flush(self):
+            raise error
+
+    monkeypatch.setattr(logger_module.sys, "stdout", BrokenStream())
+    logger = AgentFieldLogger("broken-structured-stdout")
+    monkeypatch.setattr(logger, "_dispatch_to_cp", Mock())
+
+    logger.log_execution("still safe", event_type="test.event", execution_id="exec-1")
+
+
+@pytest.mark.unit
+def test_logger_created_before_tee_uses_current_stdout(monkeypatch):
+    before = io.StringIO()
+    after = io.StringIO()
+    monkeypatch.setattr(logger_module.sys, "stdout", before)
+    logger = AgentFieldLogger("lazy-stdout")
+    monkeypatch.setattr(logger_module.sys, "stdout", after)
+
+    logger.logger.error("captured after install")
+
+    assert before.getvalue() == ""
+    assert after.getvalue() == "captured after install\n"

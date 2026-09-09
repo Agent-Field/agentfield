@@ -1,5 +1,9 @@
 # AgentField Go SDK
 
+## Graceful shutdown
+
+Server agents notify the control plane, stop accepting requests, and drain in-flight executions on SIGTERM, SIGINT, or `POST /shutdown`. Set `AGENTFIELD_SHUTDOWN_TIMEOUT` to bare seconds (`30`) or a duration (`30s`, `5m`); the default is 30 seconds. `Config.ShutdownTimeout` takes precedence. In Kubernetes, set `terminationGracePeriodSeconds` higher than the drain timeout.
+
 The AgentField Go SDK provides idiomatic Go bindings for interacting with the AgentField control plane.
 
 ## Installation
@@ -117,6 +121,14 @@ result, err := approvalClient.WaitForApproval(waitCtx, nodeID, executionID,
 ```
 
 **Methods:** `RequestApproval()`, `GetApprovalStatus()`, `WaitForApproval()`
+
+## Logging
+
+- `AGENTFIELD_LOG_STDOUT` controls the on-by-default structured JSON mirror; `0`, `false`, `no`, or `off` disables it without disabling control-plane dispatch.
+- `AGENTFIELD_LOGS_ENABLED` controls stdout/stderr capture and the node logs endpoint, not control-plane dispatch.
+- `AGENTFIELD_LOG_MAX_LINE_BYTES` defaults to 16384 bytes. Values below 256 and non-integers use that default; valid integers of 256 or greater are accepted.
+
+See the [environment-variable reference](../../docs/ENVIRONMENT_VARIABLES.md) for details.
 
 ## Testing
 

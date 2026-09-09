@@ -1,4 +1,5 @@
 import type { HarnessProvider } from './base.js';
+import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
 import { runCli } from '../cli.js';
@@ -43,10 +44,9 @@ export class OpenCodeProvider implements HarnessProvider {
     const cmd = [this.bin, 'run'];
 
     // Use --dir for project directory.
-    if (options.cwd && typeof options.cwd === 'string') {
-      cmd.push('--dir', options.cwd);
-    } else if (options.project_dir && typeof options.project_dir === 'string') {
-      cmd.push('--dir', options.project_dir);
+    const root = resolveRoot(options);
+    if (root) {
+      cmd.push('--dir', root);
     }
 
     const env: Record<string, string> = { ...(options.env as Record<string, string>) };

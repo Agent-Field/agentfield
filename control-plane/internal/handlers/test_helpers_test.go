@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -144,6 +145,31 @@ func (s *testExecutionStorage) GetWorkflowRun(ctx context.Context, runID string)
 		return nil, nil
 	}
 	return run, nil
+}
+
+func (s *testExecutionStorage) UpdateWorkflowRunMetadata(_ context.Context, runID string, mutate func(map[string]json.RawMessage) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	namespaces := make(map[string]json.RawMessage)
+	run := s.runs[runID]
+	if run == nil {
+		now := time.Now().UTC()
+		run = &types.WorkflowRun{RunID: runID, RootWorkflowID: runID, Status: "pending", CreatedAt: now, UpdatedAt: now}
+	}
+	if len(run.Metadata) > 0 {
+		_ = json.Unmarshal(run.Metadata, &namespaces)
+	}
+	if err := mutate(namespaces); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(namespaces)
+	if err != nil {
+		return err
+	}
+	run.Metadata = encoded
+	run.UpdatedAt = time.Now().UTC()
+	s.runs[runID] = run
+	return nil
 }
 
 func (s *testExecutionStorage) UpdateWorkflowRun(ctx context.Context, runID string, updateFunc func(*types.WorkflowRun) (*types.WorkflowRun, error)) error {

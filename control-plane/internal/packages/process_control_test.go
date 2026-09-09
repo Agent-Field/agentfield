@@ -2,10 +2,12 @@ package packages
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -331,6 +333,29 @@ func TestAssessRecordedProcessUnknownIdentityMatrix(t *testing.T) {
 				t.Fatalf("assessment=%+v, want ownership=%v signal=%v", assessment, test.want, test.wantSignal)
 			}
 		})
+	}
+}
+
+func TestAgentShutdownBudgetUsesConfiguredProcessEnvironment(t *testing.T) {
+	pid := 123
+	entry := InstalledPackage{Runtime: RuntimeInfo{PID: &pid}}
+
+	got := agentShutdownBudgetWith(entry, func(int) []string {
+		return []string{"OTHER=value", "AGENTFIELD_SHUTDOWN_TIMEOUT=2m"}
+	})
+
+	if got != 2*time.Minute {
+		t.Fatalf("budget=%s, want 2m", got)
+	}
+}
+
+func TestAgentShutdownBudgetDefaultsForMissingOrInvalidValue(t *testing.T) {
+	pid := 123
+	entry := InstalledPackage{Runtime: RuntimeInfo{PID: &pid}}
+	for _, env := range [][]string{nil, {"AGENTFIELD_SHUTDOWN_TIMEOUT=eventually"}} {
+		if got := agentShutdownBudgetWith(entry, func(int) []string { return env }); got != 30*time.Second {
+			t.Fatalf("budget=%s, want 30s for env %v", got, env)
+		}
 	}
 }
 
@@ -690,8 +715,31 @@ func TestPackageHealthIdentityUsesManifestMetadata(t *testing.T) {
 func TestRequestHTTPShutdownHonorsExpiredContext(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	accepted, timedOut := requestHTTPShutdown(ctx, 1)
+	accepted, timedOut := requestHTTPShutdown(ctx, 1, 30*time.Second)
 	if accepted || !timedOut {
 		t.Fatalf("accepted=%v timedOut=%v", accepted, timedOut)
+	}
+}
+
+func TestRequestHTTPShutdownSendsResolvedBudget(t *testing.T) {
+	var body struct {
+		Graceful       bool    `json:"graceful"`
+		TimeoutSeconds float64 `json:"timeout_seconds"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	accepted, timedOut := requestHTTPShutdown(context.Background(), port, 45*time.Second)
+	if !accepted || timedOut {
+		t.Fatalf("accepted=%v timedOut=%v", accepted, timedOut)
+	}
+	if !body.Graceful || body.TimeoutSeconds != 45 {
+		t.Fatalf("body=%+v", body)
 	}
 }

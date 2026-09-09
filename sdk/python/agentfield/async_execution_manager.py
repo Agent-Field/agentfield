@@ -7,6 +7,7 @@ monitoring capabilities.
 """
 
 import asyncio
+import contextvars
 import json
 import time
 from dataclasses import dataclass, field
@@ -40,6 +41,16 @@ from .status import normalize_status
 from .types import WebhookConfig
 
 logger = get_logger(__name__)
+
+
+def _create_background_task(coro: Any) -> asyncio.Task:
+    """Create manager-owned work without inheriting a caller's run context."""
+    return contextvars.Context().run(asyncio.create_task, coro)
+
+
+def _log_without_execution_context(method: Any, message: str) -> None:
+    """Keep lifecycle records out of execution-scoped log streams."""
+    contextvars.Context().run(method, message)
 
 
 async def _safe_pause_callback(callback: Any, name: str, timeout: float = 2.0) -> None:
@@ -316,17 +327,18 @@ class AsyncExecutionManager:
         self._loop = current_running_loop()
 
         # Start background tasks
-        self._polling_task = asyncio.create_task(self._polling_loop())
-        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        self._polling_task = _create_background_task(self._polling_loop())
+        self._cleanup_task = _create_background_task(self._cleanup_loop())
 
         if self.config.enable_performance_logging:
-            self._metrics_task = asyncio.create_task(self._metrics_loop())
+            self._metrics_task = _create_background_task(self._metrics_loop())
 
         if self.config.enable_event_stream:
-            self._event_stream_task = asyncio.create_task(self._event_stream_loop())
+            self._event_stream_task = _create_background_task(self._event_stream_loop())
 
-        logger.info(
-            f"AsyncExecutionManager started with max_concurrent={self.config.max_concurrent_executions}"
+        _log_without_execution_context(
+            logger.info,
+            f"AsyncExecutionManager started with max_concurrent={self.config.max_concurrent_executions}",
         )
 
     async def stop(self) -> None:
@@ -340,7 +352,7 @@ class AsyncExecutionManager:
         different loop`` RuntimeError. Downstream component teardown
         (connection_manager, result_cache) is likewise loop-aware.
         """
-        logger.info("Stopping AsyncExecutionManager...")
+        _log_without_execution_context(logger.info, "Stopping AsyncExecutionManager...")
 
         current_loop = current_running_loop()
         owning_loop = self._loop
@@ -428,12 +440,13 @@ class AsyncExecutionManager:
                     await self.result_cache.stop()
 
         if first_error is not None:
-            logger.warning(
-                f"AsyncExecutionManager stopped, but teardown reported {first_error!r}"
+            _log_without_execution_context(
+                logger.warning,
+                f"AsyncExecutionManager stopped, but teardown reported {first_error!r}",
             )
             raise first_error
 
-        logger.info("AsyncExecutionManager stopped")
+        _log_without_execution_context(logger.info, "AsyncExecutionManager stopped")
 
     def _cancel_active_executions(self, reason: str) -> Optional[BaseException]:
         """Cancel every active execution, returning the first failure.

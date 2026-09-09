@@ -17,22 +17,31 @@ import (
 )
 
 func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
+	return c.prepareExecutionWithAdmission(ctx, ginCtx, true)
+}
+
+func (c *executionController) prepareAsyncExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
+	return c.prepareExecutionWithAdmission(ctx, ginCtx, true)
+}
+
+func (c *executionController) prepareExecutionWithAdmission(ctx context.Context, ginCtx *gin.Context, acquireSlot bool) (*preparedExecution, error) {
 	targetParam := ginCtx.Param("target")
 	var req ExecuteRequest
 	if err := ginCtx.ShouldBindJSON(&req); err != nil {
 		return nil, fmt.Errorf("invalid request body: %w", err)
 	}
-	return c.prepareExecutionForTarget(
+	return c.prepareExecutionForTargetWithAdmission(
 		ctx,
 		targetParam,
 		req,
 		readExecutionHeaders(ginCtx),
 		middleware.GetVerifiedCallerDID(ginCtx),
 		middleware.GetTargetDID(ginCtx),
+		acquireSlot,
 	)
 }
 
-func (c *executionController) prepareExecutionForTarget(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string) (*preparedExecution, error) {
+func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string, acquireSlot bool) (*preparedExecution, error) {
 	target, err := parseTarget(targetParam)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
@@ -41,6 +50,14 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 	// Allow empty input for skills/reasoners that take no parameters (issue #196).
 	if req.Input == nil {
 		req.Input = map[string]interface{}{}
+	}
+	if req.RunMetadata != nil && headers.parentExecutionID == nil {
+		if _, err := applyRunMetadataInput(types.RunMetadata{}, *req.RunMetadata); err != nil {
+			return nil, fmt.Errorf("invalid run_metadata: %w", err)
+		}
+		if _, err := normalizeRunMetadataActor(pointerValue(headers.actorID)); err != nil {
+			return nil, fmt.Errorf("invalid run_metadata: %w", err)
+		}
 	}
 
 	var (
@@ -109,6 +126,12 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 	// contacting the agent, so the node being down must not reject it (a
 	// replay miss simply dials and fails exactly as it did before this gate).
 	if agent.DeploymentType != "serverless" && strings.TrimSpace(headers.replaySourceRunID) == "" {
+		if agentIsDraining(agent) {
+			agent, err = c.waitForDrainingAgent(ctx, agent, target.NodeID)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if err := ensureAgentDispatchable(agent, target.NodeID); err != nil {
 			return nil, err
 		}
@@ -126,31 +149,52 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 	}
 	target.TargetType = targetType
 
+	storedPayload, err := json.Marshal(buildClientPayload(req))
+	if err != nil {
+		return nil, fmt.Errorf("encode execution payload: %w", err)
+	}
+
+	hit, err := c.findReplayHit(ctx, headers, target, storedPayload)
+	if err != nil {
+		return nil, err
+	}
+
 	runID := headers.runID
 	if runID == "" {
 		runID = utils.GenerateRunID()
 	}
 
+	llmEndpoint := extractRequestedLLMEndpoint(req)
+	slotAcquired := false
+	slotTransferred := false
+	if acquireSlot && hit == nil {
+		if err := CheckExecutionPreconditions(target.NodeID, llmEndpoint); err != nil {
+			logger.Logger.Warn().
+				Str("node_id", target.NodeID).
+				Str("error_category", string(classifyExecutionError(err))).
+				Str("run_id", runID).
+				Msg("execution rejected by admission gate")
+			return nil, err
+		}
+		slotAcquired = true
+		defer func() {
+			// Gin recovers handler panics. Do not strand a slot when persistence or
+			// another preparation dependency panics before a plan takes ownership.
+			if slotAcquired && !slotTransferred {
+				ReleaseExecutionSlot(target.NodeID)
+			}
+		}()
+	}
+
 	executionID := utils.GenerateExecutionID()
 	now := time.Now().UTC()
-
-	clientPayload := map[string]interface{}{
-		"input": req.Input,
-	}
-	if len(req.Context) > 0 {
-		clientPayload["context"] = req.Context
-	}
-
-	storedPayload, err := json.Marshal(clientPayload)
-	if err != nil {
-		return nil, fmt.Errorf("encode execution payload: %w", err)
-	}
 
 	exec := &types.Execution{
 		ExecutionID:       executionID,
 		RunID:             runID,
 		ParentExecutionID: headers.parentExecutionID,
 		AgentNodeID:       agent.ID,
+		InstanceID:        agent.InstanceID,
 		ReasonerID:        target.TargetName,
 		NodeID:            target.NodeID,
 		Status:            types.ExecutionStatusRunning,
@@ -188,6 +232,9 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 	if err := c.store.CreateExecutionRecord(ctx, exec); err != nil {
 		return nil, fmt.Errorf("create execution record: %w", err)
 	}
+	if headers.parentExecutionID == nil && req.RunMetadata != nil {
+		c.persistExecuteRunMetadata(ctx, runID, *req.RunMetadata, headers.actorID)
+	}
 
 	var webhookRegistered bool
 	if sanitizedWebhook != nil && webhookError == nil {
@@ -218,18 +265,14 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 
 	c.ensureWorkflowExecutionRecord(ctx, exec, target, storedPayload)
 
-	hit, err := c.findReplayHit(ctx, headers, target, storedPayload)
-	if err != nil {
-		return nil, err
-	}
-
-	return &preparedExecution{
+	plan := &preparedExecution{
 		exec:                    exec,
 		requestBody:             agentPayloadBytes,
 		agent:                   agent,
 		target:                  target,
 		targetType:              targetType,
-		llmEndpoint:             extractRequestedLLMEndpoint(req),
+		llmEndpoint:             llmEndpoint,
+		slotHeld:                slotAcquired,
 		webhookRegistered:       webhookRegistered,
 		webhookError:            webhookError,
 		callerDID:               callerDID,
@@ -239,7 +282,68 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 		replayBeforeExecutionID: headers.replayBeforeExecutionID,
 		replayMode:              headers.replayMode,
 		replayHit:               hit,
-	}, nil
+	}
+	slotTransferred = true
+	return plan, nil
+}
+
+// buildClientPayload builds the blob persisted as executions.input_payload,
+// which canonicalReplayPayload then hashes into the replay dedupe key.
+//
+// Only input and context belong in it. run_metadata is deliberately excluded:
+// it names the run for humans and has no bearing on what the reasoner is asked
+// to compute, so two executes that differ only in run_metadata must still
+// replay-match each other. Adding a field here changes the dedupe key for every
+// caller and silently turns existing replay hits into misses.
+func buildClientPayload(req ExecuteRequest) map[string]interface{} {
+	payload := map[string]interface{}{
+		"input": req.Input,
+	}
+	if len(req.Context) > 0 {
+		payload["context"] = req.Context
+	}
+	return payload
+}
+
+// persistExecuteRunMetadata stores the run_metadata a root execute carried, by
+// merging it into the run's "run" namespace. Best effort on purpose: an execute
+// must not fail because a display name could not be recorded, so a failure is
+// logged and swallowed — the same contract persistRestartRunMetadata uses for
+// the lineage seed. Callers must have already checked that this is a root
+// execute; only the run root establishes run identity.
+func (c *executionController) persistExecuteRunMetadata(ctx context.Context, runID string, input RunMetadataInput, actorID *string) {
+	writer, ok := c.store.(workflowRunMetadataWriter)
+	if !ok {
+		return
+	}
+	actor, err := normalizeRunMetadataActor(pointerValue(actorID))
+	if err != nil {
+		logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to persist execute run metadata")
+		return
+	}
+	if err := writer.UpdateWorkflowRunMetadata(ctx, runID, func(namespaces map[string]json.RawMessage) error {
+		current := types.RunMetadata{}
+		if raw := namespaces[types.RunMetadataNamespace]; raw != nil {
+			_ = json.Unmarshal(raw, &current)
+		}
+		merged, err := applyRunMetadataInput(current, input)
+		if err != nil {
+			return err
+		}
+		merged.SetBy = actor
+		merged.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		namespaces[types.RunMetadataNamespace], err = json.Marshal(merged)
+		return err
+	}); err != nil {
+		logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to persist execute run metadata")
+	}
+}
+
+func pointerValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // findReplayHit returns a previously-succeeded child output to reuse for the

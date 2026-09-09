@@ -17,7 +17,7 @@ AgentField is a Kubernetes-style control plane for AI agents. It provides produc
 - Go 1.23+
 - Python 3.8+
 - Node.js 20+
-- PostgreSQL 15+ (for cloud mode)
+- PostgreSQL 15+ (for PostgreSQL storage mode)
 
 ### Initial Setup
 ```bash
@@ -40,7 +40,7 @@ go run ./cmd/af dev
 # Or: go run ./cmd/agentfield-server
 ```
 
-**Cloud mode** (requires PostgreSQL):
+**PostgreSQL storage mode**:
 ```bash
 # Run migrations first
 cd control-plane
@@ -48,7 +48,7 @@ export AGENTFIELD_DATABASE_URL="postgres://agentfield:agentfield@localhost:5432/
 goose -dir ./migrations postgres "$AGENTFIELD_DATABASE_URL" up
 
 # Start server
-AGENTFIELD_STORAGE_MODE=postgresql \
+AGENTFIELD_STORAGE_MODE=postgres \
 AGENTFIELD_DATABASE_URL="postgres://agentfield:agentfield@localhost:5432/agentfield?sslmode=disable" \
 go run ./cmd/agentfield-server
 ```
@@ -158,7 +158,7 @@ The UI dev server proxies API requests to the control plane. In production, the 
 **Configuration:**
 - Environment variables take precedence over `config/agentfield.yaml`
 - See `control-plane/.env.example` for all options
-- Key modes: `AGENTFIELD_MODE=local` (SQLite/BoltDB) vs `AGENTFIELD_STORAGE_MODE=postgresql` (cloud)
+- Storage modes: `AGENTFIELD_STORAGE_MODE=local` (SQLite/BoltDB) or `AGENTFIELD_STORAGE_MODE=postgres` (PostgreSQL)
 
 **Database Schema:**
 - `migrations/` - SQL migrations managed by Goose
@@ -225,7 +225,6 @@ agent.Run(context.Background())
 ### Storage Modes
 - **Local mode:** SQLite (relational) + BoltDB (key-value). No external dependencies. Good for dev/testing.
 - **PostgreSQL mode:** Full PostgreSQL backend. Requires running migrations. Production-ready.
-- **Cloud mode:** PostgreSQL backend. Used in distributed deployments.
 
 Storage interface is unified—services call storage layer methods, storage layer switches backends based on config.
 
@@ -316,8 +315,7 @@ Releases are automated via `.github/workflows/release.yml` and `.goreleaser.yml`
 
 See `control-plane/.env.example` for comprehensive list. Key vars:
 - `AGENTFIELD_PORT` - HTTP server port (default: 8080)
-- `AGENTFIELD_MODE` - `local` or `cloud`
-- `AGENTFIELD_STORAGE_MODE` - `local`, `postgresql`, or `cloud`
+- `AGENTFIELD_STORAGE_MODE` - `local` or `postgres`
 - `AGENTFIELD_DATABASE_URL` - PostgreSQL connection string
 - `AGENTFIELD_UI_ENABLED` - Enable/disable web UI
 - `AGENTFIELD_UI_MODE` - `embedded` (production) or `development` (Vite proxy)

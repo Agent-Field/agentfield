@@ -47,14 +47,23 @@ def test_send_enhanced_heartbeat_sync_success_and_failure(monkeypatch):
 def test_notify_graceful_shutdown_sync(monkeypatch):
     import agentfield.client as client_mod
 
-    def ok_post(url, headers, timeout):
+    requests = []
+
+    def ok_post(url, json, headers, timeout):
+        requests.append(json)
         return DummyResponse(200)
 
     monkeypatch.setattr(client_mod.requests, "post", ok_post)
     bc = AgentFieldClient(base_url="http://example")
-    assert bc.notify_graceful_shutdown_sync("node1") is True
+    assert (
+        bc.notify_graceful_shutdown_sync(
+            "node1", reason="signal", timeout_seconds=12
+        )
+        is True
+    )
+    assert requests == [{"reason": "signal", "timeout_seconds": 12}]
 
-    def bad_post(url, headers, timeout):
+    def bad_post(url, json, headers, timeout):
         raise RuntimeError("x")
 
     monkeypatch.setattr(client_mod.requests, "post", bad_post)

@@ -4,6 +4,7 @@ import type {
   ExecutionViewFilters,
   GoldenRunMetadata,
   RunLineageMetadata,
+  RunMetadata,
   WorkflowSummary,
   WorkflowDAGLightweightResponse,
 } from "../types/workflows";
@@ -120,6 +121,7 @@ interface ApiWorkflowRunSummary {
   trigger?: ApiTriggerInfo | null;
   lineage?: RunLineageMetadata | null;
   golden?: GoldenRunMetadata | null;
+  run_metadata?: RunMetadata | null;
 }
 
 interface ApiWorkflowExecution {
@@ -153,6 +155,7 @@ export interface WorkflowRunDetailResponse {
     completed_at?: string | null;
     lineage?: RunLineageMetadata | null;
     golden?: GoldenRunMetadata | null;
+    run_metadata?: RunMetadata | null;
   };
   executions: ApiWorkflowExecution[];
 }
@@ -277,6 +280,7 @@ function mapApiRunToWorkflowSummary(
       : undefined,
     lineage: run.lineage ?? undefined,
     golden: run.golden ?? undefined,
+    run_metadata: run.run_metadata ?? undefined,
   };
 }
 

@@ -180,7 +180,7 @@ func (h *TriggerHandlers) IngestSourceHandler() gin.HandlerFunc {
 		// an HTTP-200-but-Source-extracted-zero edge case (e.g. Slack
 		// URL verification handshake). 200 is preserved across the board
 		// so providers don't retry — the response body carries the nuance.
-		status := "ok"
+		var status string
 		switch {
 		case persisted > 0:
 			status = "ok"
@@ -684,10 +684,10 @@ func (h *TriggerHandlers) GetSource() gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"name":             src.Name(),
-			"kind":             src.Kind().String(),
-			"secret_required":  src.SecretRequired(),
-			"config_schema":    src.ConfigSchema(),
+			"name":            src.Name(),
+			"kind":            src.Kind().String(),
+			"secret_required": src.SecretRequired(),
+			"config_schema":   src.ConfigSchema(),
 		})
 	}
 }
@@ -875,7 +875,6 @@ func triggerEventTypeMatches(filters []string, eventType string) bool {
 	}
 	return false
 }
-
 
 // GetTriggerMetrics handles GET /api/v1/triggers/metrics — dashboard tile stats
 // (global aggregate, not per-trigger).

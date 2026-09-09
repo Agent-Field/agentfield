@@ -285,8 +285,8 @@ class HarnessConfig(BaseModel):
         default_factory=_default_harness_provider,
         description=(
             'Coding agent provider: "aforge" (default) | "claude-code" | "codex" | '
-            '"gemini" | "opencode" | "grok". Unset resolves to the '
-            'AGENTFIELD_HARNESS_PROVIDER env var when present, else "aforge".'
+            '"gemini" | "opencode" | "grok" | "pi" | "omp". Unset resolves to '
+            'the AGENTFIELD_HARNESS_PROVIDER env var when present, else "aforge".'
         ),
     )
     model: Optional[str] = Field(
@@ -294,6 +294,13 @@ class HarnessConfig(BaseModel):
         description=(
             "Model identifier. None/empty means the provider's own default "
             "(aforge picks its own; claude-code uses sonnet)."
+        ),
+    )
+    variant: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider-specific reasoning-effort variant (for example, "
+            '"high" or "minimal"). Wins over a #variant model suffix.'
         ),
     )
     max_turns: int = Field(default=30, description="Maximum agent iterations.")
@@ -338,6 +345,8 @@ class HarnessConfig(BaseModel):
     opencode_bin: str = Field(
         default="opencode", description="Path to opencode binary."
     )
+    pi_bin: str = Field(default="pi", description="Path to Pi binary.")
+    omp_bin: str = Field(default="omp", description="Path to OMP binary.")
     aforge_bin: str = Field(default="aforge", description="Path to aforge binary.")
     grok_bin: str = Field(
         default="grok", description="Path to Grok Build CLI binary."

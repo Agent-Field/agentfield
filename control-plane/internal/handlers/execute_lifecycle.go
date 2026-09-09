@@ -43,9 +43,16 @@ func (c *executionController) waitForExecutionCompletion(ctx context.Context, ex
 	eventChan := c.eventBus.Subscribe(subscriberID)
 	defer c.eventBus.Unsubscribe(subscriberID)
 
-	// Create timeout timer
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	// A non-positive agent-call timeout disables the deadline end-to-end.
+	// A nil channel is never selected, so context cancellation still controls
+	// the lifetime of a disabled wait.
+	var timeoutC <-chan time.Time
+	var timer *time.Timer
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		timeoutC = timer.C
+		defer timer.Stop()
+	}
 
 	// Fallback for terminal states that reach the store without an event.
 	poll := time.NewTicker(completionPollInterval)
@@ -73,7 +80,7 @@ func (c *executionController) waitForExecutionCompletion(ctx context.Context, ex
 		case <-ctx.Done():
 			return nil, ctx.Err()
 
-		case <-timer.C:
+		case <-timeoutC:
 			logger.Logger.Warn().
 				Str("execution_id", executionID).
 				Dur("timeout", timeout).
@@ -190,6 +197,7 @@ type preparedExecution struct {
 	targetType        string
 	executionMode     string
 	llmEndpoint       string
+	slotHeld          bool
 	webhookRegistered bool
 	webhookError      *string
 	// DID context forwarded to the target agent.
@@ -201,6 +209,19 @@ type preparedExecution struct {
 	replayBeforeExecutionID string
 	replayMode              string
 	replayHit               *replayHit
+}
+
+// releaseSlot releases this plan's admission slot at most once. A plan owns
+// its slot from successful preparation until a synchronous handler returns or
+// ownership is transferred to an asyncExecutionJob.
+func (p *preparedExecution) releaseSlot() {
+	if p == nil || !p.slotHeld {
+		return
+	}
+	p.slotHeld = false
+	if p.target != nil {
+		ReleaseExecutionSlot(p.target.NodeID)
+	}
 }
 
 func (c *executionController) callAgent(ctx context.Context, plan *preparedExecution) ([]byte, time.Duration, bool, error) {

@@ -45,7 +45,15 @@ export class LocalVerifier {
     timestampWindow = 300,
     apiKey?: string,
   ) {
-    this.agentFieldUrl = agentFieldUrl.replace(/\/+$/, '');
+    // Strip trailing slashes with a single backward scan. A `/\/+$/` replace
+    // backtracks quadratically on inputs like '///...x' (CodeQL
+    // js/polynomial-redos), and repeated `slice(0, -1)` reallocates per
+    // character; walking an index and slicing once is linear.
+    let end = agentFieldUrl.length;
+    while (end > 0 && agentFieldUrl.charCodeAt(end - 1) === 47 /* '/' */) {
+      end--;
+    }
+    this.agentFieldUrl = agentFieldUrl.slice(0, end);
     this.refreshInterval = refreshInterval;
     this.timestampWindow = timestampWindow;
     this.apiKey = apiKey;

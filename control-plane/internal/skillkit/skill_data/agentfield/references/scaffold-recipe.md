@@ -211,7 +211,7 @@ CMD ["python", "main.py"]
 
 Build context is the project directory itself (`context: .`), so the same scaffold works whether the project lives in `code/examples/` or standalone at `/tmp/my-build/`.
 
-**Only edit if you need to install a harness CLI** (claude-code, codex, gemini, opencode). See `primitives-snapshot.md` → "Harness availability gate". Otherwise leave it alone.
+**Only edit if you need to install a harness CLI** (claude-code, codex, gemini, opencode, pi, omp — `aforge`, the default, ships with `af`). See `primitives-snapshot.md` → "Harness availability gate". Otherwise leave it alone.
 
 ---
 

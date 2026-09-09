@@ -47,6 +47,11 @@ func QueryHandler(store storage.StorageProvider) gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
+		if strings.TrimSpace(req.Filters.ExecutionID) != "" && req.Resource != "executions" && req.Resource != "events" {
+			respondError(c, http.StatusBadRequest, "unsupported_filter",
+				"filters.execution_id is not supported for resource "+req.Resource)
+			return
+		}
 
 		switch req.Resource {
 		case "runs":
@@ -99,6 +104,9 @@ func queryRuns(c *gin.Context, ctx context.Context, store storage.StorageProvide
 
 func queryExecutions(c *gin.Context, ctx context.Context, store storage.StorageProvider, req QueryRequest) {
 	filter := types.ExecutionFilter{}
+	if executionID := strings.TrimSpace(req.Filters.ExecutionID); executionID != "" {
+		filter.ExecutionID = &executionID
+	}
 	if req.Filters.Status != "" {
 		filter.Status = &req.Filters.Status
 	}

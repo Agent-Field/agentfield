@@ -254,7 +254,7 @@ func extractGoTarGz(archivePath, dst string) error {
 			if err := root.MkdirAll(name, 0o755); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if dir := filepath.Dir(name); dir != "." {
 				if err := root.MkdirAll(dir, 0o755); err != nil {
 					return err

@@ -227,7 +227,7 @@ func TestObservabilityForwarder_ReloadConfig(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Initially no config
 	status := forwarder.GetStatus()
@@ -266,7 +266,7 @@ func TestObservabilityForwarder_GetStatus(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Enable webhook
 	store.SetWebhookConfig(&types.ObservabilityWebhookConfig{
@@ -274,7 +274,7 @@ func TestObservabilityForwarder_GetStatus(t *testing.T) {
 		URL:     "https://example.com/webhook",
 		Enabled: true,
 	})
-	forwarder.ReloadConfig(ctx)
+	require.NoError(t, forwarder.ReloadConfig(ctx))
 
 	status := forwarder.GetStatus()
 	require.True(t, status.Enabled)
@@ -487,7 +487,7 @@ func TestObservabilityForwarder_WebhookDelivery(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Wait for forwarder to be fully started
 	time.Sleep(100 * time.Millisecond)
@@ -558,7 +558,7 @@ func TestObservabilityForwarder_WebhookWithSignature(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Wait for forwarder to be fully started
 	time.Sleep(100 * time.Millisecond)
@@ -622,7 +622,7 @@ func TestObservabilityForwarder_WebhookWithCustomHeaders(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Wait for forwarder to be fully started
 	time.Sleep(100 * time.Millisecond)
@@ -680,7 +680,7 @@ func TestObservabilityForwarder_DeadLetterQueueOnFailure(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Wait for forwarder to be fully started
 	time.Sleep(100 * time.Millisecond)
@@ -735,7 +735,7 @@ func TestObservabilityForwarder_Redrive(t *testing.T) {
 			Timestamp:   time.Now().Format(time.RFC3339),
 			Data:        map[string]interface{}{"id": i},
 		}
-		store.AddToDeadLetterQueue(context.Background(), event, "previous failure", 3)
+		require.NoError(t, store.AddToDeadLetterQueue(context.Background(), event, "previous failure", 3))
 	}
 
 	// Verify DLQ has entries
@@ -753,7 +753,7 @@ func TestObservabilityForwarder_Redrive(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Perform redrive
 	response := forwarder.Redrive(ctx)
@@ -782,7 +782,7 @@ func TestObservabilityForwarder_RedriveNotConfigured(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	response := forwarder.Redrive(ctx)
 
@@ -820,7 +820,7 @@ func TestObservabilityForwarder_RedrivePartialFailure(t *testing.T) {
 			Timestamp:   time.Now().Format(time.RFC3339),
 			Data:        map[string]interface{}{"id": i},
 		}
-		store.AddToDeadLetterQueue(context.Background(), event, "previous failure", 3)
+		require.NoError(t, store.AddToDeadLetterQueue(context.Background(), event, "previous failure", 3))
 	}
 
 	cfg := ObservabilityForwarderConfig{
@@ -834,7 +834,7 @@ func TestObservabilityForwarder_RedrivePartialFailure(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	response := forwarder.Redrive(ctx)
 
@@ -850,7 +850,7 @@ func TestObservabilityForwarder_FiltersNodeHeartbeats(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var batch types.ObservabilityEventBatch
-		json.Unmarshal(body, &batch)
+		require.NoError(t, json.Unmarshal(body, &batch))
 
 		mu.Lock()
 		receivedEvents = append(receivedEvents, batch.Events...)
@@ -879,7 +879,7 @@ func TestObservabilityForwarder_FiltersNodeHeartbeats(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Publish a mix of events including heartbeats
 	events.PublishNodeOnline("node-1", nil)
@@ -908,7 +908,7 @@ func TestObservabilityForwarder_FiltersReasonerHeartbeats(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var batch types.ObservabilityEventBatch
-		json.Unmarshal(body, &batch)
+		require.NoError(t, json.Unmarshal(body, &batch))
 
 		mu.Lock()
 		receivedEvents = append(receivedEvents, batch.Events...)
@@ -937,7 +937,7 @@ func TestObservabilityForwarder_FiltersReasonerHeartbeats(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Publish a mix of events including heartbeats
 	events.PublishReasonerOnline("reasoner-1", "node-1", nil)
@@ -973,7 +973,7 @@ func TestObservabilityForwarder_NoEnqueueWhenDisabled(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Publish events
 	events.PublishExecutionCompleted("exec-disabled-1", "wf-1", "agent-1", nil)
@@ -996,7 +996,7 @@ func TestObservabilityForwarder_BatchingBySize(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var batch types.ObservabilityEventBatch
-		json.Unmarshal(body, &batch)
+		require.NoError(t, json.Unmarshal(body, &batch))
 
 		mu.Lock()
 		batchSizes = append(batchSizes, batch.EventCount)
@@ -1025,7 +1025,7 @@ func TestObservabilityForwarder_BatchingBySize(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Wait for forwarder to be fully started
 	time.Sleep(100 * time.Millisecond)
@@ -1082,7 +1082,7 @@ func TestObservabilityForwarder_BatchingByTimeout(t *testing.T) {
 	ctx := context.Background()
 	err := forwarder.Start(ctx)
 	require.NoError(t, err)
-	defer forwarder.Stop(ctx)
+	defer func() { require.NoError(t, forwarder.Stop(ctx)) }()
 
 	// Wait for forwarder to be fully started
 	time.Sleep(100 * time.Millisecond)

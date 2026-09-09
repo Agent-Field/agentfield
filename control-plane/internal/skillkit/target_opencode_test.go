@@ -156,6 +156,7 @@ func TestOpenCodeTargetStatusPreservesVersionFromRemovedDirectLink(t *testing.T)
 }
 
 func TestOpenCodeTargetUninstallRemovesCatalogEntries(t *testing.T) {
+	withTempHome(t)
 	target := opencodeTarget{}
 	root, err := target.TargetPath()
 	if err != nil {

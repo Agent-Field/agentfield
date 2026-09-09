@@ -11,9 +11,9 @@ import (
 // HarnessConfig configures the default harness runner for the agent.
 type HarnessConfig struct {
 	// Provider is the default provider: "aforge", "claude-code", "codex",
-	// "gemini", or "opencode". When empty, AGENTFIELD_HARNESS_PROVIDER
-	// overrides the default, "aforge" (AgentField's native harness). An
-	// explicit value always wins.
+	// "gemini", "opencode", "pi", or "omp". When empty,
+	// AGENTFIELD_HARNESS_PROVIDER overrides the default, "aforge"
+	// (AgentField's native harness). An explicit value always wins.
 	Provider string
 
 	// Model is the default model identifier. Empty means the provider's own

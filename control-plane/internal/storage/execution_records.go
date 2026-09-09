@@ -12,6 +12,25 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
+// staleTimestampExpr returns the SQL expression used to compare an execution's
+// most recent activity timestamp against the stale cutoff.
+//
+// SQLite stores timestamps as text and compares them lexically. When a host
+// runs in a non-UTC timezone, time.Now() persists values carrying a local zone
+// offset (e.g. "...-05:00"), and a fresh local value can sort BEFORE a UTC
+// cutoff even though its instant is newer, wrongly reaping active executions
+// (#1040). Wrapping the value in julianday() forces an instant-aware numeric
+// comparison that is offset-correct.
+//
+// Postgres columns are timestamptz and already compare by instant, and
+// julianday() does not exist there, so Postgres keeps the plain expression.
+func (ls *LocalStorage) staleTimestampExpr(col string) string {
+	if ls.requireSQLDB().Mode() == "postgres" {
+		return col
+	}
+	return "julianday(" + col + ")"
+}
+
 // maxNodesForDepthCalc caps the number of executions for which we compute DAG depth to avoid heavy queries.
 const maxNodesForDepthCalc = 1000
 
@@ -33,14 +52,14 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 	insert := `
 		INSERT INTO executions (
 			execution_id, run_id, parent_execution_id,
-			agent_node_id, reasoner_id, node_id,
+			agent_node_id, instance_id, reasoner_id, node_id,
 			status, status_reason, input_payload, result_payload, error_message,
 			input_uri, result_uri,
 			session_id, actor_id,
 			started_at, completed_at, duration_ms,
 			notes,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	// Serialize notes to JSON
 	var notesJSON []byte
@@ -59,6 +78,7 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 		exec.RunID,
 		exec.ParentExecutionID,
 		exec.AgentNodeID,
+		exec.InstanceID,
 		exec.ReasonerID,
 		exec.NodeID,
 		exec.Status,
@@ -88,7 +108,7 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 func (ls *LocalStorage) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
 	query := `
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
 		       status, status_reason, input_payload, result_payload, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -130,7 +150,7 @@ func (ls *LocalStorage) GetExecutionRecordsBatch(ctx context.Context, executionI
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(executionIDs)), ",")
 	query := fmt.Sprintf(`
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
 		       status, status_reason, input_payload, result_payload, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -192,7 +212,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 	// commits, then re-reads the committed row instead of a stale snapshot.
 	row := tx.QueryRowContext(ctx, `
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
 		       status, status_reason, input_payload, result_payload, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -234,6 +254,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 			run_id = ?,
 			parent_execution_id = ?,
 			agent_node_id = ?,
+			instance_id = ?,
 			reasoner_id = ?,
 			node_id = ?,
 			status = ?,
@@ -258,6 +279,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 		updated.RunID,
 		updated.ParentExecutionID,
 		updated.AgentNodeID,
+		updated.InstanceID,
 		updated.ReasonerID,
 		updated.NodeID,
 		updated.Status,
@@ -345,7 +367,7 @@ func (ls *LocalStorage) QueryExecutionRecords(ctx context.Context, filter types.
 	}
 	queryBuilder.WriteString(`
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
 		       status, status_reason, ` + payloadCols + `, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -472,8 +494,8 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 	}
 	if filter.Search != nil {
 		searchTerm := "%" + *filter.Search + "%"
-		where = append(where, "(run_id LIKE ? OR agent_node_id LIKE ? OR reasoner_id LIKE ?)")
-		args = append(args, searchTerm, searchTerm, searchTerm)
+		where = append(where, "(run_id LIKE ? OR agent_node_id LIKE ? OR reasoner_id LIKE ? OR "+runMetadataSearchPredicate(ls.mode)+")")
+		args = append(args, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm)
 	}
 
 	whereClause := ""
@@ -773,6 +795,54 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 	}
 
 	return summaries, totalRuns, nil
+}
+
+// runMetadataSearchPredicate adds only the client-facing run display name and
+// labels to run search. The workflow_runs metadata column is JSONB in
+// PostgreSQL and JSON text in SQLite, so each backend needs its own JSON table
+// function. Both variants guard legacy/malformed namespace shapes rather than
+// letting one bad metadata row fail the whole runs list.
+func runMetadataSearchPredicate(mode string) string {
+	if mode == "postgres" {
+		return `run_id IN (
+			SELECT wr.run_id
+			FROM workflow_runs wr
+			WHERE wr.metadata->'run'->>'display_name' LIKE ?
+			   OR EXISTS (
+				SELECT 1
+				FROM jsonb_array_elements_text(
+					CASE
+						WHEN jsonb_typeof(wr.metadata->'run'->'labels') = 'array'
+						THEN wr.metadata->'run'->'labels'
+						ELSE '[]'::jsonb
+					END
+				) AS run_label(value)
+				WHERE run_label.value LIKE ?
+			)
+		)`
+	}
+	return `run_id IN (
+		SELECT wr.run_id
+		FROM workflow_runs wr
+		WHERE CASE
+				WHEN json_valid(wr.metadata) THEN json_extract(wr.metadata, '$.run.display_name')
+			END LIKE ?
+		   OR EXISTS (
+			SELECT 1
+			FROM json_each(
+				CASE
+					WHEN json_valid(wr.metadata) THEN
+						CASE
+							WHEN json_type(wr.metadata, '$.run.labels') = 'array'
+							THEN json_extract(wr.metadata, '$.run.labels')
+							ELSE '[]'
+						END
+					ELSE '[]'
+				END
+			) AS run_label
+			WHERE CAST(run_label.value AS TEXT) LIKE ?
+		)
+	)`
 }
 
 // mapRunSummarySortColumn restricts ORDER BY to vetted columns to avoid SQL injection and
@@ -1126,17 +1196,19 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 	cutoff := time.Now().UTC().Add(-staleAfter)
 
 	db := ls.requireSQLDB()
+	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	cutoffExpr := ls.staleTimestampExpr("?")
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
 		FROM executions e
 		WHERE status IN ('running', 'pending', 'queued')
-		  AND COALESCE(updated_at, created_at, started_at) <= ?
+		  AND `+tsExpr+` <= `+cutoffExpr+`
 		  AND NOT EXISTS (
 		      SELECT 1 FROM executions c
 		      WHERE c.parent_execution_id = e.execution_id
 		        AND c.status IN ('running', 'pending', 'queued')
 		  )
-		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
+		ORDER BY `+tsExpr+` ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("query stale executions: %w", err)
@@ -1239,18 +1311,20 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	cutoff := time.Now().UTC().Add(-staleAfter)
 
 	db := ls.requireSQLDB()
+	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	cutoffExpr := ls.staleTimestampExpr("?")
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
 		FROM workflow_executions w
 		WHERE status IN ('running', 'pending', 'queued', 'waiting')
-		  AND COALESCE(updated_at, created_at, started_at) <= ?
+		  AND `+tsExpr+` <= `+cutoffExpr+`
 		  AND COALESCE(approval_status, '') != 'pending'
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
 		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
 		  )
-		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
+		ORDER BY `+tsExpr+` ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("query stale workflow executions: %w", err)
@@ -1379,7 +1453,17 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 // older code path reading it sees a consistent picture. We deliberately do
 // not write duration_ms here: the row's started_at is preserved, so consumers
 // that need the runtime can compute completed_at - started_at directly.
-func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error) {
+func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID, reasonMessage string) (int, error) {
+	return ls.markAgentExecutionsOrphaned(ctx, agentNodeID, "*", reasonMessage)
+}
+
+// MarkAgentInstanceExecutionsOrphaned limits restart cleanup to the departing
+// process plus legacy rows which predate per-execution instance stamping.
+func (ls *LocalStorage) MarkAgentInstanceExecutionsOrphaned(ctx context.Context, agentNodeID, departingInstanceID, reasonMessage string) (int, error) {
+	return ls.markAgentExecutionsOrphaned(ctx, agentNodeID, departingInstanceID, reasonMessage)
+}
+
+func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNodeID, departingInstanceID, reasonMessage string) (int, error) {
 	if strings.TrimSpace(agentNodeID) == "" {
 		return 0, fmt.Errorf("agent_node_id is required")
 	}
@@ -1394,9 +1478,10 @@ func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNo
 		UPDATE workflow_executions
 		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
 		WHERE agent_node_id = ?
+		  AND (? = '*' OR COALESCE(instance_id, '') = '' OR instance_id = ?)
 		  AND status IN ('running', 'pending', 'queued', 'waiting')
 		  AND COALESCE(status_reason, '') <> ?`,
-		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID, departingInstanceID, departingInstanceID,
 		types.ExecutionReasonAwaitingAgentRestart,
 	)
 	if err != nil {
@@ -1412,9 +1497,10 @@ func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNo
 		UPDATE executions
 		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
 		WHERE agent_node_id = ?
+		  AND (? = '*' OR COALESCE(instance_id, '') = '' OR instance_id = ?)
 		  AND status IN ('running', 'pending', 'queued', 'waiting')
 		  AND COALESCE(status_reason, '') <> ?`,
-		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID, departingInstanceID, departingInstanceID,
 		types.ExecutionReasonAwaitingAgentRestart,
 	)
 
@@ -1434,14 +1520,16 @@ func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleA
 
 	cutoff := time.Now().UTC().Add(-staleAfter)
 	db := ls.requireSQLDB()
+	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	cutoffExpr := ls.staleTimestampExpr("?")
 
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id
 		FROM workflow_executions
 		WHERE status IN ('running', 'pending', 'queued')
 		  AND retry_count < ?
-		  AND COALESCE(updated_at, created_at, started_at) <= ?
-		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
+		  AND `+tsExpr+` <= `+cutoffExpr+`
+		ORDER BY `+tsExpr+` ASC
 		LIMIT ?`, maxRetries, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query retriable workflow executions: %w", err)
@@ -1549,6 +1637,7 @@ func scanExecution(scanner interface {
 		&exec.RunID,
 		&parentExecutionID,
 		&exec.AgentNodeID,
+		&exec.InstanceID,
 		&exec.ReasonerID,
 		&exec.NodeID,
 		&exec.Status,

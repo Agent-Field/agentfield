@@ -1,3 +1,5 @@
+import { envFlagEnabled } from '../utils/envFlags.js';
+
 type LogEntry = {
   v: number;
   seq: number;
@@ -10,8 +12,7 @@ type LogEntry = {
 };
 
 function logsEnabled(): boolean {
-  const v = (process.env.AGENTFIELD_LOGS_ENABLED ?? 'true').trim().toLowerCase();
-  return !['0', 'false', 'no', 'off'].includes(v);
+  return envFlagEnabled('AGENTFIELD_LOGS_ENABLED');
 }
 
 function maxBufferBytes(): number {

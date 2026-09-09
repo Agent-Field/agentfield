@@ -6,6 +6,2436 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.13] - 2026-09-07
+
+
+### Testing
+
+- Test(harness): cover raw result text and failure type serialization (#1043) (0916748)
+
+## [0.1.138-rc.12] - 2026-09-06
+
+
+### Testing
+
+- Test: expand event publish helper coverage (#1016) (b62eec9)
+
+## [0.1.138-rc.11] - 2026-09-06
+
+
+### Fixed
+
+- Fix(control-plane): compare execution timestamps by instant on SQLite (#1040) (#1041)
+
+On a non-UTC host using local SQLite storage, the stale-execution reaper could
+mark a fresh, active execution as timed out within seconds of starting. Later
+successful status callbacks were then rejected with HTTP 409 because the row
+had already become terminal.
+
+Root cause: SQLite compares timestamp columns as text. Write paths persisted
+timestamps with time.Now(), so on a non-UTC host they carried a local zone
+offset (e.g. "...-05:00"). A fresh local value sorts lexically before a UTC
+cutoff even though its instant is newer, so the reaper's
+COALESCE(updated_at, created_at, started_at) <= cutoff test matched rows that
+were not actually stale.
+
+Fix has two layers:
+
+1. Read path: wrap the timestamp comparison and ORDER BY in julianday() for
+   SQLite so the comparison is instant-aware and offset-correct. Postgres uses
+   timestamptz (already instant-aware) and has no julianday(), so the Postgres
+   query path is left unchanged via a dialect-aware helper. This covers rows
+   already persisted with an offset.
+
+2. Write path: normalize execution and workflow created_at/updated_at to
+   time.Now().UTC() so newly stored rows never carry a local offset. This is
+   the durable fix.
+
+Applies to MarkStaleExecutions, MarkStaleWorkflowExecutions, and
+RetryStaleWorkflowExecutions.
+
+Adds regression tests covering fresh and genuinely stale rows stored with a
+non-UTC offset, for both the mark-stale and retry-selection paths. (1ae0e5a)
+
+## [0.1.138-rc.10] - 2026-09-04
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 3 directories with 3 updates (#1039)
+
+Bumps the npm_and_yarn group with 1 update in the /control-plane/web/client directory: [@humanfs/node](https://github.com/humanwhocodes/humanfs/tree/HEAD/packages/node).
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [@xmldom/xmldom](https://github.com/xmldom/xmldom).
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [qs](https://github.com/ljharb/qs).
+
+
+Updates `@humanfs/node` from 0.16.6 to 0.16.7
+- [Release notes](https://github.com/humanwhocodes/humanfs/releases)
+- [Changelog](https://github.com/humanwhocodes/humanfs/blob/main/packages/node/CHANGELOG.md)
+- [Commits](https://github.com/humanwhocodes/humanfs/commits/node-v0.16.7/packages/node)
+
+Updates `@xmldom/xmldom` from 0.8.13 to 0.8.15
+- [Release notes](https://github.com/xmldom/xmldom/releases)
+- [Changelog](https://github.com/xmldom/xmldom/blob/master/CHANGELOG.md)
+- [Commits](https://github.com/xmldom/xmldom/compare/0.8.13...0.8.15)
+
+Updates `qs` from 6.15.2 to 6.16.0
+- [Changelog](https://github.com/ljharb/qs/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/ljharb/qs/compare/v6.15.2...v6.16.0)
+
+---
+updated-dependencies:
+- dependency-name: "@humanfs/node"
+  dependency-version: 0.16.7
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: "@xmldom/xmldom"
+  dependency-version: 0.8.15
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: qs
+  dependency-version: 6.16.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (c9e3bcb)
+
+- Chore(deps): bump the npm_and_yarn group across 1 directory with 2 updates (#1038)
+
+Bumps the npm_and_yarn group with 2 updates in the /examples/python_agent_nodes/rag_evaluation/ui directory: [browserslist](https://github.com/browserslist/browserslist) and [postcss-selector-parser](https://github.com/postcss/postcss-selector-parser).
+
+
+Updates `browserslist` from 4.28.2 to 4.28.8
+- [Release notes](https://github.com/browserslist/browserslist/releases)
+- [Changelog](https://github.com/browserslist/browserslist/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/browserslist/browserslist/compare/4.28.2...4.28.8)
+
+Updates `postcss-selector-parser` from 6.1.2 to 6.1.4
+- [Release notes](https://github.com/postcss/postcss-selector-parser/releases)
+- [Changelog](https://github.com/postcss/postcss-selector-parser/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/postcss/postcss-selector-parser/compare/v6.1.2...6.1.4)
+
+---
+updated-dependencies:
+- dependency-name: browserslist
+  dependency-version: 4.28.8
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: postcss-selector-parser
+  dependency-version: 6.1.4
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (1a50760)
+
+## [0.1.138-rc.9] - 2026-09-02
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 2 updates (#1037)
+
+Bumps the npm_and_yarn group with 2 updates in the /control-plane/web/client directory: [browserslist](https://github.com/browserslist/browserslist) and [postcss-selector-parser](https://github.com/postcss/postcss-selector-parser).
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [browserslist](https://github.com/browserslist/browserslist).
+
+
+Updates `browserslist` from 4.28.0 to 4.28.8
+- [Release notes](https://github.com/browserslist/browserslist/releases)
+- [Changelog](https://github.com/browserslist/browserslist/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/browserslist/browserslist/compare/4.28.0...4.28.8)
+
+Updates `postcss-selector-parser` from 6.1.2 to 6.1.4
+- [Release notes](https://github.com/postcss/postcss-selector-parser/releases)
+- [Changelog](https://github.com/postcss/postcss-selector-parser/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/postcss/postcss-selector-parser/compare/v6.1.2...6.1.4)
+
+Updates `browserslist` from 4.28.5 to 4.28.8
+- [Release notes](https://github.com/browserslist/browserslist/releases)
+- [Changelog](https://github.com/browserslist/browserslist/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/browserslist/browserslist/compare/4.28.0...4.28.8)
+
+---
+updated-dependencies:
+- dependency-name: browserslist
+  dependency-version: 4.28.8
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: postcss-selector-parser
+  dependency-version: 6.1.4
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: browserslist
+  dependency-version: 4.28.8
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (5210726)
+
+- Chore(deps): bump google.golang.org/grpc (#1036)
+
+Bumps the go_modules group with 1 update in the /control-plane directory: [google.golang.org/grpc](https://github.com/grpc/grpc-go).
+
+
+Updates `google.golang.org/grpc` from 1.82.1 to 1.83.1
+- [Release notes](https://github.com/grpc/grpc-go/releases)
+- [Commits](https://github.com/grpc/grpc-go/compare/v1.82.1...v1.83.1)
+
+---
+updated-dependencies:
+- dependency-name: google.golang.org/grpc
+  dependency-version: 1.83.1
+  dependency-type: direct:production
+  dependency-group: go_modules
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (c831d89)
+
+## [0.1.138-rc.8] - 2026-09-02
+
+
+### Added
+
+- Feat(sdk/python): expose provider-agnostic harness variants (#1024) (d32caf6)
+
+## [0.1.138-rc.7] - 2026-09-01
+
+
+### Added
+
+- Feat(sdk/python): isolate OpenCode harness runs (#1023) (0b90cf2)
+
+## [0.1.138-rc.6] - 2026-08-31
+
+
+### Added
+
+- Feat(control-plane): instance identity on execution reads and an orphan-reap kill switch for multi-replica agents (#1031)
+
+* feat(control-plane): expose agent_node_id/instance_id on execution reads
+
+When the re-registration reap fails an in-flight execution, the row's
+status_reason names the departing instance but nothing in any read API
+exposed which instance the execution was actually created against. An
+operator had no way to tell a genuinely orphaned execution from a legacy
+row that the reap swept because its instance_id was empty.
+
+Add agent_node_id and instance_id to ExecutionStatusResponse, populated in
+renderStatus -- the single builder GET /executions/:id, batch-status and
+the status callback all funnel through. Both are omitempty: instance_id
+vanishes for nodes that never report one (only the Python SDK does today),
+and agent_node_id stays absent on the synthetic not_found/error entries
+that handleBatchStatus builds inline, so those keep their current shape.
+
+The UI details DTO gains instance_id alongside the agent_node_id it
+already carried, so the DAG step drawer can surface it.
+
+No storage or schema change: migrations 033/035 added the columns and
+every execution SELECT already reads COALESCE(instance_id, '').
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): add an orphan-reap kill switch for multi-replica agents
+
+The deferred reap assumes a re-registration with a new instance_id means
+the previous OS process is gone. With replicas > 1 behind one node id that
+assumption is wrong: a sibling replica registering is indistinguishable
+from a replacement, so the reap fails the still-alive sibling's in-flight
+executions once the drain grace elapses (#987).
+
+Add AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED (default true = today's
+behaviour). When false, the new conjunct on shouldReapOrphans means the
+deferred goroutine is never armed at all, and the stale-execution sweep
+stays as the backstop. Startup logs one greppable warning when disabled.
+
+Defaulting a bool to true needs presence tracking, since a zero value and
+an explicit `false` are otherwise identical. This follows the existing
+ExecutionCleanup.Enabled precedent and covers both loaders: yaml.v3 via an
+UnmarshalYAML hook on NodeHealthConfig, and viper -- which decodes through
+mapstructure and never calls that hook -- via IsSet in
+MarkExecutionCleanupEnabledIfSet. ApplyDefaults runs before
+ApplyEnvOverrides in all three load paths, so applyBoolEnv gets the last
+word and its existing warn-and-keep behaviour makes a garbage value fall
+back to true for free.
+
+The grace wiring moves into configureAgentRestartSettings so the startup
+behaviour is testable without booting a server.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document instance_id attribution and the orphan-reap kill switch
+
+EXECUTE.md enumerated the polling response's exact field list, so it went
+stale the moment the two new fields landed. Extend it, and state the
+semantics that are easy to get wrong: instance_id names the instance the
+execution was *created against* and is not re-stamped when a dispatch is
+replayed across an agent restart, so a restart-absorbed execution names
+the departed process even though the replacement ran the work.
+Re-stamping stays out of scope because that column is the reap scope key.
+
+EXECUTION_RESTART.md notes that the reap also sweeps rows whose
+instance_id is empty, which is exactly why the new explicit field is what
+lets an operator tell that legacy case apart from a real orphan.
+
+The k8s guide gains the replicas > 1 rationale for the new env var, and a
+warning not to treat instance_id as guaranteed pod attribution: only the
+Python SDK reports one, it is a bare uuid4().hex the SDK never logs, and
+the sole path from that value to a pod is the control plane's own
+re-registration reap log (old_instance_id / new_instance_id).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): preserve orphan reap config defaults
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2d7fc72)
+
+- Feat(sdk-python): AgentMesh — host several agents in one process with in-process call resolution (#1026)
+
+* feat(sdk-python): add AgentMesh for hosting several agents in one process
+
+Refs #651 (v1: offline-only; the registered/online mode stays open).
+
+`AgentMesh([a, b])` mounts every member on one FastAPI app (`/{node_id}`)
+so a single uvicorn serves them all, and resolves `app.call()` between
+members in-process instead of round-tripping through the control plane.
+
+Dispatch goes through the target Agent's own ASGI app — Agent already
+subclasses FastAPI — so validation, the per-execution CostTracker,
+workflow events, DID and trigger unwrapping all run exactly as they do
+for an HTTP-routed execution. The ASGI scope/receive/send are built by
+hand rather than through `httpx.ASGITransport`, because httpx is not a
+declared runtime dependency of the SDK; the mesh adds no new dependency.
+
+Three hazards the implementation is built around:
+
+- `to_headers()` emits `X-Execution-ID`, and the reasoner endpoint turns
+  that header plus a non-empty `agentfield_server` into a fire-and-forget
+  202. `agentfield_server` defaults to http://localhost:8080 even with
+  AGENTFIELD_SERVER unset, so the header is popped unconditionally —
+  otherwise every mesh call would return {"status": "processing"}.
+- The target's `_execute_reasoner_endpoint` ends in `_clear_current()`.
+  The dispatch therefore runs in a child context (`asyncio.create_task`),
+  which keeps the caller's agent/execution contextvars intact, and
+  snapshots/restores the `Agent._current_agent` CLASS attribute that a
+  child context cannot protect.
+- Argument binding is left entirely to the existing `Agent.call` mapping
+  ladder (extracted verbatim into `_map_call_args`), so mesh and
+  control-plane paths bind identically — including the `arg_0` degradation
+  for a cross-node positional call. A mesh-only improvement here would be
+  a dev/prod trap.
+
+`Agent.call_local()` ships the same in-process dispatch as an explicit
+opt-in for a bare agent (Go SDK `CallLocal` parity); the intentionally
+DISABLED same-agent short-circuit in `call()` is untouched, so implicit
+short-circuiting still only happens inside a mesh.
+
+v1 is offline-only: members get `auto_register=False` and
+`AgentMesh(register=True)` raises NotImplementedError rather than
+registering members at a mounted path the control plane cannot route back
+to. An unknown node or member raises the new `MeshTargetNotFound` instead
+of the misleading "server unavailable" error, with no control-plane
+fallthrough. With no AgentMesh constructed, `call()` is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): cover AgentMesh dispatch, lineage and shutdown behaviour
+
+Behaviour-level tests for every item of the AgentMesh contract, written
+against the public surface (`app.call`, `call_local`, `AgentMesh`, the
+mounted app over TestClient) rather than mesh internals.
+
+The regression guards worth calling out:
+
+- `test_mesh_does_not_forward_execution_id_header` pins the 202
+  fire-and-forget trap: it captures the headers actually handed to the
+  ASGI app and asserts x-execution-id is gone while x-run-id and
+  x-parent-execution-id survive.
+- `test_mesh_nested_a_b_a_current_agent_at_each_hop` walks a->b->a and
+  asserts both the contextvar and `Agent.get_current()` report the right
+  agent at every hop and after the outermost call returns.
+- `test_mesh_positional_binding_matches_control_plane` asserts the mesh
+  and control-plane paths bind the same call identically, so a mesh-only
+  binding improvement cannot silently reintroduce the dev/prod trap.
+- `test_call_semantics_unchanged_without_mesh` pins the exact existing
+  offline AgentFieldClientError text for an agent with no mesh.
+
+`agentfield.mesh` is added to the pytest `--cov` list because
+scripts/coverage-surface.sh runs pytest with only those targets, so a new
+module absent from the list produces no coverage rows and the required
+patch-coverage gate cannot see it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document AgentMesh, call_local and the v1 limitations
+
+Adds docs/agent-mesh.md and a short README section pointing at it.
+
+Every limitation listed is one verified against the code rather than
+assumed: mesh calls carry no DID signature (so a member with
+local_verification=True would 401 its own traffic), the connection
+manager and memory-event client never connect because the mesh does not
+run AgentServer.serve()'s resilient startup lifecycle, child executions
+land at depth 0 because to_headers() never emits depth and from_request()
+never reads it, and both `Agent.get_current()` and the set_current_agent
+contextvar are last-writer-wins with several agents in one process —
+which is why the mesh resolves targets from its own registry and never
+from the ambient one.
+
+The error-mapping table is part of the contract: unknown node or member
+raises MeshTargetNotFound, a validation failure raises
+ExecuteError(status_code=422) exactly as the control-plane path does, and
+a reasoner exception becomes ExecutionFailedError with the original
+exception as __cause__.
+
+No new environment variable is introduced, so
+docs/ENVIRONMENT_VARIABLES.md is untouched.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk-python): harden AgentMesh parity and shutdown
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (164fb7a)
+
+
+
+### Fixed
+
+- Fix(control-plane): gate every dispatch lane before persistence and complete the rejection contract (#1033)
+
+* fix(control-plane): admit executions before persistence on every dispatch lane
+
+The per-agent concurrency limit and the LLM circuit breaker were checked
+before persistence only on the async lane. On the sync, restart and MCP
+lanes the check ran *after* prepare had already written an executions row,
+a workflow_executions row and an input payload blob, so a gate-rejected
+request was charged a failed execution for work that was never attempted.
+
+There is now a single admission point, ahead of persistence, on all four
+lanes: prepareExecutionForTargetWithAdmission takes acquireSlot=true from
+the sync handler, the restart handler and the MCP start_run path, and the
+duplicate post-prepare gate blocks are gone. findReplayHit moves ahead of
+the gate so a replay hit — which never dials the agent — is never rejected
+by it and consumes no slot; the async lane no longer acquires and releases
+a slot for one. preparedExecution.slotHeld records whether a plan actually
+owns a slot, so every release site releases exactly what it took.
+
+Two other holes in the rejection contract close with it:
+
+- handleAsync abandoned the already-persisted row in "running" when
+  submitReserved found a stopped pool. It now terminates it through
+  failForControlPlaneShutdown (failed + status_reason
+  control_plane_shutdown on both tables), on a detached context because
+  the request context is very likely being cancelled by the same drain.
+- The restart and MCP queue-full paths reserved pool capacity only after
+  prepare, so a queue-full burst wrote rows and then failed them, and the
+  restart lane persisted status_reason internal_error while answering
+  concurrency_limit. reserve() is hoisted ahead of prepare on both, and a
+  single typed executionPreconditionError now feeds both failExecution and
+  the response.
+
+Retry-After is completed at the same time: writeExecutionError takes the
+value stamped on the error, else a per-category default, so llm_unavailable
+advertises the circuit breaker's remaining recovery window (default 30s,
+floor 1s) via the new LLMHealthMonitor.RetryAfterSeconds — circuitOpenedAt
+is unexported, so the window has to be computed inside services — while
+concurrency_limit and node_unavailable stay at 1 and non-retryable
+rejections (413, agent_pending_approval) still carry nothing.
+
+The stale reservation comment above pool.reserve() is corrected: the worker
+releases the reservation when its job returns, not on dequeue, so a
+reservation covers preparation, queue wait and the whole dispatch.
+
+Both gate halves are opt-in and off by default
+(AGENTFIELD_MAX_CONCURRENT_PER_AGENT=0, llm_health.enabled=false), so a
+stock deployment sees no behaviour change.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover the execute admission gate and rejection contract
+
+One test per observable behaviour of the new admission point, written from
+the caller's side (HTTP status, headers, body, and what the store holds
+afterwards) rather than from the implementation:
+
+- sync concurrency and llm_unavailable rejections persist no executions
+  row, no workflow_executions row and no payload blob;
+- a replay hit against an agent already at its cap still returns 200/202
+  with X-AgentField-Replay-Hit, never dials the agent, and consumes no
+  slot;
+- the per-agent running count is 1 during a successful sync call and back
+  to 0 after success, an agent 5xx and a pre-gate precondition rejection;
+- restart rejections (gate and queue-full) persist nothing and carry
+  Retry-After plus retry_after;
+- an async request whose pool stops between reserve() and submitReserved
+  ends as failed/control_plane_shutdown on both tables with the slot
+  released exactly once;
+- writeExecutionError's Retry-After table, including that 413 and
+  agent_pending_approval carry neither header nor field;
+- LLMHealthMonitor.RetryAfterSeconds counts the window down, floors at 1,
+  and falls back to the configured recovery timeout (30s) when the circuit
+  is closed, the endpoint is unknown, or the receiver is nil;
+- an MCP start_run rejected by the gate persists nothing.
+
+Two existing fixtures build a preparedExecution by hand after acquiring a
+slot themselves; they now set slotHeld so the job still releases what they
+took. TestPrepareExecution_AdditionalCoverage pins the process-global
+limiter to nil, because prepareExecution now acquires a slot and its four
+direct calls would otherwise leak counts into unrelated tests.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: describe the real execute admission model, not a lease-based queue
+
+README advertised "a durable PostgreSQL queue with lease-based processing,
+so a crash or a restart resumes where it left off". No such thing exists:
+the lease columns in migrations 011 and 013 are inert plumbing, and there
+is no acquisition, renewal or expiry-reclaim code anywhere in the tree.
+What the control plane actually does is admit work into a bounded
+in-process queue with backpressure (429/503 plus Retry-After) and, on
+graceful shutdown, terminate in-flight executions with status_reason
+control_plane_shutdown instead of silently dropping them. Both README
+claims now say that.
+
+Alongside it:
+
+- docs/api/EXECUTE.md said llm_unavailable carried no Retry-After. It now
+  does, advertising the circuit breaker's remaining recovery window, and a
+  new line under the table states that these pre-dispatch rejections
+  persist no rows — with the one exception of a request rejected after
+  preparation because the pool has already stopped.
+- docs/api/EXECUTION_RESTART.md records that the restart lane runs the same
+  admission checks before persistence and returns Retry-After on queue-full.
+- AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY was documented as the number of
+  executions "waiting for a worker". The admission bound is really
+  workers + queue_capacity and a reservation is held across preparation,
+  queue wait and the worker's dispatch (up to 24h for a paused execution).
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): assert the restart lane persists the category it answers with
+
+The restart handler can still lose the race between reserve() and
+submitReserved when the pool stops in between. That branch is the one that
+used to answer concurrency_limit while writing status_reason
+internal_error, because the queue error was an untyped errors.New. Drive it
+through the same CreateExecutionRecord seam the async pool-stopped test
+uses and assert the persisted status_reason equals the error_category in
+the body, that Retry-After and retry_after are both present, and that the
+per-agent slot is released.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): terminalize pool-stopped restart/MCP admissions through a detached context
+
+The restart and MCP submit-failure paths persisted the terminal state with
+the request context — during shutdown that context is likely already
+cancelled, stranding the freshly created rows in running (the same bug
+class #1001 fixed on the async lane). MCP also discarded the persistence
+error entirely. All three lanes now share one helper: detached bounded
+persistence context, failed/control_plane_shutdown on both tables, and a
+warn log carrying node_id and execution_id when persistence itself fails.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* style(control-plane): gofmt the admission fix
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): balance admission ownership through shutdown
+
+* fix(control-plane): preserve replay input envelopes
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2638b9e)
+
+## [0.1.138-rc.5] - 2026-08-31
+
+
+### Added
+
+- Feat(control-plane): client-settable run display name, labels and links (#1032)
+
+* fix(control-plane): bound golden-run name and tag writes into run metadata
+
+POST /api/ui/v2/workflow-runs/:run_id/golden wrote the caller-supplied name
+and tag list into workflow_runs.metadata with no bounds at all. The name was
+only TrimSpace'd, so a 1 MiB name persisted verbatim; sanitizeStringList
+trimmed and de-duped but capped neither the entry count nor the entry length,
+and it preallocated its output slice (and an unbounded de-dupe map) straight
+from the attacker-controlled input length. That row is re-read and
+re-serialised on every runs-list page that contains the run, so both are
+stored amplification vectors (#944).
+
+Cap tags at 20 entries of at most 64 runes each, and truncate the name at 200
+runes. Over-long tags are dropped rather than truncated: byte-slicing can land
+mid-rune and json.Marshal silently rewrites the invalid UTF-8 to U+FFFD.
+Lengths are counted with utf8.RuneCountInString so a 64-rune CJK tag survives.
+The output slice and de-dupe map are now sized min(len(values), maxCount) and
+the loop stops once maxCount survivors are collected, so a multi-million-entry
+tag array cannot force a large allocation before the cap applies.
+
+This route is UI-private and its only caller sends one hard-coded tag, so
+oversized input is bounded silently rather than rejected — a 400 would break
+the existing "Save as golden run" button. The name fallback is unchanged: an
+empty name still falls back to run_id, and run_id itself is not truncated.
+
+Forward-only. Nothing re-validates on read, so rows that already hold
+oversized golden metadata keep reading back exactly as they do today.
+
+The caps are named constants so the follow-up run-metadata endpoint can reuse
+the same bounds and the same helper.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover golden-run metadata bounds and forward-only reads
+
+Adds the behaviour tests for the golden-run caps:
+
+- sanitizeStringList: 100 inputs cap to the first 20; a 65-rune ASCII entry is
+  dropped while its 64-rune neighbour survives; a 64-rune CJK entry is kept
+  byte-identical (proving it is not truncated into U+FFFD) while a 65-rune one
+  is dropped; the legacy trim/de-dupe/order behaviour is pinned unchanged; the
+  maxCount<=0 and maxRunes<=0 guards are exercised.
+- A 100k-entry input asserts cap(out) <= 20, which is the allocation contract —
+  a length assertion alone would still pass with the old preallocation.
+- truncateRunes: cut on a rune boundary, result always valid UTF-8 with no
+  replacement character, and the non-positive cap guard.
+- Handler round-trip: a POST with 50 tags plus one over-long tag stores exactly
+  20, a 1 MiB name stores 200 runes and keeps the whole metadata blob under
+  4 KiB, and a blank name still falls back to run_id.
+- Read-back: a pre-seeded row holding 50 tags and a 500-rune name still
+  surfaces in full on both the runs list and the run detail, pinning that this
+  change is forward-only and read paths do not re-validate.
+
+The two pre-existing golden-route tests are left untouched as the
+behaviour-unchanged regression guard.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): client-settable run display name, labels and links
+
+A 'run' namespace in workflow_runs.metadata, written only through a
+namespace-merging transactional primitive (never the full-row upsert, which
+clobbers golden/lineage and resets state columns). POST
+/api/v1/runs/:run_id/metadata read-merge-writes it with strict caps
+(display_name<=200, labels<=20x64, links<=10, url<=2048, http/https only, no
+embedded credentials) and creates the carrier row on first write; an optional
+run_metadata execute field seeds it at dispatch, excluded from the replay
+dedupe key; restart lineage now writes through the same primitive. The run
+list, run detail, DAG and agentic overview surface it. external_status is
+deliberately out of scope.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(storage): open SQLite with _txlock=immediate
+
+Write transactions now take the write reservation at BEGIN instead of on
+first write, so the read-merge-write metadata primitive (and every other
+BeginTx writer) cannot hit the read->write upgrade deadlock; WAL and the 60s
+busy timeout were already in place. Global, deliberate change — the full
+suite gates it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(web-ui): render run display names, label chips and safe external links
+
+Display name takes precedence in the run list row, labels render as chips,
+links render only after scheme re-validation (http/https, host required)
+with rel="noopener noreferrer"; nothing is treated as trusted HTML.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): run metadata contract, race, replay and negative-matrix coverage
+
+Concurrent different-namespace writers both survive; lineage seed and
+metadata merge interleave without clobbering; two executes differing only in
+run_metadata replay-hit through the real findReplayHit path; byte-identity
+of untouched namespaces; endpoint-level negatives for every cap and for
+javascript:/data:/file:/credentialed/scheme-less URLs with storage untouched.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document the run metadata endpoint and execute field
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): harden run metadata updates
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c2df003)
+
+- Feat(control-plane,k8s): shutdown min delay, drain-aware readiness, chart defaults and a coherent tuning recipe (#1030)
+
+* feat(control-plane): add AGENTFIELD_SHUTDOWN_MIN_DELAY and shutdown-aware readiness
+
+On Kubernetes the control plane closes its listener the instant it is
+signalled, while kube-proxy is still routing traffic to the pod: in-flight
+and newly arriving requests get connection refusals for however long
+endpoint removal takes to propagate. There was also no way to tell a
+draining control plane from a healthy one -- /health and /api/v1/health
+answer 200 right up to the moment the listener goes away, so a readiness
+probe pointed at them can never fail early enough to help.
+
+Add two pieces that fix that together:
+
+- AGENTFIELD_SHUTDOWN_MIN_DELAY: a control-plane-only wait between the
+  shutdown signal and the start of Stop(). It defaults to 0, which
+  reproduces the previous timing exactly, and accepts bare seconds or a Go
+  duration like AGENTFIELD_SHUTDOWN_TIMEOUT does. It gets its own
+  non-negative parser rather than relaxing parseShutdownTimeout, because
+  that parser rejecting 0 is what keeps AGENTFIELD_SHUTDOWN_TIMEOUT=0 from
+  silently changing meaning. The wait is placed after cmd/af's
+  stopSignals() and after cmd/agentfield-server's waitForShutdown helper
+  has returned, so a second SIGTERM during the window still kills the
+  process immediately.
+- GET /readyz and GET /api/v1/health/ready: readiness routes that run the
+  same dependency checks as /health but answer 503 as soon as BeginDrain
+  has run. Liveness is deliberately untouched, so the kubelet does not
+  kill a pod that is draining on purpose, and the process keeps accepting
+  and completing requests for the whole window.
+
+/readyz is added to the API-key skip list (the middleware only exempts the
+/api/v1/health prefix, /health and /metrics), and both paths are listed in
+the DID auth skip paths.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover the min delay, the drain readiness flip and the shipped probe path
+
+Each test maps to one observable behaviour rather than to the code shape:
+
+- the env table covers 5, 5s, 500ms, 0, unset, abc and -1s, with 0 accepted
+  as a real value and the invalid cases leaving the configured value alone;
+- a separate case asserts AGENTFIELD_SHUTDOWN_TIMEOUT=0 still keeps its
+  current value, which is the guard against someone "simplifying" the two
+  parsers back into one;
+- the routing test walks /readyz, /api/v1/health/ready, /health and
+  /api/v1/health before and after BeginDrain, with an API key configured so
+  it also proves the skip-path entry, and then asks for /api/v1/version to
+  show ordinary traffic is still served while draining;
+- both entry points assert beginDrain runs before stop, that stop is not
+  reached before a 50ms delay elapses, and that a zero delay does not wait.
+
+The manifest test reads the chart values and the kustomize base and asserts
+the shipped readinessProbe path is still /api/v1/health. The chart defaults
+to image tag latest with IfNotPresent and one replica, so flipping that
+path to one an older cached image does not serve would leave the Service
+with zero endpoints -- that regression should fail a test, not a cluster.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(deployments): ship a 5s control-plane shutdown delay and a gated readiness path
+
+The chart and the kustomize base now set AGENTFIELD_SHUTDOWN_MIN_DELAY to
+5s and raise the control-plane pod grace from 45 to 60 seconds, which is
+what the shutdown actually needs: 5s minimum delay + the 30s
+AGENTFIELD_SHUTDOWN_TIMEOUT drain + roughly 20s of tail (a fresh >=5s
+async-pool budget plus 5s each for package maintenance, the observability
+forwarder and the tracer). The agent templates are left alone.
+
+The readinessProbe path is deliberately NOT flipped to the new
+shutdown-aware route. controlPlane.image.tag defaults to latest with
+pullPolicy IfNotPresent and replicaCount 1, so a chart upgrade can land on
+a node holding an older cached image; pointing the probe at a path that
+image 404s would leave a single-replica Service with zero endpoints. The
+path moves behind controlPlane.readinessProbe.path, defaulting to today's
+/api/v1/health, with a comment saying when it is safe to switch.
+
+The min-delay env entry is skipped when controlPlane.env already defines
+AGENTFIELD_SHUTDOWN_MIN_DELAY, so an explicit operator value never renders
+a duplicate env name.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(k8s): make the drain and shutdown recipe derivable without reading code
+
+The Kubernetes guide told operators to raise terminationGracePeriodSeconds
+when they raised AGENTFIELD_SHUTDOWN_TIMEOUT, and stopped there. That is
+the exact configuration that breaks: the deferred reap fires
+AGENTFIELD_AGENT_DRAIN_GRACE after the REPLACEMENT registers, regardless of
+how much drain budget the departing pod still has, and under a default
+rolling update the replacement is Ready and registered before the old pod
+is even signalled. A reader following the old text ends up with a long
+reasoner reaped mid-flight and a 409 on its own success callback.
+
+State the invariant instead, and the things a reader cannot guess:
+
+- the drain-grace inequality, with maxSurge: 0 as the way to zero the
+  registration-to-SIGTERM lag term, and a worked 10-minute-reasoner example
+  written with unit suffixes, because AGENTFIELD_AGENT_DRAIN_GRACE takes
+  Go durations only -- a bare 660 is dropped silently and the 60s default
+  survives;
+- that 0s does not disable the reap (zero keeps the default) and a negative
+  duration makes it immediate, so it is not an opt-out;
+- that drain grace is one global setting that also feeds agentIsDraining,
+  so a 12m value holds every dead node's dispatches and rows for 12m;
+- that AGENTFIELD_EXECUTION_STALE_TIMEOUT (30m) is a second ceiling no
+  drain tuning can raise, and the exact status_reason to grep for;
+- the 409 / idempotent-200 / 500 callback outcomes after a reap;
+- why replicas must stay 1 today, in terms of instance_id and the single
+  callback URL field, not as a roadmap promise.
+
+Also document the new AGENTFIELD_SHUTDOWN_MIN_DELAY and readiness routes,
+the real control-plane pod-grace arithmetic (min delay + shutdown timeout +
+~20s of tail, not the optimistic +5s), and reconcile the agent pod-grace
+floor to one number (+15s) across both files. Drops the stale claim that
+Agent.setup_signal_handlers() is retained for compatibility -- that
+delegate was removed and this line was its last mention in the repo.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(k8s): fix the worked terminationGracePeriodSeconds arithmetic
+
+Review caught 11m15s being written as 690s. Derive the number from the
+stated invariant (budget + settlement + headroom) instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): assert the helm templates consume the new values keys
+
+The values.yaml parse test would keep passing if the deployment template
+stopped referencing controlPlane.readinessProbe.path, shutdownMinDelay or
+terminationGracePeriodSeconds. Table-driven template-reference assertions
+close that hole without depending on a helm binary.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(k8s): align readiness drain timing
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e1c67ba)
+
+- Feat(sdk-python): opt-in litellm observability callbacks and execution metadata (#1029)
+
+* feat(sdk-python): opt-in litellm callbacks and execution metadata
+
+LangFuse/Logfire/Langsmith users see `app.ai` completions as anonymous
+LLM calls: nothing correlates a generation back to the AgentField run,
+execution or reasoner that produced it, and wiring litellm callbacks by
+hand means editing every acompletion site (#990, #997).
+
+Add `agentfield/litellm_observability.py`:
+
+- `AGENTFIELD_LITELLM_CALLBACKS` — comma-separated litellm callback names,
+  trimmed, lowercased, deduped, registered once per process through
+  `logging_callback_manager.add_litellm_callback`, with a hand-rolled
+  dedupe fallback when that private attribute is absent. Unset means we
+  never import litellm and never touch its callback state, so today's
+  behaviour is unchanged by default. Registration failures are logged and
+  swallowed — a bad callback name must not stop an agent from booting.
+  Unknown names are passed through rather than allowlisted, because
+  litellm's own `_known_custom_logger_compatible_callbacks` omits real
+  callbacks (helicone, lunary, athina, plain s3).
+- An execution-correlation stamp on every `app.ai` text completion:
+  `agentfield_execution_id`, `agentfield_run_id`, `agentfield_agent_node_id`,
+  `agentfield_reasoner`, plus session / parent execution ids when the
+  context has them. `metadata` is a litellm-only param, so none of this
+  reaches the provider request body. Opt out with
+  `AGENTFIELD_LITELLM_METADATA=false`, mirroring
+  `AGENTFIELD_OPENROUTER_ATTRIBUTION`.
+
+The LangFuse-native aliases (trace_id, session_id, trace_name,
+generation_name, tags) are stamped only when AgentField itself registered
+a callback. litellm's callback state is process-global, so stamping them
+unconditionally would silently re-key, rename and re-tag every generation
+belonging to a user who had already wired up LangFuse themselves.
+
+`user_id` and `requester_metadata` are never emitted: anthropic copies
+`metadata["user_id"]` into the request body and vertex turns
+`metadata["requester_metadata"]` into request labels.
+
+The stamp is applied in `AgentAI.ai` rather than in
+`AIConfig.get_litellm_params`, because the two text-to-speech paths splat
+that config into calls with no `metadata` kwarg. It is re-applied at the
+top of the tool-loop completion so each turn gets its own metadata dict
+instead of sharing one object through the loop's shallow param copies.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): cover litellm observability callbacks and metadata
+
+32 tests over the new module, driven by injected litellm stubs so the
+process-global callback lists are never mutated by accident; the two
+tests that do touch the real module snapshot and restore
+`callbacks` / `success_callback` / `failure_callback`.
+
+The wire test is the important one. Asserting that `metadata` is in
+litellm's `all_litellm_params` would only restate litellm's own table,
+and that table moves — the SDK floats litellm on Python 3.11+. Instead a
+stdlib HTTPServer on 127.0.0.1 captures the real request body for the
+openai/, litellm_proxy/ and openrouter/ routes and asserts no `metadata`
+key and no `agentfield_*` key ever reaches it.
+
+The canary comment records why: the module reads litellm's private
+`logging_callback_manager` and `_known_custom_logger_compatible_callbacks`,
+and the weekly canary already runs this module via run_pytest.sh, so an
+upstream rename surfaces there rather than in a user's process.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document litellm observability callbacks and execution metadata
+
+New top-level page rather than docs/integrations/, which is reserved for
+control-plane integration packs.
+
+Beyond the env vars and the metadata field list, the page states the
+three things that bite people: litellm callback state is process-global,
+so a process hosting several Agents applies the union of their configured
+callbacks; langfuse and logfire are not SDK dependencies and litellm
+degrades a missing one to a logged non-blocking error rather than failing
+the call (verified against litellm 1.98.0); and an otel-family callback
+produces a second trace tree disconnected from the control plane's own
+OTLP spans, because nothing in this repo propagates W3C traceparent to
+agent nodes.
+
+It also names what the stamp does not cover — image generation and the
+harness schema-repair call go to litellm directly, and the text-to-speech
+paths take `metadata=` explicitly — so nobody reads the feature as wider
+than it is.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk-python): narrow litellm alias gate and callback bookkeeping
+
+Review follow-ups on the opt-in LiteLLM observability module.
+
+Gate the LangFuse-native metadata aliases (trace_id, session_id,
+trace_name, generation_name, tags) on AgentField having registered a
+LangFuse-family callback rather than on it having registered any callback
+at all. The previous gate still re-keyed, renamed and re-tagged an
+application's own LangFuse generations whenever the operator set
+AGENTFIELD_LITELLM_CALLBACKS to a different vendor, which is the hazard
+the contract item was written to prevent.
+
+Record a callback in _AGENTFIELD_REGISTERED only when a registration
+branch actually installed it. Given neither a logging_callback_manager
+nor a litellm.callbacks list, register_callbacks previously reported
+success and flipped the alias gate on for a callback that was never
+installed anywhere.
+
+Copy a stamped list value when merging, so the tool-calling loop's
+shallow `{**litellm_params}` copies do not share one metadata["tags"]
+list across turns -- LangFuse-style integrations append to it.
+
+Replace the two dead metadata.pop() calls with a comment recording why
+user_id and requester_metadata must never be added: LiteLLM's anthropic
+transform copies metadata["user_id"] into the provider request body, and
+its vertex transform turns metadata["requester_metadata"] into request
+labels.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): fix the py3.10 leg and guard the alias narrowing
+
+Skip the openrouter parametrization of test_metadata_never_reaches_the_wire
+on LiteLLM below 1.98. That version routes an `openrouter/` model carrying
+a custom api_base through the OpenAI SDK while still applying
+OpenrouterConfig.transform_request, which unconditionally injects a
+top-level `usage` key that AsyncCompletions.create() rejects. pyproject
+caps LiteLLM at <1.98.0 on Python 3.10, so the CI matrix's 3.10 leg failed
+on LiteLLM's own request shaping rather than on the metadata under test.
+Real AgentField openrouter traffic sets no api_base and is unaffected, and
+the route still runs on 3.11+.
+
+Cover the two behaviour fixes: a non-LangFuse callback registered by
+AgentField must not stamp the LangFuse aliases even when the application
+registered langfuse itself, and register_callbacks must report nothing when
+neither registration branch can install anything.
+
+Make three existing assertions load-bearing. Run the TTS one inside a live
+ExecutionContext so it fails if the stamp ever migrates into
+AIConfig.get_litellm_params; exercise the alias branch in the
+user_id/requester_metadata test so a future alias addition is caught; and
+assert the tool loop's turns do not share one tags list.
+
+Clear _AGENTFIELD_REGISTERED on fixture entry so the alias-absence
+assertions cannot become order-dependent.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: scope litellm alias stamping to the langfuse family
+
+The callback-native aliases are stamped only when AgentField itself
+registered `langfuse` or `langfuse_otel`, not on any AgentField-registered
+callback, so that registering some other vendor cannot silently re-key an
+existing LangFuse setup's generations.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(sdk-python): include litellm_observability in the coverage module list
+
+The re-review caught the new module missing from the --cov list, so its
+patch coverage was never measured. Full sdk-python gate re-run with it
+included: all pass.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk-python): harden LiteLLM observability
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (41699ab)
+
+
+
+### Fixed
+
+- Fix(sdk-typescript): honor AGENTFIELD_LOG_STDOUT, and document the per-SDK logging knobs (#1020)
+
+* fix(sdk-typescript): honor AGENTFIELD_LOG_STDOUT in the ExecutionLogger
+
+docs/api/AGENT_NODE_LOGS.md has promised AGENTFIELD_LOG_STDOUT SDK-agnostically
+since it was written, and the Python (`_stdout_mirror_enabled`) and Go
+(`executionLogStdoutEnabled`) SDKs both honor it. The TypeScript
+ExecutionLogger did not: `mirrorToStdout` defaulted to `true` and nothing ever
+read the environment, so a TypeScript node had no way to turn the structured
+stdout mirror off (#985).
+
+`mirrorToStdout` becomes tri-state (`boolean | undefined`). An explicit option
+still wins in both directions; when it is absent the flag is resolved from the
+environment. The resolution happens per emit rather than in the constructor
+because `Agent` builds one shared ExecutionLogger at construction time, so a
+snapshot would freeze the flag for the whole process lifetime — Python and Go
+both re-read it on every record.
+
+The accepted falsy spellings (`0`/`false`/`no`/`off`, case-insensitive,
+whitespace trimmed) move into a new internal `utils/envFlags` helper that
+`processLogs.ts` now shares, so the list cannot drift between modules or
+against the other SDKs. The helper guards `process` with
+`typeof process !== 'undefined'`, matching the guard ExecutionLogger already
+uses for `process.stdout`, so the class stays usable outside Node.
+
+The default is unchanged: unset, empty, or any unrecognised value keeps the
+mirror on, so a typo cannot silently drop log output, and nothing in the repo
+sets this variable. Serialization now happens inside the mirror branch — with
+the mirror off the JSON envelope is never built, which is the cost the flag
+exists to avoid (the transport is handed the object, not the string).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): pin AGENTFIELD_LOG_MAX_LINE_BYTES parsing
+
+`node_logs.max_line_bytes()` had no direct test, yet its parsing differs from
+the Go and TypeScript SDKs in ways the environment-variable reference is about
+to describe: Python clamps every integer below 256 up to 256 (including zero
+and negatives) where Go and TypeScript reject those values and fall back to
+16384, and Python's `int(raw, 10)` rejects `512abc` where TypeScript's
+`parseInt` prefix-parses it to 512.
+
+Table-driven so the documented matrix and the code cannot drift apart.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(logging): file AGENTFIELD_LOG_STDOUT cross-SDK and correct the line-cap claims
+
+AGENTFIELD_LOG_STDOUT was documented under "Python SDK agents" even though the
+Go SDK reads it too (and now the TypeScript SDK does). It moves to "Structured
+logging (SDKs)" with an explicit reader list; a pointer stays in the Python
+section so a reader scanning only their own section does not lose it. Two
+consequences that were previously undocumented are stated so they are not
+later filed as regressions: a record with no execution id is skipped by
+control-plane dispatch in all three SDKs and is therefore dropped entirely when
+the mirror is off, and because the node-log ring is fed by captured stdout,
+disabling the mirror also empties structured records out of
+GET /agentfield/v1/logs.
+
+The AGENTFIELD_LOG_MAX_LINE_BYTES entry claimed "minimum: 256" and that "the Go
+and TypeScript SDKs treat invalid values as unset". The first is misleading and
+the second is false. Python clamps sub-256 integers up to 256; Go and
+TypeScript reject them upward to the 16384 default, so `=100` yields a cap 64x
+larger than requested. Python and Go reject non-integers outright while
+TypeScript's parseInt prefix-parses (`512abc` -> 512). The Python clamp also
+governs both Python log paths — the stdout/stderr tee behind
+/agentfield/v1/logs and the structured-mirror elision budget — not just the
+mirror. Every number here is pinned by the new test_node_logs.py table.
+
+Each SDK README gains a short Logging section carrying that SDK's own numbers.
+The Python one uses absolute github.com URLs because that file is the PyPI
+long_description, where relative links render dead.
+
+No code behaviour changes in this commit.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-typescript): isolate execution logger stdout env
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (4b2b8bd)
+
+## [0.1.138-rc.4] - 2026-08-31
+
+
+### Changed
+
+- Refactor(desktop): share one linear trailing-slash trim (#1021)
+
+#1019 replaced the `/\/+$/` replace in the TypeScript SDK's LocalVerifier
+after CodeQL flagged it as js/polynomial-redos. Four copies of the same
+pattern remained in desktop/: catalog.sourceRepo, cloudUpdate.normalizedUrl
+(twice) and cpClient.request.
+
+CodeQL does not flag those — they take operator config, not attacker
+input, so there is no taint path — but there is no reason to keep four
+copies of a pattern the scanner objects to when one linear helper does
+the job.
+
+Add shared/trimSlashes.ts with the same backward index scan LocalVerifier
+now uses, and route all four call sites through it. Behavior is unchanged
+for every input, interior '//' in catalog source strings included. (7f58f58)
+
+
+
+### Chores
+
+- Chore(pre-commit): repair the ruff hooks, pin them to CI's version (#1022)
+
+The ruff hooks have been dead. `sdk/python/pyproject.toml` selects the
+ASYNC ruleset, which the pinned v0.6.9 does not know, so both hooks
+aborted before linting anything:
+
+    ruff failed
+      Cause: Failed to parse sdk/python/pyproject.toml
+      Cause: TOML parse error at line 136, column 1
+        Unknown rule selector: `ASYNC240`
+
+Every Python commit hit this, which is how #1018 ended up needing
+--no-verify. Pin to v0.15.22, the version .github/workflows/sdk-python.yml
+already installs, so local and CI enforce one contract. 0.16.x stays out
+of scope: it flags ~2700 pre-existing violations repo-wide.
+
+Scope both hooks to ^sdk/python/, matching that workflow's
+working-directory. Unscoped they run from the repo root and surface 53
+pre-existing errors in examples/ and scripts/ that CI has never checked
+— a real backlog, but one that deserves its own PR rather than arriving
+as a side effect of a version bump.
+
+Also switch `ruff` to `ruff-check`; the old id is now a legacy alias.
+
+Verified: `pre-commit run --all-files ruff-check` passes, and the file
+that forced --no-verify on #1018 passes every hook. (d48f40f)
+
+
+
+### Fixed
+
+- Fix(control-plane): bound golden-run name and tag writes into workflow_runs.metadata (#1025)
+
+* fix(control-plane): bound golden-run name and tag writes into run metadata
+
+POST /api/ui/v2/workflow-runs/:run_id/golden wrote the caller-supplied name
+and tag list into workflow_runs.metadata with no bounds at all. The name was
+only TrimSpace'd, so a 1 MiB name persisted verbatim; sanitizeStringList
+trimmed and de-duped but capped neither the entry count nor the entry length,
+and it preallocated its output slice (and an unbounded de-dupe map) straight
+from the attacker-controlled input length. That row is re-read and
+re-serialised on every runs-list page that contains the run, so both are
+stored amplification vectors (#944).
+
+Cap tags at 20 entries of at most 64 runes each, and truncate the name at 200
+runes. Over-long tags are dropped rather than truncated: byte-slicing can land
+mid-rune and json.Marshal silently rewrites the invalid UTF-8 to U+FFFD.
+Lengths are counted with utf8.RuneCountInString so a 64-rune CJK tag survives.
+The output slice and de-dupe map are now sized min(len(values), maxCount) and
+the loop stops once maxCount survivors are collected, so a multi-million-entry
+tag array cannot force a large allocation before the cap applies.
+
+This route is UI-private and its only caller sends one hard-coded tag, so
+oversized input is bounded silently rather than rejected — a 400 would break
+the existing "Save as golden run" button. The name fallback is unchanged: an
+empty name still falls back to run_id, and run_id itself is not truncated.
+
+Forward-only. Nothing re-validates on read, so rows that already hold
+oversized golden metadata keep reading back exactly as they do today.
+
+The caps are named constants so the follow-up run-metadata endpoint can reuse
+the same bounds and the same helper.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover golden-run metadata bounds and forward-only reads
+
+Adds the behaviour tests for the golden-run caps:
+
+- sanitizeStringList: 100 inputs cap to the first 20; a 65-rune ASCII entry is
+  dropped while its 64-rune neighbour survives; a 64-rune CJK entry is kept
+  byte-identical (proving it is not truncated into U+FFFD) while a 65-rune one
+  is dropped; the legacy trim/de-dupe/order behaviour is pinned unchanged; the
+  maxCount<=0 and maxRunes<=0 guards are exercised.
+- A 100k-entry input asserts cap(out) <= 20, which is the allocation contract —
+  a length assertion alone would still pass with the old preallocation.
+- truncateRunes: cut on a rune boundary, result always valid UTF-8 with no
+  replacement character, and the non-positive cap guard.
+- Handler round-trip: a POST with 50 tags plus one over-long tag stores exactly
+  20, a 1 MiB name stores 200 runes and keeps the whole metadata blob under
+  4 KiB, and a blank name still falls back to run_id.
+- Read-back: a pre-seeded row holding 50 tags and a 500-rune name still
+  surfaces in full on both the runs list and the run detail, pinning that this
+  change is forward-only and read paths do not re-validate.
+
+The two pre-existing golden-route tests are left untouched as the
+behaviour-unchanged regression guard.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e1f2831)
+
+
+
+### Performance
+
+- Perf(sdk-python): stop re-serializing oversized structured log records (#1028)
+
+* perf(sdk-python): stop re-serializing oversized structured log records
+
+_bounded_mirror_line serialized the whole record with json.dumps before it
+knew whether the record fit the mirror budget, and serialized it a second
+time at the end to report original_size. A record carrying a multi-megabyte
+string attribute therefore passed that payload to json.dumps twice, and every
+size check did len(<str>.encode("utf-8")), materialising a throwaway
+multi-megabyte bytes copy purely to count.
+
+Three changes, all inside that one private method and the helpers next to it:
+
+* _certainly_exceeds_budget is a shallow O(top-level keys + attributes) sum
+  over str/bytes payloads that skips the speculative whole-record dumps when
+  it can already prove the record is oversized. It is deliberately NOT a
+  recursive walker — a recursive lower-bound walk measured +318% on a fitting
+  14.7 KB record and never aborts early for int-heavy payloads. Nested
+  containers count as zero, so "False" means "unknown, serialize and measure",
+  and any exception falls back to that same path so a mirror line is never
+  dropped because the estimator misbehaved.
+* _record_size reconstructs the full record size arithmetically from the
+  envelope plus the already-computed attributes size instead of re-encoding,
+  which removes the second whole-record dumps. It falls back to a plain dumps
+  when the record has no "attributes" key, because {**record,
+  "attributes": {}} would APPEND the key and overcount the envelope by 14
+  bytes in the reported original_size.
+* _byte_len replaces len(x.encode("utf-8")) everywhere it was used only to
+  count; str.isascii() is an O(1) flag check on CPython's compact-unicode
+  representation, so the common case no longer allocates at all.
+
+_json_key fixes a latent off-by-two while it is in here: json coerces non-str
+dict keys (1 -> "1", True -> "true", None -> "null"), so measuring the raw key
+undercut the attributes size by two bytes per non-str key and could push an
+elision boundary the wrong way. bool is checked before int because
+isinstance(True, int).
+
+Output is unchanged: a 220-case differential harness (hand-picked edges plus
+200 randomised records across budgets 256-16384) produces byte-identical lines
+against the previous implementation, and the record handed to _dispatch_to_cp
+is still only ever shallow-copied. Measured, mean of 5: one 5 MB str attribute
+20.4 ms -> 9.0 ms (json.dumps calls carrying a >=1 MB payload: 2 -> 1),
+200 x 50 KB attributes 46.2 ms -> 18.8 ms, and a fitting 14.7 KB record stays
+at 0.18 ms.
+
+Refs #985
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): guard the bounded mirror line against re-serialization
+
+Regression tests for the mirror-line precheck, derived from the behavior
+contract rather than from the implementation:
+
+* a 5 MB str attribute passes a >=1 MB payload to json.dumps at most once
+  (counting proxy around logger_module.json.dumps) — the deterministic guard
+  that the whole-record dumps is really skipped;
+* a record that FITS the default 16384 budget is emitted byte-identically to
+  a direct json.dumps and its nested values are never measured. The existing
+  many-large-attributes test cannot catch a recursive precheck, because its
+  first 50 KB attribute aborts the scan immediately; this one nests a str
+  subclass whose isascii()/__len__ raise, which CPython's C json encoder
+  never touches but a recursive walker would;
+* non-str attribute keys elide at the same per-attribute boundary and report
+  an aggregate _elided size that matches json.dumps exactly (4030, not the
+  4024 the raw-key measurement produced);
+* a record with no "attributes" key reports its exact size in the
+  minimal-record fallback rather than 14 bytes too many;
+* a payload that raises while being measured falls back to the full-dumps
+  path, so the stdout line is still emitted instead of being dropped;
+* _json_key's coercion table (str / bool / None / float / __str__ fallback).
+
+No wall-clock assertion is added: the post-fix timing has only ~4.6x headroom
+and would be a CI flake source. Every existing structured-mirror test —
+including the exact <4002>/<4004> markers and the elapsed < 0.2 guard — passes
+unmodified.
+
+Refs #985
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): make the mirror perf guards fail on revert
+
+Both new guards passed against main's logger.py, so neither actually
+guarded the behaviour it was named for.
+
+- test_..._serializes_large_string_payload_at_most_once classified
+  json.dumps calls by their *argument* (a >=1MB str). The redundant call
+  this PR removes passes the record *dict*, not the 5 MB string, so both
+  versions showed exactly one big-str argument. Count the *output* size
+  instead: 1 on the branch, 2 on main, 2 with the precheck neutered.
+
+- test_..._fitting_nested_record_is_not_walked_recursively used a
+  tripwire that raised AssertionError, but _certainly_exceeds_budget
+  swallows every exception and falls back to the full-dumps path, so a
+  recursive precheck silently emitted the byte-identical line the test
+  asserted. Record the touches in a list and assert it stays empty; the
+  byte-identical assertion is kept alongside it.
+
+Verified by mutation: with `return False` inserted at the top of
+_certainly_exceeds_budget the first test now fails (2 != 1), and with
+_shallow_payload_bytes made recursive over dicts/lists the second fails
+with 2800 recorded touches. Both were green before this change.
+
+Also applies `ruff format` to the one hunk in
+test_..._non_string_attribute_keys_have_exact_sizes that had drifted, so
+the file stays format-clean.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (5a0d275)
+
+## [0.1.138-rc.3] - 2026-08-31
+
+
+### Fixed
+
+- Fix(sdk/python): parse URL in logger test to resolve CodeQL substring-sanitization alert (#1018)
+
+* fix(sdk/python): parse URL in logger test to resolve CodeQL substring-sanitization alert
+
+* review: assert the parsed hostname from the captured log line
+
+The first pass added `urlparse("https://api.openai.com").hostname ==
+"api.openai.com"`, which parses a hardcoded literal and can never fail.
+It asserts that urllib works, not that the logger emitted anything, and
+left the original substring check as the only real assertion.
+
+Pull the URL back out of caplog.text and compare parsed hostnames for
+equality. Any `in` against a bare hostname literal, set membership
+included, still trips py/incomplete-url-substring-sanitization, so the
+check is written as `any(... == ...)`.
+
+Verified 17 passed, and that the assertion fails when the logged host
+changes. (35c1f18)
+
+- Fix(sdk/typescript): replace trailing-slash regex to resolve CodeQL polynomial-redos alert (#1019)
+
+* fix(sdk/typescript): replace trailing-slash regex to resolve CodeQL polynomial-redos alert
+
+CodeQL alert #54 (js/polynomial-redos) flagged /\/+$/ in LocalVerifier's
+constructor as a polynomial-time regex on uncontrolled input. Trim
+trailing slashes with a plain loop instead; behavior is identical.
+
+Fixes CodeQL alert #54.
+
+* review: single-pass trailing-slash trim + regression tests
+
+The first pass traded the regex for `while (url.endsWith('/')) url =
+url.slice(0, -1)`, which reallocates the string once per trailing slash
+and is quadratic on the very input the CodeQL alert was about.
+
+Walk an index backwards and slice once instead: linear, one allocation,
+still no regex. Rewrite the comment, which described a `.test` call the
+original code never made.
+
+Add constructor tests covering single, repeated, absent, empty-string
+and all-slash inputs, plus a 200k-slash run to catch a regression back
+to quadratic behavior. (9af2d49)
+
+## [0.1.138-rc.2] - 2026-08-31
+
+
+### Added
+
+- Feat(sdk/go): add AI rate limiter with backoff and circuit breaker (#1009)
+
+* feat(sdk/go): add AI rate limiter with backoff and circuit breaker (#97)
+
+Adds production resilience to the Go SDK AI client, matching the Python
+and TypeScript SDKs.
+
+- RateLimiter: exponential backoff with per-container jitter, retrying
+  on HTTP 429/503 and rate-limit keyword errors, honoring server
+  Retry-After hints and context cancellation.
+- Circuit breaker: opens after N consecutive rate-limit failures, probes
+  recovery after a timeout (half-open), closes on success. Disable with a
+  negative threshold.
+- CircuitState enum (closed/open/half-open) and sentinel errors
+  ErrCircuitOpen / ErrMaxRetriesExceeded.
+- Opt-in via ai.Config (RateLimitMaxRetries greater than 0). agent.AI
+  uses it automatically since it flows through Client.Complete.
+- Docs and tests. ai package coverage 92 to 94.7 percent.
+
+* fix(sdk/go): enforce single half-open probe in circuit breaker (#97)
+
+Addresses review feedback on PR #1009. The previous half-open handling
+cleared circuitOpenTime on the first caller after the timeout, so every
+concurrent caller also passed through - reopening the floodgate instead
+of admitting one probe.
+
+Replace the implicit time-based reset with an explicit state machine:
+- admit() returns whether a call may proceed and whether it is the single
+  half-open probe. While a probe is in flight, concurrent callers fast-fail
+  with ErrCircuitOpen.
+- onResult() closes the circuit on a successful probe or re-opens it (with
+  a fresh timeout) on a failed probe.
+- releaseProbe() frees the probe slot without a verdict when the call ends
+  in a non-rate-limit error or context cancellation, so the breaker never
+  wedges half-open.
+
+Adds tests for single-probe admission (including a 50-goroutine race test),
+failed-probe reopen, and probe release on non-rate-limit errors. (5097a58)
+
+## [0.1.138-rc.1] - 2026-08-31
+
+
+### Testing
+
+- Test(handlers): cover discovery.go filter parsing helpers (#397) (#1015)
+
+Adds control-plane/internal/handlers/discovery_filters_test.go. Test-only;
+no source changes.
+
+Covers the query-parsing and response-building helpers:
+- parseDiscoveryFilters: invalid bool/int/format/health_status params return
+  parameterError naming the offending parameter and allowed values; happy path
+  parses all filters; defaults applied when absent.
+- collectAgentIDs: merges agent / node_id / agent_ids / node_ids aliases,
+  trimmed + deduped + sorted; agent wins over node_id; empty when none.
+- buildDiscoveryResponse: paginates after filtering (totals reflect the full
+  filtered set, page trimmed to limit); filters by agent id + tag pattern.
+- decodeSchema: nil and malformed JSON decode to nil, not an error.
+- extractDescription / extractExamples: blank descriptions ignored; typed and
+  []interface{} example shapes handled; malformed containers skipped.
+- matchesPattern / matchesTags / parseCSV / parseBool / parseInt / dedupeStrings.
+
+Coverage on the targeted functions:
+  parseDiscoveryFilters 85.7 -> 100, collectAgentIDs 81.8 -> 100,
+  decodeSchema/extractDescription/matchesTags/parseCSV/parseBool/parseInt 100,
+  buildDiscoveryResponse 96.2, extractExamples 94.1. (a9ec91d)
+
+- Test(events): cover node/exec/reasoner publish + dedupe helpers (#394) (#1014)
+
+Adds three test files under control-plane/internal/events. Test-only;
+no source changes.
+
+- node_events_dedupe_test.go: shouldFilterEvent, isDuplicateStatusEvent,
+  compareStatusEventData, cleanupEventCache, PublishNodeStatusUpdatedEnhanced
+  state extraction, StartNodeHeartbeat, plus a concurrency race test.
+- reasoner_events_publish_test.go: StartHeartbeat, online/offline/updated
+  status contracts, PublishReasonersRefresh empty-id.
+- execution_events_publish_test.go: canonical Status assertions for all
+  execution publishers (completed -> succeeded, updated preserves caller
+  status, approval resolved forwards new status, etc.) + data forwarding.
+
+Closes the coverage gaps left after prior events tests:
+  cleanupEventCache 0 -> 100, StartHeartbeat 0 -> 100,
+  StartNodeHeartbeat 0 -> 100, PublishNodeStatusUpdatedEnhanced 57 -> 100.
+  Package total 87.0 -> 97.2 percent. (4dc4d17)
+
+## [0.1.137] - 2026-08-31
+
+## [0.1.137-rc.14] - 2026-08-30
+
+
+### Fixed
+
+- Fix: end SSE streams on shutdown so af server exits promptly; restore Go SDK notify-then-drain order (#1011)
+
+* fix(server): cancel streams before graceful shutdown
+
+* fix(server): treat drain timeout as successful shutdown
+
+* fix(go-sdk): accept dispatch during shutdown notify
+
+* docs(shutdown): clarify limits and grace periods
+
+* fix(config): accept bare seconds for AGENTFIELD_SHUTDOWN_TIMEOUT like the SDKs do (b01e831)
+
+
+
+### Testing
+
+- Test(storage): add composite-PK migration + autoMigrateSchema tests (#392) (#1012)
+
+Adds control-plane/internal/storage/migrations_test.go covering
+migrateAgentNodesCompositePK and autoMigrateSchema for local (SQLite)
+mode. Test-only; no source changes.
+
+Six subtests seed the legacy agent_nodes schema via raw SQL and inspect
+pragma_table_info afterward:
+- fresh install skips legacy migration (no table -> no-op)
+- already-migrated schema is a no-op and preserves data
+- legacy table recreated with composite PK (id, version) + traffic_weight
+- missing feature columns backfilled before copy
+- group_id backfill uses id during copy
+- autoMigrateSchema runs the composite-PK migration before GORM models (09d112c)
+
+## [0.1.137-rc.13] - 2026-08-29
+
+
+### Fixed
+
+- Fix: release polish for v0.1.137 — graceful af server, timeout=0, ingress caps, SDK drain fixes, lint, k8s manifests, docs (#1010)
+
+* fix(typescript-sdk): bound graceful shutdown drain
+
+* fix(agent): reject dispatches during shutdown notification
+
+* fix(agent): synchronize initialized test read
+
+* fix(deployments): allow graceful workload shutdown
+
+* fix(api-catalog): expose UI execution details
+
+* docs(config): correct deployment environment guidance
+
+* docs(deployments): document production lifecycle contracts
+
+* docs(api): match the documented execute rejection categories to the code
+
+* chore(sdk/python): relock uv.lock for 0.1.137rc12
+
+* fix(sdk/python): use lifespan signal shutdown path
+
+* fix(sdk/python): isolate manager log context
+
+* ci(release): relock Python SDK after version bump
+
+* fix(sdk/python): drop the dead signal-handler delegates that pointed at the removed os._exit path
+
+* fix(cli): gracefully stop server on signals
+
+* fix(execute): disable async wait timeout at zero
+
+* fix(execute): add retry hint for unavailable nodes
+
+* fix(server): cap node registration request bodies
+
+* ci(control-plane): clear lint findings
+
+* fix(payloads): sweep stale temporary files
+
+* fix(af-tray): keep the Claude usage URL constant with its darwin-only caller
+
+* test(control-plane): cover the af server drain helper and the registration body cap env handling (f55ed41)
+
+## [0.1.137-rc.12] - 2026-08-28
+
+
+### Fixed
+
+- Fix(sdk/python): drain control-plane-dispatched reasoners on shutdown within AGENTFIELD_SHUTDOWN_TIMEOUT (#1006)
+
+* test(sdk): cover graceful reasoner drain budgets
+
+* fix(sdk/python): drain dispatched reasoners on shutdown
+
+* fix(control-plane): respect agent shutdown budget
+
+* docs(sdk): document graceful shutdown budget
+
+* fix(sdk/python): align shutdown workflow cancellation status
+
+* fix(sdk/python): send one structured shutdown notice
+
+* fix(sdk/python): notify shutdown off the event loop
+
+* refactor(sdk/python): construct uvicorn server directly
+
+* fix(control-plane): send resolved agent shutdown budget
+
+* fix(python): bound shutdown task settlement
+
+* fix(python): deduplicate HTTP shutdown requests
+
+* test(python): cover bounded graceful shutdown
+
+* docs: clarify af stop shutdown wait
+
+* test(control-plane): cover af stop shutdown-budget error branches
+
+* chore(sdk/python): relock after the v0.1.137-rc.5 version bump
+
+The release bot bumps pyproject.toml without regenerating uv.lock, so
+the lock-drift check added in #999 fails on every branch until the lock
+is refreshed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d3e9dfc)
+
+## [0.1.137-rc.11] - 2026-08-28
+
+
+### Fixed
+
+- Fix(sdk/python): bounded, non-blocking structured log mirror; safe tee; async log follower (#1002)
+
+* test(sdks): cover safe bounded log mirroring
+
+* fix(sdk/python): bound structured stdout logging
+
+* fix(sdk/go): allow disabling execution log mirror
+
+* docs(logging): document SDK log controls
+
+* style(sdk/python): format logging changes
+
+* test(sdk/python): preserve lifecycle updates on capture failure
+
+* fix(sdk/python): shallow-copy the mirrored record instead of deepcopy
+
+The bounded stdout view only replaces attribute values, so a deepcopy of a
+multi-megabyte (or non-copyable) payload was pure cost — and a copy failure
+would have silently skipped the mirror.
+
+* fix(python): always emit bounded structured JSON
+
+* perf(python): size structured attributes in one pass
+
+* test(python): cover bounded structured log fallbacks
+
+* docs: clarify structured log line byte cap
+
+* fix(sdk/python): remove cached stdout mirror setting
+
+* chore(sdk/python): relock after the v0.1.137-rc.5 version bump
+
+The release bot bumps pyproject.toml without regenerating uv.lock, so
+the lock-drift check added in #999 fails on every branch until the lock
+is refreshed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (adc27d7)
+
+## [0.1.137-rc.10] - 2026-08-28
+
+
+### CI
+
+- Ci(sdk/python): make the uv lock drift check advisory (#1008)
+
+The release workflow bumps sdk/python/pyproject.toml on every release
+candidate without regenerating uv.lock, so the blocking check added in
+#999 fails on every open Python PR as soon as the next rc is cut
+(main is at 0.1.137-rc.7 while uv.lock records rc3). Keep the signal
+but stop it from blocking until the release step also runs uv lock.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1e591af)
+
+
+
+### Fixed
+
+- Fix(control-plane): safe execution-cleanup defaults, terminal-row retention, and payload GC (#1007)
+
+* fix(control-plane): default execution cleanup safely
+
+* fix(control-plane): prune terminal execution records
+
+* fix(control-plane): garbage collect payload files
+
+* fix(control-plane): scope empty run cleanup
+
+* test(control-plane): align cleanup closed-store error
+
+* fix(control-plane): preserve cleanup enabled presence
+
+* fix(control-plane): isolate payload garbage collection store
+
+* fix(control-plane): defer orphan sweep until cleanup loop
+
+* docs(control-plane): note orphan scan memory cost
+
+* refactor(control-plane): extract cleanup presence marker helper
+
+Both CLI entry points duplicated the same viper.IsSet guard around
+MarkExecutionCleanupEnabledConfigured. Move it behind
+config.MarkExecutionCleanupEnabledIfSet so the presence-tracking rule
+lives next to the flag it guards and can be exercised by a unit test —
+the guard previously sat only in package main, where it was unreachable
+from tests. Behavior is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover cleanup config, store and GC error branches
+
+Adds coverage for the error and guard paths introduced by this branch:
+presence marking from a viper instance, the payload sweep's nil-store /
+missing-directory / cancelled-context / limit-zero guards, the cleanup
+service's payload-remove, reference-list and sweep failure logging plus
+its capability probes, and the local storage payload URI listings over
+NULL, empty and closed-database cases along with the batch-size guard.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(control-plane): move the .env.example block into its section
+
+Keeps this PR's example variables next to the section they belong to
+instead of appending at end-of-file, so sibling PRs that also extend
+.env.example merge in any order.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(config): preserve disabled agent call timeout
+
+* fix(cleanup): avoid shutdown mutex deadlock
+
+* fix(cleanup): preserve recent execution window
+
+* fix(storage): prune revoked executions
+
+* fix(payloads): scan beyond referenced sweep entries
+
+* fix(cleanup): report payload listing errors
+
+* fix(control-plane): honor disabled agent call timeout
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (da1e214)
+
+## [0.1.137-rc.9] - 2026-08-28
+
+
+### Fixed
+
+- Fix(control-plane): instance-scoped, deferred orphan reap on agent re-registration; hold dispatch while a node drains (#1004)
+
+* fix(control-plane): stamp executions with agent instance
+
+* fix(control-plane): defer instance orphan reap during drains
+
+* docs(control-plane): configure agent drain grace
+
+* test(control-plane): account for execution instance column
+
+* fix(control-plane): only hold actively draining agents
+
+* fix(control-plane): hold dispatches by offline recency, not health
+
+Every node-announced offline transition (POST /nodes/{id}/shutdown, the
+lifecycle/status route, a status PATCH) records health as inactive, and so
+does the health monitor's own demotion, so gating the hold on health kept
+the one case it exists for — a pod that just announced its shutdown — on
+the fail-fast path and held only monitor-demoted nodes.
+
+Gate on recency instead: a node whose last heartbeat is within
+AGENTFIELD_AGENT_DRAIN_GRACE is treated as draining and held for the
+restart grace; one silent for longer is dead and fails fast with 503 and no
+execution row. The same window already defers the orphan reap, so both
+sides of the drain agree on what "recently" means.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(control-plane): move the .env.example block into its section
+
+Keeps this PR's example variables next to the section they belong to
+instead of appending at end-of-file, so sibling PRs that also extend
+.env.example merge in any order.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): bound deferred orphan reap
+
+* docs(control-plane): document deferred reap backstop
+
+* fix(control-plane): read workflow instance IDs
+
+* test(control-plane): script instance_id in workflow-execution fixtures
+
+The workflow-execution SELECT now reads COALESCE(instance_id, ''), so the
+scripted driver row and the shared lifecycle column list must carry the
+column too; CI's coverage run caught the 43-vs-44 Scan mismatch.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c477f6d)
+
+## [0.1.137-rc.8] - 2026-08-28
+
+
+### Fixed
+
+- Fix(control-plane): reject async executions before persisting them; drain the async pool on shutdown; ingress limits (#1001)
+
+* test(control-plane): cover async admission and ingress contracts
+
+* fix(control-plane): admit async work before persistence
+
+* fix(control-plane): drain async pool and harden ingress
+
+* docs(control-plane): document execution admission settings
+
+* fix(control-plane): scope execute body cap to execute routes
+
+* fix(control-plane): emit shutdown failure notifications
+
+* refactor(control-plane): remove unused shutdown wrapper
+
+* docs(control-plane): clarify async reservation lifetime
+
+* docs(control-plane): move the .env.example block into its section
+
+Keeps this PR's example variables next to the section they belong to
+instead of appending at end-of-file, so sibling PRs that also extend
+.env.example merge in any order.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): reject streamed oversized executions
+
+* fix(control-plane): bound async shutdown draining
+
+* test(control-plane): make async saturation deterministic
+
+* fix(control-plane): persist async jobs interrupted by shutdown
+
+* fix(control-plane): admit workers plus queued async jobs
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (9a517de)
+
+## [0.1.137-rc.7] - 2026-08-28
+
+
+### Fixed
+
+- Fix(control-plane): honor execution_id query filter, per-key rate-limit identity, operator note reads, real details timestamps; make OTLP export work with standard endpoints (#1005)
+
+* fix(control-plane): honor execution query filters
+
+* fix(control-plane): allow operator note reads
+
+* fix(control-plane): return persisted execution details
+
+* fix(control-plane): export traces to configured OTLP transport
+
+* docs(control-plane): document tracing configuration
+
+* fix(control-plane): use complete workflow reads for details
+
+* fix(control-plane): restore exact execution detail reads
+
+* chore(control-plane): tidy tracing dependencies
+
+* style(control-plane): format execution storage fixture
+
+* fix(control-plane): use exporter-specific OTLP defaults
+
+* docs(control-plane): clarify tracing startup failures
+
+* docs(control-plane): describe execution note operator reads (e38277a)
+
+## [0.1.137-rc.6] - 2026-08-28
+
+
+### Added
+
+- Feat(sdk): allow disabling structured log stdout mirroring (#994)
+
+* feat(sdk): allow disabling structured log stdout mirroring
+
+* fix(sdk): treat AGENTFIELD_LOG_STDOUT like the SDK's other on-by-default flags
+
+AGENTFIELD_LOG_STDOUT was parsed as `== "true"`, so only the literal string
+"true" kept the stdout mirror on. Every other value turned it off, including
+values that are truthy everywhere else in the SDK (`_TRUTHY_ENV_VALUES` in
+agent.py accepts 1/true/yes), a set-but-empty variable — what a bare
+`AGENTFIELD_LOG_STDOUT=` in a Compose file or `value: ""` in a Kubernetes
+manifest produces — and any typo. An operator who set the flag to `1` to keep
+mirroring, or who left it empty, silently lost their structured log output.
+
+Use the falsy-list convention already established by node_logs.logs_enabled()
+for on-by-default flags: 0/false/no/off disable, everything else keeps the
+default. The flag now fails towards keeping records visible.
+
+Also move the docs entry out of "Control Plane (Server) > Logging" into
+"Agent Nodes > Python SDK agents" — the variable is read only by the Python
+SDK, so a server operator setting it would see no effect — and spell out the
+accepted values the way the neighbouring AGENTFIELD_DISABLE_IP_DETECTION
+entry does.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk): make structured stdout mirroring opt-in
+
+* Revert "fix(sdk): make structured stdout mirroring opt-in"
+
+This reverts commit ff99fa92be41ab3955679826d954d06cb347e05d.
+
+* fix(sdk): skip disabled structured log serialization
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (515ae55)
+
+
+
+### Fixed
+
+- Fix(sdk/go,sdk/typescript): graceful shutdown drains dispatched executions under AGENTFIELD_SHUTDOWN_TIMEOUT (#1000)
+
+* test(sdk): cover graceful shutdown contracts
+
+* fix(sdk/go): drain asynchronous executions on shutdown
+
+* fix(sdk/typescript): handle signals and drain executions
+
+* test(sdk/typescript): run shutdown parser contract in suite
+
+* docs(sdk): document shared graceful shutdown timeout
+
+* fix(sdk/go): unblock Serve after remote shutdown
+
+* fix(sdk/go): bound graceful shutdown drain
+
+* test(sdk/go): cover asynchronous shutdown drain
+
+* fix(sdk/typescript): cancel all executions on shutdown timeout
+
+* fix(sdk/typescript): exit after signal shutdown
+
+* fix(sdk/typescript): reuse shutdown promise
+
+* test(sdk/typescript): cover shutdown drain lifecycle
+
+* test(sdk/go): cover shutdown drain branches
+
+* chore: drop stray worker report from repo root
+
+REPORT.md was an agent work-log artifact accidentally committed to the
+repository root; it is not project documentation and should not ship.
+
+* docs: restore blank line before Harness heading
+
+Lost while resolving the ENVIRONMENT_VARIABLES.md rebase conflict.
+
+* docs: place the SDK graceful-shutdown section under Agent Nodes
+
+Moves the Go/TypeScript AGENTFIELD_SHUTDOWN_TIMEOUT section next to the
+other agent-node settings instead of the end of the file, and leaves the
+control-plane bullet untouched, so sibling PRs editing the same document
+merge in any order. Points at the Python SDK section for its equivalent.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ts-sdk): bound post-cancel drain wait
+
+* fix(ts-sdk): reject executions during shutdown
+
+* fix(go-sdk): make shutdown lease stop idempotent
+
+* docs: clarify graceful shutdown bound
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (9399409)
+
+## [0.1.137-rc.5] - 2026-08-28
+
+
+### CI
+
+- Ci(sdk/python): lock drift check, Python 3.13 leg, weekly latest-litellm canary (#999)
+
+* fix(sdk/python): refresh dependency lock
+
+* ci(sdk/python): test Python 3.13 and lock drift
+
+* ci(sdk/python): add weekly LiteLLM canary
+
+* chore(sdk/python): relock after the #993 litellm marker split
+
+Regenerates uv.lock on top of main now that PR #993 scopes the
+litellm !=1.97.0,<1.98.0 cap to python_version < '3.11'. The lock
+now carries both marker branches in requires-dist and passes
+uv lock --check, which the sdk-python workflow enforces from this PR.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/python): note the litellm cap exit condition and canary
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (0b39990)
+
+## [0.1.137-rc.4] - 2026-08-28
+
+
+### Documentation
+
+- Docs: correct storage modes, document execute/restart contracts and live control-plane knobs (#998)
+
+* docs(control-plane): correct storage mode names
+
+* docs(api): document execution and restart contracts
+
+* docs(control-plane): describe live execution knobs
+
+* docs(kubernetes): add agent rollout guidance (f9ef7ba)
+
+
+
+### Fixed
+
+- Fix(control-plane): skip disk payload writes in postgres storage mode (#983) (#996)
+
+When storage.mode is postgres, payloads are already persisted inline
+in the execution record (input_payload / result_payload BYTEA columns).
+The FilePayloadStore was unconditionally writing them to disk as well,
+causing unbounded disk growth (~2GB/30d) and eventual pod eviction.
+
+Fix: use a NopPayloadStore when mode is postgres. savePayload returns
+nil, so InputURI/ResultURI stay NULL - all read paths already prefer
+the inline columns and only fall back to URI when inline is empty. (fb9aa44)
+
+- Fix(skillkit,harness): restore the OpenCode legacy AGENTS.md cleanup dropped by #947's squash; mark nested harness sessions (#1003)
+
+* fix(skillkit): strip the legacy OpenCode AGENTS.md block on install
+
+Moving the OpenCode target to a native ~/.config/opencode/skills/<name>
+symlink leaves the marker block older af binaries appended to
+~/.config/opencode/AGENTS.md behind forever: uninstallMarkerBlock is no
+longer reachable for this target, so nothing can remove it. Upgrading
+users end up with the native skill *and* the stale instructions — the
+AGENTS.md bloat #813 was actually about. Codex made the same migration in
+#910 and shipped removeLegacyMarkerBlock for exactly this reason.
+
+Install (once the symlink is in place) and Uninstall (per catalog skill)
+now strip that block. The rules are deliberately stricter than the Codex
+helper, because the two files are not alike: Codex's AGENTS.override.md
+was created by af for itself, while ~/.config/opencode/AGENTS.md is
+written by the user and read by OpenCode. So a file holding no block of
+ours is never opened for writing — bytes and mtime stay exactly as the
+user left them — and the file is deleted only when removing our block is
+what emptied it. Reusing uninstallMarkerBlock verbatim would instead
+rewrite any AGENTS.md it can read (measured: a user file with no
+agentfield block goes 23 -> 21 bytes) and delete a deliberately empty
+one on every install.
+
+Other tools' marker blocks and user prose on both sides of ours survive;
+a missing file is a no-op; read/write failures propagate, matching the
+target's existing Uninstall error contract.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(skillkit): isolate the OpenCode uninstall test and snapshot its new root
+
+TestOpenCodeTargetUninstallRemovesCatalogEntries was the one OpenCode
+test that did not call withTempHome, so it built and tore down catalog
+entries in the home shared by the whole package instead of its own.
+
+realHomeSnapshot also still only fingerprinted the old
+~/.config/opencode/AGENTS.md. Now that OpenCode installs a directory of
+symlinks, add ~/.config/opencode/skills so the real-home pollution guard
+covers the path this target actually writes to.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* refactor(skillkit): route the OpenCode legacy cleanup through the package seams
+
+removeLegacyMarkerBlock called os.Remove/os.WriteFile/os.Rename directly
+while every other write path in the package goes through the reconcile*
+seams (reconcile.go), which exist precisely so a test can force a failure.
+The consequence was that its "remove", "write" and "rename into" branches
+could not be exercised at all: six lines that never ran once, and error
+strings that could ship wrongly wrapped without anything noticing.
+
+Switch the four filesystem calls to reconcileReadFile/reconcileRemove/
+reconcileWriteFile/reconcileRename and cover each failure through
+Uninstall, modelled on the reconciler's own rewrite-failure subtests.
+
+Also drop legacyRulesPath's error return. It could only fail when
+TargetPath() fails, and both call sites have already proven TargetPath()
+succeeds before reaching it — so the branch was unreachable and told a
+reader about a failure mode that does not exist. It now takes the resolved
+skills root, which lets Uninstall use the TargetPath() result it was
+already computing and discarding instead of re-resolving it per skill.
+
+No behaviour change: same files read, same files written, same errors
+returned.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skillkit): keep a live OpenCode install recorded when the legacy block cannot be cleaned
+
+Restores skillkit changes from a2762e14 (PR #947) dropped by the squash 9a14e21e.
+
+* fix(sdk): mark nested harness subprocesses
+
+* docs(harness): document depth guard and OpenCode limits
+
+Documents AGENTFIELD_HARNESS_DEPTH and removes unsupported OpenCode tool and permission claims.
+
+* fix(skillkit): sync harness depth guidance
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (29c209f)
+
+## [0.1.137-rc.3] - 2026-08-28
+
+
+### Fixed
+
+- Fix(python-sdk): scope LiteLLM cap to Python 3.10 (#993)
+
+Signed-off-by: ump45nose <52391318+ump45nose@users.noreply.github.com> (e9710dc)
+
+## [0.1.137-rc.2] - 2026-08-27
+
+
+### Other
+
+- Add Pi and OMP harness providers (#913)
+
+* Add Pi and OMP harness providers
+
+* Make OMP the default harness provider
+
+* Improve Pi and OMP harness coverage
+
+* address review comments on #913
+
+- Go pi.go: build the plan-mode read-only tool list as a fresh slice
+  instead of the in-place tools[:0] filter, matching the Python/TS
+  providers and removing the aliasing footgun.
+- Go pi.go: distinguish a negative return code (signal kill) from a
+  plain non-zero exit, reporting 'Process killed by signal N.' to match
+  the Python provider and the gemini/opencode Go providers.
+- Add a pi_test.go case pinning the signal-kill message.
+
+* harness: keep aforge as the default; document Pi and OMP as additional providers
+
+Sweeps the OMP-as-default remnants left in non-conflicting files after the
+merge, and brings the Go Pi/OMP provider up to the Result.Model contract main
+added for aforge/opencode:
+
+- af doctor / af harness doctor list aforge-first ordering and drop the
+  "omp default" help text.
+- skills/agentfield (+ embedded skill_data mirror), harness-v2-design, the
+  harness_duo Go example and its README no longer claim OMP is the default;
+  omp_worker now passes Provider explicitly.
+- TS Agent usage attribution resolves through resolveProviderName so the
+  explicit > config > AGENTFIELD_HARNESS_PROVIDER > aforge chain is honoured.
+- sdk/go/harness/pi.go populates Metrics.Model (configured model wins over the
+  model reported in the Pi/OMP JSONL stream), matching the Python and TS
+  adapters.
+- Tests that asserted an OMP default now assert aforge; explicit pi/omp
+  coverage is retained.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* harness: resolve the provider at dispatch time so aforge stays the default
+
+Follow-up to the merge: three places still baked OMP (or an eagerly resolved
+default) into the no-configuration path, which the gates caught.
+
+- sdk/go/harness/runner.go: NewRunner no longer stamps DefaultProvider into
+  DefaultOptions. Run() applies explicit > AGENTFIELD_HARNESS_PROVIDER >
+  aforge, so an env change reaches an already-constructed runner and
+  Agent.HarnessRunner() keeps zero-value options as main expects.
+- sdk/python/agentfield/agent.py: _harness_provider_name no longer falls back
+  to "omp", so usage attribution goes through resolve_harness_provider.
+- Tests: the Go/TS supported-provider strings list pi and omp, the TS pi/omp
+  factory test asserts explicit routing instead of an OMP default, and the
+  duplicate aforge-default usage test is dropped in favour of main's.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ts-sdk): classify pi/omp failures with failureType and returnCode
+
+The TypeScript pi/omp provider returned failures with neither failureType
+nor returnCode set, so callers could not tell a crash from an API error or
+an empty completion — the Go and Python pi providers both classify. Mirror
+their exact ladder: signal death -> crash, non-zero exit -> crash, a
+stopReason error/aborted on a clean exit -> api_error, a clean exit with no
+assistant text -> no_output, otherwise none. stderr is now ANSI-stripped and
+capped at 1000 chars like Go/Python. The catch path classifies a timeout
+distinctly from a crash.
+
+runCli resolved `code ?? 0`, so a child killed by a signal looked like a
+clean exit 0 and the "Process killed by signal N" branch was unreachable.
+It now reports the negative signal number, matching Go's os/exec and
+Python's asyncio subprocess.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ts-sdk): honour projectDir as the working directory in every provider
+
+runner.ts bases the schema-output directory on `projectDir ?? cwd`, but only
+pi/omp and aforge read projectDir — codex, gemini, opencode and claude used
+options.cwd alone. `{ schema, projectDir, cwd, provider: 'codex' }` therefore
+wrote the instruction file into one directory and ran the CLI in another, so
+the agent was told to write a file outside the root it could see.
+
+Add a single resolveRoot() helper (projectDir -> project_dir -> cwd, the
+precedence every Python provider already uses) and route all six providers
+through it. This also fixes opencode's inverted ladder, which checked cwd
+first and then a snake_case project_dir key the TS options object never
+carries.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): probe pi/omp over stdin like the SDK adapters do
+
+`af doctor --probe` ran `pi --print "Say OK"` with the prompt positional and
+stdin left at EOF, while all three SDK adapters run `<bin> --print --mode json`
+and feed the prompt over stdin. The probe therefore exercised a different
+surface than the harness does, so a healthy install could be reported as
+empty or error.
+
+The registry entry gains ProbeStdin; pi and omp now carry the adapters' exact
+flag set with the prompt on stdin, and runProbeCommand wires a strings.Reader
+in when a payload is present. Providers that take the prompt positionally keep
+a nil stdin, and the 60s probe bound is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): stop sending Pi an approval flag it rejects
+
+Verified against the real CLIs (pi 0.74.2, omp v18.0.7):
+
+- Pi has no approval flag at all. `--approve`, `--auto-approve`, `--yolo`,
+  `-y`, `--approval-mode` and `--permission-mode` each fail with
+  `Error: Unknown option: <flag>`, so the `permission_mode="auto"` branch made
+  every Pi auto-mode run die on argument parsing. Only OMP gets a flag now
+  (`--auto-approve`, which it does document).
+- `--tools` is an enforced allowlist in both CLIs and is Pi's own documented
+  read-only mechanism ("Read-only mode (no file modifications possible):
+  pi --tools read,grep,find,ls -p ..."), so plan mode is genuinely read-only
+  with no approval flag. OMP's default `tools.approvalMode` is `yolo`, and even
+  `always-ask` auto-approves read-only tiers, so a read-only allowlist never
+  blocks on approval there either.
+
+Plan mode therefore keeps sending only the read-only allowlist. The flag set is
+now pinned by a test in each SDK that rejects every known approval-style flag,
+and the ground truth is recorded in a comment at each branch so it does not get
+"fixed" back.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(python): clear AGENTFIELD_HARNESS_PROVIDER in the aforge-default test
+
+test_default_provider_is_aforge asserts the built-in default, but
+HarnessConfig.provider resolves through AGENTFIELD_HARNESS_PROVIDER, so
+the test failed on any machine that pins a harness provider in the
+environment. Every sibling test that asserts this default already clears
+the variable (test_harness_types.py, test_types.py, test_harness_defaults.py,
+test_harness_runner.py); this one did not.
+
+Verified: `AGENTFIELD_HARNESS_PROVIDER=codex pytest tests/test_harness_factory.py`
+now passes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): stop the --provider help implying the flag defaults to aforge
+
+`--provider` has no default: omitting it surveys every provider. In cobra
+help, "(default)" reads as the flag's own default value, so annotating
+aforge that way advertised behaviour the flag does not have. aforge is the
+SDK's default harness provider, which is a different statement and belongs
+in the SDK docs, not in this flag's help.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(cli): drop the "OMP default" premise from a harness doctor test name
+
+The test body never asserted a default — it checks OMP's provider name,
+auth status, official install command and usability — but its name was
+residue from the reverted "OMP is the default provider" design. aforge is
+the default; this was the last OMP-default claim left in the tree.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(readme): list pi and omp in the harness provider-swap row
+
+The two other README spots that enumerate harness providers already list
+pi and omp; the "Harness (Multi-turn Coding Agents)" table still stopped
+at opencode. aforge stays the zero-setup default, stated in the row above.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): stop reporting a recovered Pi/OMP turn as a failed run
+
+The Pi-family event stream can carry several assistant message_end events.
+All three adapters took the assistant text last-writer-wins but kept the
+provider error first-writer-sticky: once any message_end reported stopReason
+"error" or "aborted", nothing cleared it. A run whose model call failed on an
+intermediate turn and then recovered was surfaced as failure_type=api_error
+with a stale message, its correct final answer discarded — and since
+api_error is transient, the runner burned a retry re-running the whole
+harness invocation.
+
+Only the final message_end's stop reason decides now: every assistant
+message_end sets or clears the provider error. Nothing else about the parse
+changes, and no exit-code branch moves.
+
+Fixed identically in Go, Python and TypeScript with a regression test in
+each, covering both error-then-recovery (clean run) and recovery-then-error
+(still an api_error).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ts-sdk): derive the schema output root from the same ladder the providers use
+
+resolveRoot() centralised the provider-side working-directory ladder
+(projectDir -> project_dir -> cwd), but the runner kept its own two-rung
+version that never looked at project_dir. resolveOptions copies overrides
+with Object.entries, so a JS caller's project_dir key does reach the
+providers: with { project_dir: P, cwd: C } the schema instruction file was
+created under C while the provider ran in P, and the harness was told to
+write its output to a path outside the directory it was running in. Before
+this branch that split existed for aforge alone; centralising the ladder had
+widened it to six providers.
+
+The runner now calls resolveRoot on the resolved options, so the two ladders
+are identical by construction. Regression test covers the snake_case-only
+case; it fails if the line is reverted.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(ts-sdk): cover ClaudeCodeProvider's projectDir handling
+
+ClaudeCodeProvider goes through @anthropic-ai/claude-agent-sdk rather than
+cli.runCli, so the runner's provider matrix cannot reach it, and the existing
+claude tests only ever passed `cwd`. Reverting claude.ts to the old
+`options.cwd` line left the whole suite green.
+
+Two tests close that: projectDir wins over a nested cwd, and an empty-string
+cwd now leaves the SDK option unset (resolveRoot skips empty strings, where
+the old code forwarded ''). Both fail against the reverted hunk.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): make `af doctor` survey aforge, the default harness provider
+
+The agentfield skill gates every use of app.harness() on `af doctor`
+reporting harness_usable: true AND listing the chosen provider. doctor's
+provider list never contained aforge, so on the default install — aforge
+shipped with `af`, nothing else present — an agent following the skill
+concluded the harness was unusable and refused to use the default provider.
+This branch had made that worse by adding aforge to the skill's provider
+union while leaving doctor's list alone.
+
+Detection now reuses `af harness doctor`'s spec table
+(findHarnessProviderSpec + probeHarnessBinary) wherever a binary-backed spec
+exists, so both doctors agree on what "installed" means. That matters for
+aforge specifically: it answers `version`, not `--version`, and `af aforge
+ensure` installs it into $AGENTFIELD_HOME/bin, which the current shell's PATH
+usually does not contain. claude-code has no binary in that table (it is the
+pip-package wrapper) and keeps the plain PATH check.
+
+--probe skips providers that declare no ProbeArgs, which is aforge alone:
+every other probe is one trivial completion, whereas aforge's only one-shot
+is a full coding-agent run with write access to the working directory, which
+is not something a doctor command should start. `af harness doctor` reports
+aforge's health.
+
+Live-verified with a fake aforge in $HOME/.agentfield/bin and an empty PATH:
+`af doctor --json` reports aforge available with its version, and
+recommendation.harness_usable true / harness_providers ["aforge"];
+`af doctor --probe` produces no aforge probe entry.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): stop `--probe` reporting a silently broken pi/omp install as ok
+
+classifyProbe decided "empty" purely by an empty stdout. That was correct
+while pi/omp probed in plain --print text mode, but they now probe with
+`--print --mode json`, and the CLI emits a {"type":"session",...} event
+before any assistant output. stdout is therefore never blank and the probe
+always fell through to "ok" — so an install that exits 0 with a parsed stream
+and no assistant text, and one whose message reports stopReason "error", both
+came back healthy. That negates the exact capability --probe's own help text
+advertises, for the two providers this branch added.
+
+Providers whose probe output is a JSON event stream are now marked
+JSONLStream, and their probes apply the SDK adapters' own success criterion:
+an assistant message_end carrying text, with the last assistant message_end's
+stop reason not "error"/"aborted" (a turn that errored and then recovered is
+not a failure, matching the adapter fix in this branch). An exit-0 stream
+error surfaces its message as the probe detail when stderr is silent. Plain
+text providers keep the previous rule unchanged.
+
+Live-verified with fakes on PATH: an `omp` printing only
+{"type":"session","id":"s1"} and exiting 0 now reports status "empty" where
+it reported "ok" before; a `pi` printing a real assistant message_end still
+reports "ok".
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(cli): guard `af doctor`'s aforge detection against a silent revert
+
+The branch in buildDoctorReport that routes detection through the harness
+doctor's spec table (findHarnessProviderSpec + probeHarnessBinary) is the
+whole behavior of "fix(cli): make `af doctor` survey aforge, the default
+harness provider" — it is what makes doctor ask aforge for `version` rather
+than `--version`, and what makes it look in $AGENTFIELD_HOME/bin when the
+binary is not on PATH. Replacing that branch with main's original
+`checkTool(h.Binary, "--version")` left the entire internal/cli suite green,
+so a future refactor could revert the fix without CI noticing.
+
+TestBuildDoctorReport_AforgeDetectionUsesHarnessSpec drives buildDoctorReport
+with a shell-script aforge stub and covers both halves:
+
+  • installed only in $AGENTFIELD_HOME/bin with an empty PATH — doctor must
+    report it available, with the managed path and its version;
+  • on PATH but answering `version` only (non-zero on `--version`) — doctor
+    must still record the version.
+
+Both subtests fail under the `checkTool(h.Binary, "--version")` mutation
+(available:false / version:"" respectively), and the full
+`go test ./internal/cli/ -count=1` suite stays green.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (44d63dc)
+
 ## [0.1.137-rc.1] - 2026-08-27
 
 

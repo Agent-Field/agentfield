@@ -160,6 +160,7 @@ def _resolve_options(
         for field_name in [
             "provider",
             "model",
+            "variant",
             "max_turns",
             "max_budget_usd",
             "max_retries",
@@ -176,6 +177,8 @@ def _resolve_options(
             "codex_bin",
             "gemini_bin",
             "opencode_bin",
+            "pi_bin",
+            "omp_bin",
             "grok_bin",
             "schema_max_retries",
             "schema_mode",
@@ -251,6 +254,7 @@ class HarnessRunner:
         schema: Any = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        variant: Optional[str] = None,
         max_turns: Optional[int] = None,
         max_budget_usd: Optional[float] = None,
         tools: Optional[list[str]] = None,
@@ -264,6 +268,7 @@ class HarnessRunner:
         overrides = {
             "provider": provider,
             "model": model,
+            "variant": variant,
             "max_turns": max_turns,
             "max_budget_usd": max_budget_usd,
             "tools": tools,

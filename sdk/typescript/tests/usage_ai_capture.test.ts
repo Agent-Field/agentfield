@@ -273,7 +273,7 @@ describe('harness usage capture', () => {
   });
 
   it('records cost-only runs and skips runs that reported nothing', async () => {
-    const agent = makeAgent();
+    const agent = new Agent({ nodeId: 'default-harness-agent' });
     const runSpy = vi.spyOn(HarnessRunner.prototype, 'run');
 
     // Cost known, tokens unknown -> still recorded.
@@ -283,7 +283,8 @@ describe('harness usage capture', () => {
     expect(ctx.costTracker.serialize().entries[0]).toMatchObject({
       cost_usd: 0.25,
       cost_source: 'provider',
-      total_tokens: 0
+      total_tokens: 0,
+      harness: 'aforge'
     });
 
     // Neither tokens nor cost -> no entry.

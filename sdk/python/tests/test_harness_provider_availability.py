@@ -11,28 +11,32 @@ from agentfield.harness.providers.codex import CodexProvider
 from agentfield.harness.providers.claude import ClaudeCodeProvider
 from agentfield.harness.providers.gemini import GeminiProvider
 from agentfield.harness.providers.opencode import OpenCodeProvider
+from agentfield.harness.providers.pi import OMPProvider, PiProvider
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("provider", "name", "install_command"),
+    ("provider", "name", "module", "install_command"),
     [
-        (AforgeProvider(bin_path="aforge-missing"), "aforge", "af aforge ensure"),
-        (CodexProvider(bin_path="codex-missing"), "codex", "@openai/codex"),
+        (AforgeProvider(bin_path="aforge-missing"), "aforge", "aforge", "af aforge ensure"),
+        (CodexProvider(bin_path="codex-missing"), "codex", "codex", "@openai/codex"),
         (
             OpenCodeProvider(bin_path="opencode-missing"),
             "opencode",
+            "opencode",
             "opencode.ai/install",
         ),
+        (PiProvider(bin_path="pi-missing"), "pi", "pi", "@earendil-works/pi-coding-agent"),
+        (OMPProvider(bin_path="omp-missing"), "omp", "pi", "omp.sh/install"),
     ],
 )
 async def test_cli_provider_raises_typed_error_before_spawn(
-    monkeypatch, provider, name, install_command
+    monkeypatch, provider, name, module, install_command
 ):
     monkeypatch.setattr("agentfield.harness._availability.shutil.which", lambda _: None)
     run_cli = AsyncMock()
     monkeypatch.setattr(
-        f"agentfield.harness.providers.{name}.run_cli",
+        f"agentfield.harness.providers.{module}.run_cli",
         run_cli,
     )
 
