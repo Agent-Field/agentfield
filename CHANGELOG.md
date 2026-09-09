@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.16] - 2026-09-09
+
+
+### Chores
+
+- Chore(deps): bump @ai-sdk/provider-utils from 4.0.23 to 4.0.50 in /desktop in the npm_and_yarn group across 1 directory (#1045)
+
+* chore(deps): bump @ai-sdk/provider-utils
+
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [@ai-sdk/provider-utils](https://github.com/vercel/ai/tree/HEAD/packages/provider-utils).
+
+
+Updates `@ai-sdk/provider-utils` from 4.0.23 to 4.0.50
+- [Release notes](https://github.com/vercel/ai/releases)
+- [Changelog](https://github.com/vercel/ai/blob/@ai-sdk/provider-utils@4.0.50/packages/provider-utils/CHANGELOG.md)
+- [Commits](https://github.com/vercel/ai/commits/@ai-sdk/provider-utils@4.0.50/packages/provider-utils)
+
+---
+updated-dependencies:
+- dependency-name: "@ai-sdk/provider-utils"
+  dependency-version: 4.0.50
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+* chore(deps): narrow provider-utils bump to its own dependency subtree
+
+Dependabot's refresh also rewrote desktop/package-lock.json, but that lockfile
+contains no @ai-sdk packages at all -- its only change was an unrelated
+browserslist 4.28.8 -> 4.28.9 dev-dependency drift. Revert it so the PR carries
+only the security fix.
+
+sdk/typescript/package-lock.json is kept as dependabot generated it. Every
+@ai-sdk/* adapter and `ai` pins @ai-sdk/provider-utils to an *exact* version --
+no caret, no tilde -- in every one of their published releases, so the package
+cannot be moved on its own: `npm update @ai-sdk/provider-utils
+--package-lock-only` against the base lockfile is a verified no-op. Regenerating
+from the base with a scoped `npm update` of only the direct AI dependencies
+reproduces this same resolution, and every package that moves is a forced
+consequence of that exact-pin chain (see the PR discussion for the per-package
+breakdown).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (d2fad28)
+
 ## [0.1.138-rc.15] - 2026-09-09
 
 
