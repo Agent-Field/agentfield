@@ -116,7 +116,9 @@ func TestTelemetryServiceSanitizesEventData(t *testing.T) {
 		event.Properties["transition_source"] != "status_callback" {
 		t.Fatalf("unexpected lifecycle dimensions: %#v", event.Properties)
 	}
-	if event.SchemaVersion != telemetrySchemaVersion {
+	// The relay accepts only schema versions 1|2. Keep this literal so a bump
+	// requires a visible test change instead of slipping through with the constant.
+	if event.SchemaVersion != 2 {
 		t.Fatalf("unexpected schema version %d", event.SchemaVersion)
 	}
 	if len(event.EventID) != 64 {

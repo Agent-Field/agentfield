@@ -28,7 +28,12 @@ import (
 const (
 	defaultTelemetryQueueSize = 256
 	telemetrySubscriberID     = "anonymous-oss-telemetry"
-	telemetrySchemaVersion    = 3
+
+	// The hosted relay accepts only schema versions 1 and 2
+	// (app/api/oss/telemetry/route.ts in Agent-Field/website2.0). It rejects a
+	// payload declaring anything else whole with HTTP 400 before ingest, so do
+	// not bump this until a relay accepting the new version is deployed.
+	telemetrySchemaVersion = 2
 
 	// telemetryReportedCapacity bounds the set of terminal outcomes this
 	// process remembers having already reported. An execution's outcome is
