@@ -423,9 +423,9 @@ func (s *TelemetryService) handleExecutionEvent(event events.ExecutionEvent) {
 	// real events.
 	key := eventName + "\x00" + identityMaterial
 	if stable && s.reported.observe(key) {
-		logger.Logger.Debug().
+		logger.Logger.Warn().
 			Str("event", eventName).
-			Msg("anonymous telemetry: outcome already reported for this execution; not sending again")
+			Msg("anonymous telemetry: duplicate terminal lifecycle event published for one execution; not sending again")
 		return
 	}
 	// observe is an atomic test-and-set and must happen before enqueue to keep
