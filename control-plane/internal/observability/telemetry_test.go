@@ -498,12 +498,23 @@ func TestTelemetryDetectsUsageContext(t *testing.T) {
 		}
 	}
 
+	falsyValues := []string{"false", "0", "no", "off", "FALSE", " false ", ""}
+	truthyValues := []string{"1", "true", "yes", "https://jenkins.example/job/1"}
+
 	for _, key := range ciKeys {
 		t.Run(key, func(t *testing.T) {
 			clearCIEnv(t)
-			t.Setenv(key, "1")
-			if got := detectUsageContext("binary"); got != "ci" {
-				t.Fatalf("detectUsageContext with %s set = %q, want \"ci\"", key, got)
+			for _, value := range falsyValues {
+				t.Setenv(key, value)
+				if got := detectUsageContext("binary"); got != "dev_or_local" {
+					t.Fatalf("detectUsageContext with %s=%q = %q, want \"dev_or_local\"", key, value, got)
+				}
+			}
+			for _, value := range truthyValues {
+				t.Setenv(key, value)
+				if got := detectUsageContext("binary"); got != "ci" {
+					t.Fatalf("detectUsageContext with %s=%q = %q, want \"ci\"", key, value, got)
+				}
 			}
 		})
 	}

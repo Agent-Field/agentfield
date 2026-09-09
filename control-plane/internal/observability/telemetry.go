@@ -190,7 +190,7 @@ func detectRuntime() string {
 
 func detectUsageContext(runtimeName string) string {
 	for _, key := range []string{"CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE", "CIRCLECI", "JENKINS_URL"} {
-		if os.Getenv(key) != "" {
+		if isTruthyEnvValue(os.Getenv(key)) {
 			return "ci"
 		}
 	}
@@ -199,6 +199,17 @@ func detectUsageContext(runtimeName string) string {
 		return "server"
 	default:
 		return "dev_or_local"
+	}
+}
+
+// CI providers and users commonly set variables to false to explicitly turn
+// off CI behaviour, so presence alone must not classify the process as CI.
+func isTruthyEnvValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
 
