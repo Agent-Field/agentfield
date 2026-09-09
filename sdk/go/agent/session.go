@@ -119,11 +119,13 @@ type sessionMetadataCopyReference struct {
 	kind   reflect.Kind
 	typeOf reflect.Type
 	ptr    uintptr
+	length int
+	cap    int
 }
 
 // cloneSessionMetadata recursively copies maps and slices stored in metadata.
 // It keeps a copy of each encountered reference so cyclic metadata remains
-// detached without recursing forever.
+// detached without recursing forever. Other kinds are returned unchanged.
 func cloneSessionMetadata(metadata map[string]any) map[string]any {
 	if metadata == nil {
 		return nil
@@ -163,7 +165,10 @@ func cloneSessionMetadataValue(value reflect.Value, copied map[sessionMetadataCo
 		if value.IsNil() {
 			return reflect.Zero(value.Type())
 		}
-		ref := sessionMetadataCopyReference{kind: value.Kind(), typeOf: value.Type(), ptr: value.Pointer()}
+		ref := sessionMetadataCopyReference{
+			kind: value.Kind(), typeOf: value.Type(), ptr: value.Pointer(),
+			length: value.Len(), cap: value.Cap(),
+		}
 		if existing, found := copied[ref]; found {
 			return existing
 		}

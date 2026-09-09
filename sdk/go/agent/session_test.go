@@ -110,3 +110,31 @@ func TestAgentSessionDefinitionsReturnsDefensiveSnapshots(t *testing.T) {
 		t.Errorf("typed metadata slice = %#v, want original values", session.Metadata["typedLabels"])
 	}
 }
+
+func TestAgentSessionDefinitionsPreservesOverlappingSliceLengths(t *testing.T) {
+	a, err := New(Config{NodeID: "support", Version: "v1"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	shared := []any{"a", "b", "c"}
+	if err := a.RegisterSession(
+		"voice",
+		"openai",
+		"webrtc",
+		WithSessionMetadata(map[string]any{
+			"all":  shared,
+			"head": shared[:1],
+		}),
+	); err != nil {
+		t.Fatalf("RegisterSession returned error: %v", err)
+	}
+
+	metadata := a.SessionDefinitions()[0].Metadata
+	if got := len(metadata["all"].([]any)); got != 3 {
+		t.Errorf("len(all) = %d, want 3", got)
+	}
+	if got := len(metadata["head"].([]any)); got != 1 {
+		t.Errorf("len(head) = %d, want 1", got)
+	}
+}
