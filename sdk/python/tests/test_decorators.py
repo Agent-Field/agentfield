@@ -1,6 +1,8 @@
 import asyncio
+from typing import Union
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from agentfield.decorators import reasoner, _execute_with_tracking
 from agentfield.execution_context import ExecutionContext
@@ -120,3 +122,33 @@ async def test_execute_with_tracking_error(monkeypatch):
                 await asyncio.gather(*tasks, return_exceptions=True)
 
     assert "error" in calls
+
+
+@pytest.mark.asyncio
+async def test_execute_with_tracking_preserves_pydantic_validation_error(monkeypatch):
+    # Contract item 8: the in-process decorator path propagates Pydantic's
+    # original exception type instead of failing while trying to re-wrap it.
+    class M1(BaseModel):
+        a: int
+
+    class M2(BaseModel):
+        b: int
+
+    async def record_error(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("agentfield.decorators._send_workflow_error", record_error)
+
+    agent = StubAgent()
+    set_current_agent(agent)
+
+    async def composite_reasoner(item: Union[M1, M2, None] = None):
+        return item
+
+    try:
+        with pytest.raises(ValidationError):
+            await _execute_with_tracking(
+                composite_reasoner, item={"x": "offending-value"}
+            )
+    finally:
+        clear_current_agent()
