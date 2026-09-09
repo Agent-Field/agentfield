@@ -75,7 +75,7 @@
   },
   "dependencies": {
     "@lobehub/icons-static-svg": "^1.94.0",
-    "js-yaml": "^4.3.1",
+    "js-yaml": "^4.3.2",
     "motion": "^12.42.2"
   },
   "devDependencies": {
@@ -91,7 +91,7 @@
     "react-dom": "^18.3.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
-    "vitest": "^3.0.5"
+    "vitest": "^5.0.0"
   },
   "overrides": {
     "fast-uri": "3.1.5",
