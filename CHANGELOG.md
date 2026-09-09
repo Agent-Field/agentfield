@@ -6,6 +6,111 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.14] - 2026-09-09
+
+
+### Fixed
+
+- Fix(sdk/python): coerce complex pydantic type hints in reasoner args (#1035)
+
+* fix(sdk/python): coerce complex pydantic type hints in reasoner args (#1034)
+
+Argument coercion only handled a bare model or a 2-arg Optional[model].
+Complex hints fell through as raw dicts:
+- unions of 3+ (M1 | M2 | None)
+- containers of models (list[M], Sequence[M | None])
+- unions of container types (list[M1] | list[M2] | None)
+
+It also silently swallowed validation errors due to a Pydantic v2
+ValidationError constructor mismatch, returning the raw dict instead of
+surfacing the failure.
+
+Fix:
+- type_hint_involves_model(): recurses through Union/list/Sequence/tuple/
+  dict args to detect a model anywhere in the hint.
+- _convert_with_type_hint(): validates via pydantic TypeAdapter, which
+  handles any nested/union/optional/container shape losslessly; hints with
+  no model are returned untouched (preserves plain int/str/dict pass-through).
+- convert_function_args now propagates validation errors (wrapped with the
+  parameter name) instead of hiding them; non-validation errors still fall
+  back to original args for backward compatibility.
+- convert_dict_to_model uses model_class.model_validate (correct v2 API).
+- should_convert_args uses the same recursive detection so conversion
+  triggers for the new shapes.
+
+Adds tests for each reported case plus non-model pass-through and
+validation-error propagation.
+
+* fix(sdk/python): preserve ValidationError from arg coercion (#1034 review)
+
+Addresses review feedback on PR #1035. The rewrite wrapped validation
+failures as ValueError, but the reasoner/skill call sites in agent.py and
+decorators.py intercept pydantic.ValidationError specifically to route bad
+payloads through their safe-validation path (_HandlerInputError, avoiding
+stack-trace exposure in 422s). Wrapping as ValueError let a bad payload miss
+that handler and fall back to the raw dict.
+
+Let the ValidationError from TypeAdapter propagate unchanged so the existing
+callers keep intercepting it. Tests now assert ValidationError explicitly.
+
+* fix(sdk/python): keep None passthrough and cache the TypeAdapter
+
+Two follow-ups to the complex-hint coercion in this PR, both found by
+driving a real Agent through its ASGI request path:
+
+* `def reasoner(m: MyModel = None)` and `def reasoner(items: list[MyModel]
+  = None)` (implicit Optional, no `Optional[...]` wrapper) used to work:
+  `apply_defaults()` fills `None` and the old code never validated a
+  non-dict. Under `TypeAdapter(hint).validate_python(None)` they started
+  raising ValidationError, so every call to such a reasoner became an
+  error response. Return top-level `None` unchanged, before any adapter
+  work; `None` *elements* inside a container are still validated by the
+  adapter, and a `null` for a required parameter is still rejected by
+  Agent._validate_handler_input before conversion runs.
+
+* A fresh TypeAdapter was built on every call. Measured on python 3.11 /
+  pydantic 2.13.5 with a `list[Model] | None` parameter: 84 us per
+  conversion, of which 55 us is adapter construction; with the adapter
+  cached the validation itself is 1.2 us. Cache it in a 512-entry
+  lru_cache, with an uncached fallback for unhashable hints so a hint can
+  never silently lose its coercion just because it is not hashable.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(sdk/python): surface coercion failures as 422 instead of 500 / TypeError
+
+Now that convert_function_args lets pydantic's ValidationError escape, the
+three call sites that were written to handle it are actually reached — and
+two of them were broken:
+
+* agent.py built a `_HandlerInputError` "to prevent stack trace exposure in
+  422 responses" but nothing caught it, so an invalid payload for one of the
+  newly covered shapes escaped the endpoint and starlette answered
+  500 "Internal Server Error". Verified over the real ASGI path: a reasoner
+  typed `M1 | M2 | None` given `{"item": {"x": "bad"}}`, a reasoner typed
+  `list[M1]` given `[{"a": "bad"}]`, and the equivalent skill call all
+  returned 500. They now return 422 `{"detail": "..."}`, the same shape the
+  input validator already returns, with no pydantic text or payload echoed
+  back. The skill conversion moved above the execution-context setup so the
+  early return cannot leak the context; the reasoner path catches
+  _HandlerInputError around both synchronous awaits, leaving the 202
+  fire-and-forget path, cancellation (499) and cost-tracker handling alone.
+
+* decorators.py re-raised `ValidationError(msg, model=...)`, the exact
+  pydantic-v2 constructor misuse that was removed from pydantic_utils.py in
+  this PR: it raises `TypeError: ValidationError.__new__() got an unexpected
+  keyword argument 'model'`. It was dead code before (the error never
+  escaped conversion); it is live now, so a bad payload on the in-process
+  reasoner-calls-reasoner path failed with that TypeError instead of the
+  validation error. Propagate the original ValidationError unchanged.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (faf5f78)
+
 ## [0.1.138-rc.13] - 2026-09-07
 
 
