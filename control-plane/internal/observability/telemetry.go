@@ -237,9 +237,9 @@ func (s *TelemetryService) Enqueue(eventName string, properties map[string]inter
 	s.enqueue(eventName, properties, "")
 }
 
-func (s *TelemetryService) enqueue(eventName string, properties map[string]interface{}, identityMaterial string) {
+func (s *TelemetryService) enqueue(eventName string, properties map[string]interface{}, identityMaterial string) bool {
 	if s == nil {
-		return
+		return false
 	}
 	event := TelemetryEvent{
 		SchemaVersion:          telemetrySchemaVersion,
@@ -257,8 +257,10 @@ func (s *TelemetryService) enqueue(eventName string, properties map[string]inter
 	}
 	select {
 	case s.queue <- event:
+		return true
 	default:
 		logger.Logger.Debug().Str("event", eventName).Msg("anonymous telemetry queue full; dropping event")
+		return false
 	}
 }
 
@@ -408,13 +410,19 @@ func (s *TelemetryService) handleExecutionEvent(event events.ExecutionEvent) {
 	// Only stable identities are eligible: the random ones above belong to
 	// transitions that are allowed to recur, and collapsing those would lose
 	// real events.
-	if stable && s.reported.observe(eventName+"\x00"+identityMaterial) {
+	key := eventName + "\x00" + identityMaterial
+	if stable && s.reported.observe(key) {
 		logger.Logger.Debug().
 			Str("event", eventName).
 			Msg("anonymous telemetry: outcome already reported for this execution; not sending again")
 		return
 	}
-	s.enqueue(eventName, props, identityMaterial)
+	// observe is an atomic test-and-set and must happen before enqueue to keep
+	// concurrent republishes to at most one report. If backpressure drops that
+	// report, release the key so a later republish can still deliver it.
+	if !s.enqueue(eventName, props, identityMaterial) && stable {
+		s.reported.forget(key)
+	}
 }
 
 // telemetryReportedSet remembers which terminal outcomes have already been
@@ -433,7 +441,7 @@ func (s *TelemetryService) handleExecutionEvent(event events.ExecutionEvent) {
 type telemetryReportedSet struct {
 	mu       sync.Mutex
 	capacity int
-	seen     map[string]struct{}
+	seen     map[string]int
 	order    []string
 	next     int
 }
@@ -447,7 +455,7 @@ func (s *telemetryReportedSet) observe(key string) bool {
 		if capacity <= 0 {
 			capacity = telemetryReportedCapacity
 		}
-		s.seen = make(map[string]struct{}, capacity)
+		s.seen = make(map[string]int, capacity)
 		s.order = make([]string, capacity)
 	}
 	if _, ok := s.seen[key]; ok {
@@ -457,9 +465,24 @@ func (s *telemetryReportedSet) observe(key string) bool {
 		delete(s.seen, evicted)
 	}
 	s.order[s.next] = key
+	s.seen[key] = s.next
 	s.next = (s.next + 1) % len(s.order)
-	s.seen[key] = struct{}{}
 	return false
+}
+
+// forget makes a dropped key eligible to be observed again while keeping the
+// membership map and eviction ring in sync.
+func (s *telemetryReportedSet) forget(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, ok := s.seen[key]
+	if !ok {
+		return
+	}
+	if s.order[idx] == key {
+		s.order[idx] = ""
+	}
+	delete(s.seen, key)
 }
 
 func hasStableCallbackIdentity(event events.ExecutionEvent, outcome string) bool {

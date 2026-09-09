@@ -363,6 +363,60 @@ func TestTelemetryReportedSetEvictsOldestPastCapacity(t *testing.T) {
 	}
 }
 
+func TestTelemetryReportedSetForgetRestoresObservationAndEviction(t *testing.T) {
+	set := &telemetryReportedSet{capacity: 3}
+
+	if set.observe("a") || set.observe("b") || set.observe("c") {
+		t.Fatal("first sighting of a key reported as a duplicate")
+	}
+	set.forget("b")
+	if set.observe("b") {
+		t.Fatal("forgotten key was still recognized")
+	}
+	if set.observe("d") {
+		t.Fatal("new key reported as a duplicate")
+	}
+	for _, key := range []string{"b", "c", "d"} {
+		if !set.observe(key) {
+			t.Fatalf("key %q was evicted unexpectedly after forget", key)
+		}
+	}
+	if len(set.seen) > set.capacity {
+		t.Fatalf("set holds %d keys, exceeds capacity %d", len(set.seen), set.capacity)
+	}
+}
+
+func TestTelemetryTerminalEventDroppedByFullQueueIsRetriable(t *testing.T) {
+	svc := &TelemetryService{
+		installHash: "install-hash",
+		eventIDKey:  eventIdentityKey("private-install-id"),
+		runtimeName: "binary",
+		version:     "test",
+		queue:       make(chan TelemetryEvent, 1),
+	}
+	eventA := events.ExecutionEvent{Type: events.ExecutionCompleted, ExecutionID: "A", Status: "succeeded"}
+	eventB := events.ExecutionEvent{Type: events.ExecutionCompleted, ExecutionID: "B", Status: "succeeded"}
+
+	svc.handleExecutionEvent(eventA)
+	svc.handleExecutionEvent(eventB)
+	if got := len(svc.queue); got != 1 {
+		t.Fatalf("full queue holds %d events, want 1", got)
+	}
+	first := <-svc.queue
+	if want := svc.eventIdentity("execution_completed", "A\x00succeeded"); first.EventID != want {
+		t.Fatalf("queued event ID = %q, want A's %q", first.EventID, want)
+	}
+
+	svc.handleExecutionEvent(eventB)
+	if got := len(svc.queue); got != 1 {
+		t.Fatalf("retried event enqueued %d times, want 1", got)
+	}
+	retried := <-svc.queue
+	if want := svc.eventIdentity("execution_completed", "B\x00succeeded"); retried.EventID != want {
+		t.Fatalf("retried event ID = %q, want %q", retried.EventID, want)
+	}
+}
+
 func TestTelemetryExecutionEventIdentityDoesNotCollapseMissingIDs(t *testing.T) {
 	svc := &TelemetryService{
 		installHash: "install-hash",
