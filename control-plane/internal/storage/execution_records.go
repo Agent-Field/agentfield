@@ -1303,6 +1303,10 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 // See MarkStaleExecutions for the updated_at invariant, the COALESCE fallback
 // rationale, and why a row with a non-terminal child is skipped rather than reaped.
 func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
+	return ls.markStaleWorkflowExecutions(ctx, staleAfter, limit, nil)
+}
+
+func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, limit int, afterCandidateSelection func()) (int, error) {
 	if limit <= 0 {
 		return 0, nil
 	}
@@ -1362,6 +1366,12 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 		return 0, nil
 	}
 
+	// Package tests use this seam to make the candidate-selection-to-update
+	// interleaving deterministic; production callers leave it nil.
+	if afterCandidateSelection != nil {
+		afterCandidateSelection()
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin stale workflow execution transaction: %w", err)
@@ -1369,9 +1379,30 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	defer rollbackTx(tx, "MarkStaleWorkflowExecutions")
 
 	updateStmt, err := tx.PrepareContext(ctx, `
-		UPDATE workflow_executions
+		UPDATE workflow_executions AS w
 		SET status = ?, error_message = ?, completed_at = ?, duration_ms = ?, updated_at = ?
-		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued', 'waiting')`)
+		WHERE w.execution_id = ?
+		  AND w.status IN ('running', 'pending', 'queued', 'waiting')
+		  AND `+workflowTSExpr+` <= `+cutoffExpr+`
+		  AND (
+		      NOT EXISTS (
+		          SELECT 1 FROM executions e
+		          WHERE e.execution_id = w.execution_id
+		            AND e.status IN ('running', 'pending', 'queued', 'waiting')
+		      )
+		      OR EXISTS (
+		          SELECT 1 FROM executions e
+		          WHERE e.execution_id = w.execution_id
+		            AND e.status IN ('running', 'pending', 'queued', 'waiting')
+		            AND `+executionTSExpr+` <= `+cutoffExpr+`
+		      )
+		  )
+		  AND COALESCE(w.approval_status, '') != 'pending'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM workflow_executions c
+		      WHERE c.parent_execution_id = w.execution_id
+		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
+		  )`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare stale workflow execution update: %w", err)
 	}
@@ -1409,6 +1440,8 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 			durationMS,
 			now,
 			rec.id,
+			cutoff,
+			cutoff,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("update stale workflow execution %s: %w", rec.id, err)
