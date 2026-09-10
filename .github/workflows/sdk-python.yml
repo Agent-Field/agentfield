@@ -56,6 +56,11 @@ jobs:
         run: |
           ruff check .
 
+      - name: Type check (mypy)
+        working-directory: sdk/python
+        run: |
+          mypy --config-file mypy.ini agentfield/
+
       - name: Format (auto-fix)
         working-directory: sdk/python
         run: |
