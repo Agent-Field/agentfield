@@ -68,6 +68,9 @@ func TestRetryStaleWorkflowExecutions(t *testing.T) {
 		UpdatedAt:    now.Add(-2 * time.Hour),
 		InputPayload: json.RawMessage(`{}`),
 	}))
+	// CreateExecutionRecord initializes activity timestamps to the current time;
+	// backdate the paired row so both clocks are stale for this retry case.
+	backdateExecutionUpdatedAt(t, ls, "executions", "exec-retry-1", now.Add(-2*time.Hour))
 
 	// Create a stale execution that already exhausted retries
 	exhaustedExec := &types.WorkflowExecution{
@@ -136,6 +139,104 @@ func TestRetryStaleWorkflowExecutions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "running", fresh.Status)
 	assert.Equal(t, 0, fresh.RetryCount)
+}
+
+func TestRetryStaleWorkflowExecutions_ExecutionActivityProtectsWorkflow(t *testing.T) {
+	ls, ctx := setupRetryTestStorage(t)
+	now := time.Now().UTC()
+
+	workflow := &types.WorkflowExecution{
+		WorkflowID:          "wf-retry-heartbeat",
+		ExecutionID:         "exec-retry-heartbeat",
+		AgentFieldRequestID: "req-retry-heartbeat",
+		AgentNodeID:         "agent-1",
+		ReasonerID:          "reason-1",
+		Status:              "running",
+		StartedAt:           now.Add(-2 * time.Hour),
+		CreatedAt:           now.Add(-2 * time.Hour),
+		UpdatedAt:           now.Add(-1 * time.Hour),
+		InputData:           json.RawMessage(`{}`),
+		OutputData:          json.RawMessage(`{}`),
+		RetryCount:          0,
+	}
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, workflow))
+
+	// The execution is fresh even though its paired workflow row is stale.
+	require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
+		ExecutionID: "exec-retry-heartbeat",
+		RunID:       "run-retry-heartbeat",
+		AgentNodeID: "agent-1",
+		ReasonerID:  "reason-1",
+		NodeID:      "agent-1",
+		Status:      "running",
+		StartedAt:   now.Add(-2 * time.Hour),
+	}))
+
+	retried, err := ls.RetryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100)
+	require.NoError(t, err)
+	require.Empty(t, retried, "fresh paired execution activity must protect a stale workflow")
+
+	workflowRecord, err := ls.GetWorkflowExecution(ctx, workflow.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "running", workflowRecord.Status)
+	require.Equal(t, 0, workflowRecord.RetryCount)
+}
+
+func TestRetryStaleWorkflowExecutions_ActivityAfterSelectionSkipsUpdate(t *testing.T) {
+	ls, ctx := setupRetryTestStorage(t)
+	now := time.Now().UTC()
+
+	workflow := &types.WorkflowExecution{
+		WorkflowID:          "wf-retry-selection-race",
+		ExecutionID:         "exec-retry-selection-race",
+		AgentFieldRequestID: "req-retry-selection-race",
+		AgentNodeID:         "agent-1",
+		ReasonerID:          "reason-1",
+		Status:              "running",
+		StartedAt:           now.Add(-2 * time.Hour),
+		CreatedAt:           now.Add(-2 * time.Hour),
+		UpdatedAt:           now.Add(-1 * time.Hour),
+		InputData:           json.RawMessage(`{}`),
+		OutputData:          json.RawMessage(`{}`),
+		RetryCount:          0,
+	}
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, workflow))
+
+	execution := &types.Execution{
+		ExecutionID: "exec-retry-selection-race",
+		RunID:       "run-retry-selection-race",
+		AgentNodeID: "agent-1",
+		ReasonerID:  "reason-1",
+		NodeID:      "agent-1",
+		Status:      "running",
+		StartedAt:   now.Add(-2 * time.Hour),
+	}
+	require.NoError(t, ls.CreateExecutionRecord(ctx, execution))
+	backdateExecutionUpdatedAt(t, ls, "executions", execution.ExecutionID, now.Add(-1*time.Hour))
+
+	var heartbeatErr error
+	retried, err := ls.retryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100, func() {
+		_, heartbeatErr = ls.UpdateExecutionRecord(ctx, execution.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+			current.Notes = append(current.Notes, types.ExecutionNote{
+				Message:   "heartbeat",
+				Timestamp: now,
+			})
+			return current, nil
+		})
+	})
+	require.NoError(t, heartbeatErr)
+	require.NoError(t, err)
+	require.Empty(t, retried, "activity after selection must prevent the retry update")
+
+	workflowRecord, err := ls.GetWorkflowExecution(ctx, workflow.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "running", workflowRecord.Status)
+	require.Equal(t, 0, workflowRecord.RetryCount)
+
+	executionRecord, err := ls.GetExecutionRecord(ctx, execution.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "running", executionRecord.Status)
+	require.Len(t, executionRecord.Notes, 1)
 }
 
 func TestRetryStaleWorkflowExecutions_DisabledWithZeroMaxRetries(t *testing.T) {
