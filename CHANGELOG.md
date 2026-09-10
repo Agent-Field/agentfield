@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.139-rc.1] - 2026-09-10
+
+
+### Fixed
+
+- Fix(go-sdk): make harness schema path tests OS-portable (#1049)
+
+TestOutputPath and TestSchemaPath asserted hardcoded Unix path
+separators (/tmp/...), so they failed on Windows where filepath.Join
+produces backslash separators. Assert against filepath.Join with the
+existing filename constants so the expected value is computed the same
+way the production code computes it.
+
+Go SDK CI runs only on ubuntu-latest, so these failures surfaced only
+in local Windows development. The change is a no-op on Linux (Join
+yields the identical string) and a fix on Windows. (10aa43c)
+
 ## [0.1.138] - 2026-09-09
 
 ## [0.1.138-rc.16] - 2026-09-09
