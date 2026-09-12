@@ -436,3 +436,104 @@ func TestPostgresRetryStaleWorkflowExecutionsRepassesStaleAndSparesFreshExecutio
 	require.NoError(t, err)
 	require.Equal(t, "running", freshExecution.Status)
 }
+
+// TestPostgresRetryStaleWorkflowExecutionsHeartbeatBetweenStatementsSparesExecution
+// pins down the between-statements heartbeat race on the real engine. A second
+// session holds the paired execution's row lock; the retry transaction runs its
+// workflow UPDATE and then parks on the execution UPDATE. While it is parked,
+// the heartbeat commits, so the execution UPDATE must re-check the staleness
+// predicate and leave the freshly heartbeated execution alone.
+func TestPostgresRetryStaleWorkflowExecutionsHeartbeatBetweenStatementsSparesExecution(t *testing.T) {
+	ls, ctx := livePostgresStorage(t)
+	now := time.Now().UTC()
+	id := fmt.Sprintf("exec-live-retry-between-%d", time.Now().UnixNano())
+
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, staleLiveWorkflow(id, now.Add(-2*time.Hour))))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, liveExecution(id, now.Add(-2*time.Hour))))
+	backdateExecutionUpdatedAt(t, ls, "executions", id, now.Add(-2*time.Hour))
+
+	// A second session takes the execution row lock first, so the retry
+	// transaction reaches its second UPDATE and blocks there.
+	gateCfg := liveConfigForDatabase(t, ls.postgresConfig.Database)
+	// ConnConfig.ConnString() keeps the original database, so build the handle
+	// from the connector like livePreparedRecorder does.
+	gate := sql.OpenDB(stdlib.GetConnector(*gateCfg))
+	defer gate.Close()
+
+	gateTx, err := gate.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = gateTx.Rollback() }()
+
+	var lockedID string
+	require.NoError(t, gateTx.QueryRowContext(ctx,
+		"SELECT execution_id FROM executions WHERE execution_id = $1 FOR UPDATE", id).Scan(&lockedID))
+
+	type retryOutcome struct {
+		retried []string
+		err     error
+	}
+	outcomeCh := make(chan retryOutcome, 1)
+	go func() {
+		retried, err := ls.RetryStaleWorkflowExecutions(ctx, time.Hour, 3, 100)
+		outcomeCh <- retryOutcome{retried: retried, err: err}
+	}()
+
+	// Wait until the retry transaction has run its workflow UPDATE (it holds
+	// the table's ROW EXCLUSIVE lock) and is on or about to reach the paired
+	// execution UPDATE.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var workflowUpdated bool
+		require.NoError(t, gateTx.QueryRowContext(ctx, `
+			SELECT EXISTS (
+			    SELECT 1
+			    FROM pg_locks
+			    WHERE relation = to_regclass('public.workflow_executions')
+			      AND mode = 'RowExclusiveLock'
+			      AND granted
+			)`).Scan(&workflowUpdated))
+		if workflowUpdated {
+			break
+		}
+		select {
+		case outcome := <-outcomeCh:
+			t.Fatalf("retry finished before the heartbeat could interleave: retried=%v err=%v", outcome.retried, outcome.err)
+		case <-time.After(10 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retry transaction never reached the workflow UPDATE")
+		}
+	}
+
+	// The heartbeat commits while the retry sits between its two statements.
+	heartbeatAt := time.Now().UTC()
+	_, err = gateTx.ExecContext(ctx, `
+		UPDATE executions
+		SET updated_at = $1, status_reason = 'heartbeat-between-statements'
+		WHERE execution_id = $2`, heartbeatAt, id)
+	require.NoError(t, err)
+	require.NoError(t, gateTx.Commit())
+
+	select {
+	case outcome := <-outcomeCh:
+		require.NoError(t, outcome.err)
+		require.Equal(t, []string{id}, outcome.retried)
+	case <-time.After(15 * time.Second):
+		t.Fatal("retry transaction did not finish after the heartbeat committed")
+	}
+
+	execution, err := ls.GetExecutionRecord(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "running", execution.Status,
+		"a heartbeat between the retry statements must not be dragged back to pending")
+	require.NotNil(t, execution.StatusReason)
+	require.Equal(t, "heartbeat-between-statements", *execution.StatusReason)
+	require.True(t, execution.UpdatedAt.After(now.Add(-time.Minute)),
+		"the heartbeat timestamp must be the surviving one")
+
+	workflow, err := ls.GetWorkflowExecution(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "pending", workflow.Status,
+		"the workflow decision was made before the heartbeat landed")
+	require.Equal(t, 1, workflow.RetryCount)
+}

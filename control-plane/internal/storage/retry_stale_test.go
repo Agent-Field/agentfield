@@ -239,6 +239,82 @@ func TestRetryStaleWorkflowExecutions_ActivityAfterSelectionSkipsUpdate(t *testi
 	require.Len(t, executionRecord.Notes, 1)
 }
 
+// TestRetryStaleWorkflowExecutions_HeartbeatBetweenStatementsSparesExecution
+// covers the window between the workflow UPDATE and the paired execution
+// UPDATE. An AFTER UPDATE trigger on workflow_executions simulates a heartbeat
+// that commits after the workflow guard has been evaluated: the execution's
+// activity clock moves while the retry is between its two statements. The
+// execution UPDATE must repeat the staleness predicate, so the fresh execution
+// survives instead of being dragged back to pending.
+func TestRetryStaleWorkflowExecutions_HeartbeatBetweenStatementsSparesExecution(t *testing.T) {
+	ls, ctx := setupRetryTestStorage(t)
+	now := time.Now().UTC()
+
+	workflow := &types.WorkflowExecution{
+		WorkflowID:          "wf-retry-between-statements",
+		ExecutionID:         "exec-retry-between-statements",
+		AgentFieldRequestID: "req-retry-between-statements",
+		AgentNodeID:         "agent-1",
+		ReasonerID:          "reason-1",
+		Status:              "running",
+		StartedAt:           now.Add(-2 * time.Hour),
+		CreatedAt:           now.Add(-2 * time.Hour),
+		UpdatedAt:           now.Add(-2 * time.Hour),
+		InputData:           json.RawMessage(`{}`),
+		OutputData:          json.RawMessage(`{}`),
+		RetryCount:          0,
+	}
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, workflow))
+
+	require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
+		ExecutionID:  workflow.ExecutionID,
+		RunID:        "run-retry-between-statements",
+		AgentNodeID:  "agent-1",
+		ReasonerID:   "reason-1",
+		NodeID:       "agent-1",
+		Status:       "running",
+		StartedAt:    now.Add(-2 * time.Hour),
+		InputPayload: json.RawMessage(`{}`),
+	}))
+	backdateExecutionUpdatedAt(t, ls, "executions", workflow.ExecutionID, now.Add(-2*time.Hour))
+
+	// The trigger stamps a heartbeat on the paired execution as soon as the
+	// retry's workflow UPDATE has matched, i.e. between the retry's two
+	// statements.
+	db := ls.requireSQLDB()
+	_, err := db.Exec(`
+		CREATE TRIGGER retry_heartbeat_between_statements
+		AFTER UPDATE ON workflow_executions
+		FOR EACH ROW
+		BEGIN
+			UPDATE executions
+			SET updated_at = CURRENT_TIMESTAMP,
+			    status_reason = 'heartbeat-between-statements'
+			WHERE execution_id = NEW.execution_id;
+		END`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.Exec("DROP TRIGGER IF EXISTS retry_heartbeat_between_statements")
+	})
+
+	retried, err := ls.RetryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100)
+	require.NoError(t, err)
+	require.Equal(t, []string{workflow.ExecutionID}, retried)
+
+	executionRecord, err := ls.GetExecutionRecord(ctx, workflow.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "running", executionRecord.Status,
+		"a heartbeat between the retry statements must not be dragged back to pending")
+	require.NotNil(t, executionRecord.StatusReason)
+	require.Equal(t, "heartbeat-between-statements", *executionRecord.StatusReason,
+		"the between-statements heartbeat must be the surviving write")
+
+	workflowRecord, err := ls.GetWorkflowExecution(ctx, workflow.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", workflowRecord.Status)
+	require.Equal(t, 1, workflowRecord.RetryCount)
+}
+
 func TestRetryStaleWorkflowExecutions_DisabledWithZeroMaxRetries(t *testing.T) {
 	ls, ctx := setupRetryTestStorage(t)
 

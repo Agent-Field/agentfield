@@ -1574,7 +1574,8 @@ func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNo
 // RetryStaleWorkflowExecutions finds stale workflow executions that haven't exceeded
 // maxRetries and resets both workflow_executions and executions back to "pending"
 // so the paired records stay in sync for the retry path. The candidate predicates
-// are repeated in the conditional update so activity after selection prevents a retry.
+// are repeated in both conditional updates, so activity after selection — including
+// a heartbeat landing between the workflow and execution statements — prevents a retry.
 func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int) ([]string, error) {
 	return ls.retryStaleWorkflowExecutions(ctx, staleAfter, maxRetries, limit, nil)
 }
@@ -1670,14 +1671,19 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 	}
 	defer workflowStmt.Close()
 
+	// The execution update repeats the staleness predicate: a heartbeat can
+	// land between the workflow guard above and this statement, and the fresh
+	// execution must not be dragged back to pending.
 	executionStmt, err := tx.PrepareContext(ctx, `
-		UPDATE executions
+		UPDATE executions AS e
 		SET status = 'pending',
 		    error_message = ?,
 		    completed_at = NULL,
 		    duration_ms = NULL,
 		    updated_at = ?
-		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued')`)
+		WHERE e.execution_id = ?
+		  AND e.status IN ('running', 'pending', 'queued')
+		  AND `+executionTSExpr+` <= `+cutoffExpr)
 	if err != nil {
 		return nil, fmt.Errorf("prepare execution retry statement: %w", err)
 	}
@@ -1697,7 +1703,7 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 			continue
 		}
 
-		if _, err := executionStmt.ExecContext(ctx, retryReason, now, id); err != nil {
+		if _, err := executionStmt.ExecContext(ctx, retryReason, now, id, cutoff); err != nil {
 			return retried, fmt.Errorf("retry execution %s: %w", id, err)
 		}
 		retried = append(retried, id)
