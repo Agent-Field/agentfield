@@ -23,7 +23,7 @@
     "clsx": "^2.1.1",
     "framer-motion": "^11.11.9",
     "lucide-react": "^0.453.0",
-    "next": "15.5.22",
+    "next": "15.5.25",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
@@ -43,6 +43,6 @@
   "overrides": {
     "nanoid": "3.3.18",
     "postcss": "$postcss",
-    "sharp": "0.35.3"
+    "sharp": "0.35.4"
   }
 }
