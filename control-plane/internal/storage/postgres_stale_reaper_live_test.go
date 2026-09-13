@@ -542,3 +542,127 @@ func TestPostgresRetryStaleWorkflowExecutionsHeartbeatBetweenStatementsSparesExe
 	require.Nil(t, workflow.ErrorMessage,
 		"the rolled-back workflow must not keep the retry error message")
 }
+
+// TestPostgresRetryStaleWorkflowExecutionsBatchReportsOnlyMovedCandidates drives
+// a mixed batch on the real engine: the oldest candidate's paired execution is
+// locked so a heartbeat can win between the retry's statements, while a second,
+// newer candidate is untouched and stale. The reported id list must name only
+// the candidate whose two records moved as a pair, and the losing candidate
+// must be left all-or-nothing.
+func TestPostgresRetryStaleWorkflowExecutionsBatchReportsOnlyMovedCandidates(t *testing.T) {
+	ls, ctx := livePostgresStorage(t)
+	now := time.Now().UTC()
+	suffix := time.Now().UnixNano()
+
+	losingID := fmt.Sprintf("exec-live-batch-losing-%d", suffix)
+	winningID := fmt.Sprintf("exec-live-batch-winning-%d", suffix)
+
+	// The losing workflow is older, so the retry reaches it first and parks on
+	// the gate lock before it can touch the winning candidate.
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, staleLiveWorkflow(losingID, now.Add(-3*time.Hour))))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, liveExecution(losingID, now.Add(-2*time.Hour))))
+	backdateExecutionUpdatedAt(t, ls, "executions", losingID, now.Add(-2*time.Hour))
+
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, staleLiveWorkflow(winningID, now.Add(-2*time.Hour))))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, liveExecution(winningID, now.Add(-2*time.Hour))))
+	backdateExecutionUpdatedAt(t, ls, "executions", winningID, now.Add(-2*time.Hour))
+
+	gateCfg := liveConfigForDatabase(t, ls.postgresConfig.Database)
+	gate := sql.OpenDB(stdlib.GetConnector(*gateCfg))
+	defer gate.Close()
+
+	gateTx, err := gate.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = gateTx.Rollback() }()
+
+	var lockedID string
+	require.NoError(t, gateTx.QueryRowContext(ctx,
+		"SELECT execution_id FROM executions WHERE execution_id = $1 FOR UPDATE", losingID).Scan(&lockedID))
+
+	type retryOutcome struct {
+		retried []string
+		err     error
+	}
+	outcomeCh := make(chan retryOutcome, 1)
+	go func() {
+		retried, err := ls.RetryStaleWorkflowExecutions(ctx, time.Hour, 3, 100)
+		outcomeCh <- retryOutcome{retried: retried, err: err}
+	}()
+
+	// Wait until the retry transaction has run its first workflow UPDATE (it
+	// holds the table's ROW EXCLUSIVE lock) and is on or about to reach the
+	// losing candidate's paired execution UPDATE.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var workflowUpdated bool
+		require.NoError(t, gateTx.QueryRowContext(ctx, `
+			SELECT EXISTS (
+			    SELECT 1
+			    FROM pg_locks
+			    WHERE relation = to_regclass('public.workflow_executions')
+			      AND mode = 'RowExclusiveLock'
+			      AND granted
+			)`).Scan(&workflowUpdated))
+		if workflowUpdated {
+			break
+		}
+		select {
+		case outcome := <-outcomeCh:
+			t.Fatalf("retry finished before the heartbeat could interleave: retried=%v err=%v", outcome.retried, outcome.err)
+		case <-time.After(10 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retry transaction never reached the workflow UPDATE")
+		}
+	}
+
+	// The heartbeat commits while the retry sits between its two statements
+	// for the losing candidate.
+	heartbeatAt := time.Now().UTC()
+	_, err = gateTx.ExecContext(ctx, `
+		UPDATE executions
+		SET updated_at = $1, status_reason = 'heartbeat-between-statements'
+		WHERE execution_id = $2`, heartbeatAt, losingID)
+	require.NoError(t, err)
+	require.NoError(t, gateTx.Commit())
+
+	var outcome retryOutcome
+	select {
+	case outcome = <-outcomeCh:
+	case <-time.After(15 * time.Second):
+		t.Fatal("retry transaction did not finish after the heartbeat committed")
+	}
+	require.NoError(t, outcome.err)
+	require.Equal(t, []string{winningID}, outcome.retried,
+		"the reported batch must name exactly the candidates whose records moved as a pair")
+
+	// The losing candidate is all-or-nothing: its workflow half is rolled back
+	// and its execution keeps the committed heartbeat.
+	losingWorkflow, err := ls.GetWorkflowExecution(ctx, losingID)
+	require.NoError(t, err)
+	require.Equal(t, "running", losingWorkflow.Status,
+		"the losing candidate's workflow half must not be dragged to pending")
+	require.Equal(t, 0, losingWorkflow.RetryCount,
+		"retry_count must not be incremented when the pair cannot move together")
+	require.Nil(t, losingWorkflow.ErrorMessage)
+
+	losingExecution, err := ls.GetExecutionRecord(ctx, losingID)
+	require.NoError(t, err)
+	require.Equal(t, "running", losingExecution.Status)
+	require.NotNil(t, losingExecution.StatusReason)
+	require.Equal(t, "heartbeat-between-statements", *losingExecution.StatusReason)
+	require.True(t, losingExecution.UpdatedAt.After(now.Add(-time.Minute)),
+		"the independently committed heartbeat timestamp must be the surviving one")
+
+	// The winning candidate moved as a pair.
+	winningWorkflow, err := ls.GetWorkflowExecution(ctx, winningID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", winningWorkflow.Status)
+	require.Equal(t, 1, winningWorkflow.RetryCount)
+	require.Nil(t, winningWorkflow.CompletedAt)
+
+	winningExecution, err := ls.GetExecutionRecord(ctx, winningID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", winningExecution.Status,
+		"the winning candidate's execution half must move with its workflow half")
+}
