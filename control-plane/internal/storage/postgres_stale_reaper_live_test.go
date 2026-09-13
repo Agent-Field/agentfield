@@ -442,7 +442,8 @@ func TestPostgresRetryStaleWorkflowExecutionsRepassesStaleAndSparesFreshExecutio
 // session holds the paired execution's row lock; the retry transaction runs its
 // workflow UPDATE and then parks on the execution UPDATE. While it is parked,
 // the heartbeat commits, so the execution UPDATE must re-check the staleness
-// predicate and leave the freshly heartbeated execution alone.
+// predicate and lose. The candidate is then all-or-nothing: the workflow half
+// is rolled back, retry_count stays put, and nothing is reported as retried.
 func TestPostgresRetryStaleWorkflowExecutionsHeartbeatBetweenStatementsSparesExecution(t *testing.T) {
 	ls, ctx := livePostgresStorage(t)
 	now := time.Now().UTC()
@@ -517,7 +518,8 @@ func TestPostgresRetryStaleWorkflowExecutionsHeartbeatBetweenStatementsSparesExe
 	select {
 	case outcome := <-outcomeCh:
 		require.NoError(t, outcome.err)
-		require.Equal(t, []string{id}, outcome.retried)
+		require.Empty(t, outcome.retried,
+			"a candidate whose execution update loses to a heartbeat must not be reported as retried")
 	case <-time.After(15 * time.Second):
 		t.Fatal("retry transaction did not finish after the heartbeat committed")
 	}
@@ -533,7 +535,10 @@ func TestPostgresRetryStaleWorkflowExecutionsHeartbeatBetweenStatementsSparesExe
 
 	workflow, err := ls.GetWorkflowExecution(ctx, id)
 	require.NoError(t, err)
-	require.Equal(t, "pending", workflow.Status,
-		"the workflow decision was made before the heartbeat landed")
-	require.Equal(t, 1, workflow.RetryCount)
+	require.Equal(t, "running", workflow.Status,
+		"the workflow half of a candidate that cannot move as a pair must be rolled back")
+	require.Equal(t, 0, workflow.RetryCount,
+		"retry_count must not be incremented when the pair cannot move together")
+	require.Nil(t, workflow.ErrorMessage,
+		"the rolled-back workflow must not keep the retry error message")
 }

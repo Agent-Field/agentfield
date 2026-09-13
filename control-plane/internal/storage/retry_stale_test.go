@@ -244,8 +244,9 @@ func TestRetryStaleWorkflowExecutions_ActivityAfterSelectionSkipsUpdate(t *testi
 // UPDATE. An AFTER UPDATE trigger on workflow_executions simulates a heartbeat
 // that commits after the workflow guard has been evaluated: the execution's
 // activity clock moves while the retry is between its two statements. The
-// execution UPDATE must repeat the staleness predicate, so the fresh execution
-// survives instead of being dragged back to pending.
+// execution UPDATE must repeat the staleness predicate, and when it loses to
+// the heartbeat the candidate must be all-or-nothing: the workflow half is
+// rolled back, retry_count stays put, and nothing is reported as retried.
 func TestRetryStaleWorkflowExecutions_HeartbeatBetweenStatementsSparesExecution(t *testing.T) {
 	ls, ctx := setupRetryTestStorage(t)
 	now := time.Now().UTC()
@@ -299,15 +300,54 @@ func TestRetryStaleWorkflowExecutions_HeartbeatBetweenStatementsSparesExecution(
 
 	retried, err := ls.RetryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100)
 	require.NoError(t, err)
-	require.Equal(t, []string{workflow.ExecutionID}, retried)
+	require.Empty(t, retried,
+		"a candidate whose execution update loses to a heartbeat must not be reported as retried")
 
 	executionRecord, err := ls.GetExecutionRecord(ctx, workflow.ExecutionID)
 	require.NoError(t, err)
 	require.Equal(t, "running", executionRecord.Status,
 		"a heartbeat between the retry statements must not be dragged back to pending")
-	require.NotNil(t, executionRecord.StatusReason)
-	require.Equal(t, "heartbeat-between-statements", *executionRecord.StatusReason,
-		"the between-statements heartbeat must be the surviving write")
+	// The trigger's heartbeat is written inside the candidate's transaction, so
+	// the rollback returns the row to its committed state. The live PostgreSQL
+	// test covers a heartbeat that commits independently and must survive.
+
+	workflowRecord, err := ls.GetWorkflowExecution(ctx, workflow.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "running", workflowRecord.Status,
+		"the workflow half of a candidate that cannot move as a pair must be rolled back")
+	require.Equal(t, 0, workflowRecord.RetryCount,
+		"retry_count must not be incremented when the pair cannot move together")
+	require.Nil(t, workflowRecord.ErrorMessage,
+		"the rolled-back workflow must not keep the retry error message")
+}
+
+// TestRetryStaleWorkflowExecutions_WorkflowWithoutPairedExecutionStillRetried
+// pins the pre-existing workflow-only path: a stale workflow with no paired
+// execution row is still reset, because there is no second record that could
+// fall out of sync with it.
+func TestRetryStaleWorkflowExecutions_WorkflowWithoutPairedExecutionStillRetried(t *testing.T) {
+	ls, ctx := setupRetryTestStorage(t)
+	now := time.Now().UTC()
+
+	workflow := &types.WorkflowExecution{
+		WorkflowID:          "wf-retry-unpaired",
+		ExecutionID:         "exec-retry-unpaired",
+		AgentFieldRequestID: "req-retry-unpaired",
+		AgentNodeID:         "agent-1",
+		ReasonerID:          "reason-1",
+		Status:              "running",
+		StartedAt:           now.Add(-2 * time.Hour),
+		CreatedAt:           now.Add(-2 * time.Hour),
+		UpdatedAt:           now.Add(-2 * time.Hour),
+		InputData:           json.RawMessage(`{}`),
+		OutputData:          json.RawMessage(`{}`),
+		RetryCount:          0,
+	}
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, workflow))
+
+	retried, err := ls.RetryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100)
+	require.NoError(t, err)
+	require.Equal(t, []string{workflow.ExecutionID}, retried)
 
 	workflowRecord, err := ls.GetWorkflowExecution(ctx, workflow.ExecutionID)
 	require.NoError(t, err)

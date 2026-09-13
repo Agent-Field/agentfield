@@ -1576,6 +1576,7 @@ func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNo
 // so the paired records stay in sync for the retry path. The candidate predicates
 // are repeated in both conditional updates, so activity after selection — including
 // a heartbeat landing between the workflow and execution statements — prevents a retry.
+// A candidate is only committed and reported as retried when both records move.
 func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int) ([]string, error) {
 	return ls.retryStaleWorkflowExecutions(ctx, staleAfter, maxRetries, limit, nil)
 }
@@ -1689,8 +1690,21 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 	}
 	defer executionStmt.Close()
 
+	// Each candidate is wrapped in a savepoint so it can be undone as a unit:
+	// when the paired execution update loses to activity that arrived between
+	// the two statements, the workflow half must not be committed either.
+	const retryCandidateSavepoint = "retry_stale_candidate"
+	releaseCandidate := func() error {
+		_, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT "+retryCandidateSavepoint)
+		return err
+	}
+
 	var retried []string
 	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, "SAVEPOINT "+retryCandidateSavepoint); err != nil {
+			return retried, fmt.Errorf("savepoint for retry candidate %s: %w", id, err)
+		}
+
 		result, err := workflowStmt.ExecContext(ctx, retryReason, now, id, maxRetries, cutoff, cutoff)
 		if err != nil {
 			return retried, fmt.Errorf("retry workflow execution %s: %w", id, err)
@@ -1700,11 +1714,50 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 			return retried, fmt.Errorf("rows affected for workflow execution %s: %w", id, err)
 		}
 		if affected == 0 {
+			if err := releaseCandidate(); err != nil {
+				return retried, fmt.Errorf("release savepoint for workflow execution %s: %w", id, err)
+			}
 			continue
 		}
 
-		if _, err := executionStmt.ExecContext(ctx, retryReason, now, id, cutoff); err != nil {
+		execResult, err := executionStmt.ExecContext(ctx, retryReason, now, id, cutoff)
+		if err != nil {
 			return retried, fmt.Errorf("retry execution %s: %w", id, err)
+		}
+		execAffected, err := execResult.RowsAffected()
+		if err != nil {
+			return retried, fmt.Errorf("rows affected for execution %s: %w", id, err)
+		}
+		if execAffected == 0 {
+			// The paired execution did not move. A heartbeat landing between
+			// the statements leaves it active but no longer stale, and the
+			// workflow half must be rolled back so the candidate stays
+			// all-or-nothing. The pre-existing workflow-only paths (no paired
+			// row, terminal row, or waiting row) keep their old outcome.
+			var wokeBetweenStatements bool
+			err = tx.QueryRowContext(ctx, `
+				SELECT EXISTS (
+				    SELECT 1 FROM executions AS e
+				    WHERE e.execution_id = ?
+				      AND e.status IN ('running', 'pending', 'queued')
+				      AND `+executionTSExpr+` > `+cutoffExpr+`
+				)`, id, cutoff).Scan(&wokeBetweenStatements)
+			if err != nil {
+				return retried, fmt.Errorf("check execution activity for %s: %w", id, err)
+			}
+			if wokeBetweenStatements {
+				if _, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+retryCandidateSavepoint); err != nil {
+					return retried, fmt.Errorf("rollback retry candidate %s: %w", id, err)
+				}
+				if err := releaseCandidate(); err != nil {
+					return retried, fmt.Errorf("release rolled-back savepoint for %s: %w", id, err)
+				}
+				continue
+			}
+		}
+
+		if err := releaseCandidate(); err != nil {
+			return retried, fmt.Errorf("release savepoint for retry candidate %s: %w", id, err)
 		}
 		retried = append(retried, id)
 	}
