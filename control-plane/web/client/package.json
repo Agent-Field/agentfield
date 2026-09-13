@@ -69,7 +69,7 @@
         "@types/react": "^19.1.2",
         "@types/react-dom": "^19.1.2",
         "@vitejs/plugin-react": "^6.0.1",
-        "@vitest/coverage-v8": "^4.1.8",
+        "@vitest/coverage-v8": "^4.1.11",
         "autoprefixer": "^10.4.21",
         "eslint": "^9.25.0",
         "eslint-plugin-react-hooks": "^5.2.0",
@@ -82,10 +82,12 @@
         "typescript": "~5.8.3",
         "typescript-eslint": "^8.30.1",
         "vite": "^8.0.16",
-        "vitest": "^4.1.8"
+        "vitest": "^4.1.11"
     },
     "overrides": {
-        "js-yaml": "4.3.1",
+        "js-yaml": "4.3.2",
+        "browserslist": "4.28.9",
+        "baseline-browser-mapping": "2.11.23",
         "nanoid": "3.3.18",
         "esbuild": "0.28.1",
         "ws": "8.21.0",
@@ -95,7 +97,9 @@
     },
     "pnpm": {
         "overrides": {
-            "js-yaml": "4.3.1",
+            "js-yaml": "4.3.2",
+            "browserslist": "4.28.9",
+            "baseline-browser-mapping": "2.11.23",
             "nanoid": "3.3.18",
             "esbuild": "0.28.1",
             "ws": "8.21.0",

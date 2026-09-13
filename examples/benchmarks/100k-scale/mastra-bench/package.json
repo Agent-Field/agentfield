@@ -15,12 +15,12 @@
     "@types/node": "^20.0.0"
   },
   "overrides": {
-    "js-yaml": "4.3.1",
-    "fast-uri": "3.1.5",
+    "js-yaml": "4.3.2",
+    "fast-uri": "3.1.7",
     "body-parser": "2.3.0",
     "@ai-sdk/provider-utils": "^4.0.27",
     "@ai-sdk/provider-utils-v5": "npm:@ai-sdk/provider-utils@^4.0.27",
-    "hono": "4.12.34",
+    "hono": "4.13.7",
     "@hono/node-server": "2.0.12"
   }
 }
