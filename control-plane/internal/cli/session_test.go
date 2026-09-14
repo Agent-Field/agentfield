@@ -77,6 +77,7 @@ func TestRunSessionOfferPostsSDPAndWritesRawAnswer(t *testing.T) {
 		require.Equal(t, "/api/v1/session-instances/sess-1/realtime-offer", r.URL.Path)
 		require.Equal(t, "openai", r.URL.Query().Get("provider"))
 		require.Equal(t, "webrtc", r.URL.Query().Get("transport"))
+		require.Equal(t, "support.voice", r.URL.Query().Get("target"))
 		gotContentType = r.Header.Get("Content-Type")
 		gotAPIKey = r.Header.Get("X-API-Key")
 		body, err := io.ReadAll(r.Body)
@@ -90,6 +91,7 @@ func TestRunSessionOfferPostsSDPAndWritesRawAnswer(t *testing.T) {
 	var stdout bytes.Buffer
 	err := runSessionOffer(context.Background(), "sess-1", &sessionOfferOptions{
 		provider:     "openai",
+		target:       "support.voice",
 		transport:    "webrtc",
 		sdpSource:    "v=0\r\noffer\r\n",
 		outputFormat: "raw",

@@ -139,3 +139,8 @@ go test ./...
 ## License
 
 Distributed under the Apache 2.0 License. See the repository root for full details.
+
+## Realtime session turn detection
+
+See [session turn detection and interruption](../../docs/session-turn-detection.md)
+for VAD configuration, defaults, validation, and the WebRTC connection flow.

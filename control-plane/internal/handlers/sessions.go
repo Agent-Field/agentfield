@@ -77,29 +77,48 @@ func StartSessionHandler(store storage.StorageProvider) gin.HandlerFunc {
 			return
 		}
 
+		turnDetection, err := types.ParseSessionTurnDetection(capability.Provider, capability.Transport, definition.TurnDetection)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
 		sessionID := "sess_" + time.Now().UTC().Format("20060102_150405") + "_" + shortRandom()
 		model := firstNonEmptySession(req.Model, definition.Model)
 		voice := firstNonEmptySession(req.Voice, definition.Voice)
+		// The offer endpoint is stateless. Carry the registered target in its
+		// returned URL so the next request can resolve and validate its config.
+		offerQuery := url.Values{
+			"target":    {nodeID + "." + sessionName},
+			"provider":  {capability.Provider},
+			"transport": {capability.Transport},
+		}
+		if model != "" {
+			offerQuery.Set("model", model)
+		}
+		if voice != "" {
+			offerQuery.Set("voice", voice)
+		}
 		c.JSON(http.StatusCreated, gin.H{
-			"session_id":   sessionID,
-			"target":       nodeID + "." + sessionName,
-			"provider":     capability.Provider,
-			"transport":    capability.Transport,
-			"model":        model,
-			"voice":        voice,
-			"modalities":   definition.Modalities,
-			"tags":         definition.ApprovedTags,
-			"tool_targets": sessionToolTargets(nodeID, definition.Tools),
-			"offer_url":    fmt.Sprintf("/api/v1/session-instances/%s/realtime-offer", url.PathEscape(sessionID)),
-			"tool_url":     fmt.Sprintf("/api/v1/session-instances/%s/tools/{tool}", url.PathEscape(sessionID)),
-			"created_at":   time.Now().UTC().Format(time.RFC3339Nano),
+			"turn_detection": turnDetection,
+			"session_id":     sessionID,
+			"target":         nodeID + "." + sessionName,
+			"provider":       capability.Provider,
+			"transport":      capability.Transport,
+			"model":          model,
+			"voice":          voice,
+			"modalities":     definition.Modalities,
+			"tags":           definition.ApprovedTags,
+			"tool_targets":   sessionToolTargets(nodeID, definition.Tools),
+			"offer_url":      fmt.Sprintf("/api/v1/session-instances/%s/realtime-offer", url.PathEscape(sessionID)) + "?" + offerQuery.Encode(),
+			"tool_url":       fmt.Sprintf("/api/v1/session-instances/%s/tools/{tool}", url.PathEscape(sessionID)),
+			"created_at":     time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	}
 }
 
 func SessionRealtimeOfferHandler(store storage.StorageProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		_ = store
 		provider := strings.TrimSpace(c.Query("provider"))
 		transport := strings.TrimSpace(c.Query("transport"))
 		if provider == "" || transport == "" {
@@ -120,6 +139,33 @@ func SessionRealtimeOfferHandler(store storage.StorageProvider) gin.HandlerFunc 
 			c.JSON(http.StatusBadRequest, gin.H{"error": "webrtc realtime offers currently require provider=openai"})
 			return
 		}
+		var rawTurnDetection json.RawMessage
+		model, voice := c.Query("model"), c.Query("voice")
+		if _, supplied := c.Request.URL.Query()["target"]; supplied {
+			target := c.Query("target")
+			nodeID, sessionName, ok := splitSessionTarget(target)
+			if !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "session target must be <node>.<session>"})
+				return
+			}
+			definition, found := lookupSessionDefinition(c, store, nodeID, sessionName)
+			if !found {
+				return
+			}
+			if types.NormalizeSessionTransportValue(definition.Provider) != "openai" ||
+				types.NormalizeSessionTransportValue(definition.Transport) != "webrtc" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "registered session must use provider=openai transport=webrtc for realtime offers"})
+				return
+			}
+			rawTurnDetection = definition.TurnDetection
+			model = firstNonEmptySession(model, definition.Model)
+			voice = firstNonEmptySession(voice, definition.Voice)
+		}
+		turnDetection, err := types.ParseSessionTurnDetection("openai", "webrtc", rawTurnDetection)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		if strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) == "" {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "OPENAI_API_KEY is required for provider=openai transport=webrtc"})
 			return
@@ -133,8 +179,9 @@ func SessionRealtimeOfferHandler(store storage.StorageProvider) gin.HandlerFunc 
 			c.Request.Context(),
 			sessionPathID(c),
 			string(sdp),
-			firstNonEmptySession(c.Query("model"), "gpt-realtime-2"),
-			firstNonEmptySession(c.Query("voice"), "marin"),
+			firstNonEmptySession(model, "gpt-realtime-2"),
+			firstNonEmptySession(voice, "marin"),
+			turnDetection,
 		)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{
@@ -269,7 +316,7 @@ func sessionToolTargets(nodeID string, tools []string) map[string]string {
 	return targets
 }
 
-func createOpenAIRealtimeCall(ctx context.Context, sessionID string, sdp string, model string, voice string) (string, error) {
+func createOpenAIRealtimeCall(ctx context.Context, sessionID string, sdp string, model string, voice string, turnDetection *types.TurnDetection) (string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("sdp", sdp); err != nil {
@@ -279,8 +326,11 @@ func createOpenAIRealtimeCall(ctx context.Context, sessionID string, sdp string,
 		"type":         "realtime",
 		"model":        model,
 		"instructions": "You are a realtime voice front end for an AgentField session. Use registered tools to route agent work through the AgentField control plane.",
-		"audio":        map[string]interface{}{"output": map[string]interface{}{"voice": voice}},
-		"tool_choice":  "auto",
+		"audio": map[string]interface{}{
+			"input":  map[string]interface{}{"turn_detection": turnDetection},
+			"output": map[string]interface{}{"voice": voice},
+		},
+		"tool_choice": "auto",
 	}
 	sessionBytes, _ := json.Marshal(sessionConfig)
 	if err := writer.WriteField("session", string(sessionBytes)); err != nil {

@@ -1,20 +1,26 @@
 package agent
 
 type SessionDefinition struct {
-	Name         string         `json:"name"`
-	Provider     string         `json:"provider"`
-	Transport    string         `json:"transport"`
-	Model        string         `json:"model,omitempty"`
-	Modalities   []string       `json:"modalities"`
-	Voice        string         `json:"voice,omitempty"`
-	Tools        []string       `json:"tools"`
-	Tags         []string       `json:"tags,omitempty"`
-	ProposedTags []string       `json:"proposed_tags,omitempty"`
-	ApprovedTags []string       `json:"approved_tags,omitempty"`
-	Metadata     map[string]any `json:"metadata"`
+	Name          string         `json:"name"`
+	Provider      string         `json:"provider"`
+	Transport     string         `json:"transport"`
+	Model         string         `json:"model,omitempty"`
+	Modalities    []string       `json:"modalities"`
+	TurnDetection *TurnDetection `json:"turn_detection,omitempty"`
+	Voice         string         `json:"voice,omitempty"`
+	Tools         []string       `json:"tools"`
+	Tags          []string       `json:"tags,omitempty"`
+	ProposedTags  []string       `json:"proposed_tags,omitempty"`
+	ApprovedTags  []string       `json:"approved_tags,omitempty"`
+	Metadata      map[string]any `json:"metadata"`
 }
 
 type SessionOption func(*SessionDefinition)
+
+// WithSessionTurnDetection sets VAD options; RegisterSession validates them.
+func WithSessionTurnDetection(config TurnDetection) SessionOption {
+	return func(s *SessionDefinition) { s.TurnDetection = &config }
+}
 
 func WithSessionModel(model string) SessionOption {
 	return func(s *SessionDefinition) { s.Model = model }
@@ -90,6 +96,10 @@ func (a *Agent) RegisterSession(name string, provider string, transport string, 
 		definition.Metadata = map[string]any{}
 	}
 
+	definition.TurnDetection, err = NormalizeTurnDetection(definition.Provider, definition.Transport, definition.TurnDetection)
+	if err != nil {
+		return err
+	}
 	a.sessions[name] = definition
 	return nil
 }

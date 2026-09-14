@@ -91,7 +91,12 @@ from .tool_calling import (
     capabilities_to_tool_schemas,
 )
 
+from .session_turn_detection import ServerVAD, SemanticVAD, TurnDetection
+
 __all__ = [
+    "ServerVAD",
+    "SemanticVAD",
+    "TurnDetection",
     "Agent",
     "AgentMesh",
     "CostTracker",

@@ -72,6 +72,7 @@ from agentfield.run_async import run_coroutine, fire_and_forget
 from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.pydantic_utils import convert_function_args, should_convert_args
+from agentfield.session_turn_detection import TurnDetection
 from agentfield.sessions import (
     RealtimeSession,
     build_session_definition,
@@ -1815,6 +1816,7 @@ class Agent(FastAPI):
         model: Optional[str] = None,
         modalities: Optional[List[str]] = None,
         voice: Optional[str] = None,
+        turn_detection: Optional[TurnDetection] = None,
         tools: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -1823,7 +1825,8 @@ class Agent(FastAPI):
 
         Provider and transport are both explicit; AgentField does not infer or
         switch them. Unsupported combinations fail at declaration time and again
-        at control-plane session start.
+        at control-plane session start. OpenAI sessions default to interruptible
+        server VAD; turn_detection configures detection and response behavior.
         """
 
         definition = build_session_definition(
@@ -1833,6 +1836,7 @@ class Agent(FastAPI):
             model=model,
             modalities=modalities,
             voice=voice,
+            turn_detection=turn_detection,
             tools=tools,
             tags=tags,
             metadata=metadata,
