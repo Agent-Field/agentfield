@@ -529,3 +529,38 @@ func TestStartSessionRejectsTurnDetectionForOpenRouter(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "turn_detection requires")
 }
+
+func TestSessionOfferRejectsInvalidRegisteredTargets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	original := http.DefaultClient.Transport
+	t.Cleanup(func() { http.DefaultClient.Transport = original })
+	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatal("invalid target must not reach the provider")
+		return nil, nil
+	})
+	for _, tc := range []struct {
+		name, target, provider, transport string
+		status                            int
+		message                           string
+	}{
+		{"empty target", "", "openai", "webrtc", http.StatusBadRequest, "session target must be"},
+		{"malformed target", "support", "openai", "webrtc", http.StatusBadRequest, "session target must be"},
+		{"missing session", "support.missing", "openai", "webrtc", http.StatusNotFound, "session not registered"},
+		{"wrong provider", "support.voice", "openrouter", "audio_turns", http.StatusBadRequest, "registered session must use"},
+		{"wrong transport", "support.voice", "openai", "websocket", http.StatusBadRequest, "registered session must use"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := sessionTestAgent()
+			raw := agent.Metadata.Custom["sessions"].([]interface{})[0].(map[string]interface{})
+			raw["provider"], raw["transport"] = tc.provider, tc.transport
+			router := gin.New()
+			router.POST("/:session_id/realtime-offer", SessionRealtimeOfferHandler(&nodeRESTStorageStub{agent: agent}))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+				"/sess-1/realtime-offer?provider=openai&transport=webrtc&target="+url.QueryEscape(tc.target), strings.NewReader("v=0")))
+			require.Equal(t, tc.status, rec.Code, rec.Body.String())
+			require.Contains(t, rec.Body.String(), tc.message)
+		})
+	}
+}
