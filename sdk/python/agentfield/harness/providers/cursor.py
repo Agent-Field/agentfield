@@ -42,16 +42,15 @@ class CursorProvider:
             cmd.extend(["--workspace", root])
 
         # permission_mode -> Cursor's --force / --mode. Unlike codex there is
-        # no sandbox dimension: --force is "act without asking", `--mode plan`
-        # plans without editing, and `--mode ask` would block forever in a
-        # subprocess, so an unset mode maps to plan rather than ask.
+        # no sandbox dimension: --force is "act without asking" and
+        # `--mode plan` plans without editing. Unset leaves `-p` at the CLI's
+        # own default, which has access to every tool, as the other adapters
+        # do. Schema runs depend on that: the agent writes its output file.
         permission_mode = options.get("permission_mode")
         if permission_mode == "plan":
             cmd.extend(["--mode", "plan"])
         elif permission_mode == "auto":
             cmd.append("--force")
-        else:
-            cmd.extend(["--mode", "plan"])
 
         model_value, _variant_value = resolve_model_and_variant(options)
         if model_value:

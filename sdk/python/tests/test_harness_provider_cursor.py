@@ -34,7 +34,8 @@ def _capturing_run_cli(captured: dict[str, Any], stdout: str, returncode: int = 
 
 RESULT_STREAM = (
     '{"type":"system","subtype":"init","session_id":"chat-1"}\n'
-    '{"type":"assistant","content":"working"}\n'
+    '{"type":"assistant","message":{"role":"assistant","content":'
+    '[{"type":"text","text":"working"}]},"session_id":"chat-1"}\n'
     '{"type":"result","subtype":"success","result":"final text",'
     '"session_id":"chat-1","duration_ms":1200}\n'
 )
@@ -167,19 +168,12 @@ async def test_an_empty_resume_id_is_not_passed(monkeypatch: pytest.MonkeyPatch)
     [
         ("auto", ["--force"]),
         ("plan", ["--mode", "plan"]),
-        (None, ["--mode", "plan"]),
     ],
 )
 @pytest.mark.asyncio
 async def test_permission_mode_mapping(
     monkeypatch: pytest.MonkeyPatch, permission_mode, expected
 ):
-    """An unset mode maps to plan, not ask.
-
-    ``--mode ask`` waits for an interactive answer and a subprocess has nobody
-    to give one, so the run would hang until the harness timeout rather than
-    fail. Planning is the safe reading of "no mode stated".
-    """
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
         "agentfield.harness.providers.cursor.run_cli",
@@ -192,6 +186,31 @@ async def test_permission_mode_mapping(
     assert "ask" not in cmd
     start = cmd.index(expected[0])
     assert cmd[start : start + len(expected)] == expected
+
+
+@pytest.mark.parametrize("options", [{}, {"permission_mode": None}])
+@pytest.mark.asyncio
+async def test_an_unset_permission_mode_leaves_the_cli_default(
+    monkeypatch: pytest.MonkeyPatch, options
+):
+    """No ``--mode`` and no ``--force`` when the caller did not ask for one.
+
+    ``-p`` on its own runs with every tool available, which schema runs need:
+    the harness asks the agent to write its output file. ``--mode plan`` would
+    make that impossible, and in headless mode the CLI rejects approval
+    requests rather than waiting on them, so there is no hang to guard against.
+    """
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "agentfield.harness.providers.cursor.run_cli",
+        _capturing_run_cli(captured, RESULT_STREAM),
+    )
+
+    await CursorProvider().execute("hi", options)
+
+    cmd = captured["cmd"]
+    assert "--mode" not in cmd
+    assert "--force" not in cmd
 
 
 @pytest.mark.asyncio

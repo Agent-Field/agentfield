@@ -79,6 +79,7 @@ Python, `agent.HarnessConfig{Provider: "codex"}` in Go).
 | `gemini` | `npm install -g @google/gemini-cli` | None | `gemini` | Gemini login, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
 | `opencode` | `curl -fsSL https://opencode.ai/install \| bash` | `agentfield[harness-opencode]` | `opencode` | Provider credentials configured in OpenCode |
 | `grok` | Install the Grok Build CLI, then `grok login` | None | `grok` | `XAI_API_KEY` |
+| `cursor` | `curl https://cursor.com/install -fsS \| bash` | None | `agent` | `agent login` or `CURSOR_API_KEY` |
 | `pi` | `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` | None | `pi` | Provider login or API key such as `OPENROUTER_API_KEY` |
 | `omp` | `curl -fsSL https://omp.sh/install \| sh` | None | `omp` | Provider login or API key such as `OPENROUTER_API_KEY` |
 
@@ -104,7 +105,8 @@ The pinned build, its download host and the opt-out are documented under
 The extras install Python wrappers. They do not replace the runtime preflight:
 AForge and Gemini are CLI-only, and Codex or OpenCode may still require a
 separately available executable depending on the wrapper and platform. `grok`
-is available in the Python SDK only. Pi and OMP are CLI-only: install their
+and `cursor` are available in the Python SDK only; Cursor's CLI binary is named
+`agent`, not `cursor`. Pi and OMP are CLI-only: install their
 upstream binaries as shown below.
 
 ### AForge adapter contract
