@@ -3,20 +3,26 @@ package agent
 import "reflect"
 
 type SessionDefinition struct {
-	Name         string         `json:"name"`
-	Provider     string         `json:"provider"`
-	Transport    string         `json:"transport"`
-	Model        string         `json:"model,omitempty"`
-	Modalities   []string       `json:"modalities"`
-	Voice        string         `json:"voice,omitempty"`
-	Tools        []string       `json:"tools"`
-	Tags         []string       `json:"tags,omitempty"`
-	ProposedTags []string       `json:"proposed_tags,omitempty"`
-	ApprovedTags []string       `json:"approved_tags,omitempty"`
-	Metadata     map[string]any `json:"metadata"`
+	Name          string         `json:"name"`
+	Provider      string         `json:"provider"`
+	Transport     string         `json:"transport"`
+	Model         string         `json:"model,omitempty"`
+	Modalities    []string       `json:"modalities"`
+	TurnDetection *TurnDetection `json:"turn_detection,omitempty"`
+	Voice         string         `json:"voice,omitempty"`
+	Tools         []string       `json:"tools"`
+	Tags          []string       `json:"tags,omitempty"`
+	ProposedTags  []string       `json:"proposed_tags,omitempty"`
+	ApprovedTags  []string       `json:"approved_tags,omitempty"`
+	Metadata      map[string]any `json:"metadata"`
 }
 
 type SessionOption func(*SessionDefinition)
+
+// WithSessionTurnDetection sets VAD options; RegisterSession validates them.
+func WithSessionTurnDetection(config TurnDetection) SessionOption {
+	return func(s *SessionDefinition) { s.TurnDetection = &config }
+}
 
 func WithSessionModel(model string) SessionOption {
 	return func(s *SessionDefinition) { s.Model = model }
@@ -92,6 +98,10 @@ func (a *Agent) RegisterSession(name string, provider string, transport string, 
 		definition.Metadata = map[string]any{}
 	}
 
+	definition.TurnDetection, err = NormalizeTurnDetection(definition.Provider, definition.Transport, definition.TurnDetection)
+	if err != nil {
+		return err
+	}
 	a.sessions[name] = definition
 	return nil
 }
@@ -112,7 +122,24 @@ func cloneSessionDefinition(session SessionDefinition) SessionDefinition {
 	cloned.ProposedTags = append([]string(nil), session.ProposedTags...)
 	cloned.ApprovedTags = append([]string(nil), session.ApprovedTags...)
 	cloned.Metadata = cloneSessionMetadata(session.Metadata)
+	if session.TurnDetection != nil {
+		config := *session.TurnDetection
+		config.Threshold = cloneSessionPointer(config.Threshold)
+		config.PrefixPaddingMS = cloneSessionPointer(config.PrefixPaddingMS)
+		config.SilenceDurationMS = cloneSessionPointer(config.SilenceDurationMS)
+		config.CreateResponse = cloneSessionPointer(config.CreateResponse)
+		config.InterruptResponse = cloneSessionPointer(config.InterruptResponse)
+		cloned.TurnDetection = &config
+	}
 	return cloned
+}
+
+func cloneSessionPointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 type sessionMetadataCopyReference struct {

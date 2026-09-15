@@ -1185,7 +1185,13 @@ func parseTimeString(value string) (time.Time, error) {
 // is reaped first, which makes its parent childless and eligible on the next
 // sweep, and so on up. Nothing is stuck forever; it just takes one sweep per
 // level.
+// The conditional UPDATE re-evaluates the staleness predicates so a row that
+// gains activity after selection is left alone.
 func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
+	return ls.markStaleExecutions(ctx, staleAfter, limit, nil)
+}
+
+func (ls *LocalStorage) markStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int, afterCandidateSelection func()) (int, error) {
 	if limit <= 0 {
 		return 0, nil
 	}
@@ -1197,6 +1203,7 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 
 	db := ls.requireSQLDB()
 	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	executionUpdateTSExpr := ls.staleTimestampExpr("COALESCE(e.updated_at, e.created_at, e.started_at)")
 	cutoffExpr := ls.staleTimestampExpr("?")
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
@@ -1236,6 +1243,12 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 		return 0, nil
 	}
 
+	// Package tests use this seam to make the candidate-selection-to-update
+	// interleaving deterministic; production callers leave it nil.
+	if afterCandidateSelection != nil {
+		afterCandidateSelection()
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin stale execution transaction: %w", err)
@@ -1243,9 +1256,16 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 	defer rollbackTx(tx, "MarkStaleExecutions")
 
 	updateStmt, err := tx.PrepareContext(ctx, `
-		UPDATE executions
+		UPDATE executions AS e
 		SET status = ?, error_message = ?, completed_at = ?, duration_ms = ?, updated_at = ?
-		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued')`)
+		WHERE e.execution_id = ?
+		  AND e.status IN ('running', 'pending', 'queued')
+		  AND `+executionUpdateTSExpr+` <= `+cutoffExpr+`
+		  AND NOT EXISTS (
+		      SELECT 1 FROM executions c
+		      WHERE c.parent_execution_id = e.execution_id
+		        AND c.status IN ('running', 'pending', 'queued')
+		  )`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare stale execution update: %w", err)
 	}
@@ -1273,6 +1293,7 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 			durationMS,
 			now,
 			rec.id,
+			cutoff,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("update stale execution %s: %w", rec.id, err)
@@ -1295,12 +1316,18 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 }
 
 // MarkStaleWorkflowExecutions updates workflow executions stuck in non-terminal states
-// when their updated_at timestamp exceeds the staleAfter threshold. This catches orphaned
-// child executions whose parent failed without cascading cancellation.
+// when both the workflow and its paired execution activity timestamps exceed the
+// staleAfter threshold. This catches orphaned child executions whose parent failed
+// without cascading cancellation while allowing activity recorded in either table
+// to keep the execution alive.
 //
 // See MarkStaleExecutions for the updated_at invariant, the COALESCE fallback
 // rationale, and why a row with a non-terminal child is skipped rather than reaped.
 func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
+	return ls.markStaleWorkflowExecutions(ctx, staleAfter, limit, nil)
+}
+
+func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, limit int, afterCandidateSelection func()) (int, error) {
 	if limit <= 0 {
 		return 0, nil
 	}
@@ -1311,21 +1338,29 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	cutoff := time.Now().UTC().Add(-staleAfter)
 
 	db := ls.requireSQLDB()
-	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	workflowTSExpr := ls.staleTimestampExpr("COALESCE(w.updated_at, w.created_at, w.started_at)")
+	executionTSExpr := ls.staleTimestampExpr("COALESCE(e.updated_at, e.created_at, e.started_at)")
 	cutoffExpr := ls.staleTimestampExpr("?")
+	// The legacy reaper runs first and makes its row terminal while updating
+	// updated_at. Terminal rows must not shield their still-active workflow row
+	// from this reaper, or the two tables could remain out of sync forever.
 	rows, err := db.QueryContext(ctx, `
-		SELECT execution_id, started_at
+		SELECT w.execution_id, w.started_at
 		FROM workflow_executions w
-		WHERE status IN ('running', 'pending', 'queued', 'waiting')
-		  AND `+tsExpr+` <= `+cutoffExpr+`
-		  AND COALESCE(approval_status, '') != 'pending'
+		LEFT JOIN executions e
+		  ON e.execution_id = w.execution_id
+		 AND e.status IN ('running', 'pending', 'queued', 'waiting')
+		WHERE w.status IN ('running', 'pending', 'queued', 'waiting')
+		  AND `+workflowTSExpr+` <= `+cutoffExpr+`
+		  AND (e.execution_id IS NULL OR `+executionTSExpr+` <= `+cutoffExpr+`)
+		  AND COALESCE(w.approval_status, '') != 'pending'
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
 		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
 		  )
-		ORDER BY `+tsExpr+` ASC
-		LIMIT ?`, cutoff, limit)
+		ORDER BY `+workflowTSExpr+` ASC
+		LIMIT ?`, cutoff, cutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("query stale workflow executions: %w", err)
 	}
@@ -1352,6 +1387,12 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 		return 0, nil
 	}
 
+	// Package tests use this seam to make the candidate-selection-to-update
+	// interleaving deterministic; production callers leave it nil.
+	if afterCandidateSelection != nil {
+		afterCandidateSelection()
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin stale workflow execution transaction: %w", err)
@@ -1359,9 +1400,30 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	defer rollbackTx(tx, "MarkStaleWorkflowExecutions")
 
 	updateStmt, err := tx.PrepareContext(ctx, `
-		UPDATE workflow_executions
+		UPDATE workflow_executions AS w
 		SET status = ?, error_message = ?, completed_at = ?, duration_ms = ?, updated_at = ?
-		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued', 'waiting')`)
+		WHERE w.execution_id = ?
+		  AND w.status IN ('running', 'pending', 'queued', 'waiting')
+		  AND `+workflowTSExpr+` <= `+cutoffExpr+`
+		  AND (
+		      NOT EXISTS (
+		          SELECT 1 FROM executions e
+		          WHERE e.execution_id = w.execution_id
+		            AND e.status IN ('running', 'pending', 'queued', 'waiting')
+		      )
+		      OR EXISTS (
+		          SELECT 1 FROM executions e
+		          WHERE e.execution_id = w.execution_id
+		            AND e.status IN ('running', 'pending', 'queued', 'waiting')
+		            AND `+executionTSExpr+` <= `+cutoffExpr+`
+		      )
+		  )
+		  AND COALESCE(w.approval_status, '') != 'pending'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM workflow_executions c
+		      WHERE c.parent_execution_id = w.execution_id
+		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
+		  )`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare stale workflow execution update: %w", err)
 	}
@@ -1399,6 +1461,8 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 			durationMS,
 			now,
 			rec.id,
+			cutoff,
+			cutoff,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("update stale workflow execution %s: %w", rec.id, err)

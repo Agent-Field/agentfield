@@ -21,7 +21,7 @@ func ResolveProviderName(name string) string {
 
 // BuildProvider creates a Provider instance for the given provider name.
 // Supported providers: "aforge", "claude-code", "codex", "gemini",
-// "opencode", "pi", "omp".
+// "opencode", "pi", "omp", "cursor".
 func BuildProvider(name string, binPath string) (Provider, error) {
 	name = ResolveProviderName(name)
 	switch name {
@@ -39,10 +39,12 @@ func BuildProvider(name string, binPath string) (Provider, error) {
 		return NewPiProvider(binPath), nil
 	case ProviderOMP:
 		return NewOMPProvider(binPath), nil
+	case ProviderCursor:
+		return NewCursorProvider(binPath), nil
 	default:
 		return nil, fmt.Errorf(
-			"unknown harness provider: %q (supported: %s, %s, %s, %s, %s, %s, %s)",
-			name, ProviderAforge, ProviderClaudeCode, ProviderCodex, ProviderGemini, ProviderOpenCode, ProviderPi, ProviderOMP,
+			"unknown harness provider: %q (supported: %s, %s, %s, %s, %s, %s, %s, %s)",
+			name, ProviderAforge, ProviderClaudeCode, ProviderCodex, ProviderGemini, ProviderOpenCode, ProviderPi, ProviderOMP, ProviderCursor,
 		)
 	}
 }

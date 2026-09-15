@@ -72,6 +72,7 @@ from agentfield.run_async import run_coroutine, fire_and_forget
 from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.pydantic_utils import convert_function_args, should_convert_args
+from agentfield.session_turn_detection import TurnDetection
 from agentfield.sessions import (
     RealtimeSession,
     build_session_definition,
@@ -1815,6 +1816,7 @@ class Agent(FastAPI):
         model: Optional[str] = None,
         modalities: Optional[List[str]] = None,
         voice: Optional[str] = None,
+        turn_detection: Optional[TurnDetection] = None,
         tools: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -1823,7 +1825,8 @@ class Agent(FastAPI):
 
         Provider and transport are both explicit; AgentField does not infer or
         switch them. Unsupported combinations fail at declaration time and again
-        at control-plane session start.
+        at control-plane session start. OpenAI sessions default to interruptible
+        server VAD; turn_detection configures detection and response behavior.
         """
 
         definition = build_session_definition(
@@ -1833,6 +1836,7 @@ class Agent(FastAPI):
             model=model,
             modalities=modalities,
             voice=voice,
+            turn_detection=turn_detection,
             tools=tools,
             tags=tags,
             metadata=metadata,
@@ -2230,6 +2234,15 @@ class Agent(FastAPI):
                         trigger_bindings=handler_trigger_bindings,
                     )
 
+                async def handle_input_error(awaitable: Awaitable[Any]) -> Any:
+                    try:
+                        return await awaitable
+                    except _HandlerInputError as e:
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": e.safe_message},
+                        )
+
                 execution_id_header = request.headers.get("X-Execution-ID")
                 if execution_id_header and self.agentfield_server:
                     task = asyncio.create_task(
@@ -2278,7 +2291,7 @@ class Agent(FastAPI):
                             self, execution_id_header, sync_task
                         )
                         try:
-                            result = await sync_task
+                            result = await handle_input_error(sync_task)
                             return self._wrap_sync_result_with_usage(
                                 result, sync_tracker
                             )
@@ -2294,7 +2307,7 @@ class Agent(FastAPI):
                         finally:
                             await deregister_execution(self, execution_id_header)
 
-                    result = await run_reasoner()
+                    result = await handle_input_error(run_reasoner())
                     return self._wrap_sync_result_with_usage(result, sync_tracker)
                 finally:
                     reset_current_cost_tracker(usage_token)
@@ -3263,7 +3276,37 @@ class Agent(FastAPI):
                             content={"detail": e.safe_message},
                         )
 
-                # Extract execution context from request headers
+                # Use validated input directly (already a dict)
+                input_payload = validated_input
+
+                # 🔥 NEW: Automatic Pydantic model conversion (FastAPI-like behavior)
+                # Use the original function for type hint inspection
+                original_func = getattr(func, "_original_func", func)
+                try:
+                    if should_convert_args(original_func):
+                        _converted_args, converted_kwargs = convert_function_args(
+                            original_func, (), input_payload
+                        )
+                        kwargs = converted_kwargs
+                    else:
+                        kwargs = dict(input_payload)
+                except ValidationError:
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "detail": f"Pydantic validation failed for skill '{skill_id}'"
+                        },
+                    )
+                except Exception as e:
+                    # Log conversion errors but continue with original args for backward compatibility
+                    if self.dev_mode:
+                        log_warn(
+                            f"Failed to convert arguments for skill '{skill_id}': {e}"
+                        )
+                    kwargs = dict(input_payload)
+
+                # Extract execution context from request headers only after
+                # conversion succeeds, so an early 422 cannot leak context.
                 execution_context = ExecutionContext.from_request(request, self.node_id)
 
                 # Store current context for use in app.call()
@@ -3290,34 +3333,6 @@ class Agent(FastAPI):
                     self._populate_execution_context_with_did(
                         execution_context, did_execution_context
                     )
-
-                # Use validated input directly (already a dict)
-                input_payload = validated_input
-
-                # 🔥 NEW: Automatic Pydantic model conversion (FastAPI-like behavior)
-                # Use the original function for type hint inspection
-                original_func = getattr(func, "_original_func", func)
-                try:
-                    if should_convert_args(original_func):
-                        _converted_args, converted_kwargs = convert_function_args(
-                            original_func, (), input_payload
-                        )
-                        kwargs = converted_kwargs
-                    else:
-                        kwargs = dict(input_payload)
-                except ValidationError as e:
-                    # Convert Pydantic validation error to safe _HandlerInputError
-                    # to prevent potential stack trace exposure in 422 responses.
-                    raise _HandlerInputError(
-                        f"Pydantic validation failed for skill '{skill_id}'"
-                    ) from e
-                except Exception as e:
-                    # Log conversion errors but continue with original args for backward compatibility
-                    if self.dev_mode:
-                        log_warn(
-                            f"Failed to convert arguments for skill '{skill_id}': {e}"
-                        )
-                    kwargs = dict(input_payload)
 
                 # Inject execution context if the function accepts it
                 if "execution_context" in sig.parameters:

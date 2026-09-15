@@ -30,5 +30,6 @@ export * from './usage/costTracker.js';
 export * from './status/ExecutionStatus.js';
 export * from './approval/ApprovalClient.js';
 export * from './sessionTransport.js';
+export * from './sessionTurnDetection.js';
 export * from './session.js';
 export * from './triggers/index.js';

@@ -374,12 +374,10 @@ async def _execute_with_tracking(
                 )
                 args = converted_args  # type: ignore[assignment]
                 call_kwargs = converted_kwargs
-        except ValidationError as e:
-            # Re-raise validation errors with context
-            raise ValidationError(
-                f"Pydantic validation failed for reasoner '{func.__name__}': {e}",
-                model=getattr(e, "model", None),
-            ) from e
+        except ValidationError:
+            # Pydantic owns ValidationError construction; preserve the original
+            # exception so callers can identify and handle validation failures.
+            raise
         except Exception as e:
             # Log conversion errors but continue with original args for backward compatibility
             if hasattr(agent_instance, "dev_mode") and agent_instance.dev_mode:

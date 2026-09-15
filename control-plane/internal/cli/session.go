@@ -31,6 +31,7 @@ type sessionToolOptions struct {
 }
 
 type sessionOfferOptions struct {
+	target       string
 	provider     string
 	transport    string
 	sdpSource    string
@@ -113,6 +114,7 @@ func newSessionOfferCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.provider, "provider", "", "Explicit session provider")
 	cmd.Flags().StringVar(&opts.transport, "transport", "", "Explicit session transport")
+	cmd.Flags().StringVar(&opts.target, "target", "", "Registered <node>.<session> whose turn detection settings to use")
 	cmd.Flags().StringVar(&opts.sdpSource, "sdp", "", "SDP offer as inline text, @path, or - for stdin; defaults to stdin")
 	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", "raw", "Output format: raw, json, pretty, yaml")
 	return cmd
@@ -132,6 +134,9 @@ func runSessionOffer(ctx context.Context, sessionID string, opts *sessionOfferOp
 	}
 	if strings.TrimSpace(opts.transport) != "" {
 		values.Set("transport", opts.transport)
+	}
+	if strings.TrimSpace(opts.target) != "" {
+		values.Set("target", opts.target)
 	}
 	path := "/api/v1/session-instances/" + url.PathEscape(sessionID) + "/realtime-offer"
 	if encoded := values.Encode(); encoded != "" {

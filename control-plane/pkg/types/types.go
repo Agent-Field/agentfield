@@ -248,17 +248,19 @@ type SkillDefinition struct {
 
 // SessionDefinition defines a realtime session ingress provided by an agent node.
 type SessionDefinition struct {
-	Name         string                 `json:"name"`
-	Provider     string                 `json:"provider"`
-	Transport    string                 `json:"transport"`
-	Model        string                 `json:"model,omitempty"`
-	Modalities   []string               `json:"modalities,omitempty"`
-	Voice        string                 `json:"voice,omitempty"`
-	Tools        []string               `json:"tools,omitempty"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
-	Tags         []string               `json:"tags,omitempty"`
-	ProposedTags []string               `json:"proposed_tags,omitempty"`
-	ApprovedTags []string               `json:"approved_tags,omitempty"`
+	// Keep raw options until validation so unknown or malformed fields are rejected explicitly.
+	TurnDetection json.RawMessage        `json:"turn_detection,omitempty"`
+	Name          string                 `json:"name"`
+	Provider      string                 `json:"provider"`
+	Transport     string                 `json:"transport"`
+	Model         string                 `json:"model,omitempty"`
+	Modalities    []string               `json:"modalities,omitempty"`
+	Voice         string                 `json:"voice,omitempty"`
+	Tools         []string               `json:"tools,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	Tags          []string               `json:"tags,omitempty"`
+	ProposedTags  []string               `json:"proposed_tags,omitempty"`
+	ApprovedTags  []string               `json:"approved_tags,omitempty"`
 }
 
 // HydrateAgentSessions copies session definitions from metadata.custom.sessions

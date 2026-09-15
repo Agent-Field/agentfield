@@ -1,6 +1,67 @@
 package agent
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestAgentSessionDefinitionsDetachesTurnDetection(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, transport string
+		config                    *TurnDetection
+	}{
+		{name: "defaults", provider: "openai", transport: "webrtc"},
+		{name: "explicit zero and false", provider: "openai", transport: "websocket", config: &TurnDetection{
+			Type: "server_vad", Threshold: turnDetectionTestPtr(0.0),
+			PrefixPaddingMS: turnDetectionTestPtr(0), SilenceDurationMS: turnDetectionTestPtr(0),
+			CreateResponse: turnDetectionTestPtr(false), InterruptResponse: turnDetectionTestPtr(false),
+		}},
+		{name: "semantic", provider: "openai", transport: "webrtc", config: &TurnDetection{Type: "semantic_vad", Eagerness: "low"}},
+		{name: "no turn detection", provider: "openrouter", transport: "audio_turns"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, err := New(Config{NodeID: "support", Version: "v1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var opts []SessionOption
+			if tc.config != nil {
+				opts = append(opts, WithSessionTurnDetection(*tc.config))
+			}
+			if err := a.RegisterSession("voice", tc.provider, tc.transport, opts...); err != nil {
+				t.Fatal(err)
+			}
+			want, err := json.Marshal(a.sessions["voice"].TurnDetection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := a.SessionDefinitions()[0]
+			if config := snapshot.TurnDetection; config != nil {
+				config.Type = "mutated"
+				config.Eagerness = "mutated"
+				if config.Threshold != nil {
+					*config.Threshold = 1
+				}
+				if config.PrefixPaddingMS != nil {
+					*config.PrefixPaddingMS = 999
+				}
+				if config.SilenceDurationMS != nil {
+					*config.SilenceDurationMS = 999
+				}
+				*config.CreateResponse = !*config.CreateResponse
+				*config.InterruptResponse = !*config.InterruptResponse
+			}
+			got, err := json.Marshal(a.SessionDefinitions()[0].TurnDetection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("snapshot mutation changed registered session: got %s, want %s", got, want)
+			}
+		})
+	}
+}
 
 func TestAgentRegisterSessionStoresExplicitDefinition(t *testing.T) {
 	a, err := New(Config{NodeID: "support", Version: "v1"})
@@ -136,5 +197,37 @@ func TestAgentSessionDefinitionsPreservesOverlappingSliceLengths(t *testing.T) {
 	}
 	if got := len(metadata["head"].([]any)); got != 1 {
 		t.Errorf("len(head) = %d, want 1", got)
+	}
+}
+
+func TestAgentRegisterSessionTurnDetection(t *testing.T) {
+	a, err := New(Config{NodeID: "support", Version: "v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = a.RegisterSession("voice", "OpenAI", "WebRTC", WithSessionTurnDetection(TurnDetection{
+		Type: "server_vad", Threshold: turnDetectionTestPtr(0.0), InterruptResponse: turnDetectionTestPtr(false),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(a.SessionDefinitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{`"turn_detection":`, `"threshold":0`, `"interrupt_response":false`} {
+		if !strings.Contains(string(body), value) {
+			t.Fatalf("missing %s in %s", value, body)
+		}
+	}
+	err = a.RegisterSession("invalid", "openai", "webrtc", WithSessionTurnDetection(TurnDetection{
+		Type: "semantic_vad", Threshold: turnDetectionTestPtr(0.5),
+	}))
+	if err == nil || len(a.SessionDefinitions()) != 1 {
+		t.Fatal("invalid registration must not change registry")
+	}
+	err = a.RegisterSession("invalid", "openrouter", "audio_turns", WithSessionTurnDetection(TurnDetection{Type: "server_vad"}))
+	if err == nil {
+		t.Fatal("expected unsupported provider error")
 	}
 }

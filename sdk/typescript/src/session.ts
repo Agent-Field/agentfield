@@ -1,4 +1,5 @@
 import { validateSessionTransport } from './sessionTransport.js';
+import { normalizeTurnDetection, type TurnDetection } from './sessionTurnDetection.js';
 
 export interface SessionDefinition {
   name: string;
@@ -7,6 +8,7 @@ export interface SessionDefinition {
   model?: string;
   modalities: string[];
   voice?: string;
+  turn_detection?: TurnDetection;
   tools: string[];
   tags: string[];
   proposed_tags: string[];
@@ -20,6 +22,7 @@ export interface SessionOptions {
   model?: string;
   modalities?: string[];
   voice?: string;
+  turn_detection?: TurnDetection;
   tools?: string[];
   tags?: string[];
   metadata?: Record<string, unknown>;
@@ -57,6 +60,7 @@ export function buildSessionDefinition(name: string, options: SessionOptions): S
     model: options.model,
     modalities: options.modalities ?? ['audio', 'text'],
     voice: options.voice,
+    turn_detection: normalizeTurnDetection(capability.provider, capability.transport, options.turn_detection),
     tools: options.tools ?? [],
     tags: options.tags ?? [],
     proposed_tags: options.tags ?? [],

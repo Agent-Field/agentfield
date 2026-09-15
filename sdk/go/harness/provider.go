@@ -17,6 +17,8 @@ const (
 	ProviderPi = "pi"
 	// ProviderOMP is the provider name for the Oh My Pi coding-agent CLI.
 	ProviderOMP = "omp"
+	// ProviderCursor is the provider name for the Cursor CLI (`agent`).
+	ProviderCursor = "cursor"
 )
 
 const (
@@ -41,7 +43,7 @@ type Provider interface {
 // zero values mean "use default".
 type Options struct {
 	// Provider name: "aforge", "opencode", "claude-code", "codex",
-	// "gemini", "pi", or "omp". An explicit value wins over
+	// "gemini", "pi", "omp", or "cursor". An explicit value wins over
 	// AGENTFIELD_HARNESS_PROVIDER; when both are empty, the provider
 	// defaults to "aforge".
 	Provider string

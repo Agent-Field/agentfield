@@ -168,3 +168,8 @@ agent.reasoner<{ task: string }, { status: string }>('deploy', async (ctx) => {
 **Methods:** `requestApproval()`, `getApprovalStatus()`, `waitForApproval()`
 
 See `examples/ts-node-examples/waiting-state/` for a complete working example.
+
+## Realtime session turn detection
+
+See [session turn detection and interruption](../../docs/session-turn-detection.md)
+for VAD configuration, defaults, validation, and the WebRTC connection flow.

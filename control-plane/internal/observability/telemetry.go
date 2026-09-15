@@ -28,7 +28,20 @@ import (
 const (
 	defaultTelemetryQueueSize = 256
 	telemetrySubscriberID     = "anonymous-oss-telemetry"
-	telemetrySchemaVersion    = 2
+
+	// The hosted relay accepts only schema versions 1 and 2
+	// (app/api/oss/telemetry/route.ts in Agent-Field/website2.0). It rejects a
+	// payload declaring anything else whole with HTTP 400 before ingest, so do
+	// not bump this until a relay accepting the new version is deployed.
+	telemetrySchemaVersion = 2
+
+	// telemetryReportedCapacity bounds the set of terminal outcomes this
+	// process remembers having already reported. An execution's outcome is
+	// reported once and never revisited, so the set only needs to span the
+	// window in which a duplicate can still arrive (an SDK's bounded callback
+	// retries, seconds at most). 8192 covers that with room to spare while
+	// keeping the footprint fixed on a control plane that runs for months.
+	telemetryReportedCapacity = 8192
 )
 
 var telemetryVersionPattern = regexp.MustCompile(`^v?[0-9]+(?:\.[0-9]+){0,3}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
@@ -52,14 +65,17 @@ type telemetrySender func(context.Context, string, time.Duration, TelemetryEvent
 // TelemetryService subscribes to internal event buses and forwards anonymous,
 // low-cardinality usage events. It never forwards raw event payloads.
 type TelemetryService struct {
-	cfg         config.TelemetryConfig
-	storageMode string
-	installHash string
-	eventIDKey  []byte
-	runtimeName string
-	version     string
-	timeout     time.Duration
-	sender      telemetrySender
+	cfg          config.TelemetryConfig
+	storageMode  string
+	installHash  string
+	eventIDKey   []byte
+	runtimeName  string
+	usageContext string
+	version      string
+	timeout      time.Duration
+	sender       telemetrySender
+
+	reported telemetryReportedSet
 
 	queue  chan TelemetryEvent
 	ctx    context.Context
@@ -93,16 +109,19 @@ func NewTelemetryService(cfg config.TelemetryConfig, agentfieldHome, storageMode
 		return nil, err
 	}
 
+	runtimeName := detectRuntime()
+
 	return &TelemetryService{
-		cfg:         cfg,
-		storageMode: normalizeStorageMode(storageMode),
-		installHash: hashInstallID(installID),
-		eventIDKey:  eventIdentityKey(installID),
-		runtimeName: detectRuntime(),
-		version:     emptyTo(version, "unknown"),
-		timeout:     timeout,
-		sender:      sendTelemetryEvent,
-		queue:       make(chan TelemetryEvent, defaultTelemetryQueueSize),
+		cfg:          cfg,
+		storageMode:  normalizeStorageMode(storageMode),
+		installHash:  hashInstallID(installID),
+		eventIDKey:   eventIdentityKey(installID),
+		runtimeName:  runtimeName,
+		usageContext: detectUsageContext(runtimeName),
+		version:      emptyTo(version, "unknown"),
+		timeout:      timeout,
+		sender:       sendTelemetryEvent,
+		queue:        make(chan TelemetryEvent, defaultTelemetryQueueSize),
 	}, nil
 }
 
@@ -171,7 +190,7 @@ func detectRuntime() string {
 
 func detectUsageContext(runtimeName string) string {
 	for _, key := range []string{"CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE", "CIRCLECI", "JENKINS_URL"} {
-		if os.Getenv(key) != "" {
+		if isTruthyEnvValue(os.Getenv(key)) {
 			return "ci"
 		}
 	}
@@ -180,6 +199,17 @@ func detectUsageContext(runtimeName string) string {
 		return "server"
 	default:
 		return "dev_or_local"
+	}
+}
+
+// CI providers and users commonly set variables to false to explicitly turn
+// off CI behaviour, so presence alone must not classify the process as CI.
+func isTruthyEnvValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
 
@@ -195,10 +225,9 @@ func (s *TelemetryService) Start(ctx context.Context) {
 	go s.subscribeExecutionEvents()
 
 	s.Enqueue("control_plane_started", map[string]interface{}{
-		"go_version":    runtime.Version(),
-		"go_os":         runtime.GOOS,
-		"go_arch":       runtime.GOARCH,
-		"usage_context": detectUsageContext(s.runtimeName),
+		"go_version": runtime.Version(),
+		"go_os":      runtime.GOOS,
+		"go_arch":    runtime.GOARCH,
 	})
 	logger.Logger.Info().Msg("anonymous OSS telemetry enabled")
 }
@@ -219,9 +248,9 @@ func (s *TelemetryService) Enqueue(eventName string, properties map[string]inter
 	s.enqueue(eventName, properties, "")
 }
 
-func (s *TelemetryService) enqueue(eventName string, properties map[string]interface{}, identityMaterial string) {
+func (s *TelemetryService) enqueue(eventName string, properties map[string]interface{}, identityMaterial string) bool {
 	if s == nil {
-		return
+		return false
 	}
 	event := TelemetryEvent{
 		SchemaVersion:          telemetrySchemaVersion,
@@ -232,16 +261,38 @@ func (s *TelemetryService) enqueue(eventName string, properties map[string]inter
 		AgentFieldVersion:      s.version,
 		Runtime:                s.runtimeName,
 		StorageMode:            normalizeStorageMode(s.storageMode),
-		Properties:             sanitizeProperties(properties),
+		Properties:             s.withUsageContext(sanitizeProperties(properties)),
 	}
 	if identityMaterial != "" && len(s.eventIDKey) != 0 {
 		event.EventID = s.eventIdentity(eventName, identityMaterial)
 	}
 	select {
 	case s.queue <- event:
+		return true
 	default:
 		logger.Logger.Debug().Str("event", eventName).Msg("anonymous telemetry queue full; dropping event")
+		return false
 	}
+}
+
+// withUsageContext stamps every event with where this control plane is
+// running: "ci", "server", or "dev_or_local".
+//
+// It belongs on every event, not just control_plane_started. A CI job starts
+// the control plane on a fresh volume, so it mints a new install ID and its
+// executions are indistinguishable from a real first-time user's — and with
+// the context carried only by the startup event, no downstream query could
+// separate the two after the fact. Stamping it here is what makes
+// execution_completed (and every other event) filterable at the source.
+func (s *TelemetryService) withUsageContext(props map[string]interface{}) map[string]interface{} {
+	if s.usageContext == "" {
+		return props
+	}
+	if props == nil {
+		props = make(map[string]interface{}, 1)
+	}
+	props["usage_context"] = s.usageContext
+	return props
 }
 
 // eventIdentity returns a stable, opaque identifier suitable for idempotent
@@ -345,7 +396,8 @@ func (s *TelemetryService) handleExecutionEvent(event events.ExecutionEvent) {
 		props["outcome"] = outcome
 	}
 	identityMaterial := ""
-	if hasStableCallbackIdentity(event, outcome) {
+	stable := hasStableCallbackIdentity(event, outcome)
+	if stable {
 		identityMaterial = event.ExecutionID
 	} else {
 		// Updated/timeout transitions can legitimately recur (for example,
@@ -357,7 +409,91 @@ func (s *TelemetryService) handleExecutionEvent(event events.ExecutionEvent) {
 		}
 	}
 	identityMaterial += "\x00" + outcome
-	s.enqueue(eventName, props, identityMaterial)
+
+	// An execution reaches a given terminal outcome once, so a second event
+	// for one is a re-publish, not a second execution. The bus has produced
+	// those before — a status callback re-delivered after a lost 200 used to
+	// re-run every side effect, publishing another completed event and
+	// counting the execution again — and it stays one refactor away from
+	// producing them again. Suppressing here keeps a republish from becoming
+	// an inflated count even if the ingest side ignores telemetry_event_id.
+	//
+	// Only stable identities are eligible: the random ones above belong to
+	// transitions that are allowed to recur, and collapsing those would lose
+	// real events.
+	key := eventName + "\x00" + identityMaterial
+	if stable && s.reported.observe(key) {
+		logger.Logger.Warn().
+			Str("event", eventName).
+			Msg("anonymous telemetry: duplicate terminal lifecycle event published for one execution; not sending again")
+		return
+	}
+	// observe is an atomic test-and-set and must happen before enqueue to keep
+	// concurrent republishes to at most one report. If backpressure drops that
+	// report, release the key so a later republish can still deliver it.
+	if !s.enqueue(eventName, props, identityMaterial) && stable {
+		s.reported.forget(key)
+	}
+}
+
+// telemetryReportedSet remembers which terminal outcomes have already been
+// reported, so a republished lifecycle event cannot count twice.
+//
+// Capacity is fixed: insertion past the limit evicts the oldest key, which is
+// the right trade for a process that may run for months. A duplicate arrives
+// within seconds of the original, so an eviction can only ever drop a key long
+// past the window in which it could still suppress anything.
+//
+// The zero value is usable and allocates on first observe, so suppression is
+// not something a caller can forget to wire up.
+//
+// Keys are built from raw execution IDs and never leave the process — only the
+// HMAC in eventIdentity is ever sent.
+type telemetryReportedSet struct {
+	mu       sync.Mutex
+	capacity int
+	seen     map[string]int
+	order    []string
+	next     int
+}
+
+// observe records key and reports whether it had already been seen.
+func (s *telemetryReportedSet) observe(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.seen == nil {
+		capacity := s.capacity
+		if capacity <= 0 {
+			capacity = telemetryReportedCapacity
+		}
+		s.seen = make(map[string]int, capacity)
+		s.order = make([]string, capacity)
+	}
+	if _, ok := s.seen[key]; ok {
+		return true
+	}
+	if evicted := s.order[s.next]; evicted != "" {
+		delete(s.seen, evicted)
+	}
+	s.order[s.next] = key
+	s.seen[key] = s.next
+	s.next = (s.next + 1) % len(s.order)
+	return false
+}
+
+// forget makes a dropped key eligible to be observed again while keeping the
+// membership map and eviction ring in sync.
+func (s *telemetryReportedSet) forget(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, ok := s.seen[key]
+	if !ok {
+		return
+	}
+	if s.order[idx] == key {
+		s.order[idx] = ""
+	}
+	delete(s.seen, key)
 }
 
 func hasStableCallbackIdentity(event events.ExecutionEvent, outcome string) bool {

@@ -91,7 +91,12 @@ from .tool_calling import (
     capabilities_to_tool_schemas,
 )
 
+from .session_turn_detection import ServerVAD, SemanticVAD, TurnDetection
+
 __all__ = [
+    "ServerVAD",
+    "SemanticVAD",
+    "TurnDetection",
     "Agent",
     "AgentMesh",
     "CostTracker",
@@ -187,4 +192,4 @@ __all__ = [
     "reasoner",
 ]
 
-__version__ = "0.1.138-rc.12"
+__version__ = "0.1.139-rc.2"

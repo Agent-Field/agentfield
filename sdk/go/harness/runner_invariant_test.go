@@ -185,6 +185,7 @@ func TestInvariant_Runner_ProviderFactoryExhaustiveness(t *testing.T) {
 		ProviderOpenCode,
 		ProviderPi,
 		ProviderOMP,
+		ProviderCursor,
 	}
 
 	for _, name := range knownProviders {
@@ -220,7 +221,6 @@ func TestInvariant_Runner_ProviderFactoryUnknownReturnsError(t *testing.T) {
 		"gpt-4",
 		"anthropic",
 		"openai",
-		"cursor",
 	}
 
 	for _, name := range unknownNames {

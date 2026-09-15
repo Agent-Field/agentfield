@@ -6,6 +6,398 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.139-rc.2] - 2026-09-15
+
+
+### Added
+
+- Feat(go-sdk): add Cursor CLI harness provider (#293) (#1057)
+
+* feat(go-sdk): add Cursor CLI harness provider
+
+Closes #293 (part of epic #291). Adds CursorProvider to the Go SDK
+harness, following the same pattern as the existing codex/gemini
+providers.
+
+- cursor.go: CursorProvider runs 'agent -p --force --trust
+  --output-format json <prompt>', mapping ProjectDir/Cwd to --workspace,
+  Model (with #variant stripped) to --model, ResumeSessionID to
+  --resume, and PermissionMode=plan to --mode plan. Parses the single
+  JSON result object for result text and session_id, with a raw-text
+  fallback for non-JSON stdout. Standard missing-binary, timeout, and
+  non-zero-exit handling via the shared RunCLI.
+- provider.go: add ProviderCursor = "cursor" constant.
+- factory.go: register cursor in BuildProvider.
+- cursor_test.go: 15 tests using an injectable runCLI (no real
+  subprocess), covering execution, JSON parsing, session resume,
+  timeout, missing binary, flag wiring, and error classification.
+  Coverage on cursor.go: NewCursorProvider 100%, Execute 94.1%,
+  parseJSONOutput 100%.
+
+* test(go-sdk): update provider invariants for registered cursor provider
+
+Registering cursor as a known provider broke three existing harness
+tests that hardcoded the provider set:
+- runner_invariant_test.go: remove "cursor" from the unknown-names
+  list (it now resolves) and add ProviderCursor to the exhaustiveness
+  list of known providers.
+- factory_test.go: include "cursor" in the expected BuildProvider
+  error-message provider list.
+
+These were masked locally by pre-existing Windows-only shell-script
+test failures; CI (Linux) surfaced them. (2e6c575)
+
+
+
+### Fixed
+
+- Fix(sessions): expose turn detection and barge-in configuration across SDKs (#1056)
+
+* fix(sessions): expose validated turn detection across SDKs
+
+Signed-off-by: WANG Qingmin <75425799+FriendlyPasser@users.noreply.github.com>
+
+* test(sessions): cover config parsing and invalid offer targets
+
+Signed-off-by: WANG Qingmin <75425799+FriendlyPasser@users.noreply.github.com>
+
+---------
+
+Signed-off-by: WANG Qingmin <75425799+FriendlyPasser@users.noreply.github.com> (9e69229)
+
+## [0.1.139-rc.1] - 2026-09-10
+
+
+### Fixed
+
+- Fix(go-sdk): make harness schema path tests OS-portable (#1049)
+
+TestOutputPath and TestSchemaPath asserted hardcoded Unix path
+separators (/tmp/...), so they failed on Windows where filepath.Join
+produces backslash separators. Assert against filepath.Join with the
+existing filename constants so the expected value is computed the same
+way the production code computes it.
+
+Go SDK CI runs only on ubuntu-latest, so these failures surfaced only
+in local Windows development. The change is a no-op on Linux (Join
+yields the identical string) and a fix on Windows. (10aa43c)
+
+## [0.1.138] - 2026-09-09
+
+## [0.1.138-rc.16] - 2026-09-09
+
+
+### Chores
+
+- Chore(deps): bump @ai-sdk/provider-utils from 4.0.23 to 4.0.50 in /desktop in the npm_and_yarn group across 1 directory (#1045)
+
+* chore(deps): bump @ai-sdk/provider-utils
+
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [@ai-sdk/provider-utils](https://github.com/vercel/ai/tree/HEAD/packages/provider-utils).
+
+
+Updates `@ai-sdk/provider-utils` from 4.0.23 to 4.0.50
+- [Release notes](https://github.com/vercel/ai/releases)
+- [Changelog](https://github.com/vercel/ai/blob/@ai-sdk/provider-utils@4.0.50/packages/provider-utils/CHANGELOG.md)
+- [Commits](https://github.com/vercel/ai/commits/@ai-sdk/provider-utils@4.0.50/packages/provider-utils)
+
+---
+updated-dependencies:
+- dependency-name: "@ai-sdk/provider-utils"
+  dependency-version: 4.0.50
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+* chore(deps): narrow provider-utils bump to its own dependency subtree
+
+Dependabot's refresh also rewrote desktop/package-lock.json, but that lockfile
+contains no @ai-sdk packages at all -- its only change was an unrelated
+browserslist 4.28.8 -> 4.28.9 dev-dependency drift. Revert it so the PR carries
+only the security fix.
+
+sdk/typescript/package-lock.json is kept as dependabot generated it. Every
+@ai-sdk/* adapter and `ai` pins @ai-sdk/provider-utils to an *exact* version --
+no caret, no tilde -- in every one of their published releases, so the package
+cannot be moved on its own: `npm update @ai-sdk/provider-utils
+--package-lock-only` against the base lockfile is a verified no-op. Regenerating
+from the base with a scoped `npm update` of only the direct AI dependencies
+reproduces this same resolution, and every package that moves is a forced
+consequence of that exact-pin chain (see the PR discussion for the per-package
+breakdown).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (d2fad28)
+
+## [0.1.138-rc.15] - 2026-09-09
+
+
+### Fixed
+
+- Fix(storage): workflow reaper consults execution activity clock (#1046)
+
+* fix(storage): honor execution activity in workflow reaper
+
+* fix(storage): guard stale workflow update against activity race
+
+* fix(storage): re-check staleness in the execution reaper update
+
+MarkStaleWorkflowExecutions now repeats its candidate predicates in the
+conditional UPDATE, but MarkStaleExecutions still only re-checked status.
+A heartbeat that lands between its candidate selection and that UPDATE
+therefore still flips a live execution row to timeout — the same false
+timeout the workflow reaper just stopped producing, through a narrower
+window (its candidate query reads the clock the heartbeat writes, so the
+race is the millisecond gap between the two statements rather than the
+whole run).
+
+Give it the same treatment: the conditional UPDATE re-evaluates the
+activity clock against the sweep cutoff and the non-terminal-child guard,
+and the body moves behind the same post-selection seam the workflow reaper
+uses so the interleaving is testable without sleeps.
+
+Tests: a real execution-note write landing in that window leaves the row
+running with its note intact; a seam that writes nothing still reaps the
+silent row with the existing "no activity" message.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (78215f1)
+
+- Fix(telemetry): report each terminal outcome once and stamp usage_context on every event (#954)
+
+* fix(telemetry): report each terminal outcome once and stamp usage_context on every event
+
+Two defects let execution_completed count things that were not executions.
+
+Duplicate lifecycle events were forwarded verbatim. A terminal status callback
+re-delivered after a lost 200 used to re-run every side effect, publishing a
+second completed event for an execution that had already been reported (#951
+closed that path in the handler; the SDKs retry a callback up to five times, so
+one execution could report several). The telemetry client had no defense of its
+own: it minted a stable telemetry_event_id and left deduplication entirely to
+the ingest side. It now remembers the terminal outcomes it has reported and
+drops a repeat, so a republished event cannot inflate a count regardless of what
+ingest does with the event ID. Only stable identities are eligible — the random
+ones belong to transitions allowed to recur, such as timeout -> running ->
+timeout, and collapsing those would lose real events. The set is bounded at 8192
+keys with oldest-first eviction; a duplicate arrives within seconds, so eviction
+can only drop keys long past the window where they could suppress anything.
+
+usage_context rode only on control_plane_started. A CI job starts the control
+plane on a fresh volume, so it mints a new install ID and its executions look
+exactly like a real first-time user's — and with the context on the startup
+event alone, nothing downstream could separate them after ingestion. Disabling
+telemetry for the functional-test compose stacks was a fix for one known
+producer; this makes every producer distinguishable at the source. It is now
+stamped on every event, so execution_completed can be filtered to
+dev_or_local/server and CI traffic excluded.
+
+Schema version goes to 3 so the ingest side can tell a build that stamps
+usage_context everywhere from one that does not, and know when the filter is
+trustworthy.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(telemetry): keep the schema version the hosted relay accepts
+
+The relay validates telemetry_schema_version strictly: it accepts only
+1 or 2 (app/api/oss/telemetry/route.ts in Agent-Field/website2.0) and
+returns 400 invalid_telemetry_event for anything else, before ingest. A
+producer declaring 3 would therefore have every payload dropped whole
+rather than degraded, silently zeroing out control-plane telemetry.
+
+Nothing in this branch changes the v2 wire shape -- usage_context is
+additive and already allowlisted by the relay's shared property schema,
+and the duplicate suppression is producer-side and invisible to ingest --
+so the bump bought nothing. Keep it at 2 until a relay that accepts a
+newer version is deployed.
+
+The test asserted the emitted version against the constant, which
+compares the constant to itself; it now pins the literal 2 so a future
+bump has to be a visible test change.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(telemetry): keep a queue-dropped terminal outcome deliverable
+
+observe() recorded the outcome before enqueue() ran, and enqueue drops
+the event when the 256-deep send queue is full (one worker, one network
+POST at a time). The outcome was then marked reported without ever being
+sent, and the republish that would have delivered it was suppressed for
+good -- turning a transient backpressure drop into permanent loss of that
+execution's terminal event, precisely when volume is highest. Before this
+branch that retry got through.
+
+enqueue now reports whether the event actually made it onto the queue,
+and handleExecutionEvent releases the dedupe key when it did not.
+observe stays ahead of the enqueue because it is an atomic test-and-set:
+that is what bounds concurrent republishes to at most one report.
+
+telemetryReportedSet keeps the key's ring slot in the membership map so
+forget can clear both, otherwise a released key would leave a stale ring
+entry that later evicts a freshly re-observed key ahead of its time.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(telemetry): treat a falsy CI variable as not CI
+
+detectUsageContext bucketed the process as `ci` on the mere presence of
+CI, GITHUB_ACTIONS, GITLAB_CI, BUILDKITE, CIRCLECI or JENKINS_URL.
+`CI=false` is a common way to say "not CI" / "turn CI behaviour off", so
+a user who exports it had every event labelled `ci`. Now that
+usage_context rides on every event rather than just control_plane_started,
+that mislabels all of their traffic and filters real usage out of the
+product numbers.
+
+Only a truthy value counts: empty, 0, false, no and off (trimmed,
+case-insensitive) are not CI.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(telemetry): warn when a duplicate terminal event is suppressed
+
+Suppressing a republished terminal outcome keeps the counts right, but
+at Debug it also makes the producer bug that caused the republish
+invisible: the metric stops moving and nothing says why. Warn keeps that
+signal alive for an operator without changing behaviour.
+
+The line stays low-cardinality and carries only the telemetry event name
+-- never the execution ID or the dedupe key, which are exactly what
+eventIdentity exists to keep inside the process.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (366c7ff)
+
+## [0.1.138-rc.14] - 2026-09-09
+
+
+### Fixed
+
+- Fix(sdk/python): coerce complex pydantic type hints in reasoner args (#1035)
+
+* fix(sdk/python): coerce complex pydantic type hints in reasoner args (#1034)
+
+Argument coercion only handled a bare model or a 2-arg Optional[model].
+Complex hints fell through as raw dicts:
+- unions of 3+ (M1 | M2 | None)
+- containers of models (list[M], Sequence[M | None])
+- unions of container types (list[M1] | list[M2] | None)
+
+It also silently swallowed validation errors due to a Pydantic v2
+ValidationError constructor mismatch, returning the raw dict instead of
+surfacing the failure.
+
+Fix:
+- type_hint_involves_model(): recurses through Union/list/Sequence/tuple/
+  dict args to detect a model anywhere in the hint.
+- _convert_with_type_hint(): validates via pydantic TypeAdapter, which
+  handles any nested/union/optional/container shape losslessly; hints with
+  no model are returned untouched (preserves plain int/str/dict pass-through).
+- convert_function_args now propagates validation errors (wrapped with the
+  parameter name) instead of hiding them; non-validation errors still fall
+  back to original args for backward compatibility.
+- convert_dict_to_model uses model_class.model_validate (correct v2 API).
+- should_convert_args uses the same recursive detection so conversion
+  triggers for the new shapes.
+
+Adds tests for each reported case plus non-model pass-through and
+validation-error propagation.
+
+* fix(sdk/python): preserve ValidationError from arg coercion (#1034 review)
+
+Addresses review feedback on PR #1035. The rewrite wrapped validation
+failures as ValueError, but the reasoner/skill call sites in agent.py and
+decorators.py intercept pydantic.ValidationError specifically to route bad
+payloads through their safe-validation path (_HandlerInputError, avoiding
+stack-trace exposure in 422s). Wrapping as ValueError let a bad payload miss
+that handler and fall back to the raw dict.
+
+Let the ValidationError from TypeAdapter propagate unchanged so the existing
+callers keep intercepting it. Tests now assert ValidationError explicitly.
+
+* fix(sdk/python): keep None passthrough and cache the TypeAdapter
+
+Two follow-ups to the complex-hint coercion in this PR, both found by
+driving a real Agent through its ASGI request path:
+
+* `def reasoner(m: MyModel = None)` and `def reasoner(items: list[MyModel]
+  = None)` (implicit Optional, no `Optional[...]` wrapper) used to work:
+  `apply_defaults()` fills `None` and the old code never validated a
+  non-dict. Under `TypeAdapter(hint).validate_python(None)` they started
+  raising ValidationError, so every call to such a reasoner became an
+  error response. Return top-level `None` unchanged, before any adapter
+  work; `None` *elements* inside a container are still validated by the
+  adapter, and a `null` for a required parameter is still rejected by
+  Agent._validate_handler_input before conversion runs.
+
+* A fresh TypeAdapter was built on every call. Measured on python 3.11 /
+  pydantic 2.13.5 with a `list[Model] | None` parameter: 84 us per
+  conversion, of which 55 us is adapter construction; with the adapter
+  cached the validation itself is 1.2 us. Cache it in a 512-entry
+  lru_cache, with an uncached fallback for unhashable hints so a hint can
+  never silently lose its coercion just because it is not hashable.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(sdk/python): surface coercion failures as 422 instead of 500 / TypeError
+
+Now that convert_function_args lets pydantic's ValidationError escape, the
+three call sites that were written to handle it are actually reached — and
+two of them were broken:
+
+* agent.py built a `_HandlerInputError` "to prevent stack trace exposure in
+  422 responses" but nothing caught it, so an invalid payload for one of the
+  newly covered shapes escaped the endpoint and starlette answered
+  500 "Internal Server Error". Verified over the real ASGI path: a reasoner
+  typed `M1 | M2 | None` given `{"item": {"x": "bad"}}`, a reasoner typed
+  `list[M1]` given `[{"a": "bad"}]`, and the equivalent skill call all
+  returned 500. They now return 422 `{"detail": "..."}`, the same shape the
+  input validator already returns, with no pydantic text or payload echoed
+  back. The skill conversion moved above the execution-context setup so the
+  early return cannot leak the context; the reasoner path catches
+  _HandlerInputError around both synchronous awaits, leaving the 202
+  fire-and-forget path, cancellation (499) and cost-tracker handling alone.
+
+* decorators.py re-raised `ValidationError(msg, model=...)`, the exact
+  pydantic-v2 constructor misuse that was removed from pydantic_utils.py in
+  this PR: it raises `TypeError: ValidationError.__new__() got an unexpected
+  keyword argument 'model'`. It was dead code before (the error never
+  escaped conversion); it is live now, so a bad payload on the in-process
+  reasoner-calls-reasoner path failed with that TypeError instead of the
+  validation error. Propagate the original ValidationError unchanged.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (faf5f78)
+
+## [0.1.138-rc.13] - 2026-09-07
+
+
+### Testing
+
+- Test(harness): cover raw result text and failure type serialization (#1043) (0916748)
+
 ## [0.1.138-rc.12] - 2026-09-06
 
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from .session_transport import validate_session_transport
+from .session_turn_detection import TurnDetection, normalize_turn_detection
 
 
 SessionHandler = Callable[["RealtimeSession"], Awaitable[Any]]
@@ -24,6 +25,7 @@ class SessionDefinition:
     proposed_tags: List[str] = field(default_factory=list)
     approved_tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    turn_detection: Optional[TurnDetection] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -38,6 +40,10 @@ class SessionDefinition:
             "proposed_tags": list(self.proposed_tags or self.tags),
             "approved_tags": list(self.approved_tags),
             "metadata": dict(self.metadata),
+            **(
+                {"turn_detection": dict(self.turn_detection)}
+                if self.turn_detection is not None else {}
+            ),
         }
 
 
@@ -93,12 +99,16 @@ def build_session_definition(
     tools: Optional[List[str]] = None,
     tags: Optional[List[str]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    turn_detection: Optional[TurnDetection] = None,
 ) -> SessionDefinition:
     capability = validate_session_transport(provider, transport)
     return SessionDefinition(
         name=name,
         provider=capability.provider,
         transport=capability.transport,
+        turn_detection=normalize_turn_detection(
+            capability.provider, capability.transport, turn_detection
+        ),
         model=model,
         modalities=list(modalities or ["audio", "text"]),
         voice=voice,

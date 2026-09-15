@@ -211,3 +211,8 @@ and CI do not rely on pytest's predictable default temp directory layout.
 ## License
 
 Distributed under the Apache 2.0 License. See the project root `LICENSE` for details.
+
+## Realtime session turn detection
+
+See [session turn detection and interruption](../../docs/session-turn-detection.md)
+for VAD configuration, defaults, validation, and the WebRTC connection flow.

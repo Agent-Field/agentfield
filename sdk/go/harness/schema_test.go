@@ -11,12 +11,12 @@ import (
 )
 
 func TestOutputPath(t *testing.T) {
-	assert.Equal(t, "/tmp/.agentfield_output.json", OutputPath("/tmp"))
-	assert.Equal(t, "foo/.agentfield_output.json", OutputPath("foo"))
+	assert.Equal(t, filepath.Join("/tmp", outputFilename), OutputPath("/tmp"))
+	assert.Equal(t, filepath.Join("foo", outputFilename), OutputPath("foo"))
 }
 
 func TestSchemaPath(t *testing.T) {
-	assert.Equal(t, "/tmp/.agentfield_schema.json", SchemaPath("/tmp"))
+	assert.Equal(t, filepath.Join("/tmp", schemaFilename), SchemaPath("/tmp"))
 }
 
 func TestBuildPromptSuffix_SmallSchema(t *testing.T) {

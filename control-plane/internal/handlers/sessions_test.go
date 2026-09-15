@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -277,6 +278,10 @@ func TestSessionRealtimeOfferHandlerCallsRealtimeProvider(t *testing.T) {
 	require.Len(t, gotSafetyID, 32)
 	require.Contains(t, gotSession, `"model":"gpt-test"`)
 	require.Contains(t, gotSession, `"voice":"cedar"`)
+	var config map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(gotSession), &config))
+	input := config["audio"].(map[string]interface{})["input"].(map[string]interface{})
+	require.Equal(t, true, input["turn_detection"].(map[string]interface{})["interrupt_response"])
 }
 
 func TestSessionRealtimeOfferHandlerSurfacesProviderErrors(t *testing.T) {
@@ -401,5 +406,161 @@ func sessionTestAgent() *types.AgentNode {
 				},
 			},
 		}},
+	}
+}
+
+// Exercise the complete metadata -> start -> offer -> provider boundary, rather
+// than just checking that a new field exists in the registration response.
+func TestSessionTurnDetectionReachesProvider(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	original := http.DefaultClient.Transport
+	t.Cleanup(func() { http.DefaultClient.Transport = original })
+	for _, tc := range []struct{ name, config, expected string }{
+		{"legacy defaults", "", `{"type":"server_vad","threshold":0.5,"prefix_padding_ms":300,"silence_duration_ms":500,"create_response":true,"interrupt_response":true}`},
+		{"custom server", `{"type":"server_vad","threshold":0,"prefix_padding_ms":0,"silence_duration_ms":750,"create_response":false,"interrupt_response":false}`, `{"type":"server_vad","threshold":0,"prefix_padding_ms":0,"silence_duration_ms":750,"create_response":false,"interrupt_response":false}`},
+		{"semantic", `{"type":"semantic_vad","eagerness":"low"}`, `{"type":"semantic_vad","eagerness":"low","create_response":true,"interrupt_response":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := sessionTestAgent()
+			raw := agent.Metadata.Custom["sessions"].([]interface{})[0].(map[string]interface{})
+			raw["model"], raw["voice"] = "gpt-vad-test", "cedar"
+			if tc.config != "" {
+				raw["turn_detection"] = json.RawMessage(tc.config)
+			}
+			store := &nodeRESTStorageStub{agent: agent}
+			router := gin.New()
+			router.POST("/api/v1/session-targets/:target/start", StartSessionHandler(store))
+			router.POST("/api/v1/session-instances/:session_id/realtime-offer", SessionRealtimeOfferHandler(store))
+			start := httptest.NewRecorder()
+			router.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/api/v1/session-targets/support.voice/start", strings.NewReader(`{}`)))
+			require.Equal(t, http.StatusCreated, start.Code, start.Body.String())
+			var result struct {
+				OfferURL      string          `json:"offer_url"`
+				TurnDetection json.RawMessage `json:"turn_detection"`
+			}
+			require.NoError(t, json.Unmarshal(start.Body.Bytes(), &result))
+			require.JSONEq(t, tc.expected, string(result.TurnDetection))
+			calls := 0
+			http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				require.NoError(t, req.ParseMultipartForm(1<<20))
+				require.Equal(t, "v=0\r\noffer\r\n", req.FormValue("sdp"))
+				var config struct {
+					Model string `json:"model"`
+					Audio struct {
+						Output struct {
+							Voice string `json:"voice"`
+						} `json:"output"`
+						Input struct {
+							TurnDetection json.RawMessage `json:"turn_detection"`
+						} `json:"input"`
+					} `json:"audio"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(req.FormValue("session")), &config))
+				require.JSONEq(t, tc.expected, string(config.Audio.Input.TurnDetection))
+				require.Equal(t, "gpt-vad-test", config.Model)
+				require.Equal(t, "cedar", config.Audio.Output.Voice)
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("answer"))}, nil
+			})
+			if tc.name == "semantic" {
+				// CLI offers identify the target without repeating model/voice.
+				offerURL, err := url.Parse(result.OfferURL)
+				require.NoError(t, err)
+				query := offerURL.Query()
+				query.Del("model")
+				query.Del("voice")
+				offerURL.RawQuery = query.Encode()
+				result.OfferURL = offerURL.String()
+			}
+			offer := httptest.NewRecorder()
+			router.ServeHTTP(offer, httptest.NewRequest(http.MethodPost, result.OfferURL, strings.NewReader("v=0\r\noffer\r\n")))
+			require.Equal(t, http.StatusOK, offer.Code, offer.Body.String())
+			require.Equal(t, 1, calls)
+		})
+	}
+}
+
+func TestStartSessionRejectsInvalidTurnDetection(t *testing.T) {
+	for _, config := range []string{
+		`{}`, `{"Type":"server_vad"}`, `{"type":"semantic_vad","eagerness":""}`, `{"type":"client_vad"}`, `{"type":"server_vad","threshold":2}`,
+		`{"type":"server_vad","silence_duration_ms":-1}`, `{"type":"server_vad","prefix_padding_ms":1.5}`,
+		`{"type":"server_vad","create_response":"false"}`, `{"type":"server_vad","interrupt_response":null}`,
+		`{"type":"semantic_vad","threshold":0.5}`, `{"type":"server_vad","eagerness":"low"}`,
+		`{"type":"semantic_vad","eagerness":"urgent"}`, `{"type":"server_vad","unknown":true}`, `[]`,
+	} {
+		t.Run(config, func(t *testing.T) {
+			agent := sessionTestAgent()
+			agent.Metadata.Custom["sessions"].([]interface{})[0].(map[string]interface{})["turn_detection"] = json.RawMessage(config)
+			router := gin.New()
+			router.POST("/:target/start", StartSessionHandler(&nodeRESTStorageStub{agent: agent}))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/support.voice/start", strings.NewReader(`{}`)))
+			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			require.Contains(t, rec.Body.String(), "turn_detection")
+		})
+	}
+}
+
+func TestSessionOfferRevalidatesRegisteredTurnDetection(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "") // Invalid config must fail before credentials/upstream.
+	agent := sessionTestAgent()
+	agent.Metadata.Custom["sessions"].([]interface{})[0].(map[string]interface{})["turn_detection"] = map[string]interface{}{
+		"type": "semantic_vad", "silence_duration_ms": 500,
+	}
+	router := gin.New()
+	router.POST("/:target/realtime-offer", SessionRealtimeOfferHandler(&nodeRESTStorageStub{agent: agent}))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/sess-1/realtime-offer?provider=openai&transport=webrtc&target=support.voice", strings.NewReader("v=0")))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "turn_detection")
+}
+
+func TestStartSessionRejectsTurnDetectionForOpenRouter(t *testing.T) {
+	agent := sessionTestAgent()
+	raw := agent.Metadata.Custom["sessions"].([]interface{})[0].(map[string]interface{})
+	raw["provider"], raw["transport"] = "openrouter", "audio_turns"
+	raw["turn_detection"] = map[string]interface{}{"type": "server_vad"}
+	router := gin.New()
+	router.POST("/:target/start", StartSessionHandler(&nodeRESTStorageStub{agent: agent}))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/support.voice/start", strings.NewReader(`{}`)))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "turn_detection requires")
+}
+
+func TestSessionOfferRejectsInvalidRegisteredTargets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	original := http.DefaultClient.Transport
+	t.Cleanup(func() { http.DefaultClient.Transport = original })
+	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatal("invalid target must not reach the provider")
+		return nil, nil
+	})
+	for _, tc := range []struct {
+		name, target, provider, transport string
+		status                            int
+		message                           string
+	}{
+		{"empty target", "", "openai", "webrtc", http.StatusBadRequest, "session target must be"},
+		{"malformed target", "support", "openai", "webrtc", http.StatusBadRequest, "session target must be"},
+		{"missing session", "support.missing", "openai", "webrtc", http.StatusNotFound, "session not registered"},
+		{"wrong provider", "support.voice", "openrouter", "audio_turns", http.StatusBadRequest, "registered session must use"},
+		{"wrong transport", "support.voice", "openai", "websocket", http.StatusBadRequest, "registered session must use"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := sessionTestAgent()
+			raw := agent.Metadata.Custom["sessions"].([]interface{})[0].(map[string]interface{})
+			raw["provider"], raw["transport"] = tc.provider, tc.transport
+			router := gin.New()
+			router.POST("/:session_id/realtime-offer", SessionRealtimeOfferHandler(&nodeRESTStorageStub{agent: agent}))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+				"/sess-1/realtime-offer?provider=openai&transport=webrtc&target="+url.QueryEscape(tc.target), strings.NewReader("v=0")))
+			require.Equal(t, tc.status, rec.Code, rec.Body.String())
+			require.Contains(t, rec.Body.String(), tc.message)
+		})
 	}
 }
