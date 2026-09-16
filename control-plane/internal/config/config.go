@@ -470,14 +470,18 @@ type ConnectorCapability struct {
 
 // DIDConfig holds configuration for DID identity system.
 type DIDConfig struct {
-	Enabled          bool                `yaml:"enabled" mapstructure:"enabled" default:"true"`
-	Method           string              `yaml:"method" mapstructure:"method" default:"did:key"`
-	KeyAlgorithm     string              `yaml:"key_algorithm" mapstructure:"key_algorithm" default:"Ed25519"`
-	DerivationMethod string              `yaml:"derivation_method" mapstructure:"derivation_method" default:"BIP32"`
-	KeyRotationDays  int                 `yaml:"key_rotation_days" mapstructure:"key_rotation_days" default:"90"`
-	VCRequirements   VCRequirements      `yaml:"vc_requirements" mapstructure:"vc_requirements"`
-	Keystore         KeystoreConfig      `yaml:"keystore" mapstructure:"keystore"`
-	Authorization    AuthorizationConfig `yaml:"authorization" mapstructure:"authorization"`
+	Enabled          bool   `yaml:"enabled" mapstructure:"enabled" default:"true"`
+	Method           string `yaml:"method" mapstructure:"method" default:"did:key"`
+	KeyAlgorithm     string `yaml:"key_algorithm" mapstructure:"key_algorithm" default:"Ed25519"`
+	DerivationMethod string `yaml:"derivation_method" mapstructure:"derivation_method" default:"BIP32"`
+	KeyRotationDays  int    `yaml:"key_rotation_days" mapstructure:"key_rotation_days" default:"90"`
+	// ServerID pins which stored DID registry this control plane owns. When
+	// empty, the existing registry is found automatically; set it only when
+	// several registries share one database.
+	ServerID       string              `yaml:"server_id" mapstructure:"server_id"`
+	VCRequirements VCRequirements      `yaml:"vc_requirements" mapstructure:"vc_requirements"`
+	Keystore       KeystoreConfig      `yaml:"keystore" mapstructure:"keystore"`
+	Authorization  AuthorizationConfig `yaml:"authorization" mapstructure:"authorization"`
 }
 
 // AuthorizationConfig holds configuration for VC-based authorization.
@@ -721,6 +725,10 @@ func ApplyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("AGENTFIELD_KNOWLEDGE_ENABLED"); val != "" {
 		enabled := parseEnvBool(val)
 		cfg.Features.Knowledge.Enabled = &enabled
+	}
+
+	if val := os.Getenv("AGENTFIELD_DID_SERVER_ID"); val != "" {
+		cfg.Features.DID.ServerID = strings.TrimSpace(val)
 	}
 
 	// Embedded MCP server toggle. Enabled by default; set to a falsey value to

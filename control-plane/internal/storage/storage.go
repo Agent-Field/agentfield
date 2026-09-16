@@ -541,6 +541,12 @@ type StorageProvider interface {
 	// Returns an error if any part of the transaction fails.
 	StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int, components []ComponentDIDRequest) error
 
+	// UpsertAgentDIDWithComponents atomically inserts or updates an agent DID and
+	// its component DIDs, storing derivation paths, public keys and the X25519
+	// epoch verbatim. A DID row owned by a different server or agent is never
+	// reassigned; that case returns an error.
+	UpsertAgentDIDWithComponents(ctx context.Context, record AgentDIDRecord) error
+
 	// Execution VC operations
 	// StoreExecutionVC stores verifiable credential data for an execution.
 	// The ctx scopes the write, and the identifiers, hashes, document, signature, and storage fields describe the VC record.
@@ -745,6 +751,22 @@ type ComponentDIDRequest struct {
 	ComponentName   string
 	PublicKeyJWK    string
 	DerivationIndex int
+	// DerivationPath is the exact path the component key was derived from.
+	// UpsertAgentDIDWithComponents stores it verbatim; it is required there.
+	DerivationPath string
+}
+
+// AgentDIDRecord is the full persisted form of an agent DID and its components.
+// Every field needed to re-derive and verify the identity is stored verbatim.
+type AgentDIDRecord struct {
+	AgentNodeID        string
+	DID                string
+	AgentFieldServerID string
+	PublicKeyJWK       string
+	DerivationPath     string
+	X25519Epoch        int
+	Status             string
+	Components         []ComponentDIDRequest
 }
 
 // CacheProvider is the interface for the high-performance caching layer.

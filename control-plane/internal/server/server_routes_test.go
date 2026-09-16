@@ -387,6 +387,10 @@ func (s *stubStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID, 
 	return nil
 }
 
+func (s *stubStorage) UpsertAgentDIDWithComponents(ctx context.Context, record storage.AgentDIDRecord) error {
+	return nil
+}
+
 // Execution VC operations
 func (s *stubStorage) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {
 	return nil

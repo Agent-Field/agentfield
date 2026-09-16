@@ -315,8 +315,13 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 			return nil, fmt.Errorf("failed to initialize VC service: %w", err)
 		}
 
-		// Generate af server ID based on agentfield home directory
-		agentfieldServerID := generateAgentFieldServerID(agentfieldHome)
+		// Pick the stored server identity this control plane owns. Moving
+		// AGENTFIELD_HOME must not silently create a new identity.
+		agentfieldServerID, err := services.SelectAgentFieldServerID(
+			didRegistry, cfg.Features.DID.ServerID, generateAgentFieldServerID(agentfieldHome))
+		if err != nil {
+			return nil, fmt.Errorf("failed to select af server DID registry: %w", err)
+		}
 
 		// Initialize af server DID with dynamic ID
 		fmt.Printf("🧠 Initializing af server DID (ID: %s)...\n", agentfieldServerID)

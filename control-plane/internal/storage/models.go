@@ -326,6 +326,7 @@ type AgentDIDModel struct {
 	AgentFieldServerID string    `gorm:"column:agentfield_server_id;not null;index"`
 	PublicKeyJWK       string    `gorm:"column:public_key_jwk;not null"`
 	DerivationPath     string    `gorm:"column:derivation_path;not null"`
+	X25519Epoch        int       `gorm:"column:x25519_epoch;not null;default:0"`
 	Reasoners          string    `gorm:"column:reasoners;default:'{}'"`
 	Skills             string    `gorm:"column:skills;default:'{}'"`
 	Status             string    `gorm:"column:status;not null;default:'active'"`

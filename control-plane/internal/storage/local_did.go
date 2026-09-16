@@ -205,6 +205,122 @@ func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID
 	return nil
 }
 
+// UpsertAgentDIDWithComponents persists an agent DID and its components in one
+// transaction. Derivation paths, public keys and the X25519 epoch are stored
+// exactly as given so the identity can be re-derived and verified after a
+// restart. Existing rows are updated in place, but a row is never moved to a
+// different server, agent, or component name.
+func (ls *LocalStorage) UpsertAgentDIDWithComponents(ctx context.Context, record AgentDIDRecord) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during upsert agent DID: %w", err)
+	}
+
+	required := map[string]string{
+		"agent_node_id":        record.AgentNodeID,
+		"did":                  record.DID,
+		"agentfield_server_id": record.AgentFieldServerID,
+		"public_key_jwk":       record.PublicKeyJWK,
+		"derivation_path":      record.DerivationPath,
+	}
+	for field, value := range required {
+		if strings.TrimSpace(value) == "" {
+			return &ValidationError{Field: field, Value: value, Reason: field + " cannot be empty", Context: "UpsertAgentDIDWithComponents"}
+		}
+	}
+	for _, component := range record.Components {
+		if component.ComponentDID == "" || component.ComponentName == "" || component.PublicKeyJWK == "" || component.DerivationPath == "" {
+			return &ValidationError{
+				Field:   "component",
+				Value:   component.ComponentName,
+				Reason:  "component DID, name, public key and derivation path are required",
+				Context: "UpsertAgentDIDWithComponents",
+			}
+		}
+		if component.ComponentType != "reasoner" && component.ComponentType != "skill" {
+			return &ValidationError{Field: "component_type", Value: component.ComponentType, Reason: "component type must be 'reasoner' or 'skill'", Context: "UpsertAgentDIDWithComponents"}
+		}
+	}
+	status := record.Status
+	if status == "" {
+		status = string(types.AgentDIDStatusActive)
+	}
+
+	if err := ls.validateAgentFieldServerExists(ctx, record.AgentFieldServerID); err != nil {
+		return fmt.Errorf("pre-storage validation failed: %w", err)
+	}
+
+	tx, err := ls.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			rollbackTx(tx, "UpsertAgentDIDWithComponents")
+		}
+	}()
+
+	err = ls.retryOnConstraintFailure(ctx, func() error {
+		result, execErr := tx.ExecContext(ctx, `
+			INSERT INTO agent_dids (
+				agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path, x25519_epoch, registered_at, status
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (did) DO UPDATE SET
+				public_key_jwk = excluded.public_key_jwk,
+				derivation_path = excluded.derivation_path,
+				x25519_epoch = excluded.x25519_epoch,
+				status = excluded.status,
+				updated_at = CURRENT_TIMESTAMP
+			WHERE agent_dids.agentfield_server_id = excluded.agentfield_server_id
+			  AND agent_dids.agent_node_id = excluded.agent_node_id`,
+			record.AgentNodeID, record.DID, record.AgentFieldServerID, record.PublicKeyJWK,
+			record.DerivationPath, record.X25519Epoch, time.Now(), status)
+		if execErr != nil {
+			return fmt.Errorf("failed to upsert agent DID: %w", execErr)
+		}
+		if affected, affErr := result.RowsAffected(); affErr == nil && affected == 0 {
+			return fmt.Errorf("agent DID %s is already stored for a different server or agent node", record.DID)
+		}
+		return nil
+	}, 3)
+	if err != nil {
+		return err
+	}
+
+	for _, component := range record.Components {
+		component := component
+		err = ls.retryOnConstraintFailure(ctx, func() error {
+			result, execErr := tx.ExecContext(ctx, `
+				INSERT INTO component_dids (
+					did, agent_did, component_type, function_name, public_key_jwk, derivation_path
+				) VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT (did) DO UPDATE SET
+					public_key_jwk = excluded.public_key_jwk,
+					derivation_path = excluded.derivation_path,
+					updated_at = CURRENT_TIMESTAMP
+				WHERE component_dids.agent_did = excluded.agent_did
+				  AND component_dids.component_type = excluded.component_type
+				  AND component_dids.function_name = excluded.function_name`,
+				component.ComponentDID, record.DID, component.ComponentType, component.ComponentName,
+				component.PublicKeyJWK, component.DerivationPath)
+			if execErr != nil {
+				return fmt.Errorf("failed to upsert component DID %s: %w", component.ComponentName, execErr)
+			}
+			if affected, affErr := result.RowsAffected(); affErr == nil && affected == 0 {
+				return fmt.Errorf("component DID %s is already stored for a different agent or component", component.ComponentDID)
+			}
+			return nil
+		}, 3)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
 func (ls *LocalStorage) GetAgentFieldServerDID(ctx context.Context, agentfieldServerID string) (*types.AgentFieldServerDIDInfo, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
@@ -557,7 +673,7 @@ func (ls *LocalStorage) GetAgentDID(ctx context.Context, agentID string) (*types
 
 	query := `
 		SELECT agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path,
-		       reasoners, skills, status, registered_at
+		       COALESCE(x25519_epoch, 0), reasoners, skills, status, registered_at
 		FROM agent_dids WHERE agent_node_id = ?`
 
 	row := ls.db.QueryRowContext(ctx, query, agentID)
@@ -565,7 +681,7 @@ func (ls *LocalStorage) GetAgentDID(ctx context.Context, agentID string) (*types
 
 	var reasonersJSON, skillsJSON, publicKeyJWK string
 	err := row.Scan(&info.AgentNodeID, &info.DID, &info.AgentFieldServerID, &publicKeyJWK,
-		&info.DerivationPath, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
+		&info.DerivationPath, &info.X25519Epoch, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("agent DID for %s not found", agentID)
@@ -602,7 +718,7 @@ func (ls *LocalStorage) ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInf
 
 	query := `
 		SELECT agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path,
-		       reasoners, skills, status, registered_at
+		       COALESCE(x25519_epoch, 0), reasoners, skills, status, registered_at
 		FROM agent_dids ORDER BY registered_at DESC`
 
 	rows, err := ls.db.QueryContext(ctx, query)
@@ -621,7 +737,7 @@ func (ls *LocalStorage) ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInf
 		info := &types.AgentDIDInfo{}
 		var reasonersJSON, skillsJSON, publicKeyJWK string
 		err := rows.Scan(&info.AgentNodeID, &info.DID, &info.AgentFieldServerID, &publicKeyJWK,
-			&info.DerivationPath, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
+			&info.DerivationPath, &info.X25519Epoch, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan agent DID: %w", err)
 		}
@@ -766,17 +882,18 @@ func (ls *LocalStorage) GetComponentDID(ctx context.Context, componentID string)
 	// Use function_name as the componentID since there's no separate component_id column
 	query := `
 		SELECT function_name, did, agent_did, component_type, function_name,
-			   derivation_path, created_at
+			   derivation_path, public_key_jwk, created_at
 		FROM component_dids WHERE function_name = ?`
 
 	row := ls.db.QueryRowContext(ctx, query, componentID)
 	info := &types.ComponentDIDInfo{}
 
 	var derivationPath string
+	var publicKeyJWK sql.NullString
 	var createdAt sql.NullTime
 
 	err := row.Scan(&info.ComponentID, &info.ComponentDID, &info.AgentDID,
-		&info.ComponentType, &info.ComponentName, &derivationPath, &createdAt)
+		&info.ComponentType, &info.ComponentName, &derivationPath, &publicKeyJWK, &createdAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("component DID for %s not found", componentID)
@@ -787,6 +904,8 @@ func (ls *LocalStorage) GetComponentDID(ctx context.Context, componentID string)
 	if createdAt.Valid {
 		info.CreatedAt = createdAt.Time
 	}
+	info.DerivationPath = derivationPath
+	info.PublicKeyJWK = publicKeyJWK.String
 
 	// Parse derivation index from derivation path (e.g., "m/44'/0'/0'/123" -> 123)
 	if derivationPath != "" {
@@ -816,14 +935,14 @@ func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) 
 		// Get all components when agentDID is empty
 		query = `
 			SELECT function_name, did, agent_did, component_type, function_name,
-				   derivation_path, created_at
+				   derivation_path, public_key_jwk, created_at
 			FROM component_dids ORDER BY created_at DESC`
 		rows, err = ls.db.QueryContext(ctx, query)
 	} else {
 		// Get components for specific agent
 		query = `
 			SELECT function_name, did, agent_did, component_type, function_name,
-				   derivation_path, created_at
+				   derivation_path, public_key_jwk, created_at
 			FROM component_dids WHERE agent_did = ? ORDER BY created_at DESC`
 		rows, err = ls.db.QueryContext(ctx, query, agentDID)
 	}
@@ -841,10 +960,11 @@ func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) 
 
 		info := &types.ComponentDIDInfo{}
 		var derivationPath string
+		var publicKeyJWK sql.NullString
 		var createdAt sql.NullTime
 
 		err := rows.Scan(&info.ComponentID, &info.ComponentDID, &info.AgentDID,
-			&info.ComponentType, &info.ComponentName, &derivationPath, &createdAt)
+			&info.ComponentType, &info.ComponentName, &derivationPath, &publicKeyJWK, &createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan component DID: %w", err)
 		}
@@ -852,6 +972,8 @@ func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) 
 		if createdAt.Valid {
 			info.CreatedAt = createdAt.Time
 		}
+		info.DerivationPath = derivationPath
+		info.PublicKeyJWK = publicKeyJWK.String
 
 		// Parse derivation index from derivation path
 		if derivationPath != "" {

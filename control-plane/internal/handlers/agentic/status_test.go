@@ -468,6 +468,10 @@ func (m *mockStatusStorage) StoreAgentDIDWithComponents(ctx context.Context, age
 	return nil
 }
 
+func (m *mockStatusStorage) UpsertAgentDIDWithComponents(ctx context.Context, record storage.AgentDIDRecord) error {
+	return nil
+}
+
 // --- StatusHandler tests ---
 
 func TestStatusHandler_ReturnsOK(t *testing.T) {

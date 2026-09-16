@@ -9,8 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"io"
+	"sort"
 	"strconv"
 	"time"
 
@@ -48,6 +48,12 @@ func (s *DIDService) Initialize(agentfieldServerID string) error {
 	// Store the af server ID for dynamic resolution
 	s.agentfieldServerID = agentfieldServerID
 
+	// Refuse to run on a registry whose stored key material is inconsistent,
+	// rather than signing with keys that do not match the published DIDs.
+	if err := s.registry.IntegrityError(agentfieldServerID); err != nil {
+		return fmt.Errorf("DID registry for af server %s failed integrity check: %w", agentfieldServerID, err)
+	}
+
 	// Check if af server already has a DID registry
 	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
@@ -62,7 +68,7 @@ func (s *DIDService) Initialize(agentfieldServerID string) error {
 		}
 
 		// Generate root DID from master seed
-		rootDID, err := s.generateDIDFromSeed(masterSeed, "m/44'/0'")
+		rootDID, err := s.generateDIDFromSeed(masterSeed, rootDerivationPath)
 		if err != nil {
 			return fmt.Errorf("failed to generate root DID: %w", err)
 		}
@@ -177,6 +183,13 @@ func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DI
 	}
 
 	if existingAgent != nil {
+		if reason := s.quarantinedIdentityReason(existingAgent); reason != "" {
+			return &types.DIDRegistrationResponse{
+				Success: false,
+				Error:   fmt.Sprintf("refusing to issue keys for agent %s: %s", req.AgentNodeID, reason),
+			}, nil
+		}
+
 		// Perform differential analysis
 		newReasonerIDs := extractReasonerIDs(req.Reasoners)
 		newSkillIDs := extractSkillIDs(req.Skills)
@@ -227,14 +240,9 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 		}, nil
 	}
 
-	// Generate af server hash for derivation path
-	agentfieldServerHash := s.hashAgentFieldServerID(registry.AgentFieldServerID)
-
-	// Get next agent index
-	agentIndex := len(registry.AgentNodes)
-
-	// Generate agent DID
-	agentPath := fmt.Sprintf("m/44'/%d'/%d'", agentfieldServerHash, agentIndex)
+	// Allocate an agent index that has never been used under this server, so a
+	// new agent can never be handed another agent's key.
+	agentPath := s.nextAgentPath(registry)
 	agentDID, agentPrivKey, agentPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, agentPath)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
@@ -269,7 +277,7 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			continue
 		}
 
-		reasonerPath := fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", agentfieldServerHash, agentIndex, validReasonerIndex)
+		reasonerPath := componentDerivationPath(agentPath, componentBranch("reasoner"), validReasonerIndex)
 		reasonerDID, reasonerPrivKey, reasonerPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, reasonerPath)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
@@ -315,7 +323,7 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			continue
 		}
 
-		skillPath := fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", agentfieldServerHash, agentIndex, validSkillIndex)
+		skillPath := componentDerivationPath(agentPath, componentBranch("skill"), validSkillIndex)
 		skillDID, skillPrivKey, skillPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, skillPath)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
@@ -406,7 +414,10 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 	}, nil
 }
 
-// ResolveDID resolves a DID to its public key and metadata.
+// ResolveDID resolves a DID to its public key and metadata. DIDs issued by an
+// earlier registry on the same database stay resolvable, so credentials issued
+// before a server identity change remain verifiable. Quarantined identities
+// are never resolved.
 func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 	if !s.config.Enabled {
 		return nil, fmt.Errorf("DID system is disabled")
@@ -415,6 +426,10 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 	// Validate af server registry exists
 	if err := s.validateAgentFieldServerRegistry(); err != nil {
 		return nil, fmt.Errorf("af server registry validation failed: %w", err)
+	}
+
+	if reason := s.registry.QuarantineReason(did); reason != "" {
+		return nil, fmt.Errorf("DID %s is not usable: %s", did, reason)
 	}
 
 	// Get af server ID dynamically
@@ -429,36 +444,60 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 		return nil, fmt.Errorf("failed to get DID registry: %w", err)
 	}
 
+	if identity, found, err := s.resolveInRegistry(registry, did); found || err != nil {
+		return identity, err
+	}
+
+	// Fall back to other registries stored in the same database, in a stable
+	// order, skipping any that failed the integrity check.
+	others, err := s.registry.ListRegistries()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list DID registries: %w", err)
+	}
+	sort.Slice(others, func(i, j int) bool { return others[i].AgentFieldServerID < others[j].AgentFieldServerID })
+	for _, other := range others {
+		if other.AgentFieldServerID == agentfieldServerID || s.registry.IntegrityError(other.AgentFieldServerID) != nil {
+			continue
+		}
+		if identity, found, err := s.resolveInRegistry(other, did); found || err != nil {
+			return identity, err
+		}
+	}
+
+	return nil, fmt.Errorf("DID not found: %s", did)
+}
+
+// resolveInRegistry resolves did within one registry. found is false when the
+// registry does not contain the DID.
+func (s *DIDService) resolveInRegistry(registry *types.DIDRegistry, did string) (*types.DIDIdentity, bool, error) {
+	if registry == nil {
+		return nil, false, nil
+	}
+
 	// Check if this is the af server root DID
 	if registry.RootDID == did {
-		// Regenerate private key for root DID using root derivation path
-		privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, "m/44'/0'")
+		privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, rootDerivationPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to regenerate private key for root DID %s: %w", did, err)
+			return nil, true, fmt.Errorf("failed to regenerate private key for root DID %s: %w", did, err)
 		}
-
-		// Generate public key JWK for consistency
-		publicKeyJWK, err := s.regeneratePublicKeyJWK(registry.MasterSeed, "m/44'/0'")
+		publicKeyJWK, err := s.regeneratePublicKeyJWK(registry.MasterSeed, rootDerivationPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to regenerate public key for root DID %s: %w", did, err)
+			return nil, true, fmt.Errorf("failed to regenerate public key for root DID %s: %w", did, err)
 		}
-
 		return &types.DIDIdentity{
 			DID:            registry.RootDID,
 			PrivateKeyJWK:  privateKeyJWK,
 			PublicKeyJWK:   publicKeyJWK,
-			DerivationPath: "m/44'/0'",
+			DerivationPath: rootDerivationPath,
 			ComponentType:  "agentfield_server",
-		}, nil
+		}, true, nil
 	}
 
-	// Search through all agent nodes and their components
 	for _, agentInfo := range registry.AgentNodes {
 		if agentInfo.DID == did {
-			// Regenerate private key from master seed and derivation path
 			privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, agentInfo.DerivationPath)
 			if err != nil {
-				return nil, fmt.Errorf("failed to regenerate private key for agent DID %s: %w", did, err)
+				return nil, true, fmt.Errorf("failed to regenerate private key for agent DID %s: %w", did, err)
 			}
 
 			// Regenerate the X25519 keyAgreement keypair at the agent's CURRENT
@@ -466,7 +505,7 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 			// re-derives the matching private key for the owner.
 			x25519PubKey, x25519PrivKey, err := s.regenerateX25519KeyPairJWKAtEpoch(registry.MasterSeed, agentInfo.DerivationPath, agentInfo.X25519Epoch)
 			if err != nil {
-				return nil, fmt.Errorf("failed to regenerate X25519 keyAgreement key for agent DID %s: %w", did, err)
+				return nil, true, fmt.Errorf("failed to regenerate X25519 keyAgreement key for agent DID %s: %w", did, err)
 			}
 			// Prefer the stored public key when present (it is kept in lockstep
 			// with the epoch on rotation); fall back to the freshly derived one.
@@ -483,18 +522,15 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 				X25519Epoch:         agentInfo.X25519Epoch,
 				DerivationPath:      agentInfo.DerivationPath,
 				ComponentType:       "agent",
-			}, nil
+			}, true, nil
 		}
 
-		// Check reasoners
 		for _, reasonerInfo := range agentInfo.Reasoners {
 			if reasonerInfo.DID == did {
-				// Regenerate private key from master seed and derivation path
 				privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, reasonerInfo.DerivationPath)
 				if err != nil {
-					return nil, fmt.Errorf("failed to regenerate private key for reasoner DID %s: %w", did, err)
+					return nil, true, fmt.Errorf("failed to regenerate private key for reasoner DID %s: %w", did, err)
 				}
-
 				return &types.DIDIdentity{
 					DID:            reasonerInfo.DID,
 					PrivateKeyJWK:  privateKeyJWK,
@@ -502,19 +538,16 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 					DerivationPath: reasonerInfo.DerivationPath,
 					ComponentType:  "reasoner",
 					FunctionName:   reasonerInfo.FunctionName,
-				}, nil
+				}, true, nil
 			}
 		}
 
-		// Check skills
 		for _, skillInfo := range agentInfo.Skills {
 			if skillInfo.DID == did {
-				// Regenerate private key from master seed and derivation path
 				privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, skillInfo.DerivationPath)
 				if err != nil {
-					return nil, fmt.Errorf("failed to regenerate private key for skill DID %s: %w", did, err)
+					return nil, true, fmt.Errorf("failed to regenerate private key for skill DID %s: %w", did, err)
 				}
-
 				return &types.DIDIdentity{
 					DID:            skillInfo.DID,
 					PrivateKeyJWK:  privateKeyJWK,
@@ -522,12 +555,12 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 					DerivationPath: skillInfo.DerivationPath,
 					ComponentType:  "skill",
 					FunctionName:   skillInfo.FunctionName,
-				}, nil
+				}, true, nil
 			}
 		}
 	}
 
-	return nil, fmt.Errorf("DID not found: %s", did)
+	return nil, false, nil
 }
 
 // ResolveAgentIDByDID looks up the agent node ID for any DID (including did:key)
@@ -595,28 +628,12 @@ func (s *DIDService) generateDIDFromSeed(masterSeed []byte, derivationPath strin
 // Uses domain-separated derivation with SHA-256, the derivation path as info,
 // and a fixed salt for domain separation.
 func (s *DIDService) derivePrivateKey(masterSeed []byte, derivationPath string) (ed25519.PrivateKey, error) {
-	salt := []byte("agentfield-did-key-derivation-v1")
-	info := []byte(derivationPath)
-
-	hkdfReader := hkdf.New(sha256.New, masterSeed, salt, info)
-	derivedSeed := make([]byte, ed25519.SeedSize) // 32 bytes
-	if _, err := io.ReadFull(hkdfReader, derivedSeed); err != nil {
-		return nil, fmt.Errorf("HKDF key derivation failed: %w", err)
-	}
-
-	privateKey := ed25519.NewKeyFromSeed(derivedSeed)
-	return privateKey, nil
+	return deriveEd25519Key(masterSeed, derivationPath)
 }
 
 // generateDIDKey generates a DID:key from an Ed25519 public key.
 func (s *DIDService) generateDIDKey(publicKey ed25519.PublicKey) string {
-	// DID:key format: did:key:z + base58(multicodec + public key)
-	// For Ed25519, multicodec prefix is 0xed01
-	multicodecKey := append([]byte{0xed, 0x01}, publicKey...)
-
-	// Use base64 encoding for simplicity (in production, use base58)
-	encoded := base64.RawURLEncoding.EncodeToString(multicodecKey)
-	return fmt.Sprintf("did:key:z%s", encoded)
+	return didKeyFromPublicKey(publicKey)
 }
 
 // ed25519PrivateKeyToJWK converts an Ed25519 private key to JWK format.
@@ -660,9 +677,7 @@ func (s *DIDService) ed25519PublicKeyToJWK(publicKey ed25519.PublicKey) (string,
 
 // hashAgentFieldServerID creates a deterministic hash of af server ID for derivation paths.
 func (s *DIDService) hashAgentFieldServerID(agentfieldServerID string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(agentfieldServerID))
-	return h.Sum32() % (1 << 31) // Ensure it fits in BIP32 hardened derivation
+	return serverPathSegment(agentfieldServerID)
 }
 
 // regeneratePrivateKeyJWK regenerates a private key JWK from master seed and derivation path.
@@ -838,6 +853,9 @@ func (s *DIDService) RotateAgentX25519Key(did string) (newPubJWK string, newEpoc
 	}
 	if !found {
 		return "", 0, fmt.Errorf("agent-node DID %s not found in registry", did)
+	}
+	if reason := s.registry.QuarantineReason(did); reason != "" {
+		return "", 0, fmt.Errorf("cannot rotate keyAgreement key for DID %s: %s", did, reason)
 	}
 
 	// Increment the rotation epoch and re-derive the keyAgreement keypair.
@@ -1134,74 +1152,82 @@ func (s *DIDService) findSkillByID(skills []types.SkillDefinition, id string) *t
 	return nil
 }
 
-// generateReasonerPath generates a derivation path for a reasoner.
-func (s *DIDService) generateReasonerPath(agentNodeID, reasonerID string) string {
-	// Get af server ID dynamically
-	agentfieldServerID, err := s.getAgentFieldServerID()
-	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get af server ID for reasoner path generation")
-		return ""
-	}
-
-	// Get registry to find agent index
-	registry, err := s.registry.GetRegistry(agentfieldServerID)
-	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get registry for reasoner path generation")
-		return ""
-	}
-
-	// Generate af server hash for derivation path
-	agentfieldServerHash := s.hashAgentFieldServerID(registry.AgentFieldServerID)
-
-	// Find agent index (this is a simplified approach - in production you might want to store this)
-	agentIndex := 0
-	for nodeID := range registry.AgentNodes {
-		if nodeID == agentNodeID {
-			break
+// nextAgentPath returns the derivation path for a new agent: one past the
+// highest agent index ever used under this server, skipping any path whose DID
+// is already present in the registry.
+func (s *DIDService) nextAgentPath(registry *types.DIDRegistry) string {
+	serverSegment := serverPathSegment(registry.AgentFieldServerID)
+	used := make(map[string]bool, len(registry.AgentNodes))
+	next := 0
+	for _, agent := range registry.AgentNodes {
+		used[agent.DID] = true
+		if index, ok := agentIndexFromPath(agent.DerivationPath, serverSegment); ok && index+1 > next {
+			next = index + 1
 		}
-		agentIndex++
 	}
-
-	// Count existing reasoners to get next index
-	existingAgent := registry.AgentNodes[agentNodeID]
-	reasonerIndex := len(existingAgent.Reasoners)
-
-	return fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", agentfieldServerHash, agentIndex, reasonerIndex)
+	for {
+		path := agentDerivationPath(serverSegment, next)
+		did, err := didForPath(registry.MasterSeed, path)
+		if err != nil || !used[did] {
+			return path
+		}
+		next++
+	}
 }
 
-// generateSkillPath generates a derivation path for a skill.
-func (s *DIDService) generateSkillPath(agentNodeID, skillID string) string {
-	// Get af server ID dynamically
-	agentfieldServerID, err := s.getAgentFieldServerID()
-	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get af server ID for skill path generation")
-		return ""
-	}
+// componentPathAllocator hands out component derivation paths for one agent.
+// Indices continue past every index already used in memory or in storage,
+// including removed components, so a new component never reuses a key.
+type componentPathAllocator struct {
+	agentPath string
+	next      map[int]int
+}
 
-	// Get registry to find agent index
-	registry, err := s.registry.GetRegistry(agentfieldServerID)
-	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get registry for skill path generation")
-		return ""
-	}
-
-	// Generate af server hash for derivation path
-	agentfieldServerHash := s.hashAgentFieldServerID(registry.AgentFieldServerID)
-
-	// Find agent index (this is a simplified approach - in production you might want to store this)
-	agentIndex := 0
-	for nodeID := range registry.AgentNodes {
-		if nodeID == agentNodeID {
-			break
+func (s *DIDService) newComponentPathAllocator(agent types.AgentDIDInfo) *componentPathAllocator {
+	alloc := &componentPathAllocator{agentPath: agent.DerivationPath, next: map[int]int{0: 0, 1: 0}}
+	observe := func(path string) {
+		for branch := 0; branch <= 1; branch++ {
+			if index, ok := componentIndexFromPath(path, agent.DerivationPath, branch); ok && index+1 > alloc.next[branch] {
+				alloc.next[branch] = index + 1
+			}
 		}
-		agentIndex++
 	}
+	for _, reasoner := range agent.Reasoners {
+		observe(reasoner.DerivationPath)
+	}
+	for _, skill := range agent.Skills {
+		observe(skill.DerivationPath)
+	}
+	for _, path := range s.registry.persistedComponentPaths(agent.DID) {
+		observe(path)
+	}
+	return alloc
+}
 
-	// Count existing skills to get next index
-	existingAgent := registry.AgentNodes[agentNodeID]
-	skillIndex := len(existingAgent.Skills)
+func (a *componentPathAllocator) allocate(componentType string) string {
+	branch := componentBranch(componentType)
+	index := a.next[branch]
+	a.next[branch] = index + 1
+	return componentDerivationPath(a.agentPath, branch, index)
+}
 
-	return fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", agentfieldServerHash, agentIndex, skillIndex)
+// quarantinedIdentityReason returns why any identity belonging to the agent
+// is unusable, or "" when all of them verified.
+func (s *DIDService) quarantinedIdentityReason(agent *types.AgentDIDInfo) string {
+	if reason := s.registry.QuarantineReason(agent.DID); reason != "" {
+		return reason
+	}
+	for _, reasoner := range agent.Reasoners {
+		if reason := s.registry.QuarantineReason(reasoner.DID); reason != "" {
+			return reason
+		}
+	}
+	for _, skill := range agent.Skills {
+		if reason := s.registry.QuarantineReason(skill.DID); reason != "" {
+			return reason
+		}
+	}
+	return ""
 }
 
 // buildExistingIdentityPackage builds an identity package from existing agent DID info.
@@ -1400,6 +1426,20 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		}, nil
 	}
 
+	if reason := s.quarantinedIdentityReason(&existingAgent); reason != "" {
+		return &types.DIDRegistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("refusing to issue keys for agent %s: %s", req.AgentNodeID, reason),
+		}, nil
+	}
+	if !identityMatchesPath(registry.MasterSeed, existingAgent.DerivationPath, existingAgent.DID) {
+		return &types.DIDRegistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("refusing to extend agent %s: its derivation path does not reproduce its DID", req.AgentNodeID),
+		}, nil
+	}
+	paths := s.newComponentPathAllocator(existingAgent)
+
 	// Generate DIDs for new reasoners only
 	newReasonerDIDs := make(map[string]types.DIDIdentity)
 	newReasonerInfos := make(map[string]types.ReasonerDIDInfo)
@@ -1414,13 +1454,7 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		}
 
 		// Generate DID for new reasoner
-		reasonerPath := s.generateReasonerPath(req.AgentNodeID, reasonerID)
-		if reasonerPath == "" {
-			return &types.DIDRegistrationResponse{
-				Success: false,
-				Error:   fmt.Sprintf("failed to generate derivation path for reasoner %s", reasonerID),
-			}, nil
-		}
+		reasonerPath := paths.allocate("reasoner")
 
 		reasonerDID, privKey, pubKey, err := s.generateDIDWithKeys(registry.MasterSeed, reasonerPath)
 		if err != nil {
@@ -1466,13 +1500,7 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		}
 
 		// Generate DID for new skill
-		skillPath := s.generateSkillPath(req.AgentNodeID, skillID)
-		if skillPath == "" {
-			return &types.DIDRegistrationResponse{
-				Success: false,
-				Error:   fmt.Sprintf("failed to generate derivation path for skill %s", skillID),
-			}, nil
-		}
+		skillPath := paths.allocate("skill")
 
 		skillDID, privKey, pubKey, err := s.generateDIDWithKeys(registry.MasterSeed, skillPath)
 		if err != nil {

@@ -75,10 +75,14 @@ func CreateServiceContainer(cfg *config.Config, agentfieldHome string) *framewor
 		if keystoreService != nil && didRegistry != nil {
 			didService = didServices.NewDIDService(&cfg.Features.DID, keystoreService, didRegistry)
 
-			// Generate af server ID based on agentfield home directory
-			// This ensures each agentfield instance has a unique ID while being deterministic
-			agentfieldServerID := generateAgentFieldServerID(agentfieldHome)
-			if err := didService.Initialize(agentfieldServerID); err != nil {
+			// Pick the stored server identity this control plane owns. Moving
+			// AGENTFIELD_HOME must not silently create a new identity.
+			agentfieldServerID, err := didServices.SelectAgentFieldServerID(
+				didRegistry, cfg.Features.DID.ServerID, generateAgentFieldServerID(agentfieldHome))
+			if err == nil {
+				err = didService.Initialize(agentfieldServerID)
+			}
+			if err != nil {
 				logger.Logger.Warn().Err(err).Msg("failed to initialize DID service")
 				didService = nil
 			} else {

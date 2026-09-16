@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,11 +41,12 @@ func (s *VCService) GetWorkflowVCChain(workflowID string) (*types.WorkflowVCChai
 
 	// Collect DID resolution bundle for offline verification
 	logger.Logger.Debug().Msgf("🔍 Collecting DID resolution bundle for workflow: %s", workflowID)
-	didResolutionBundle, err := s.collectDIDResolutionBundle(executionVCs, workflowVC)
-	if err != nil {
-		logger.Logger.Debug().Err(err).Msg("🔍 Failed to collect DID resolution bundle")
-		// Don't fail the entire request if DID resolution fails - just log and continue without bundle
-		didResolutionBundle = make(map[string]types.DIDResolutionEntry)
+	didResolutionBundle, unresolvedDIDs := s.collectDIDResolutionBundle(executionVCs, workflowVC)
+	if len(unresolvedDIDs) > 0 {
+		logger.Logger.Warn().
+			Str("workflow_id", workflowID).
+			Strs("unresolved_dids", unresolvedDIDs).
+			Msg("VC chain references DIDs whose public keys could not be resolved; the chain is not fully verifiable")
 	}
 	logger.Logger.Debug().Msgf("🔍 Collected %d DID resolution entries", len(didResolutionBundle))
 
@@ -56,11 +58,14 @@ func (s *VCService) GetWorkflowVCChain(workflowID string) (*types.WorkflowVCChai
 		TotalSteps:          len(executionVCs),
 		Status:              workflowVC.Status,
 		DIDResolutionBundle: didResolutionBundle,
+		UnresolvedDIDs:      unresolvedDIDs,
 	}, nil
 }
 
-// collectDIDResolutionBundle collects all unique DIDs from the VC chain and resolves their public keys.
-func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC, workflowVC *types.WorkflowVC) (map[string]types.DIDResolutionEntry, error) {
+// collectDIDResolutionBundle collects all unique DIDs from the VC chain and
+// resolves their public keys. DIDs that cannot be resolved are returned in
+// sorted order instead of being dropped silently.
+func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC, workflowVC *types.WorkflowVC) (map[string]types.DIDResolutionEntry, []string) {
 	bundle := make(map[string]types.DIDResolutionEntry)
 	resolvedAt := time.Now().UTC().Format(time.RFC3339)
 
@@ -84,15 +89,12 @@ func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC,
 		uniqueDIDs[workflowVC.IssuerDID] = true
 	}
 
+	var unresolved []string
+
 	// Resolve each unique DID and collect public keys
 	for did := range uniqueDIDs {
 		if did == "" || did == "did:key:" || len(strings.TrimSpace(did)) == 0 {
 			continue // Skip empty or incomplete DIDs
-		}
-
-		identity, err := s.didService.ResolveDID(did)
-		if err != nil {
-			continue // Skip DIDs that can't be resolved
 		}
 
 		// Determine DID method from the DID string
@@ -104,10 +106,28 @@ func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC,
 			}
 		}
 
+		identity, err := s.didService.ResolveDID(did)
+		if err != nil {
+			// A control-plane did:key encodes its own public key, so it can
+			// still be verified after the issuing identity is gone.
+			if publicKeyJWK, keyErr := publicKeyJWKFromDIDKey(did); keyErr == nil {
+				bundle[did] = types.DIDResolutionEntry{
+					Method:       method,
+					PublicKeyJWK: json.RawMessage(publicKeyJWK),
+					ResolvedFrom: "did_key",
+					ResolvedAt:   resolvedAt,
+				}
+				continue
+			}
+			unresolved = append(unresolved, did)
+			continue
+		}
+
 		// Parse the public key JWK string into a JSON object
 		var publicKeyJWK map[string]interface{}
 		if err := json.Unmarshal([]byte(identity.PublicKeyJWK), &publicKeyJWK); err != nil {
-			continue // Skip DIDs with invalid public key JWK
+			unresolved = append(unresolved, did)
+			continue
 		}
 
 		// Create resolution entry with properly parsed public key JWK
@@ -119,5 +139,6 @@ func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC,
 		}
 
 	}
-	return bundle, nil
+	sort.Strings(unresolved)
+	return bundle, unresolved
 }
