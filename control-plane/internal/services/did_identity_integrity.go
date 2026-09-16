@@ -2,7 +2,6 @@ package services
 
 import (
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -193,35 +192,26 @@ func LegacyAgentFieldServerID(agentfieldHome string, absPath func(string) (strin
 	return hex.EncodeToString(hash[:])[:16]
 }
 
-// NewAgentFieldServerID mints a server ID for a brand-new DID registry: 8 random
-// bytes, hex encoded, giving the same 16-character shape as the legacy
-// home-path IDs. The ID is folded into every derivation path, so generating it
-// randomly keeps a control plane's identity independent of where
-// AGENTFIELD_HOME happened to live when the registry was created.
-func NewAgentFieldServerID() (string, error) {
-	raw := make([]byte, 8)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("failed to generate a random af server ID: %w", err)
-	}
-	return hex.EncodeToString(raw), nil
-}
-
 // SelectAgentFieldServerID picks which persisted DID registry this control plane
 // owns, so that relocating AGENTFIELD_HOME does not silently mint a new identity.
 //
-//  1. An explicitly configured server ID always wins.
-//  2. A registry already stored under the legacy home-path ID is used, so
-//     installs created before random IDs keep their identity.
-//  3. With no registries at all, a fresh random ID names the new registry; the
-//     next boot adopts it through rule 4.
+//  1. An explicitly configured server ID is used when a registry with that ID
+//     is stored, or when no registries exist yet. A configured ID that matches
+//     none of the stored registries fails, so a typo cannot create a new
+//     identity.
+//  2. A registry already stored under the home-path ID is used.
+//  3. With no registries at all, the home-path ID names the new registry. It is
+//     deterministic, so replicas that share a home path and start together
+//     converge on one registry.
 //  4. With exactly one registry, it is adopted even if the home path changed.
 //  5. Otherwise the choice is ambiguous and startup fails closed.
 func SelectAgentFieldServerID(registry *DIDRegistry, configuredID, legacyID string) (string, error) {
-	if configured := strings.TrimSpace(configuredID); configured != "" {
-		return configured, nil
-	}
+	configured := strings.TrimSpace(configuredID)
 	if registry == nil {
-		return NewAgentFieldServerID()
+		if configured != "" {
+			return configured, nil
+		}
+		return legacyID, nil
 	}
 
 	existing, err := registry.ListRegistries()
@@ -230,19 +220,34 @@ func SelectAgentFieldServerID(registry *DIDRegistry, configuredID, legacyID stri
 	}
 	ids := make([]string, 0, len(existing))
 	for _, reg := range existing {
-		if reg.AgentFieldServerID == legacyID {
-			return legacyID, nil
-		}
 		ids = append(ids, reg.AgentFieldServerID)
 	}
 	sort.Strings(ids)
+	has := func(id string) bool {
+		for _, candidate := range ids {
+			if candidate == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	if configured != "" {
+		if len(ids) == 0 || has(configured) {
+			return configured, nil
+		}
+		return "", fmt.Errorf(
+			"AGENTFIELD_DID_SERVER_ID is set to %q but no stored DID registry has that ID (stored: %s); "+
+				"refusing to create a new server identity. Set it to one of the stored IDs or unset it",
+			configured, strings.Join(ids, ", "))
+	}
+	if has(legacyID) {
+		return legacyID, nil
+	}
 
 	switch len(ids) {
 	case 0:
-		// Brand-new install: name the registry with random bytes rather than a
-		// hash of AGENTFIELD_HOME. The next boot finds exactly one registry and
-		// adopts it.
-		return NewAgentFieldServerID()
+		return legacyID, nil
 	case 1:
 		logger.Logger.Warn().
 			Str("stored_server_id", ids[0]).
@@ -270,7 +275,10 @@ type legacyPathIndex struct {
 	componentsByIx map[int]map[string]string
 }
 
-func newLegacyPathIndex(registry *types.DIDRegistry) *legacyPathIndex {
+// newLegacyPathIndex bounds the agent-index search by every agent row stored
+// in the database, not just this server's: older versions loaded all agents
+// into every registry, so their agent indices counted agents of other servers.
+func newLegacyPathIndex(registry *types.DIDRegistry, storedAgentRows int) *legacyPathIndex {
 	maxComponents := 0
 	for _, agent := range registry.AgentNodes {
 		if n := len(agent.Reasoners); n > maxComponents {
@@ -283,7 +291,7 @@ func newLegacyPathIndex(registry *types.DIDRegistry) *legacyPathIndex {
 	return &legacyPathIndex{
 		masterSeed:     registry.MasterSeed,
 		serverSegment:  serverPathSegment(registry.AgentFieldServerID),
-		maxAgentIndex:  maxInt(64, 2*len(registry.AgentNodes)+16),
+		maxAgentIndex:  maxInt(64, 2*maxInt(storedAgentRows, len(registry.AgentNodes))+16),
 		maxComponentIx: maxInt(32, 2*maxComponents+8),
 		componentsByIx: make(map[int]map[string]string),
 	}
@@ -352,8 +360,14 @@ func (ix *legacyPathIndex) componentPath(did string, preferredAgentIndex int, ha
 // re-derives to its DID. Stale placeholder paths are replaced with the
 // recovered real path. Identities that cannot be recovered are returned as
 // quarantined, keyed by DID, and must never be given keys or resolved.
-func verifyRegistryIdentities(registry *types.DIDRegistry) (repaired int, quarantined map[string]string, rootErr error) {
+//
+// An unrecoverable component of an agent that did verify is removed from the
+// registry and returned in retire (agent DID to component DIDs), so the agent
+// keeps working and the component gets a fresh identity when it registers
+// again. An unrecoverable agent stays quarantined until an operator revokes it.
+func verifyRegistryIdentities(registry *types.DIDRegistry, storedAgentRows int) (repaired int, quarantined map[string]string, retire map[string][]string, rootErr error) {
 	quarantined = make(map[string]string)
+	retire = make(map[string][]string)
 
 	if !identityMatchesPath(registry.MasterSeed, rootDerivationPath, registry.RootDID) {
 		rootErr = fmt.Errorf("root DID %s for af server %s does not match its master seed (wrong encryption passphrase or corrupted seed)",
@@ -367,13 +381,13 @@ func verifyRegistryIdentities(registry *types.DIDRegistry) (repaired int, quaran
 				quarantined[skill.DID] = rootErr.Error()
 			}
 		}
-		return 0, quarantined, rootErr
+		return 0, quarantined, retire, rootErr
 	}
 
 	var index *legacyPathIndex
 	lazyIndex := func() *legacyPathIndex {
 		if index == nil {
-			index = newLegacyPathIndex(registry)
+			index = newLegacyPathIndex(registry, storedAgentRows)
 		}
 		return index
 	}
@@ -400,7 +414,8 @@ func verifyRegistryIdentities(registry *types.DIDRegistry) (repaired int, quaran
 					quarantined[skill.DID] = reason
 				}
 				logger.Logger.Error().Str("agent_node_id", nodeID).Str("did", agent.DID).
-					Msg("DID identity is inconsistent with persisted key material; refusing to use it")
+					Msg("Agent DID cannot be re-derived from persisted key material; refusing to issue its keys. " +
+						"To give the agent a new identity, set status = 'revoked' on its agent_dids row and restart")
 				continue
 			}
 			logger.Logger.Warn().Str("agent_node_id", nodeID).Str("stored_path", agent.DerivationPath).
@@ -419,7 +434,9 @@ func verifyRegistryIdentities(registry *types.DIDRegistry) (repaired int, quaran
 			if !ok {
 				quarantined[reasoner.DID] = fmt.Sprintf("reasoner %s DID %s cannot be re-derived from the stored master seed", id, reasoner.DID)
 				logger.Logger.Error().Str("agent_node_id", nodeID).Str("reasoner", id).Str("did", reasoner.DID).
-					Msg("Component DID identity is inconsistent with persisted key material; refusing to use it")
+					Msg("Component DID cannot be re-derived from persisted key material; retiring it so the component gets a new identity")
+				delete(agent.Reasoners, id)
+				retire[agent.DID] = append(retire[agent.DID], reasoner.DID)
 				continue
 			}
 			changed := fixed != reasoner.DerivationPath
@@ -437,7 +454,9 @@ func verifyRegistryIdentities(registry *types.DIDRegistry) (repaired int, quaran
 			if !ok {
 				quarantined[skill.DID] = fmt.Sprintf("skill %s DID %s cannot be re-derived from the stored master seed", id, skill.DID)
 				logger.Logger.Error().Str("agent_node_id", nodeID).Str("skill", id).Str("did", skill.DID).
-					Msg("Component DID identity is inconsistent with persisted key material; refusing to use it")
+					Msg("Component DID cannot be re-derived from persisted key material; retiring it so the component gets a new identity")
+				delete(agent.Skills, id)
+				retire[agent.DID] = append(retire[agent.DID], skill.DID)
 				continue
 			}
 			changed := fixed != skill.DerivationPath
@@ -454,7 +473,112 @@ func verifyRegistryIdentities(registry *types.DIDRegistry) (repaired int, quaran
 		registry.AgentNodes[nodeID] = agent
 	}
 
-	return repaired, quarantined, nil
+	return repaired, quarantined, retire, nil
+}
+
+// usedIdentities is every DID and derivation path that must never be issued
+// again: identities in memory, quarantined ones, and every agent and component
+// row in storage (any server, any status, including retired and revoked).
+type usedIdentities struct {
+	dids  map[string]bool
+	paths map[string]bool
+}
+
+func newUsedIdentities() *usedIdentities {
+	return &usedIdentities{dids: make(map[string]bool), paths: make(map[string]bool)}
+}
+
+func (u *usedIdentities) add(did, path string) {
+	if did != "" {
+		u.dids[did] = true
+	}
+	if path != "" {
+		u.paths[path] = true
+	}
+}
+
+func (u *usedIdentities) addRegistry(registry *types.DIDRegistry) {
+	u.add(registry.RootDID, "")
+	for _, agent := range registry.AgentNodes {
+		u.add(agent.DID, agent.DerivationPath)
+		for _, reasoner := range agent.Reasoners {
+			u.add(reasoner.DID, reasoner.DerivationPath)
+		}
+		for _, skill := range agent.Skills {
+			u.add(skill.DID, skill.DerivationPath)
+		}
+	}
+}
+
+// taken reports whether path, or the DID it derives, was ever issued.
+func (u *usedIdentities) taken(masterSeed []byte, path string) (bool, string, error) {
+	did, err := didForPath(masterSeed, path)
+	if err != nil {
+		return true, "", err
+	}
+	return u.paths[path] || u.dids[did], did, nil
+}
+
+// nextAgentPathFor returns the lowest agent path above every agent index used
+// under this server whose path and DID were never issued.
+func nextAgentPathFor(registry *types.DIDRegistry, used *usedIdentities) (string, error) {
+	segment := serverPathSegment(registry.AgentFieldServerID)
+	next := 0
+	for path := range used.paths {
+		if index, ok := agentIndexFromPath(path, segment); ok && index+1 > next {
+			next = index + 1
+		}
+	}
+	for ; ; next++ {
+		path := agentDerivationPath(segment, next)
+		taken, did, err := used.taken(registry.MasterSeed, path)
+		if err != nil {
+			return "", err
+		}
+		if !taken {
+			used.add(did, path)
+			return path, nil
+		}
+	}
+}
+
+// componentPathAllocator hands out component paths under one agent path.
+// Indices start above every index ever used under that agent path, by any
+// agent, and skip anything whose path or DID was already issued.
+type componentPathAllocator struct {
+	masterSeed []byte
+	agentPath  string
+	used       *usedIdentities
+	next       map[int]int
+}
+
+func newComponentPathAllocator(masterSeed []byte, agentPath string, used *usedIdentities) *componentPathAllocator {
+	alloc := &componentPathAllocator{masterSeed: masterSeed, agentPath: agentPath, used: used, next: map[int]int{0: 0, 1: 0}}
+	for path := range used.paths {
+		for branch := 0; branch <= 1; branch++ {
+			if index, ok := componentIndexFromPath(path, agentPath, branch); ok && index+1 > alloc.next[branch] {
+				alloc.next[branch] = index + 1
+			}
+		}
+	}
+	return alloc
+}
+
+func (a *componentPathAllocator) allocate(componentType string) (string, error) {
+	branch := componentBranch(componentType)
+	for {
+		index := a.next[branch]
+		a.next[branch] = index + 1
+		path := componentDerivationPath(a.agentPath, branch, index)
+		taken, did, err := a.used.taken(a.masterSeed, path)
+		if err != nil {
+			return "", err
+		}
+		if !taken {
+			a.used.add(did, path)
+			return path, nil
+		}
+	}
 }
 
 func verifyComponentPath(masterSeed []byte, did, storedPath string, lazyIndex func() *legacyPathIndex, agentIndex int, hasAgentIndex bool) (string, bool) {

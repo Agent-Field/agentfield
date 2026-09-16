@@ -59,22 +59,19 @@ func (ls *LocalStorage) StoreAgentFieldServerDID(ctx context.Context, agentfield
 
 	// Execute with retry logic
 	err = ls.retryOnConstraintFailure(ctx, func() error {
+		// Never replace the key material of an existing registry with a
+		// different one. A row with the same root DID holds the same identity, so
+		// only its seed encoding (for example after enabling encryption at rest)
+		// and rotation time are refreshed. Callers read the row back to learn
+		// which identity won when two control planes create it at once.
 		query := `
-                        INSERT OR REPLACE INTO did_registry (agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
+                        INSERT INTO did_registry (agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
                         VALUES (?, ?, ?, ?, ?, 0)
+                        ON CONFLICT (agentfield_server_id) DO UPDATE SET
+                                master_seed_encrypted = excluded.master_seed_encrypted,
+                                last_key_rotation = excluded.last_key_rotation
+                        WHERE did_registry.root_did = excluded.root_did
                 `
-		if ls.mode == "postgres" {
-			query = `
-                                INSERT INTO did_registry (agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
-                                VALUES (?, ?, ?, ?, ?, 0)
-                                ON CONFLICT (agentfield_server_id) DO UPDATE SET
-                                        root_did = EXCLUDED.root_did,
-                                        master_seed_encrypted = EXCLUDED.master_seed_encrypted,
-                                        created_at = EXCLUDED.created_at,
-                                        last_key_rotation = EXCLUDED.last_key_rotation,
-                                        total_dids = did_registry.total_dids
-                        `
-		}
 		_, execErr := tx.ExecContext(ctx, query, agentfieldServerID, rootDID, masterSeed, createdAt, lastKeyRotation)
 		if execErr != nil {
 			return fmt.Errorf("failed to store af server DID: %w", execErr)

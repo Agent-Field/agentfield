@@ -120,9 +120,10 @@ func CreateServiceContainerWithDefaults(agentfieldHome string) *framework.Servic
 
 var absPathForAgentFieldServerID = filepath.Abs
 
-// generateAgentFieldServerID returns the legacy af server ID derived from the
-// agentfield home directory. It is only used to find a registry created before
-// server IDs were random; new registries get a random ID.
+// generateAgentFieldServerID returns the af server ID derived from the
+// agentfield home directory. It names a new registry and finds one created at
+// the same home path; SelectAgentFieldServerID decides which stored registry
+// is used.
 func generateAgentFieldServerID(agentfieldHome string) string {
 	return didServices.LegacyAgentFieldServerID(agentfieldHome, absPathForAgentFieldServerID)
 }

@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -245,6 +245,36 @@ func TestIdentityContinuity_LegacyPlaceholderRowsAreRecovered(t *testing.T) {
 			require.True(t, identityMatchesPath(scratchRegistry.MasterSeed, component.DerivationPath, component.ComponentDID))
 		}
 	}
+
+	// node-b owns agent index 1, where node-a's misplaced component also lives.
+	// New components of node-b must skip that recovered path.
+	var bReasoners, bSkills []string
+	for id := range b.IdentityPackage.ReasonerDIDs {
+		bReasoners = append(bReasoners, id)
+	}
+	for id := range b.IdentityPackage.SkillDIDs {
+		bSkills = append(bSkills, id)
+	}
+	for i := 0; i < 6; i++ {
+		bReasoners = append(bReasoners, fmt.Sprintf("new-%d", i))
+	}
+	extended := register(t, svc, "node-b", bReasoners, bSkills)
+	seen := map[string]bool{misplacedDID: true}
+	for i := 0; i < 6; i++ {
+		identity := extended.IdentityPackage.ReasonerDIDs[fmt.Sprintf("new-%d", i)]
+		require.NotEqual(t, misplacedPath, identity.DerivationPath)
+		require.False(t, seen[identity.DID], "component DID %s was issued twice", identity.DID)
+		seen[identity.DID] = true
+	}
+
+	legacy.restart()
+	svc = legacy.service(legacy.registry(), "legacy-server")
+	again := register(t, svc, "node-b", bReasoners, bSkills)
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("new-%d", i)
+		require.Equal(t, extended.IdentityPackage.ReasonerDIDs[id].DID, again.IdentityPackage.ReasonerDIDs[id].DID)
+	}
+	requirePackageConsistent(t, again.IdentityPackage)
 }
 
 func TestIdentityContinuity_UnverifiableIdentityFailsClosed(t *testing.T) {
@@ -313,14 +343,11 @@ func TestSelectAgentFieldServerID(t *testing.T) {
 
 	id, err := SelectAgentFieldServerID(env.registry(), "", "home-hash")
 	require.NoError(t, err)
-	require.Len(t, id, 16, "no registries: a fresh random ID names the new one")
-	_, err = hex.DecodeString(id)
-	require.NoError(t, err, "random server ID must be hex")
-	require.NotEqual(t, "home-hash", id, "a new registry is not named after AGENTFIELD_HOME")
+	require.Equal(t, "home-hash", id, "no registries: the deterministic home-path ID names the new one")
 
-	again, err := SelectAgentFieldServerID(env.registry(), "", "home-hash")
+	id, err = SelectAgentFieldServerID(env.registry(), "pinned", "home-hash")
 	require.NoError(t, err)
-	require.NotEqual(t, id, again, "each new registry gets its own random ID")
+	require.Equal(t, "pinned", id, "a pinned ID may name the first registry")
 
 	env.service(env.registry(), "original")
 
@@ -328,9 +355,13 @@ func TestSelectAgentFieldServerID(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "original", id, "single registry is adopted after a home change")
 
-	id, err = SelectAgentFieldServerID(env.registry(), "pinned", "home-hash")
+	id, err = SelectAgentFieldServerID(env.registry(), "original", "home-hash")
 	require.NoError(t, err)
-	require.Equal(t, "pinned", id, "explicit configuration wins")
+	require.Equal(t, "original", id, "a pinned ID that exists is used")
+
+	_, err = SelectAgentFieldServerID(env.registry(), "orignal", "home-hash")
+	require.Error(t, err, "a pinned ID with no stored registry must not create a new identity")
+	require.Contains(t, err.Error(), "original")
 
 	env.service(env.registry(), "second")
 
@@ -343,31 +374,33 @@ func TestSelectAgentFieldServerID(t *testing.T) {
 	require.Contains(t, err.Error(), "AGENTFIELD_DID_SERVER_ID")
 }
 
-// A brand-new install must not be named after AGENTFIELD_HOME, and the second
-// boot must adopt the random ID it minted on the first.
-func TestIdentityContinuity_NewInstallGetsRandomServerID(t *testing.T) {
+// Replicas that share a home path and database must converge on one server
+// identity on first boot, and later boots must keep it.
+func TestIdentityContinuity_NewInstallServerIDIsStable(t *testing.T) {
 	env := newContinuityEnv(t)
 	env.restart()
 
 	homeID := LegacyAgentFieldServerID("/srv/agentfield", nil)
 
-	// Boot 1: no registries yet, so a random ID names the new one.
-	firstID, err := SelectAgentFieldServerID(env.registry(), "", homeID)
+	replicaA := env.registry()
+	replicaB := env.registry()
+	idA, err := SelectAgentFieldServerID(replicaA, "", homeID)
 	require.NoError(t, err)
-	require.NotEqual(t, homeID, firstID, "a new registry is not named after AGENTFIELD_HOME")
+	idB, err := SelectAgentFieldServerID(replicaB, "", homeID)
+	require.NoError(t, err)
+	require.Equal(t, homeID, idA)
+	require.Equal(t, idA, idB, "replicas booting together pick the same ID")
 
-	svc := env.service(env.registry(), firstID)
+	svc := env.service(replicaA, idA)
 	before := register(t, svc, "node-1", []string{"r1"}, []string{"s1"})
 	rootBefore, err := svc.GetControlPlaneIssuerDID()
 	require.NoError(t, err)
 
-	// Boot 2: exactly one registry exists and it does not match the home-path
-	// ID, so the single-registry rule adopts it.
 	env.restart()
 	registry := env.registry()
 	secondID, err := SelectAgentFieldServerID(registry, "", homeID)
 	require.NoError(t, err)
-	require.Equal(t, firstID, secondID, "second boot must adopt the ID minted on the first")
+	require.Equal(t, idA, secondID)
 
 	svc = env.service(registry, secondID)
 	rootAfter, err := svc.GetControlPlaneIssuerDID()

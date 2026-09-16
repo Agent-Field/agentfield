@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -50,6 +51,10 @@ func (r *DIDRegistry) Initialize() error {
 
 // GetRegistry retrieves a DID registry for a af server.
 // Returns (nil, nil) if registry doesn't exist, (nil, error) for actual errors.
+//
+// The result is a snapshot. Published agent maps are never modified in place
+// (see UpdateAgents), so it is safe to read without further locking, and
+// changing it has no effect on the registry.
 func (r *DIDRegistry) GetRegistry(agentfieldServerID string) (*types.DIDRegistry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -60,19 +65,119 @@ func (r *DIDRegistry) GetRegistry(agentfieldServerID string) (*types.DIDRegistry
 		return nil, nil
 	}
 
-	return registry, nil
+	snapshot := *registry
+	return &snapshot, nil
 }
 
-// StoreRegistry stores a DID registry for a af server.
+// StoreRegistry stores a DID registry for a af server and writes all of its
+// identities. The in-memory registry is replaced only when every write
+// succeeded.
 func (r *DIDRegistry) StoreRegistry(registry *types.DIDRegistry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Store in memory
+	if err := r.saveRegistryToDatabase(registry, nil); err != nil {
+		return err
+	}
 	r.registries[registry.AgentFieldServerID] = registry
+	return nil
+}
 
-	// Persist to database
-	return r.saveRegistryToDatabase(registry)
+// CreateRegistry persists a newly generated registry without ever replacing
+// one that already exists in storage. When another control plane created the
+// same server ID first, its stored identity is adopted instead, after checking
+// that its root DID matches its master seed.
+func (r *DIDRegistry) CreateRegistry(registry *types.DIDRegistry) (*types.DIDRegistry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	serverID := registry.AgentFieldServerID
+	if existing, ok := r.registries[serverID]; ok {
+		snapshot := *existing
+		return &snapshot, nil
+	}
+	if err := r.storeServerRow(registry); err != nil {
+		return nil, err
+	}
+
+	stored, err := r.storageProvider.GetAgentFieldServerDID(context.Background(), serverID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read back af server DID %s: %w", serverID, err)
+	}
+	if stored == nil {
+		return nil, fmt.Errorf("af server DID %s was not stored", serverID)
+	}
+	if stored.RootDID != registry.RootDID {
+		seed := r.decryptSeed(serverID, stored.MasterSeed)
+		if !identityMatchesPath(seed, rootDerivationPath, stored.RootDID) {
+			err := fmt.Errorf("stored root DID %s for af server %s does not match its master seed", stored.RootDID, serverID)
+			r.brokenServers[serverID] = err
+			return nil, err
+		}
+		log.Printf("DID registry for af server %s was created by another control plane; adopting root DID %s", serverID, stored.RootDID)
+		registry.RootDID = stored.RootDID
+		registry.MasterSeed = seed
+		registry.CreatedAt = stored.CreatedAt
+		registry.LastKeyRotation = stored.LastKeyRotation
+	}
+
+	r.registries[serverID] = registry
+	snapshot := *registry
+	return &snapshot, nil
+}
+
+// UpdateAgents applies a change to a server's agents. fn receives a private
+// copy of the registry whose AgentNodes map may be modified freely; inner
+// Reasoners and Skills maps are shared and must be replaced, not modified (see
+// cloneAgentInfo). fn returns the node IDs it changed. Only those agents are
+// written, and the change is published in memory only when every write
+// succeeded, so a failed save leaves the registry exactly as it was.
+func (r *DIDRegistry) UpdateAgents(agentfieldServerID string, fn func(registry *types.DIDRegistry) ([]string, error)) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	current, exists := r.registries[agentfieldServerID]
+	if !exists {
+		return fmt.Errorf("registry not found for af server: %s", agentfieldServerID)
+	}
+	if err := r.brokenServers[agentfieldServerID]; err != nil {
+		return fmt.Errorf("refusing to modify DID registry for af server %s: %w", agentfieldServerID, err)
+	}
+
+	next := *current
+	next.AgentNodes = make(map[string]types.AgentDIDInfo, len(current.AgentNodes)+1)
+	for nodeID, agent := range current.AgentNodes {
+		next.AgentNodes[nodeID] = agent
+	}
+
+	changed, err := fn(&next)
+	if err != nil {
+		return err
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	if err := r.saveRegistryToDatabase(&next, changed); err != nil {
+		return err
+	}
+	r.registries[agentfieldServerID] = &next
+	return nil
+}
+
+// cloneAgentInfo returns a copy of agent whose component maps can be modified
+// without affecting published registry snapshots.
+func cloneAgentInfo(agent types.AgentDIDInfo) types.AgentDIDInfo {
+	reasoners := make(map[string]types.ReasonerDIDInfo, len(agent.Reasoners))
+	for id, reasoner := range agent.Reasoners {
+		reasoners[id] = reasoner
+	}
+	skills := make(map[string]types.SkillDIDInfo, len(agent.Skills))
+	for id, skill := range agent.Skills {
+		skills[id] = skill
+	}
+	agent.Reasoners = reasoners
+	agent.Skills = skills
+	return agent
 }
 
 // ListRegistries lists all af server registries.
@@ -103,24 +208,15 @@ func (r *DIDRegistry) DeleteRegistry(agentfieldServerID string) error {
 
 // UpdateAgentStatus updates the status of an agent DID.
 func (r *DIDRegistry) UpdateAgentStatus(agentfieldServerID, agentNodeID string, status types.AgentDIDStatus) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	registry, exists := r.registries[agentfieldServerID]
-	if !exists {
-		return fmt.Errorf("registry not found for af server: %s", agentfieldServerID)
-	}
-
-	agentInfo, exists := registry.AgentNodes[agentNodeID]
-	if !exists {
-		return fmt.Errorf("agent not found: %s", agentNodeID)
-	}
-
-	agentInfo.Status = status
-	registry.AgentNodes[agentNodeID] = agentInfo
-
-	// Persist changes to database
-	return r.saveRegistryToDatabase(registry)
+	return r.UpdateAgents(agentfieldServerID, func(registry *types.DIDRegistry) ([]string, error) {
+		agentInfo, exists := registry.AgentNodes[agentNodeID]
+		if !exists {
+			return nil, fmt.Errorf("agent not found: %s", agentNodeID)
+		}
+		agentInfo.Status = status
+		registry.AgentNodes[agentNodeID] = agentInfo
+		return []string{agentNodeID}, nil
+	})
 }
 
 // FindDIDByComponent finds a DID by component type and function name.
@@ -262,20 +358,7 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 	for _, agentfieldServerDIDInfo := range agentfieldServerDIDs {
 		serverID := agentfieldServerDIDInfo.AgentFieldServerID
 
-		// Decrypt master seed if encryption is configured
-		masterSeed := agentfieldServerDIDInfo.MasterSeed
-		if r.encryptionService != nil {
-			decrypted, err := r.encryptionService.DecryptBytes(masterSeed)
-			if err != nil {
-				// Backward compatibility: if decryption fails, the seed may be stored
-				// as plaintext from before encryption was configured. The root DID
-				// check below rejects the registry if these bytes are not the seed.
-				log.Printf("Warning: master seed decryption failed for %s (may be plaintext from before encryption was enabled), using raw bytes",
-					serverID)
-				decrypted = masterSeed
-			}
-			masterSeed = decrypted
-		}
+		masterSeed := r.decryptSeed(serverID, agentfieldServerDIDInfo.MasterSeed)
 
 		registry := &types.DIDRegistry{
 			AgentFieldServerID: serverID,
@@ -297,6 +380,14 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 		})
 
 		for _, agentDIDInfo := range rows {
+			if agentDIDInfo.Status == types.AgentDIDStatusRevoked {
+				// An operator revoked this identity. It stays in storage so its
+				// DID and derivation path are never issued again, but the node
+				// gets a new identity the next time it registers.
+				log.Printf("Agent %s DID %s under af server %s is revoked; it will not be loaded",
+					agentDIDInfo.AgentNodeID, agentDIDInfo.DID, serverID)
+				continue
+			}
 			if existing, dup := registry.AgentNodes[agentDIDInfo.AgentNodeID]; dup {
 				// Keep the earliest identity deterministically; never let row
 				// order decide which key an agent gets.
@@ -356,16 +447,26 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 			registry.TotalDIDs++
 		}
 
-		repaired, registryQuarantine, rootErr := verifyRegistryIdentities(registry)
+		repaired, registryQuarantine, retire, rootErr := verifyRegistryIdentities(registry, len(agentDIDs))
 		for did, reason := range registryQuarantine {
 			quarantined[did] = reason
 		}
 		if rootErr != nil {
 			log.Printf("Error: %v", rootErr)
 			brokenServers[serverID] = rootErr
-		} else if repaired > 0 {
-			log.Printf("Recovered %d DID derivation paths or public keys for af server %s; persisting corrections", repaired, serverID)
-			toRepair = append(toRepair, registry)
+		} else {
+			if repaired > 0 {
+				log.Printf("Recovered %d DID derivation paths or public keys for af server %s; persisting corrections", repaired, serverID)
+				toRepair = append(toRepair, registry)
+			}
+			for agentDID, componentDIDs := range retire {
+				// The component was already dropped from the registry. Retiring the
+				// row keeps it from being loaded again; if this fails it is simply
+				// dropped again on the next start.
+				if err := r.storageProvider.RetireComponentDIDs(ctx, agentDID, componentDIDs); err != nil {
+					log.Printf("Warning: failed to retire unverifiable component DIDs of agent %s: %v", agentDID, err)
+				}
+			}
 		}
 
 		registries[serverID] = registry
@@ -382,7 +483,7 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 	for _, registry := range toRepair {
 		// The recovered paths are already correct in memory; a failed write is
 		// retried on the next registry save, so it must not block startup.
-		if err := r.saveRegistryToDatabase(registry); err != nil {
+		if err := r.saveRegistryToDatabase(registry, nil); err != nil {
 			log.Printf("Warning: failed to persist recovered DID paths for af server %s: %v", registry.AgentFieldServerID, err)
 		}
 	}
@@ -391,18 +492,29 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 	return nil
 }
 
-// saveRegistryToDatabase saves a registry to the database. Callers must hold
-// r.mu. Every identity is written with its exact derivation path and public
-// key. Quarantined identities are left untouched in storage.
-func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry) error {
+// decryptSeed decrypts a stored master seed when encryption is configured.
+func (r *DIDRegistry) decryptSeed(serverID string, stored []byte) []byte {
+	if r.encryptionService == nil {
+		return stored
+	}
+	decrypted, err := r.encryptionService.DecryptBytes(stored)
+	if err != nil {
+		// Backward compatibility: if decryption fails, the seed may be stored
+		// as plaintext from before encryption was configured. The root DID
+		// check rejects the registry if these bytes are not the seed.
+		log.Printf("Warning: master seed decryption failed for %s (may be plaintext from before encryption was enabled), using raw bytes",
+			serverID)
+		return stored
+	}
+	return decrypted
+}
+
+// storeServerRow writes the af server DID row. Storage never replaces an
+// existing row's key material with a different identity.
+func (r *DIDRegistry) storeServerRow(registry *types.DIDRegistry) error {
 	if r.storageProvider == nil {
 		return fmt.Errorf("storage provider not available")
 	}
-	if err := r.brokenServers[registry.AgentFieldServerID]; err != nil {
-		return fmt.Errorf("refusing to write DID registry for af server %s: %w", registry.AgentFieldServerID, err)
-	}
-
-	ctx := context.Background()
 
 	// Encrypt master seed before storing if encryption is configured
 	seedToStore := registry.MasterSeed
@@ -414,9 +526,8 @@ func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry) error 
 		seedToStore = encrypted
 	}
 
-	// Store af server DID information
 	err := r.storageProvider.StoreAgentFieldServerDID(
-		ctx,
+		context.Background(),
 		registry.AgentFieldServerID,
 		registry.RootDID,
 		seedToStore,
@@ -426,15 +537,44 @@ func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry) error 
 	if err != nil {
 		return fmt.Errorf("failed to store af server DID: %w", err)
 	}
+	return nil
+}
 
-	nodeIDs := make([]string, 0, len(registry.AgentNodes))
-	for nodeID := range registry.AgentNodes {
-		nodeIDs = append(nodeIDs, nodeID)
+// saveRegistryToDatabase saves a registry to the database. Callers must hold
+// r.mu. Only the agents in nodeIDs are written, or all agents when nodeIDs is
+// nil. Every identity is written with its exact derivation path and public
+// key. Quarantined identities are left untouched in storage. A failure for one
+// agent does not stop the others from being written; all failures are
+// returned together.
+func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry, nodeIDs []string) error {
+	if r.storageProvider == nil {
+		return fmt.Errorf("storage provider not available")
 	}
+	if err := r.brokenServers[registry.AgentFieldServerID]; err != nil {
+		return fmt.Errorf("refusing to write DID registry for af server %s: %w", registry.AgentFieldServerID, err)
+	}
+
+	ctx := context.Background()
+
+	if err := r.storeServerRow(registry); err != nil {
+		return err
+	}
+
+	if nodeIDs == nil {
+		nodeIDs = make([]string, 0, len(registry.AgentNodes))
+		for nodeID := range registry.AgentNodes {
+			nodeIDs = append(nodeIDs, nodeID)
+		}
+	}
+	nodeIDs = append([]string(nil), nodeIDs...)
 	sort.Strings(nodeIDs)
 
+	var errs []error
 	for _, nodeID := range nodeIDs {
-		agentInfo := registry.AgentNodes[nodeID]
+		agentInfo, exists := registry.AgentNodes[nodeID]
+		if !exists {
+			continue
+		}
 		if _, bad := r.quarantined[agentInfo.DID]; bad {
 			continue
 		}
@@ -476,11 +616,11 @@ func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry) error 
 			Components:         components,
 		})
 		if err != nil {
-			return fmt.Errorf("failed to store agent DID %s with components: %w", agentInfo.AgentNodeID, err)
+			errs = append(errs, fmt.Errorf("failed to store agent DID %s with components: %w", agentInfo.AgentNodeID, err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // QuarantineReason reports why a DID must not be used, or "" when it is sound.
@@ -526,23 +666,42 @@ func (r *DIDRegistry) RetireComponents(agentfieldServerID, agentNodeID string, c
 	return nil
 }
 
-// persistedComponentPaths returns stored derivation paths for an agent's
-// components, active and retired, so a new component never reuses the key of a
-// component that was removed, even across restarts.
-func (r *DIDRegistry) persistedComponentPaths(agentDID string) []string {
-	if r.storageProvider == nil || agentDID == "" {
-		return nil
+// usedIdentities collects every DID and derivation path that was ever issued
+// from this database: all agent and component rows of every server and status,
+// plus everything in memory and in quarantine. A storage error is returned, so
+// allocation never proceeds on an incomplete view.
+func (r *DIDRegistry) usedIdentities(ctx context.Context) (*usedIdentities, error) {
+	if r.storageProvider == nil {
+		return nil, fmt.Errorf("storage provider not available")
 	}
-	components, err := r.storageProvider.ListAllComponentDIDs(context.Background(), agentDID)
+	used := newUsedIdentities()
+
+	agents, err := r.storageProvider.ListAgentDIDs(ctx)
 	if err != nil {
-		log.Printf("Warning: failed to list stored component DIDs for %s: %v", agentDID, err)
-		return nil
+		return nil, fmt.Errorf("failed to list stored agent DIDs: %w", err)
 	}
-	paths := make([]string, 0, len(components))
-	for _, component := range components {
-		if component != nil && component.DerivationPath != "" {
-			paths = append(paths, component.DerivationPath)
+	for _, agent := range agents {
+		if agent != nil {
+			used.add(agent.DID, agent.DerivationPath)
 		}
 	}
-	return paths
+	components, err := r.storageProvider.ListAllComponentDIDs(ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list stored component DIDs: %w", err)
+	}
+	for _, component := range components {
+		if component != nil {
+			used.add(component.ComponentDID, component.DerivationPath)
+		}
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, registry := range r.registries {
+		used.addRegistry(registry)
+	}
+	for did := range r.quarantined {
+		used.add(did, "")
+	}
+	return used, nil
 }

@@ -162,10 +162,17 @@ These map to `api.cors.*` in config. When set via env, use comma-separated value
 
 ### DID server identity
 
-The control plane's DID identity (master seed, root DID, and every agent and component DID) is stored in the database, not derived from the filesystem. New installs name their registry with a random server ID, and on later boots the control plane adopts the registry it finds, so moving `AGENTFIELD_HOME` (for example to a new volume mount) keeps the same identity. Installs created before this change keep the ID they already have.
+The control plane's DID identity (master seed, root DID, and every agent and component DID) is stored in the database. A new install names its registry after `AGENTFIELD_HOME`, so replicas that share a home path and database converge on one identity; if two start at once, the second adopts the identity the first stored instead of overwriting it. On later boots the control plane adopts the registry it finds, so moving `AGENTFIELD_HOME` (for example to a new volume mount) keeps the same identity.
 
-- `AGENTFIELD_DID_SERVER_ID` (default: unset): Pins which stored DID registry this control plane owns. Leave it unset unless several registries share one database; in that case the server refuses to start, lists the stored IDs, and asks you to set this variable. Equivalent YAML: `features.did.server_id`.
+- `AGENTFIELD_DID_SERVER_ID` (default: unset): Pins which stored DID registry this control plane owns. Leave it unset unless several registries share one database; in that case the server refuses to start, lists the stored IDs, and asks you to set this variable. A pinned ID that matches no stored registry also stops startup, so a typo cannot create a new identity. Replicas with different home paths should all pin the same ID. Equivalent YAML: `features.did.server_id`.
 - DIDs from other registries in the same database stay resolvable so their credentials still verify, but only the active registry's identities can sign.
+- At startup every stored identity is checked against the master seed. A component whose DID cannot be re-derived is retired and gets a new DID when its agent registers again. An agent whose DID cannot be re-derived is refused keys. If it cannot be recovered, revoke it so the node gets a new identity on its next registration (credentials signed by the old DID will no longer verify):
+
+  ```sql
+  UPDATE agent_dids SET status = 'revoked' WHERE did = '<agent DID from the startup log>';
+  ```
+
+  Then restart the control plane. Revoked rows are kept so their keys are never issued again.
 
 ### Authorization (VC-Based Permissions)
 

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -65,12 +66,18 @@ func TestDIDServiceResolveAgentIDAndDerivationPaths(t *testing.T) {
 
 	existing, err := service.GetExistingAgentDID("agent-paths")
 	require.NoError(t, err)
-	paths := service.newComponentPathAllocator(*existing)
+	registry, err := service.registry.GetRegistry(service.agentfieldServerID)
+	require.NoError(t, err)
+	used, err := service.registry.usedIdentities(context.Background())
+	require.NoError(t, err)
+	paths := newComponentPathAllocator(registry.MasterSeed, existing.DerivationPath, used)
 
-	reasonerPath := paths.allocate("reasoner")
-	require.Equal(t, existing.DerivationPath+"/0'/1'", reasonerPath)
-	require.Equal(t, existing.DerivationPath+"/0'/2'", paths.allocate("reasoner"))
-
-	skillPath := paths.allocate("skill")
-	require.Equal(t, existing.DerivationPath+"/1'/1'", skillPath)
+	allocate := func(componentType string) string {
+		path, err := paths.allocate(componentType)
+		require.NoError(t, err)
+		return path
+	}
+	require.Equal(t, existing.DerivationPath+"/0'/1'", allocate("reasoner"))
+	require.Equal(t, existing.DerivationPath+"/0'/2'", allocate("reasoner"))
+	require.Equal(t, existing.DerivationPath+"/1'/1'", allocate("skill"))
 }

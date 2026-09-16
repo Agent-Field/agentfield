@@ -12,6 +12,7 @@ import (
 	"io"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
@@ -23,6 +24,9 @@ import (
 
 // DIDService handles DID generation, management, and resolution.
 type DIDService struct {
+	// mu serializes every operation that allocates or changes identities, so
+	// two registrations can never be handed the same derivation path.
+	mu                 sync.Mutex
 	config             *config.DIDConfig
 	keystore           *KeystoreService
 	registry           *DIDRegistry
@@ -84,10 +88,12 @@ func (s *DIDService) Initialize(agentfieldServerID string) error {
 			LastKeyRotation:    time.Now(),
 		}
 
-		if err := s.registry.StoreRegistry(registry); err != nil {
+		// Another control plane sharing this database may create the same
+		// server ID at the same time; CreateRegistry keeps whichever identity
+		// was stored first instead of overwriting it.
+		if _, err := s.registry.CreateRegistry(registry); err != nil {
 			return fmt.Errorf("failed to store DID registry: %w", err)
 		}
-
 	}
 
 	return nil
@@ -158,6 +164,9 @@ func (s *DIDService) GetRegistry(agentfieldServerID string) (*types.DIDRegistry,
 // RegisterAgent generates DIDs for an agent node and all its components.
 // Enhanced to support partial registration for existing agents.
 func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if !s.config.Enabled {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -186,7 +195,7 @@ func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DI
 		if reason := s.quarantinedIdentityReason(existingAgent); reason != "" {
 			return &types.DIDRegistrationResponse{
 				Success: false,
-				Error:   fmt.Sprintf("refusing to issue keys for agent %s: %s", req.AgentNodeID, reason),
+				Error:   quarantinedAgentError(req.AgentNodeID, reason),
 			}, nil
 		}
 
@@ -240,9 +249,23 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 		}, nil
 	}
 
-	// Allocate an agent index that has never been used under this server, so a
-	// new agent can never be handed another agent's key.
-	agentPath := s.nextAgentPath(registry)
+	// Allocate paths that were never issued from this database, by any agent
+	// of any server, so a new identity can never be handed an existing key.
+	used, err := s.registry.usedIdentities(context.Background())
+	if err != nil {
+		return &types.DIDRegistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to read issued DIDs: %v", err),
+		}, nil
+	}
+	agentPath, err := nextAgentPathFor(registry, used)
+	if err != nil {
+		return &types.DIDRegistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to allocate agent derivation path: %v", err),
+		}, nil
+	}
+	paths := newComponentPathAllocator(registry.MasterSeed, agentPath, used)
 	agentDID, agentPrivKey, agentPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, agentPath)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
@@ -269,7 +292,6 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 
 	logger.Logger.Debug().Msgf("🔍 DEBUG: Calling did_manager.register_agent() with %d reasoners and %d skills", len(req.Reasoners), len(req.Skills))
 
-	validReasonerIndex := 0
 	for i, reasoner := range req.Reasoners {
 		// Skip reasoners with empty IDs to prevent malformed DIDs
 		if reasoner.ID == "" {
@@ -277,7 +299,13 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			continue
 		}
 
-		reasonerPath := componentDerivationPath(agentPath, componentBranch("reasoner"), validReasonerIndex)
+		reasonerPath, err := paths.allocate("reasoner")
+		if err != nil {
+			return &types.DIDRegistrationResponse{
+				Success: false,
+				Error:   fmt.Sprintf("failed to allocate derivation path for reasoner %s: %v", reasoner.ID, err),
+			}, nil
+		}
 		reasonerDID, reasonerPrivKey, reasonerPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, reasonerPath)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
@@ -305,7 +333,6 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			CreatedAt:      time.Now(),
 		}
 
-		validReasonerIndex++
 		logger.Logger.Debug().Msgf("🔍 Created DID for reasoner %s: %s", reasoner.ID, reasonerDID)
 	}
 
@@ -315,7 +342,6 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 	skillDIDs := make(map[string]types.DIDIdentity)
 	skillInfos := make(map[string]types.SkillDIDInfo)
 
-	validSkillIndex := 0
 	for i, skill := range req.Skills {
 		// Skip skills with empty IDs to prevent malformed DIDs
 		if skill.ID == "" {
@@ -323,7 +349,13 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			continue
 		}
 
-		skillPath := componentDerivationPath(agentPath, componentBranch("skill"), validSkillIndex)
+		skillPath, err := paths.allocate("skill")
+		if err != nil {
+			return &types.DIDRegistrationResponse{
+				Success: false,
+				Error:   fmt.Sprintf("failed to allocate derivation path for skill %s: %v", skill.ID, err),
+			}, nil
+		}
 		skillDID, skillPrivKey, skillPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, skillPath)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
@@ -351,7 +383,6 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			CreatedAt:      time.Now(),
 		}
 
-		validSkillIndex++
 		logger.Logger.Debug().Msgf("🔍 Created DID for skill %s: %s", skill.ID, skillDID)
 	}
 
@@ -372,11 +403,15 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 	}
 
 	// Update registry
-	registry.AgentNodes[req.AgentNodeID] = agentDIDInfo
-	registry.TotalDIDs += 1 + len(req.Reasoners) + len(req.Skills)
-
-	// Store updated registry
-	if err := s.registry.StoreRegistry(registry); err != nil {
+	err = s.registry.UpdateAgents(agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
+		if _, exists := live.AgentNodes[req.AgentNodeID]; exists {
+			return nil, fmt.Errorf("agent %s was registered concurrently", req.AgentNodeID)
+		}
+		live.AgentNodes[req.AgentNodeID] = agentDIDInfo
+		live.TotalDIDs += 1 + len(reasonerInfos) + len(skillInfos)
+		return []string{req.AgentNodeID}, nil
+	})
+	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to store updated registry: %v", err),
@@ -821,6 +856,9 @@ func (s *DIDService) regenerateX25519KeyPairJWKAtEpoch(masterSeed []byte, deriva
 // Only agent-node DIDs are supported. Reasoner/skill/root DIDs do not carry an
 // independent keyAgreement key and return a clear error.
 func (s *DIDService) RotateAgentX25519Key(did string) (newPubJWK string, newEpoch int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if did == "" {
 		return "", 0, fmt.Errorf("did is required")
 	}
@@ -889,10 +927,12 @@ func (s *DIDService) RotateAgentX25519Key(did string) (newPubJWK string, newEpoc
 	// Persist the new epoch + public key.
 	agentInfo.X25519Epoch = newEpoch
 	agentInfo.X25519PublicKeyJWK = json.RawMessage(pubJWK)
-	registry.AgentNodes[agentNodeID] = agentInfo
-	registry.LastKeyRotation = time.Now()
-
-	if err := s.registry.StoreRegistry(registry); err != nil {
+	err = s.registry.UpdateAgents(agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
+		live.AgentNodes[agentNodeID] = agentInfo
+		live.LastKeyRotation = time.Now()
+		return []string{agentNodeID}, nil
+	})
+	if err != nil {
 		return "", 0, fmt.Errorf("failed to persist registry after keyAgreement rotation: %w", err)
 	}
 
@@ -1173,63 +1213,12 @@ func (s *DIDService) findSkillByID(skills []types.SkillDefinition, id string) *t
 	return nil
 }
 
-// nextAgentPath returns the derivation path for a new agent: one past the
-// highest agent index ever used under this server, skipping any path whose DID
-// is already present in the registry.
-func (s *DIDService) nextAgentPath(registry *types.DIDRegistry) string {
-	serverSegment := serverPathSegment(registry.AgentFieldServerID)
-	used := make(map[string]bool, len(registry.AgentNodes))
-	next := 0
-	for _, agent := range registry.AgentNodes {
-		used[agent.DID] = true
-		if index, ok := agentIndexFromPath(agent.DerivationPath, serverSegment); ok && index+1 > next {
-			next = index + 1
-		}
-	}
-	for {
-		path := agentDerivationPath(serverSegment, next)
-		did, err := didForPath(registry.MasterSeed, path)
-		if err != nil || !used[did] {
-			return path
-		}
-		next++
-	}
-}
-
-// componentPathAllocator hands out component derivation paths for one agent.
-// Indices continue past every index already used in memory or in storage,
-// including removed components, so a new component never reuses a key.
-type componentPathAllocator struct {
-	agentPath string
-	next      map[int]int
-}
-
-func (s *DIDService) newComponentPathAllocator(agent types.AgentDIDInfo) *componentPathAllocator {
-	alloc := &componentPathAllocator{agentPath: agent.DerivationPath, next: map[int]int{0: 0, 1: 0}}
-	observe := func(path string) {
-		for branch := 0; branch <= 1; branch++ {
-			if index, ok := componentIndexFromPath(path, agent.DerivationPath, branch); ok && index+1 > alloc.next[branch] {
-				alloc.next[branch] = index + 1
-			}
-		}
-	}
-	for _, reasoner := range agent.Reasoners {
-		observe(reasoner.DerivationPath)
-	}
-	for _, skill := range agent.Skills {
-		observe(skill.DerivationPath)
-	}
-	for _, path := range s.registry.persistedComponentPaths(agent.DID) {
-		observe(path)
-	}
-	return alloc
-}
-
-func (a *componentPathAllocator) allocate(componentType string) string {
-	branch := componentBranch(componentType)
-	index := a.next[branch]
-	a.next[branch] = index + 1
-	return componentDerivationPath(a.agentPath, branch, index)
+// quarantinedAgentError explains why an agent cannot be given keys and how an
+// operator can issue it a new identity.
+func quarantinedAgentError(agentNodeID, reason string) string {
+	return fmt.Sprintf("refusing to issue keys for agent %s: %s. If this identity cannot be recovered, "+
+		"set status = 'revoked' on its agent_dids row and restart the control plane to issue a new identity "+
+		"(credentials signed by the old DID will no longer verify)", agentNodeID, reason)
 }
 
 // quarantinedIdentityReason returns why any identity belonging to the agent
@@ -1354,7 +1343,7 @@ func (s *DIDService) handlePartialRegistration(req *types.DIDRegistrationRequest
 			SkillIDsToRemove:    diffResult.RemovedSkillIDs,
 		}
 
-		deregResponse, err := s.DeregisterComponents(deregReq)
+		deregResponse, err := s.deregisterComponents(deregReq)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
 				Success: false,
@@ -1384,7 +1373,7 @@ func (s *DIDService) handlePartialRegistration(req *types.DIDRegistrationRequest
 			AllSkills:          req.Skills,
 		}
 
-		return s.PartialRegisterAgent(partialReq)
+		return s.partialRegisterAgent(partialReq)
 	}
 
 	// If we reach here, only removals were needed
@@ -1406,6 +1395,13 @@ func (s *DIDService) handlePartialRegistration(req *types.DIDRegistrationRequest
 
 // PartialRegisterAgent registers only new components for an existing agent.
 func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.partialRegisterAgent(req)
+}
+
+// partialRegisterAgent is PartialRegisterAgent for callers holding s.mu.
+func (s *DIDService) partialRegisterAgent(req *types.PartialDIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 	if !s.config.Enabled {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -1450,7 +1446,7 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 	if reason := s.quarantinedIdentityReason(&existingAgent); reason != "" {
 		return &types.DIDRegistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("refusing to issue keys for agent %s: %s", req.AgentNodeID, reason),
+			Error:   quarantinedAgentError(req.AgentNodeID, reason),
 		}, nil
 	}
 	if !identityMatchesPath(registry.MasterSeed, existingAgent.DerivationPath, existingAgent.DID) {
@@ -1459,7 +1455,15 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 			Error:   fmt.Sprintf("refusing to extend agent %s: its derivation path does not reproduce its DID", req.AgentNodeID),
 		}, nil
 	}
-	paths := s.newComponentPathAllocator(existingAgent)
+	existingAgent = cloneAgentInfo(existingAgent)
+	used, err := s.registry.usedIdentities(context.Background())
+	if err != nil {
+		return &types.DIDRegistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to read issued DIDs: %v", err),
+		}, nil
+	}
+	paths := newComponentPathAllocator(registry.MasterSeed, existingAgent.DerivationPath, used)
 
 	// Generate DIDs for new reasoners only
 	newReasonerDIDs := make(map[string]types.DIDIdentity)
@@ -1475,7 +1479,13 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		}
 
 		// Generate DID for new reasoner
-		reasonerPath := paths.allocate("reasoner")
+		reasonerPath, err := paths.allocate("reasoner")
+		if err != nil {
+			return &types.DIDRegistrationResponse{
+				Success: false,
+				Error:   fmt.Sprintf("failed to allocate derivation path for reasoner %s: %v", reasonerID, err),
+			}, nil
+		}
 
 		reasonerDID, privKey, pubKey, err := s.generateDIDWithKeys(registry.MasterSeed, reasonerPath)
 		if err != nil {
@@ -1521,7 +1531,13 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		}
 
 		// Generate DID for new skill
-		skillPath := paths.allocate("skill")
+		skillPath, err := paths.allocate("skill")
+		if err != nil {
+			return &types.DIDRegistrationResponse{
+				Success: false,
+				Error:   fmt.Sprintf("failed to allocate derivation path for skill %s: %v", skillID, err),
+			}, nil
+		}
 
 		skillDID, privKey, pubKey, err := s.generateDIDWithKeys(registry.MasterSeed, skillPath)
 		if err != nil {
@@ -1578,10 +1594,12 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 	}
 
 	// Update registry
-	registry.AgentNodes[req.AgentNodeID] = existingAgent
-	registry.TotalDIDs += len(newReasonerDIDs) + len(newSkillDIDs)
-
-	if err := s.registry.StoreRegistry(registry); err != nil {
+	err = s.registry.UpdateAgents(agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
+		live.AgentNodes[req.AgentNodeID] = existingAgent
+		live.TotalDIDs += len(newReasonerDIDs) + len(newSkillDIDs)
+		return []string{req.AgentNodeID}, nil
+	})
+	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to store updated registry: %v", err),
@@ -1617,6 +1635,13 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 
 // DeregisterComponents removes specific components from an agent's DID registry.
 func (s *DIDService) DeregisterComponents(req *types.ComponentDeregistrationRequest) (*types.ComponentDeregistrationResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deregisterComponents(req)
+}
+
+// deregisterComponents is DeregisterComponents for callers holding s.mu.
+func (s *DIDService) deregisterComponents(req *types.ComponentDeregistrationRequest) (*types.ComponentDeregistrationResponse, error) {
 	if !s.config.Enabled {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
@@ -1658,6 +1683,7 @@ func (s *DIDService) DeregisterComponents(req *types.ComponentDeregistrationRequ
 		}, nil
 	}
 
+	existingAgent = cloneAgentInfo(existingAgent)
 	removedCount := 0
 	var removedDIDs []string
 
@@ -1686,10 +1712,12 @@ func (s *DIDService) DeregisterComponents(req *types.ComponentDeregistrationRequ
 	}
 
 	// Update registry
-	registry.AgentNodes[req.AgentNodeID] = existingAgent
-	registry.TotalDIDs -= removedCount
-
-	if err := s.registry.StoreRegistry(registry); err != nil {
+	err = s.registry.UpdateAgents(agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
+		live.AgentNodes[req.AgentNodeID] = existingAgent
+		live.TotalDIDs -= removedCount
+		return []string{req.AgentNodeID}, nil
+	})
+	if err != nil {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to store updated registry: %v", err),
