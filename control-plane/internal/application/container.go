@@ -1,8 +1,6 @@
 package application
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"path/filepath"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli/framework"
@@ -122,22 +120,9 @@ func CreateServiceContainerWithDefaults(agentfieldHome string) *framework.Servic
 
 var absPathForAgentFieldServerID = filepath.Abs
 
-// generateAgentFieldServerID creates a deterministic af server ID based on the agentfield home directory.
-// This ensures each agentfield instance has a unique ID while being deterministic for the same installation.
+// generateAgentFieldServerID returns the legacy af server ID derived from the
+// agentfield home directory. It is only used to find a registry created before
+// server IDs were random; new registries get a random ID.
 func generateAgentFieldServerID(agentfieldHome string) string {
-	// Use the absolute path of agentfield home to generate a deterministic ID
-	absPath, err := absPathForAgentFieldServerID(agentfieldHome)
-	if err != nil {
-		// Fallback to the original path if absolute path fails
-		absPath = agentfieldHome
-	}
-
-	// Create a hash of the agentfield home path to generate a unique but deterministic ID
-	hash := sha256.Sum256([]byte(absPath))
-
-	// Use first 16 characters of the hex hash as the af server ID
-	// This provides uniqueness while keeping the ID manageable
-	agentfieldServerID := hex.EncodeToString(hash[:])[:16]
-
-	return agentfieldServerID
+	return didServices.LegacyAgentFieldServerID(agentfieldHome, absPathForAgentFieldServerID)
 }

@@ -93,6 +93,9 @@ features:
     key_algorithm: "Ed25519"
     derivation_method: "BIP32"
     key_rotation_days: 90
+    # Pins which stored DID registry this control plane owns. Leave unset unless several
+    # registries share one database (the server refuses to start and names this variable when the choice is ambiguous).
+    server_id: ""
     vc_requirements:
       require_vc_registration: true
       require_vc_execution: true

@@ -2,6 +2,7 @@ package services
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -192,12 +193,27 @@ func LegacyAgentFieldServerID(agentfieldHome string, absPath func(string) (strin
 	return hex.EncodeToString(hash[:])[:16]
 }
 
+// NewAgentFieldServerID mints a server ID for a brand-new DID registry: 8 random
+// bytes, hex encoded, giving the same 16-character shape as the legacy
+// home-path IDs. The ID is folded into every derivation path, so generating it
+// randomly keeps a control plane's identity independent of where
+// AGENTFIELD_HOME happened to live when the registry was created.
+func NewAgentFieldServerID() (string, error) {
+	raw := make([]byte, 8)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("failed to generate a random af server ID: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
+}
+
 // SelectAgentFieldServerID picks which persisted DID registry this control plane
 // owns, so that relocating AGENTFIELD_HOME does not silently mint a new identity.
 //
 //  1. An explicitly configured server ID always wins.
-//  2. A registry already stored under the legacy home-path ID is used.
-//  3. With no registries at all, the legacy ID names the new registry.
+//  2. A registry already stored under the legacy home-path ID is used, so
+//     installs created before random IDs keep their identity.
+//  3. With no registries at all, a fresh random ID names the new registry; the
+//     next boot adopts it through rule 4.
 //  4. With exactly one registry, it is adopted even if the home path changed.
 //  5. Otherwise the choice is ambiguous and startup fails closed.
 func SelectAgentFieldServerID(registry *DIDRegistry, configuredID, legacyID string) (string, error) {
@@ -205,7 +221,7 @@ func SelectAgentFieldServerID(registry *DIDRegistry, configuredID, legacyID stri
 		return configured, nil
 	}
 	if registry == nil {
-		return legacyID, nil
+		return NewAgentFieldServerID()
 	}
 
 	existing, err := registry.ListRegistries()
@@ -223,7 +239,10 @@ func SelectAgentFieldServerID(registry *DIDRegistry, configuredID, legacyID stri
 
 	switch len(ids) {
 	case 0:
-		return legacyID, nil
+		// Brand-new install: name the registry with random bytes rather than a
+		// hash of AGENTFIELD_HOME. The next boot finds exactly one registry and
+		// adopts it.
+		return NewAgentFieldServerID()
 	case 1:
 		logger.Logger.Warn().
 			Str("stored_server_id", ids[0]).

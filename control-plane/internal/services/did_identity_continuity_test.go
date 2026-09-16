@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -312,7 +313,14 @@ func TestSelectAgentFieldServerID(t *testing.T) {
 
 	id, err := SelectAgentFieldServerID(env.registry(), "", "home-hash")
 	require.NoError(t, err)
-	require.Equal(t, "home-hash", id, "no registries: legacy ID names the new one")
+	require.Len(t, id, 16, "no registries: a fresh random ID names the new one")
+	_, err = hex.DecodeString(id)
+	require.NoError(t, err, "random server ID must be hex")
+	require.NotEqual(t, "home-hash", id, "a new registry is not named after AGENTFIELD_HOME")
+
+	again, err := SelectAgentFieldServerID(env.registry(), "", "home-hash")
+	require.NoError(t, err)
+	require.NotEqual(t, id, again, "each new registry gets its own random ID")
 
 	env.service(env.registry(), "original")
 
@@ -333,6 +341,47 @@ func TestSelectAgentFieldServerID(t *testing.T) {
 	_, err = SelectAgentFieldServerID(env.registry(), "", "home-hash")
 	require.Error(t, err, "ambiguous choice fails closed")
 	require.Contains(t, err.Error(), "AGENTFIELD_DID_SERVER_ID")
+}
+
+// A brand-new install must not be named after AGENTFIELD_HOME, and the second
+// boot must adopt the random ID it minted on the first.
+func TestIdentityContinuity_NewInstallGetsRandomServerID(t *testing.T) {
+	env := newContinuityEnv(t)
+	env.restart()
+
+	homeID := LegacyAgentFieldServerID("/srv/agentfield", nil)
+
+	// Boot 1: no registries yet, so a random ID names the new one.
+	firstID, err := SelectAgentFieldServerID(env.registry(), "", homeID)
+	require.NoError(t, err)
+	require.NotEqual(t, homeID, firstID, "a new registry is not named after AGENTFIELD_HOME")
+
+	svc := env.service(env.registry(), firstID)
+	before := register(t, svc, "node-1", []string{"r1"}, []string{"s1"})
+	rootBefore, err := svc.GetControlPlaneIssuerDID()
+	require.NoError(t, err)
+
+	// Boot 2: exactly one registry exists and it does not match the home-path
+	// ID, so the single-registry rule adopts it.
+	env.restart()
+	registry := env.registry()
+	secondID, err := SelectAgentFieldServerID(registry, "", homeID)
+	require.NoError(t, err)
+	require.Equal(t, firstID, secondID, "second boot must adopt the ID minted on the first")
+
+	svc = env.service(registry, secondID)
+	rootAfter, err := svc.GetControlPlaneIssuerDID()
+	require.NoError(t, err)
+	require.Equal(t, rootBefore, rootAfter)
+
+	after := register(t, svc, "node-1", []string{"r1"}, []string{"s1"})
+	require.Equal(t, before.IdentityPackage.AgentDID.DID, after.IdentityPackage.AgentDID.DID)
+	require.Equal(t, before.IdentityPackage.ReasonerDIDs["r1"].DID, after.IdentityPackage.ReasonerDIDs["r1"].DID)
+	requirePackageConsistent(t, after.IdentityPackage)
+
+	servers, err := env.provider.ListAgentFieldServerDIDs(context.Background())
+	require.NoError(t, err)
+	require.Len(t, servers, 1)
 }
 
 func TestIdentityContinuity_HomeChangeKeepsIdentity(t *testing.T) {
@@ -369,11 +418,36 @@ func TestIdentityContinuity_HomeChangeKeepsIdentity(t *testing.T) {
 	require.Len(t, servers, 1)
 }
 
+// requirePublicOnly asserts an identity resolved from an inactive registry
+// carries its public keys but no private key material.
+func requirePublicOnly(t *testing.T, identity *types.DIDIdentity) {
+	t.Helper()
+	require.Empty(t, identity.PrivateKeyJWK, "inactive registry leaked a private key for %s", identity.DID)
+	require.Empty(t, identity.X25519PrivateKeyJWK, "inactive registry leaked an X25519 private key for %s", identity.DID)
+	want, err := publicKeyJWKFromDIDKey(identity.DID)
+	require.NoError(t, err)
+	require.JSONEq(t, want, identity.PublicKeyJWK)
+	require.NotEmpty(t, identity.DerivationPath)
+}
+
 func TestIdentityContinuity_OtherRegistryDIDsStayResolvable(t *testing.T) {
 	env := newContinuityEnv(t)
 	env.restart()
 	svcA := env.service(env.registry(), "server-a")
-	fromA := register(t, svcA, "node-a", []string{"r1"}, nil)
+	fromA := register(t, svcA, "node-a", []string{"r1"}, []string{"s1"})
+	rootA, err := svcA.GetControlPlaneIssuerDID()
+	require.NoError(t, err)
+	vcServiceA := NewVCService(svcA.config, svcA, env.provider)
+	require.NoError(t, vcServiceA.Initialize())
+	signedByA, err := vcServiceA.GenerateExecutionVC(&types.ExecutionContext{
+		ExecutionID:  "exec-a",
+		WorkflowID:   "workflow-a",
+		SessionID:    "session-a",
+		CallerDID:    fromA.IdentityPackage.AgentDID.DID,
+		AgentNodeDID: fromA.IdentityPackage.AgentDID.DID,
+		Timestamp:    time.Now(),
+	}, []byte(`{"in":1}`), []byte(`{"out":1}`), "succeeded", nil, 10)
+	require.NoError(t, err)
 	svcB := env.service(env.registry(), "server-b")
 	fromB := register(t, svcB, "node-b", nil, nil)
 
@@ -383,15 +457,47 @@ func TestIdentityContinuity_OtherRegistryDIDsStayResolvable(t *testing.T) {
 
 	identity, err := svcB.ResolveDID(fromA.IdentityPackage.AgentDID.DID)
 	require.NoError(t, err)
-	requireKeyMatchesDID(t, identity.DID, identity.PrivateKeyJWK)
+	requirePublicOnly(t, identity)
+	require.NotEmpty(t, identity.X25519PublicKeyJWK)
 
 	reasoner, err := svcB.ResolveDID(fromA.IdentityPackage.ReasonerDIDs["r1"].DID)
 	require.NoError(t, err)
-	requireKeyMatchesDID(t, reasoner.DID, reasoner.PrivateKeyJWK)
+	requirePublicOnly(t, reasoner)
+	require.Equal(t, "reasoner", reasoner.ComponentType)
+
+	skill, err := svcB.ResolveDID(fromA.IdentityPackage.SkillDIDs["s1"].DID)
+	require.NoError(t, err)
+	requirePublicOnly(t, skill)
+	require.Equal(t, "skill", skill.ComponentType)
+
+	root, err := svcB.ResolveDID(rootA)
+	require.NoError(t, err)
+	requirePublicOnly(t, root)
 
 	own, err := svcB.ResolveDID(fromB.IdentityPackage.AgentDID.DID)
 	require.NoError(t, err)
 	requireKeyMatchesDID(t, own.DID, own.PrivateKeyJWK)
+	require.NotEmpty(t, own.X25519PrivateKeyJWK)
+
+	// Credentials issued by the other registry still verify, but the active
+	// server cannot sign as one of its identities.
+	vcServiceB := NewVCService(svcB.config, svcB, env.provider)
+	require.NoError(t, vcServiceB.Initialize())
+	result, err := vcServiceB.VerifyVC(signedByA.VCDocument)
+	require.NoError(t, err)
+	require.True(t, result.Valid, "%s %s", result.Message, result.Error)
+
+	_, err = vcServiceB.GenerateExecutionVC(&types.ExecutionContext{
+		ExecutionID:  "exec-b",
+		WorkflowID:   "workflow-b",
+		SessionID:    "session-b",
+		CallerDID:    fromA.IdentityPackage.AgentDID.DID,
+		AgentNodeDID: fromA.IdentityPackage.AgentDID.DID,
+		Timestamp:    time.Now(),
+	}, []byte(`{"in":1}`), []byte(`{"out":1}`), "succeeded", nil, 10)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot sign")
+	require.Contains(t, err.Error(), "inactive registry")
 
 	regA, err := registry.GetRegistry("server-a")
 	require.NoError(t, err)
@@ -537,4 +643,21 @@ func TestUpsertAgentDIDNeverMovesRowsBetweenServers(t *testing.T) {
 	require.Len(t, agents, 1)
 	require.Equal(t, "server-a", agents[0].AgentFieldServerID)
 	require.Equal(t, resp.IdentityPackage.AgentDID.DerivationPath, agents[0].DerivationPath)
+}
+
+func TestSignVCRequiresPrivateKey(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	did := didKeyFromPublicKey(pub)
+	publicJWK, err := ed25519PublicKeyJWK(pub)
+	require.NoError(t, err)
+
+	vcService := &VCService{}
+	identity := &types.DIDIdentity{DID: did, PublicKeyJWK: publicJWK}
+
+	_, err = vcService.signVC(&types.VCDocument{}, identity)
+	require.EqualError(t, err, "DID "+did+" cannot sign: no private key available (identity belongs to an inactive registry)")
+
+	_, err = vcService.signWorkflowVC(&types.WorkflowVCDocument{}, identity)
+	require.ErrorContains(t, err, "cannot sign")
 }

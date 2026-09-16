@@ -236,8 +236,24 @@ func (s *VCService) createVCDocument(ctx *types.ExecutionContext, callerIdentity
 	}
 }
 
+// requireSigningKey fails when identity carries no private key. ResolveDID only
+// returns private keys for the active registry, so an identity resolved from an
+// inactive registry can be verified but never used to sign.
+func requireSigningKey(identity *types.DIDIdentity) error {
+	if identity == nil {
+		return fmt.Errorf("cannot sign: no DID identity")
+	}
+	if identity.PrivateKeyJWK == "" {
+		return fmt.Errorf("DID %s cannot sign: no private key available (identity belongs to an inactive registry)", identity.DID)
+	}
+	return nil
+}
+
 // signVC signs a VC document using the caller's private key.
 func (s *VCService) signVC(vcDoc *types.VCDocument, callerIdentity *types.DIDIdentity) (string, error) {
+	if err := requireSigningKey(callerIdentity); err != nil {
+		return "", err
+	}
 	// Create canonical representation for signing
 	vcCopy := *vcDoc
 	vcCopy.Proof = types.VCProof{} // Remove proof for signing
@@ -282,6 +298,9 @@ func (s *VCService) SignAgentTagVC(vc *types.AgentTagVCDocument) (*types.VCProof
 	issuerIdentity, err := s.didService.ResolveDID(vc.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve issuer DID %s for agent tag VC signing: %w", vc.Issuer, err)
+	}
+	if err := requireSigningKey(issuerIdentity); err != nil {
+		return nil, err
 	}
 
 	// Create canonical representation (without proof) for signing
@@ -487,6 +506,9 @@ func (s *VCService) createWorkflowVCDocument(workflowID, sessionID string, compo
 
 // signWorkflowVC signs a WorkflowVC document.
 func (s *VCService) signWorkflowVC(vcDoc *types.WorkflowVCDocument, issuerIdentity *types.DIDIdentity) (string, error) {
+	if err := requireSigningKey(issuerIdentity); err != nil {
+		return "", err
+	}
 	// Create canonical representation for signing
 	vcCopy := *vcDoc
 	vcCopy.Proof = types.VCProof{} // Remove proof for signing

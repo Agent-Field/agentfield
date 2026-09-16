@@ -444,7 +444,7 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 		return nil, fmt.Errorf("failed to get DID registry: %w", err)
 	}
 
-	if identity, found, err := s.resolveInRegistry(registry, did); found || err != nil {
+	if identity, found, err := s.resolveInRegistry(registry, did, true); found || err != nil {
 		return identity, err
 	}
 
@@ -459,7 +459,7 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 		if other.AgentFieldServerID == agentfieldServerID || s.registry.IntegrityError(other.AgentFieldServerID) != nil {
 			continue
 		}
-		if identity, found, err := s.resolveInRegistry(other, did); found || err != nil {
+		if identity, found, err := s.resolveInRegistry(other, did, false); found || err != nil {
 			return identity, err
 		}
 	}
@@ -469,16 +469,34 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 
 // resolveInRegistry resolves did within one registry. found is false when the
 // registry does not contain the DID.
-func (s *DIDService) resolveInRegistry(registry *types.DIDRegistry, did string) (*types.DIDIdentity, bool, error) {
+//
+// includePrivate must only be true for the registry this control plane owns.
+// Resolving a DID that belongs to another registry returns public key material
+// only: those identities are still verifiable, but nothing here may sign on
+// their behalf.
+func (s *DIDService) resolveInRegistry(registry *types.DIDRegistry, did string, includePrivate bool) (*types.DIDIdentity, bool, error) {
 	if registry == nil {
 		return nil, false, nil
 	}
 
+	// privateJWK returns the derived private key, or "" when this registry is
+	// not the active one.
+	privateJWK := func(derivationPath, kind string) (string, error) {
+		if !includePrivate {
+			return "", nil
+		}
+		jwk, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, derivationPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to regenerate private key for %s DID %s: %w", kind, did, err)
+		}
+		return jwk, nil
+	}
+
 	// Check if this is the af server root DID
 	if registry.RootDID == did {
-		privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, rootDerivationPath)
+		privateKeyJWK, err := privateJWK(rootDerivationPath, "root")
 		if err != nil {
-			return nil, true, fmt.Errorf("failed to regenerate private key for root DID %s: %w", did, err)
+			return nil, true, err
 		}
 		publicKeyJWK, err := s.regeneratePublicKeyJWK(registry.MasterSeed, rootDerivationPath)
 		if err != nil {
@@ -495,9 +513,9 @@ func (s *DIDService) resolveInRegistry(registry *types.DIDRegistry, did string) 
 
 	for _, agentInfo := range registry.AgentNodes {
 		if agentInfo.DID == did {
-			privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, agentInfo.DerivationPath)
+			privateKeyJWK, err := privateJWK(agentInfo.DerivationPath, "agent")
 			if err != nil {
-				return nil, true, fmt.Errorf("failed to regenerate private key for agent DID %s: %w", did, err)
+				return nil, true, err
 			}
 
 			// Regenerate the X25519 keyAgreement keypair at the agent's CURRENT
@@ -506,6 +524,9 @@ func (s *DIDService) resolveInRegistry(registry *types.DIDRegistry, did string) 
 			x25519PubKey, x25519PrivKey, err := s.regenerateX25519KeyPairJWKAtEpoch(registry.MasterSeed, agentInfo.DerivationPath, agentInfo.X25519Epoch)
 			if err != nil {
 				return nil, true, fmt.Errorf("failed to regenerate X25519 keyAgreement key for agent DID %s: %w", did, err)
+			}
+			if !includePrivate {
+				x25519PrivKey = ""
 			}
 			// Prefer the stored public key when present (it is kept in lockstep
 			// with the epoch on rotation); fall back to the freshly derived one.
@@ -527,9 +548,9 @@ func (s *DIDService) resolveInRegistry(registry *types.DIDRegistry, did string) 
 
 		for _, reasonerInfo := range agentInfo.Reasoners {
 			if reasonerInfo.DID == did {
-				privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, reasonerInfo.DerivationPath)
+				privateKeyJWK, err := privateJWK(reasonerInfo.DerivationPath, "reasoner")
 				if err != nil {
-					return nil, true, fmt.Errorf("failed to regenerate private key for reasoner DID %s: %w", did, err)
+					return nil, true, err
 				}
 				return &types.DIDIdentity{
 					DID:            reasonerInfo.DID,
@@ -544,9 +565,9 @@ func (s *DIDService) resolveInRegistry(registry *types.DIDRegistry, did string) 
 
 		for _, skillInfo := range agentInfo.Skills {
 			if skillInfo.DID == did {
-				privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, skillInfo.DerivationPath)
+				privateKeyJWK, err := privateJWK(skillInfo.DerivationPath, "skill")
 				if err != nil {
-					return nil, true, fmt.Errorf("failed to regenerate private key for skill DID %s: %w", did, err)
+					return nil, true, err
 				}
 				return &types.DIDIdentity{
 					DID:            skillInfo.DID,

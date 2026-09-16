@@ -160,6 +160,13 @@ These map to `api.cors.*` in config. When set via env, use comma-separated value
 - `AGENTFIELD_API_CORS_EXPOSED_HEADERS` (comma-separated)
 - `AGENTFIELD_API_CORS_ALLOW_CREDENTIALS` (`true`/`false`)
 
+### DID server identity
+
+The control plane's DID identity (master seed, root DID, and every agent and component DID) is stored in the database, not derived from the filesystem. New installs name their registry with a random server ID, and on later boots the control plane adopts the registry it finds, so moving `AGENTFIELD_HOME` (for example to a new volume mount) keeps the same identity. Installs created before this change keep the ID they already have.
+
+- `AGENTFIELD_DID_SERVER_ID` (default: unset): Pins which stored DID registry this control plane owns. Leave it unset unless several registries share one database; in that case the server refuses to start, lists the stored IDs, and asks you to set this variable. Equivalent YAML: `features.did.server_id`.
+- DIDs from other registries in the same database stay resolvable so their credentials still verify, but only the active registry's identities can sign.
+
 ### Authorization (VC-Based Permissions)
 
 When enabled, the control plane issues DID identities to agents and enforces tag-based access policies on agent-to-agent calls.
