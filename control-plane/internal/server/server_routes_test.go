@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,9 @@ import (
 // stubStorage implements storage.StorageProvider with minimal functionality for testing
 type stubStorage struct {
 	eventBus *events.ExecutionEventBus
+
+	serverDIDsMu sync.Mutex
+	serverDIDs   map[string]*types.AgentFieldServerDIDInfo
 }
 
 func newStubStorage() *stubStorage {
@@ -351,10 +355,27 @@ func (s *stubStorage) ListDIDs(ctx context.Context) ([]*types.DIDRegistryEntry, 
 
 // AgentField Server DID operations
 func (s *stubStorage) StoreAgentFieldServerDID(ctx context.Context, agentfieldServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
+	s.serverDIDsMu.Lock()
+	defer s.serverDIDsMu.Unlock()
+	if s.serverDIDs == nil {
+		s.serverDIDs = make(map[string]*types.AgentFieldServerDIDInfo)
+	}
+	// Like the real store, never replace an existing server identity.
+	if _, exists := s.serverDIDs[agentfieldServerID]; !exists {
+		s.serverDIDs[agentfieldServerID] = &types.AgentFieldServerDIDInfo{
+			AgentFieldServerID: agentfieldServerID,
+			RootDID:            rootDID,
+			MasterSeed:         masterSeed,
+			CreatedAt:          createdAt,
+			LastKeyRotation:    lastKeyRotation,
+		}
+	}
 	return nil
 }
 func (s *stubStorage) GetAgentFieldServerDID(ctx context.Context, agentfieldServerID string) (*types.AgentFieldServerDIDInfo, error) {
-	return nil, nil
+	s.serverDIDsMu.Lock()
+	defer s.serverDIDsMu.Unlock()
+	return s.serverDIDs[agentfieldServerID], nil
 }
 func (s *stubStorage) ListAgentFieldServerDIDs(ctx context.Context) ([]*types.AgentFieldServerDIDInfo, error) {
 	return nil, nil
