@@ -14,7 +14,13 @@ from schemas import Citation, ResearchFindings, SearchQueries, TaskResult
 research_router = AgentRouter(prefix="research")
 
 PARALLEL_MCP_URL = "https://search.parallel.ai/mcp"
-SUPPORTED_SEARCH_PROVIDERS = ("tavily", "parallel")
+SERPLY_SEARCH_URL = "https://api.serply.io/v1/search"
+# Serply treats `num` as an approximate upper bound with a ceiling of 10, so a
+# response can hold more rows than requested. Ask for the ceiling and trim to
+# the example's own budget client-side rather than trusting the count back.
+SERPLY_REQUEST_LIMIT = 10
+SERPLY_MAX_RESULTS = 5
+SUPPORTED_SEARCH_PROVIDERS = ("tavily", "parallel", "serply")
 
 
 def _search_provider() -> str:
@@ -109,6 +115,50 @@ def _parallel_results(response: object) -> list[dict]:
     return normalized
 
 
+def _serply_error(status: int, response: object) -> str:
+    """Prefer Serply's own `detail` text over a bare status code, when it sends one."""
+    message = f"Serply returned HTTP status {status}"
+    if isinstance(response, dict):
+        detail = response.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return f"{message}: {detail.strip()}"
+    return message
+
+
+def _serply_results(response: object) -> list[dict]:
+    """Decode one Serply search response into the example's existing result shape."""
+    if not isinstance(response, dict):
+        raise ValueError("Serply returned an invalid JSON response")
+
+    results = response.get("results")
+    if not isinstance(results, list):
+        raise ValueError("Serply returned no results array")
+
+    normalized = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("link")
+        title = item.get("title")
+        if not isinstance(url, str) or not url.strip():
+            continue
+        if not isinstance(title, str) or not title.strip():
+            continue
+
+        description = item.get("description")
+        text = description.strip() if isinstance(description, str) else ""
+        normalized.append(
+            {
+                "title": title,
+                "url": url,
+                "content": text,
+                "raw_content": text,
+            }
+        )
+
+    return normalized
+
+
 def _execute_tavily_search(queries: List[str]) -> list[dict]:
     try:
         from tavily import TavilyClient
@@ -166,6 +216,44 @@ async def _execute_parallel_search(queries: List[str]) -> list[dict]:
     return all_results
 
 
+async def _execute_serply_search(queries: List[str]) -> list[dict]:
+    import aiohttp
+
+    api_key = os.getenv("SERPLY_API_KEY")
+    if not api_key:
+        raise ValueError("SERPLY_API_KEY environment variable not set")
+
+    headers = {
+        "Accept": "application/json",
+        "X-Api-Key": api_key,
+    }
+    timeout = aiohttp.ClientTimeout(total=30)
+    all_results = []
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for query in queries:
+            try:
+                async with session.get(
+                    SERPLY_SEARCH_URL,
+                    params={"q": query, "num": SERPLY_REQUEST_LIMIT},
+                    headers=headers,
+                ) as response:
+                    status = response.status
+                    try:
+                        payload = await response.json(content_type=None)
+                    except Exception:
+                        payload = None
+                    if status < 200 or status >= 300:
+                        raise ValueError(_serply_error(status, payload))
+                all_results.append(
+                    {"results": _serply_results(payload)[:SERPLY_MAX_RESULTS]}
+                )
+            except Exception as e:
+                all_results.append({"error": str(e), "query": query})
+
+    return all_results
+
+
 @research_router.reasoner()
 async def generate_search_queries(
     task_description: str,
@@ -215,8 +303,11 @@ async def generate_search_queries(
 @research_router.reasoner()
 async def execute_search(queries: List[str]) -> dict:
     """Execute web search for given queries using the selected backend."""
-    if _search_provider() == "parallel":
+    provider = _search_provider()
+    if provider == "parallel":
         all_results = await _execute_parallel_search(queries)
+    elif provider == "serply":
+        all_results = await _execute_serply_search(queries)
     else:
         all_results = _execute_tavily_search(queries)
 

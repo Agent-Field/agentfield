@@ -8,7 +8,7 @@ A research agent that uses recursive planning to break down research questions i
 - **Task Deduplication** – Merges redundant tasks
 - **Smart Search Strategy** – Decides synthesis-only vs enhanced search for parent tasks
 - **Topological Execution** – Parallel execution with dependency management
-- **Web Search** – Tavily by default, or setup-free Parallel Search by explicit opt-in
+- **Web Search** – Tavily by default, or setup-free Parallel Search or Google-backed Serply by explicit opt-in
 
 ## Quick Start
 
@@ -24,6 +24,14 @@ select it explicitly; its hosted Search MCP endpoint needs no account or API key
 
 ```bash
 export SEARCH_PROVIDER=parallel
+```
+
+To use [Serply](https://serply.io) instead, which answers from Google's result
+pages and needs an API key:
+
+```bash
+export SEARCH_PROVIDER=serply
+export SERPLY_API_KEY="your-serply-api-key"
 ```
 
 ### 2. Run Agent
@@ -80,7 +88,8 @@ curl -X POST http://localhost:8080/reasoners/planning_execute_deep_research \
 
 | Variable            | Description                                       | Default                                      |
 | ------------------- | ------------------------------------------------- | -------------------------------------------- |
-| `SEARCH_PROVIDER`   | Web search backend: `tavily` or `parallel`        | `tavily`                                     |
+| `SEARCH_PROVIDER`   | Web search backend: `tavily`, `parallel`, `serply` | `tavily`                                     |
 | `TAVILY_API_KEY`    | Tavily API key (required when using Tavily)       | -                                            |
+| `SERPLY_API_KEY`    | Serply API key (required when using Serply)       | -                                            |
 | `AGENTFIELD_SERVER` | Control plane URL                                 | `http://localhost:8080`                      |
 | `AI_MODEL`          | LLM model                                         | `openrouter/deepseek/deepseek-v3.1-terminus` |

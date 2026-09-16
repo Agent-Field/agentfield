@@ -32,6 +32,7 @@ if __name__ == "__main__":
     search_provider_label = {
         "tavily": "Tavily",
         "parallel": "Parallel Search",
+        "serply": "Serply Search",
     }.get(search_provider, search_provider)
     print("🔬 Deep Research Agent")
     print("🧠 Node ID: deep-research")

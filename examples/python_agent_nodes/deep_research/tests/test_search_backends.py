@@ -44,6 +44,10 @@ def parallel_envelope(results: list[dict]) -> dict:
     }
 
 
+def serply_payload(results: list[dict]) -> dict:
+    return {"query": "q", "total": len(results), "results": results}
+
+
 class SearchProviderTests(unittest.TestCase):
     def test_search_provider_preserves_tavily_default(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -124,6 +128,69 @@ class SearchProviderTests(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
                     research._parallel_results(envelope)
+
+    def test_search_provider_accepts_serply(self):
+        with patch.dict(os.environ, {"SEARCH_PROVIDER": " Serply "}, clear=True):
+            self.assertEqual(research._search_provider(), "serply")
+        with patch.dict(os.environ, {"SEARCH_PROVIDER": "other"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "tavily, parallel, serply"):
+                research._search_provider()
+
+    def test_serply_results_normalize_and_skip_unusable_entries(self):
+        payload = serply_payload(
+            [
+                {
+                    "title": "First",
+                    "link": "https://example.com/first",
+                    "description": "  One  ",
+                    "position": 1,
+                },
+                {"title": "Missing link", "description": "ignored"},
+                {"link": "https://example.com/no-title", "description": "ignored"},
+                {"title": "Second", "link": "https://example.com/second"},
+            ]
+        )
+
+        self.assertEqual(
+            research._serply_results(payload),
+            [
+                {
+                    "title": "First",
+                    "url": "https://example.com/first",
+                    "content": "One",
+                    "raw_content": "One",
+                },
+                {
+                    "title": "Second",
+                    "url": "https://example.com/second",
+                    "content": "",
+                    "raw_content": "",
+                },
+            ],
+        )
+
+    def test_serply_results_reject_malformed_payloads(self):
+        cases = [
+            ("not a dict", "invalid JSON response"),
+            ({"total": 0}, "no results array"),
+            ({"results": "nope"}, "no results array"),
+        ]
+        for payload, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    research._serply_results(payload)
+
+    def test_serply_error_prefers_detail_text_over_bare_status(self):
+        self.assertEqual(
+            research._serply_error(401, {"detail": "Invalid API key"}),
+            "Serply returned HTTP status 401: Invalid API key",
+        )
+        for payload in (None, {}, {"detail": "   "}, "<html>"):
+            with self.subTest(payload=payload):
+                self.assertEqual(
+                    research._serply_error(503, payload),
+                    "Serply returned HTTP status 503",
+                )
 
     def test_tavily_path_preserves_key_and_request_options(self):
         calls = []
@@ -286,6 +353,134 @@ class AsyncSearchProviderTests(unittest.IsolatedAsyncioTestCase):
                 "query": "unavailable",
             },
         )
+
+    async def test_execute_search_routes_to_serply_without_tavily_key(self):
+        async def fake_serply(queries):
+            self.assertEqual(queries, ["query"])
+            return [
+                {
+                    "results": [
+                        {
+                            "title": "Result",
+                            "url": "https://example.com",
+                            "content": "Description",
+                        }
+                    ]
+                }
+            ]
+
+        environment = {"SEARCH_PROVIDER": "serply"}
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(research, "_execute_serply_search", fake_serply),
+        ):
+            result = await research.execute_search(["query"])
+
+        self.assertEqual(
+            result,
+            {
+                "results": [
+                    {
+                        "title": "Result",
+                        "url": "https://example.com",
+                        "content": "Description",
+                    }
+                ],
+                "queries": ["query"],
+            },
+        )
+
+    async def test_serply_search_sends_key_trims_results_and_isolates_failures(self):
+        requests = []
+
+        class FakeResponse:
+            def __init__(self, status, payload=None):
+                self.status = status
+                self.payload = payload
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            async def json(self, content_type=None):
+                self_test.assertIsNone(content_type)
+                return self.payload
+
+        class FakeSession:
+            def __init__(self, **kwargs):
+                self_test.assertEqual(kwargs["timeout"].total, 30)
+                self.responses = [
+                    FakeResponse(
+                        200,
+                        serply_payload(
+                            [
+                                {
+                                    "title": f"Result {index}",
+                                    "link": f"https://example.com/{index}",
+                                    "description": "text",
+                                }
+                                for index in range(7)
+                            ]
+                        ),
+                    ),
+                    FakeResponse(401, {"detail": "Invalid API key"}),
+                ]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            def get(self, url, *, params, headers):
+                requests.append((url, params, headers))
+                return self.responses.pop(0)
+
+        class FakeTimeout:
+            def __init__(self, total):
+                self.total = total
+
+        self_test = self
+        aiohttp = types.ModuleType("aiohttp")
+        aiohttp.ClientTimeout = FakeTimeout
+        aiohttp.ClientSession = FakeSession
+
+        with (
+            patch.dict(os.environ, {"SERPLY_API_KEY": "test-key"}, clear=True),
+            patch.dict(sys.modules, {"aiohttp": aiohttp}),
+        ):
+            results = await research._execute_serply_search(["good", "rejected"])
+
+        self.assertEqual(requests[0][0], research.SERPLY_SEARCH_URL)
+        self.assertEqual(
+            requests[0][1], {"q": "good", "num": research.SERPLY_REQUEST_LIMIT}
+        )
+        self.assertEqual(requests[1][1]["q"], "rejected")
+        self.assertEqual(
+            requests[0][2],
+            {"Accept": "application/json", "X-Api-Key": "test-key"},
+        )
+        # Serply treats `num` as approximate, so the client trims the surplus.
+        self.assertEqual(len(results[0]["results"]), research.SERPLY_MAX_RESULTS)
+        self.assertEqual(results[0]["results"][0]["title"], "Result 0")
+        self.assertEqual(
+            results[1],
+            {
+                "error": "Serply returned HTTP status 401: Invalid API key",
+                "query": "rejected",
+            },
+        )
+
+    async def test_serply_path_requires_its_key(self):
+        aiohttp = types.ModuleType("aiohttp")
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.dict(sys.modules, {"aiohttp": aiohttp}),
+        ):
+            with self.assertRaisesRegex(ValueError, "SERPLY_API_KEY"):
+                await research._execute_serply_search(["query"])
 
 
 if __name__ == "__main__":
