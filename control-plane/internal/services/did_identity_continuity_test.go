@@ -758,4 +758,7 @@ func TestSignVCRequiresPrivateKey(t *testing.T) {
 
 	_, err = vcService.signWorkflowVC(&types.WorkflowVCDocument{}, identity)
 	require.ErrorContains(t, err, "cannot sign")
+
+	_, err = vcService.signCanonical([]byte("{}"), identity)
+	require.ErrorContains(t, err, "cannot sign")
 }

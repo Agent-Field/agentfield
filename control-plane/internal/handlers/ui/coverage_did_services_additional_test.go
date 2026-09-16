@@ -283,6 +283,13 @@ func TestDIDHandlerCoverageWithActiveServices(t *testing.T) {
 		componentBundle := decodeJSONResponse[map[string]any](t, rec)
 		require.Equal(t, "resolved", componentBundle["resolution_status"])
 
+		// A retired component still appears in audit lookups, labelled as retired.
+		require.NoError(t, ls.RetireComponentDIDs(ctx, "did:agent:node-1", []string{"did:reasoner:plan"}))
+		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/did/did:reasoner:plan/resolution-bundle", nil)
+		require.Equal(t, http.StatusOK, rec.Code)
+		retiredBundle := decodeJSONResponse[map[string]any](t, rec)
+		require.Equal(t, "retired", retiredBundle["resolution_status"])
+
 		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/did/did:agent:node-1/resolution-bundle/download", nil)
 		require.Equal(t, http.StatusOK, rec.Code)
 		require.Contains(t, rec.Header().Get("Content-Disposition"), "did-resolution-bundle-")
