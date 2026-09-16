@@ -389,6 +389,7 @@ func (h *DIDHandler) GetWorkflowVCChainHandler(c *gin.Context) {
 		return
 	}
 
+	handlers.SetVCChainVerifiabilityHeader(c, response)
 	c.JSON(http.StatusOK, response)
 }
 

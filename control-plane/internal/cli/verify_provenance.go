@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -114,6 +115,22 @@ func VerifyProvenanceJSON(vcData []byte, options VerifyOptions) VCVerificationRe
 	step5 := VerificationStep{Step: 5, Description: "Performing comprehensive verification"}
 	enhancedVerifier := NewEnhancedVCVerifier(didResolutions, options.Verbose)
 	comprehensiveResult := enhancedVerifier.VerifyEnhancedVCChain(enhancedChain)
+	if parseKind == "workflow" {
+		if unresolved := declaredUnresolvedDIDs(vcData); len(unresolved) > 0 {
+			// The exporting control plane could not bundle keys for these DIDs,
+			// so the chain cannot be fully verified even if every signature we
+			// could check is valid.
+			result.UnresolvedDIDs = unresolved
+			comprehensiveResult.CriticalIssues = append(comprehensiveResult.CriticalIssues, VerificationIssue{
+				Type:     "unresolved_dids",
+				Severity: "critical",
+				Description: fmt.Sprintf("Chain cannot be fully verified: %d DID(s) could not be resolved by the exporting control plane: %s",
+					len(unresolved), strings.Join(unresolved, ", ")),
+			})
+			comprehensiveResult.Valid = false
+			comprehensiveResult.OverallScore = enhancedVerifier.calculateOverallScore(comprehensiveResult)
+		}
+	}
 	result.Comprehensive = comprehensiveResult
 
 	validSignatures := 0
@@ -193,6 +210,24 @@ func VerifyProvenanceJSON(vcData []byte, options VerifyOptions) VCVerificationRe
 	}
 
 	return result
+}
+
+// declaredUnresolvedDIDs returns the DIDs an exported workflow chain reports
+// as unresolvable (the unresolved_dids field of the VC chain API response).
+func declaredUnresolvedDIDs(vcData []byte) []string {
+	var declared struct {
+		UnresolvedDIDs []string `json:"unresolved_dids"`
+	}
+	if err := json.Unmarshal(vcData, &declared); err != nil {
+		return nil
+	}
+	var out []string
+	for _, did := range declared.UnresolvedDIDs {
+		if did = strings.TrimSpace(did); did != "" {
+			out = append(out, did)
+		}
+	}
+	return out
 }
 
 func tryParseEnhancedChain(vcData []byte) (EnhancedVCChain, bool) {

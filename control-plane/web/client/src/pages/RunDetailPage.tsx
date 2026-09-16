@@ -89,6 +89,7 @@ import { ExecutionObservabilityPanel } from "@/components/execution";
 import { normalizeExecutionStatus, isTerminalStatus } from "@/utils/status";
 import { safeExternalUrl } from "@/utils/safeExternalUrl";
 import { StatusPill } from "@/components/ui/status-pill";
+import { VCChainVerifiabilityWarning } from "@/components/vc/VCChainVerifiabilityWarning";
 import type {
   TriggerInfo,
   WebhookFailurePreview,
@@ -1043,6 +1044,8 @@ export function RunDetailPage() {
               </div>
             </div>
           ) : null}
+
+          <VCChainVerifiabilityWarning chain={vcChain} />
 
           <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-1">
             <p className="m-0 min-w-0 flex-1 text-xs leading-snug text-muted-foreground">

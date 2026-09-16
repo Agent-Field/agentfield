@@ -59,6 +59,7 @@ func (s *VCService) GetWorkflowVCChain(workflowID string) (*types.WorkflowVCChai
 		Status:              workflowVC.Status,
 		DIDResolutionBundle: didResolutionBundle,
 		UnresolvedDIDs:      unresolvedDIDs,
+		Verifiable:          len(unresolvedDIDs) == 0,
 	}, nil
 }
 

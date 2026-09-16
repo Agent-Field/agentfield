@@ -358,6 +358,9 @@ type WorkflowVCChainResponse struct {
 	// UnresolvedDIDs lists DIDs referenced by the chain whose public keys could
 	// not be included, so callers can tell the chain is not fully verifiable.
 	UnresolvedDIDs []string `json:"unresolved_dids,omitempty"`
+	// Verifiable is false when any DID referenced by the chain could not be
+	// resolved, meaning the chain cannot be fully verified offline.
+	Verifiable bool `json:"verifiable"`
 }
 
 // WorkflowVCStatusAggregation represents aggregated VC stats per workflow directly from storage.
