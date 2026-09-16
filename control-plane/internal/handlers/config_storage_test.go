@@ -375,6 +375,12 @@ func (m *configStorageMock) StoreAgentDIDWithComponents(ctx context.Context, age
 func (m *configStorageMock) UpsertAgentDIDWithComponents(ctx context.Context, record storage.AgentDIDRecord) error {
 	return nil
 }
+func (m *configStorageMock) ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return nil, nil
+}
+func (m *configStorageMock) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
+	return nil
+}
 func (m *configStorageMock) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {
 	return nil
 }

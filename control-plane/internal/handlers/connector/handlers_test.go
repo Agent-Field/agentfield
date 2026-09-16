@@ -388,6 +388,12 @@ func (m *mockStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID, 
 func (m *mockStorage) UpsertAgentDIDWithComponents(ctx context.Context, record storage.AgentDIDRecord) error {
 	return nil
 }
+func (m *mockStorage) ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return nil, nil
+}
+func (m *mockStorage) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
+	return nil
+}
 func (m *mockStorage) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {
 	return nil
 }

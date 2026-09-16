@@ -530,17 +530,38 @@ func TestIdentityContinuity_ComponentKeysAreNeverReused(t *testing.T) {
 	env := newContinuityEnv(t)
 	env.restart()
 	svc := env.service(env.registry(), "server-a")
-	register(t, svc, "node-1", []string{"r1"}, nil)
+	first := register(t, svc, "node-1", []string{"r1"}, nil)
+	agentPath := first.IdentityPackage.AgentDID.DerivationPath
+
+	// Every DID and reasoner-branch index ever issued to node-1.
+	issued := map[string]bool{}
+	maxReasonerIndex := -1
+	record := func(resp *types.DIDRegistrationResponse) {
+		for _, identity := range resp.IdentityPackage.ReasonerDIDs {
+			issued[identity.DID] = true
+			index, ok := componentIndexFromPath(identity.DerivationPath, agentPath, 0)
+			require.True(t, ok, "reasoner path %s is not under agent path %s", identity.DerivationPath, agentPath)
+			if index > maxReasonerIndex {
+				maxReasonerIndex = index
+			}
+		}
+		for _, identity := range resp.IdentityPackage.SkillDIDs {
+			issued[identity.DID] = true
+		}
+	}
+	record(first)
 
 	// Two components added in one partial registration get distinct keys.
 	added := register(t, svc, "node-1", []string{"r1", "r2", "r3"}, nil)
 	require.NotEqual(t, added.IdentityPackage.ReasonerDIDs["r2"].DID, added.IdentityPackage.ReasonerDIDs["r3"].DID)
+	record(added)
 	retired := added.IdentityPackage.ReasonerDIDs["r3"].DID
 
 	// Remove r3, then add r4: r4 must not inherit r3's key.
 	register(t, svc, "node-1", []string{"r1", "r2"}, nil)
 	withR4 := register(t, svc, "node-1", []string{"r1", "r2", "r4"}, nil)
 	require.NotEqual(t, retired, withR4.IdentityPackage.ReasonerDIDs["r4"].DID)
+	record(withR4)
 
 	// Components added after the first registration survive a restart.
 	env.restart()
@@ -548,10 +569,87 @@ func TestIdentityContinuity_ComponentKeysAreNeverReused(t *testing.T) {
 	again := register(t, svc, "node-1", []string{"r1", "r2", "r4"}, nil)
 	require.Equal(t, withR4.IdentityPackage.ReasonerDIDs["r4"].DID, again.IdentityPackage.ReasonerDIDs["r4"].DID)
 	requirePackageConsistent(t, again.IdentityPackage)
+	record(again)
+
+	// After a restart the retired r3 is no longer in memory; only its retired
+	// row remembers the index. A new component must still get a fresh key.
+	withR5 := register(t, svc, "node-1", []string{"r1", "r2", "r4", "r5"}, nil)
+	r5 := withR5.IdentityPackage.ReasonerDIDs["r5"]
+	require.NotEqual(t, retired, r5.DID)
+	require.False(t, issued[r5.DID], "r5 was given a DID that was already issued: %s", r5.DID)
+	r5Index, ok := componentIndexFromPath(r5.DerivationPath, agentPath, 0)
+	require.True(t, ok)
+	require.Greater(t, r5Index, maxReasonerIndex, "r5 reused a reasoner derivation index")
+	requireKeyMatchesDID(t, r5.DID, r5.PrivateKeyJWK)
 
 	// A new agent never receives an existing agent's key.
 	other := register(t, svc, "node-2", nil, nil)
 	require.NotEqual(t, again.IdentityPackage.AgentDID.DID, other.IdentityPackage.AgentDID.DID)
+}
+
+func TestIdentityContinuity_RemovedComponentsDoNotResurrect(t *testing.T) {
+	ctx := context.Background()
+	env := newContinuityEnv(t)
+	env.restart()
+	svc := env.service(env.registry(), "server-a")
+	full := register(t, svc, "node-1", []string{"r1", "r2"}, []string{"s1"})
+	agentDID := full.IdentityPackage.AgentDID.DID
+	r1DID := full.IdentityPackage.ReasonerDIDs["r1"].DID
+	r2DID := full.IdentityPackage.ReasonerDIDs["r2"].DID
+	s1DID := full.IdentityPackage.SkillDIDs["s1"].DID
+
+	// Re-register with fewer components: r2 and s1 are removed.
+	register(t, svc, "node-1", []string{"r1"}, nil)
+
+	env.restart()
+	registry := env.registry()
+	svc = env.service(registry, "server-a")
+
+	reloaded, err := registry.GetRegistry("server-a")
+	require.NoError(t, err)
+	require.NotNil(t, reloaded)
+	node, ok := reloaded.AgentNodes["node-1"]
+	require.True(t, ok)
+	require.Contains(t, node.Reasoners, "r1")
+	require.NotContains(t, node.Reasoners, "r2", "removed reasoner was reloaded after restart")
+	require.NotContains(t, node.Skills, "s1", "removed skill was reloaded after restart")
+
+	_, err = svc.ResolveDID(r2DID)
+	require.Error(t, err, "a removed reasoner DID must not resolve to keys")
+	_, err = svc.ResolveDID(s1DID)
+	require.Error(t, err, "a removed skill DID must not resolve to keys")
+	_, err = registry.FindDIDByComponent("server-a", "reasoner", "r2")
+	require.Error(t, err)
+	resolved, err := svc.ResolveDID(r1DID)
+	require.NoError(t, err)
+	require.Equal(t, r1DID, resolved.DID)
+
+	active, err := env.provider.ListComponentDIDs(ctx, agentDID)
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	require.Equal(t, r1DID, active[0].ComponentDID)
+	require.Equal(t, storage.ComponentDIDStatusActive, active[0].Status)
+
+	all, err := env.provider.ListAllComponentDIDs(ctx, agentDID)
+	require.NoError(t, err)
+	statuses := map[string]string{}
+	for _, component := range all {
+		statuses[component.ComponentDID] = component.Status
+	}
+	require.Equal(t, map[string]string{
+		r1DID: storage.ComponentDIDStatusActive,
+		r2DID: storage.ComponentDIDStatusRetired,
+		s1DID: storage.ComponentDIDStatusRetired,
+	}, statuses)
+
+	// Re-adding a removed name issues a new identity and leaves the old row retired.
+	readded := register(t, svc, "node-1", []string{"r1", "r2"}, nil)
+	require.NotEqual(t, r2DID, readded.IdentityPackage.ReasonerDIDs["r2"].DID)
+	env.restart()
+	registry = env.registry()
+	reloaded, err = registry.GetRegistry("server-a")
+	require.NoError(t, err)
+	require.Equal(t, readded.IdentityPackage.ReasonerDIDs["r2"].DID, reloaded.AgentNodes["node-1"].Reasoners["r2"].DID)
 }
 
 func TestIdentityContinuity_VCsVerifyAcrossRestart(t *testing.T) {

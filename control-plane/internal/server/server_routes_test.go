@@ -390,6 +390,12 @@ func (s *stubStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID, 
 func (s *stubStorage) UpsertAgentDIDWithComponents(ctx context.Context, record storage.AgentDIDRecord) error {
 	return nil
 }
+func (s *stubStorage) ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return nil, nil
+}
+func (s *stubStorage) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
+	return nil
+}
 
 // Execution VC operations
 func (s *stubStorage) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {

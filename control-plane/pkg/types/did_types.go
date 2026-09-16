@@ -424,6 +424,7 @@ type ComponentDIDInfo struct {
 	// DerivationPath and PublicKeyJWK are the stored values, returned verbatim.
 	DerivationPath string    `json:"derivation_path,omitempty" db:"derivation_path"`
 	PublicKeyJWK   string    `json:"public_key_jwk,omitempty" db:"public_key_jwk"`
+	Status         string    `json:"status" db:"status"` // "active", or "retired" once removed from its agent
 	CreatedAt      time.Time `json:"created_at" db:"created_at"`
 }
 

@@ -347,6 +347,7 @@ type ComponentDIDModel struct {
 	Capabilities   string    `gorm:"column:capabilities;default:'[]'"`
 	Tags           string    `gorm:"column:tags;default:'[]'"`
 	ExposureLevel  string    `gorm:"column:exposure_level;not null;default:'private'"`
+	Status         string    `gorm:"column:status;not null;default:'active';index"`
 	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }

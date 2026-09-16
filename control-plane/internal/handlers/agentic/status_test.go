@@ -471,6 +471,12 @@ func (m *mockStatusStorage) StoreAgentDIDWithComponents(ctx context.Context, age
 func (m *mockStatusStorage) UpsertAgentDIDWithComponents(ctx context.Context, record storage.AgentDIDRecord) error {
 	return nil
 }
+func (m *mockStatusStorage) ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return nil, nil
+}
+func (m *mockStatusStorage) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
+	return nil
+}
 
 // --- StatusHandler tests ---
 

@@ -291,17 +291,18 @@ func (ls *LocalStorage) UpsertAgentDIDWithComponents(ctx context.Context, record
 		err = ls.retryOnConstraintFailure(ctx, func() error {
 			result, execErr := tx.ExecContext(ctx, `
 				INSERT INTO component_dids (
-					did, agent_did, component_type, function_name, public_key_jwk, derivation_path
-				) VALUES (?, ?, ?, ?, ?, ?)
+					did, agent_did, component_type, function_name, public_key_jwk, derivation_path, status
+				) VALUES (?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (did) DO UPDATE SET
 					public_key_jwk = excluded.public_key_jwk,
 					derivation_path = excluded.derivation_path,
+					status = excluded.status,
 					updated_at = CURRENT_TIMESTAMP
 				WHERE component_dids.agent_did = excluded.agent_did
 				  AND component_dids.component_type = excluded.component_type
 				  AND component_dids.function_name = excluded.function_name`,
 				component.ComponentDID, record.DID, component.ComponentType, component.ComponentName,
-				component.PublicKeyJWK, component.DerivationPath)
+				component.PublicKeyJWK, component.DerivationPath, ComponentDIDStatusActive)
 			if execErr != nil {
 				return fmt.Errorf("failed to upsert component DID %s: %w", component.ComponentName, execErr)
 			}
@@ -880,10 +881,13 @@ func (ls *LocalStorage) GetComponentDID(ctx context.Context, componentID string)
 	}
 
 	// Use function_name as the componentID since there's no separate component_id column
+	// A name can have retired rows from earlier registrations; prefer the active one.
 	query := `
 		SELECT function_name, did, agent_did, component_type, function_name,
-			   derivation_path, public_key_jwk, created_at
-		FROM component_dids WHERE function_name = ?`
+			   derivation_path, public_key_jwk, COALESCE(status, 'active'), created_at
+		FROM component_dids WHERE function_name = ?
+		ORDER BY CASE WHEN COALESCE(status, 'active') = 'active' THEN 0 ELSE 1 END, created_at DESC
+		LIMIT 1`
 
 	row := ls.db.QueryRowContext(ctx, query, componentID)
 	info := &types.ComponentDIDInfo{}
@@ -893,7 +897,7 @@ func (ls *LocalStorage) GetComponentDID(ctx context.Context, componentID string)
 	var createdAt sql.NullTime
 
 	err := row.Scan(&info.ComponentID, &info.ComponentDID, &info.AgentDID,
-		&info.ComponentType, &info.ComponentName, &derivationPath, &publicKeyJWK, &createdAt)
+		&info.ComponentType, &info.ComponentName, &derivationPath, &publicKeyJWK, &info.Status, &createdAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("component DID for %s not found", componentID)
@@ -921,31 +925,46 @@ func (ls *LocalStorage) GetComponentDID(ctx context.Context, componentID string)
 	return info, nil
 }
 
+// ListComponentDIDs lists the active component DIDs of an agent, or of every
+// agent when agentDID is empty. Retired components are excluded so that a
+// removed component is never loaded back into the registry.
 func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return ls.listComponentDIDs(ctx, agentDID, false)
+}
+
+// ListAllComponentDIDs lists an agent's component DIDs including retired ones,
+// or of every agent when agentDID is empty. Key allocation uses it so that a
+// retired component's derivation path is never handed out again.
+func (ls *LocalStorage) ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return ls.listComponentDIDs(ctx, agentDID, true)
+}
+
+func (ls *LocalStorage) listComponentDIDs(ctx context.Context, agentDID string, includeRetired bool) ([]*types.ComponentDIDInfo, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("context cancelled during list component DIDs: %w", err)
 	}
 
-	var query string
-	var rows *sql.Rows
-	var err error
-
-	if agentDID == "" {
-		// Get all components when agentDID is empty
-		query = `
-			SELECT function_name, did, agent_did, component_type, function_name,
-				   derivation_path, public_key_jwk, created_at
-			FROM component_dids ORDER BY created_at DESC`
-		rows, err = ls.db.QueryContext(ctx, query)
-	} else {
-		// Get components for specific agent
-		query = `
-			SELECT function_name, did, agent_did, component_type, function_name,
-				   derivation_path, public_key_jwk, created_at
-			FROM component_dids WHERE agent_did = ? ORDER BY created_at DESC`
-		rows, err = ls.db.QueryContext(ctx, query, agentDID)
+	query := `
+		SELECT function_name, did, agent_did, component_type, function_name,
+			   derivation_path, public_key_jwk, COALESCE(status, 'active'), created_at
+		FROM component_dids`
+	var conditions []string
+	var args []interface{}
+	if agentDID != "" {
+		conditions = append(conditions, "agent_did = ?")
+		args = append(args, agentDID)
 	}
+	if !includeRetired {
+		conditions = append(conditions, "COALESCE(status, 'active') = ?")
+		args = append(args, ComponentDIDStatusActive)
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := ls.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list component DIDs: %w", err)
 	}
@@ -964,7 +983,7 @@ func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) 
 		var createdAt sql.NullTime
 
 		err := rows.Scan(&info.ComponentID, &info.ComponentDID, &info.AgentDID,
-			&info.ComponentType, &info.ComponentName, &derivationPath, &publicKeyJWK, &createdAt)
+			&info.ComponentType, &info.ComponentName, &derivationPath, &publicKeyJWK, &info.Status, &createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan component DID: %w", err)
 		}
@@ -988,5 +1007,37 @@ func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) 
 
 		infos = append(infos, info)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate component DIDs: %w", err)
+	}
 	return infos, nil
+}
+
+// RetireComponentDIDs marks the given component DIDs of an agent as retired.
+// Retired rows stay in storage so their derivation paths are never reused, but
+// they are no longer listed as registered components. An empty list is a no-op.
+func (ls *LocalStorage) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during retire component DIDs: %w", err)
+	}
+	if len(componentDIDs) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(agentDID) == "" {
+		return &ValidationError{Field: "agent_did", Value: agentDID, Reason: "agent DID cannot be empty", Context: "RetireComponentDIDs"}
+	}
+
+	placeholders := make([]string, len(componentDIDs))
+	args := make([]interface{}, 0, len(componentDIDs)+2)
+	args = append(args, ComponentDIDStatusRetired, agentDID)
+	for i, did := range componentDIDs {
+		placeholders[i] = "?"
+		args = append(args, did)
+	}
+	query := `UPDATE component_dids SET status = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE agent_did = ? AND did IN (` + strings.Join(placeholders, ", ") + `)`
+	if _, err := ls.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("failed to retire component DIDs for agent %s: %w", agentDID, err)
+	}
+	return nil
 }

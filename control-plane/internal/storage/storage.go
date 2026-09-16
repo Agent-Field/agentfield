@@ -530,10 +530,18 @@ type StorageProvider interface {
 	// The ctx scopes the read, and componentID identifies the component DID record to load.
 	// Returns the component DID info or an error if it is missing or unreadable.
 	GetComponentDID(ctx context.Context, componentID string) (*types.ComponentDIDInfo, error)
-	// ListComponentDIDs lists component DID records associated with an agent DID.
-	// The ctx scopes the query, and agentDID identifies the component DID owner to inspect.
+	// ListComponentDIDs lists active component DID records associated with an agent DID
+	// (every agent when agentDID is empty). Retired components are not returned.
 	// Returns component DID records or an error if the query fails.
 	ListComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error)
+	// ListAllComponentDIDs lists component DID records associated with an agent
+	// DID, including retired ones. Use it wherever a derivation path must never
+	// be reused; use ListComponentDIDs for the currently registered components.
+	ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error)
+	// RetireComponentDIDs marks the given component DIDs of an agent as retired.
+	// Retired rows are kept, so their keys are never reissued, but they are no
+	// longer returned by ListComponentDIDs. An empty list is a no-op.
+	RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error
 
 	// Multi-step DID operations with transaction safety
 	// StoreAgentDIDWithComponents stores an agent DID and its component DIDs atomically.
@@ -743,6 +751,12 @@ type StorageProvider interface {
 	// (global across all triggers).
 	TriggerMetrics(ctx context.Context) (*types.TriggerMetrics, error)
 }
+
+// Component DID lifecycle states stored in component_dids.status.
+const (
+	ComponentDIDStatusActive  = "active"
+	ComponentDIDStatusRetired = "retired"
+)
 
 // ComponentDIDRequest represents a component DID to be stored
 type ComponentDIDRequest struct {

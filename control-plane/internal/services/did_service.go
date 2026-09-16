@@ -1659,11 +1659,13 @@ func (s *DIDService) DeregisterComponents(req *types.ComponentDeregistrationRequ
 	}
 
 	removedCount := 0
+	var removedDIDs []string
 
 	// Remove reasoners
 	for _, reasonerID := range req.ReasonerIDsToRemove {
-		if _, exists := existingAgent.Reasoners[reasonerID]; exists {
+		if reasonerInfo, exists := existingAgent.Reasoners[reasonerID]; exists {
 			delete(existingAgent.Reasoners, reasonerID)
+			removedDIDs = append(removedDIDs, reasonerInfo.DID)
 			removedCount++
 			logger.Logger.Debug().Msgf("🗑️ Removed reasoner DID: %s from agent %s", reasonerID, req.AgentNodeID)
 		} else {
@@ -1673,8 +1675,9 @@ func (s *DIDService) DeregisterComponents(req *types.ComponentDeregistrationRequ
 
 	// Remove skills
 	for _, skillID := range req.SkillIDsToRemove {
-		if _, exists := existingAgent.Skills[skillID]; exists {
+		if skillInfo, exists := existingAgent.Skills[skillID]; exists {
 			delete(existingAgent.Skills, skillID)
+			removedDIDs = append(removedDIDs, skillInfo.DID)
 			removedCount++
 			logger.Logger.Debug().Msgf("🗑️ Removed skill DID: %s from agent %s", skillID, req.AgentNodeID)
 		} else {
@@ -1690,6 +1693,15 @@ func (s *DIDService) DeregisterComponents(req *types.ComponentDeregistrationRequ
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to store updated registry: %v", err),
+		}, nil
+	}
+
+	// Saving the registry only upserts the remaining components; the removed
+	// rows must be retired explicitly or they are reloaded on the next start.
+	if err := s.registry.RetireComponents(agentfieldServerID, req.AgentNodeID, removedDIDs); err != nil {
+		return &types.ComponentDeregistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to retire removed component DIDs: %v", err),
 		}, nil
 	}
 

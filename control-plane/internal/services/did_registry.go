@@ -499,14 +499,41 @@ func (r *DIDRegistry) IntegrityError(agentfieldServerID string) error {
 	return r.brokenServers[agentfieldServerID]
 }
 
+// RetireComponents marks removed components of an agent as retired in storage,
+// so they are not loaded back into the registry on the next start. The rows are
+// kept so their derivation paths are never allocated again.
+func (r *DIDRegistry) RetireComponents(agentfieldServerID, agentNodeID string, componentDIDs []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.storageProvider == nil {
+		return fmt.Errorf("storage provider not available")
+	}
+	if len(componentDIDs) == 0 {
+		return nil
+	}
+	registry, exists := r.registries[agentfieldServerID]
+	if !exists {
+		return fmt.Errorf("registry not found for af server: %s", agentfieldServerID)
+	}
+	agentInfo, exists := registry.AgentNodes[agentNodeID]
+	if !exists {
+		return fmt.Errorf("agent not found: %s", agentNodeID)
+	}
+	if err := r.storageProvider.RetireComponentDIDs(context.Background(), agentInfo.DID, componentDIDs); err != nil {
+		return fmt.Errorf("failed to retire component DIDs for agent %s: %w", agentNodeID, err)
+	}
+	return nil
+}
+
 // persistedComponentPaths returns stored derivation paths for an agent's
-// components, including ones no longer registered, so a new component never
-// reuses a retired key.
+// components, active and retired, so a new component never reuses the key of a
+// component that was removed, even across restarts.
 func (r *DIDRegistry) persistedComponentPaths(agentDID string) []string {
 	if r.storageProvider == nil || agentDID == "" {
 		return nil
 	}
-	components, err := r.storageProvider.ListComponentDIDs(context.Background(), agentDID)
+	components, err := r.storageProvider.ListAllComponentDIDs(context.Background(), agentDID)
 	if err != nil {
 		log.Printf("Warning: failed to list stored component DIDs for %s: %v", agentDID, err)
 		return nil
