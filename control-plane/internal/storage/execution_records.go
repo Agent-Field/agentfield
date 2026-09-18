@@ -1605,6 +1605,12 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 		  AND w.retry_count < ?
 		  AND `+workflowTSExpr+` <= `+cutoffExpr+`
 		  AND (e.execution_id IS NULL OR `+executionTSExpr+` <= `+cutoffExpr+`)
+		  AND COALESCE(w.approval_status, '') != 'pending'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM workflow_executions c
+		      WHERE c.parent_execution_id = w.execution_id
+		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
+		  )
 		ORDER BY `+workflowTSExpr+` ASC
 		LIMIT ?`, maxRetries, cutoff, cutoff, limit)
 	if err != nil {
@@ -1666,6 +1672,12 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 		            AND e.status IN ('running', 'pending', 'queued', 'waiting')
 		            AND `+executionTSExpr+` <= `+cutoffExpr+`
 		      )
+		  )
+		  AND COALESCE(w.approval_status, '') != 'pending'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM workflow_executions c
+		      WHERE c.parent_execution_id = w.execution_id
+		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
 		  )`)
 	if err != nil {
 		return nil, fmt.Errorf("prepare retry statement: %w", err)
