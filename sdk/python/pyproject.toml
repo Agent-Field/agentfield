@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentfield"
-version = "0.1.139-rc.2"
+version = "0.1.139-rc.4"
 description = "Python SDK for the AgentField control plane"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -100,6 +100,11 @@ dev = [
     "syrupy>=5,<6",
     "hypothesis>=6.88,<7",
     "pytest-socket>=0.6,<0.8",
+    "mypy==1.18.2",
+    # Type stubs for the pinned (stub-less) requests version, so the mypy
+    # gate is reproducible in the locked dev environment, not just under a
+    # newer pip-resolved requests that bundles its own stubs.
+    "types-requests==2.33.0.20260906",
 ]
 
 [tool.pytest.ini_options]

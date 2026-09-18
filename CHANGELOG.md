@@ -6,6 +6,133 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.139-rc.4] - 2026-09-18
+
+
+### Fixed
+
+- Fix(storage): rebind postgres tx prepares and guard stale retries (#1051)
+
+* fix(storage): rebind transactional prepares and guard stale retries
+
+* test(storage): verify stale reapers against live PostgreSQL
+
+Adds connection-backed PostgreSQL coverage for the transactional prepare
+rebinding and the paired-execution staleness guard:
+
+- reproduce the pre-fix failure at the SQL level (SQLSTATE 42601)
+- assert the reaper UPDATE statements reach the driver rebound to $n
+- drive MarkStaleExecutions, MarkStaleWorkflowExecutions and
+  RetryStaleWorkflowExecutions end to end so a row stale on both clocks is
+  reaped while a workflow whose paired execution is still fresh survives
+- cover the guard's status filter (a terminal paired execution does not
+  shield a stale workflow)
+
+Live tests are gated on POSTGRES_TEST_URL, refuse non-loopback hosts, and
+create a throwaway database per test.
+
+* fix(storage): recheck execution staleness between retry statements
+
+RetryStaleWorkflowExecutions repeated the activity predicate in its
+workflow UPDATE, but the paired execution UPDATE still only rechecked
+status. A heartbeat committing between the two statements was
+overwritten, dragging a live execution back to pending.
+
+Repeat the execution staleness predicate on the second update so
+activity that lands after the workflow guard has been evaluated is
+respected. The workflow guard and RowsAffected semantics are unchanged.
+
+Reliability coverage:
+
+- SQLite regression simulates the heartbeat between statements with an
+  AFTER UPDATE trigger; it fails on the old execution UPDATE
+- live PostgreSQL regression parks the retry transaction on the paired
+  execution row lock while a heartbeat commits on another connection; it
+  fails on the old execution UPDATE and passes with the predicate
+
+* fix(storage): make stale retries atomic across the paired records
+
+RetryStaleWorkflowExecutions committed the workflow half of a candidate
+even when the paired execution update lost to a heartbeat that landed
+between the two statements. That left workflow=pending and
+execution=running with retry_count incremented, and the candidate was
+reported as retried, so a dispatcher could duplicate live work.
+
+Check the paired execution update's RowsAffected and wrap each candidate
+in a savepoint. When the execution does not move, roll the candidate's
+workflow half back so the pair is all-or-nothing and the id is not
+reported as retried.
+
+Savepoint rollback is used rather than locking both rows first because it
+behaves identically on SQLite and PostgreSQL (SQLite has no row locks, so
+a lock-first pair could not be exercised by the SQLite regression), keeps
+the existing lock ordering unchanged, and lets the pre-existing
+workflow-only paths keep their outcome: candidates with no paired
+execution row, a terminal row, or a waiting row are only rolled back when
+the paired execution is active but no longer stale, i.e. when it actually
+won the race.
+
+Both between-statements regressions now assert the all-or-nothing outcome
+on SQLite and live PostgreSQL, and a new SQLite test pins that unpaired
+workflows are still retried.
+
+* test(storage): cover batch all-or-nothing and reaper discrimination for stale retries
+
+Add executable regressions on top of the savepoint-based retry fix without
+changing the implementation:
+
+- strengthen the heartbeat-between-statements SQLite regression to assert the
+  whole all-or-nothing outcome: empty retried set, untouched workflow row
+  (status, retry_count, completed_at, error_message, updated_at), and the
+  execution half rolled back with its committed live state
+- add a mixed-batch SQLite regression where two of three candidates lose
+  their paired execution to a between-statements heartbeat and one moves; the
+  reported count and id list must match only the candidate whose pair moved
+- add the same mixed-batch regression against live PostgreSQL, parking the
+  retry on a locked execution row while an independently committed heartbeat
+  wins, so batch accounting is proven under real READ COMMITTED semantics
+- add a selection-to-update regression for workflow-side activity and a
+  terminal-paired-execution regression pinning the workflow-only recovery path
+- add a two-reaper discrimination matrix (MarkStaleWorkflowExecutions and
+  RetryStaleWorkflowExecutions) covering stale-on-both, fresh-on-either clock,
+  and unpaired workflows so the guard introduces no false negatives
+- document the full retry interleaving inventory in the test file, mapping each
+  window to a regression or a written justification (887a3b9)
+
+## [0.1.139-rc.3] - 2026-09-18
+
+
+### Added
+
+- Feat(examples): add optional Serply search backend to deep_research (#1058)
+
+Adds `SEARCH_PROVIDER=serply` alongside the existing Tavily default and
+the Parallel Search opt-in, following the same shape as the Parallel
+backend: one normalizer, one async executor, one dispatch branch, and no
+new entry in requirements.txt.
+
+Serply answers from Google's result pages and needs an API key, so the
+backend reads SERPLY_API_KEY and fails with the same message shape the
+Tavily path already uses when its key is missing.
+
+Two details specific to this API are handled explicitly:
+
+- `num` is an approximate upper bound with a ceiling of 10, so the client
+  requests the ceiling and trims to the example's own five-result budget
+  rather than trusting the count it gets back.
+- Errors arrive as a non-2xx with a JSON `detail` string, so the failure
+  message carries that text instead of a bare status code. (6d36643)
+
+
+
+### Fixed
+
+- Fix(sdk/go): return isolated session definitions (#1044)
+
+* fix(sdk/go): return isolated session definitions
+
+* fix(sdk/go): distinguish overlapping slice views (7a1714e)
+
 ## [0.1.139-rc.2] - 2026-09-15
 
 

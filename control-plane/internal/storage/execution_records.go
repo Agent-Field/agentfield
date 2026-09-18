@@ -1573,8 +1573,15 @@ func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNo
 
 // RetryStaleWorkflowExecutions finds stale workflow executions that haven't exceeded
 // maxRetries and resets both workflow_executions and executions back to "pending"
-// so the paired records stay in sync for the retry path.
+// so the paired records stay in sync for the retry path. The candidate predicates
+// are repeated in both conditional updates, so activity after selection — including
+// a heartbeat landing between the workflow and execution statements — prevents a retry.
+// A candidate is only committed and reported as retried when both records move.
 func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int) ([]string, error) {
+	return ls.retryStaleWorkflowExecutions(ctx, staleAfter, maxRetries, limit, nil)
+}
+
+func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int, afterCandidateSelection func()) ([]string, error) {
 	if limit <= 0 || maxRetries <= 0 {
 		return nil, nil
 	}
@@ -1584,17 +1591,22 @@ func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleA
 
 	cutoff := time.Now().UTC().Add(-staleAfter)
 	db := ls.requireSQLDB()
-	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	workflowTSExpr := ls.staleTimestampExpr("COALESCE(w.updated_at, w.created_at, w.started_at)")
+	executionTSExpr := ls.staleTimestampExpr("COALESCE(e.updated_at, e.created_at, e.started_at)")
 	cutoffExpr := ls.staleTimestampExpr("?")
 
 	rows, err := db.QueryContext(ctx, `
-		SELECT execution_id
-		FROM workflow_executions
-		WHERE status IN ('running', 'pending', 'queued')
-		  AND retry_count < ?
-		  AND `+tsExpr+` <= `+cutoffExpr+`
-		ORDER BY `+tsExpr+` ASC
-		LIMIT ?`, maxRetries, cutoff, limit)
+		SELECT w.execution_id
+		FROM workflow_executions w
+		LEFT JOIN executions e
+		  ON e.execution_id = w.execution_id
+		 AND e.status IN ('running', 'pending', 'queued', 'waiting')
+		WHERE w.status IN ('running', 'pending', 'queued')
+		  AND w.retry_count < ?
+		  AND `+workflowTSExpr+` <= `+cutoffExpr+`
+		  AND (e.execution_id IS NULL OR `+executionTSExpr+` <= `+cutoffExpr+`)
+		ORDER BY `+workflowTSExpr+` ASC
+		LIMIT ?`, maxRetries, cutoff, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query retriable workflow executions: %w", err)
 	}
@@ -1616,6 +1628,12 @@ func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleA
 		return nil, nil
 	}
 
+	// Package tests use this seam to make the candidate-selection-to-update
+	// interleaving deterministic; production callers leave it nil.
+	if afterCandidateSelection != nil {
+		afterCandidateSelection()
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin retry transaction: %w", err)
@@ -1626,34 +1644,68 @@ func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleA
 	retryReason := "auto-retry after stale timeout"
 
 	workflowStmt, err := tx.PrepareContext(ctx, `
-		UPDATE workflow_executions
+		UPDATE workflow_executions AS w
 		SET status = 'pending',
 		    retry_count = retry_count + 1,
 		    error_message = ?,
 		    completed_at = NULL,
 		    updated_at = ?
-		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued')`)
+		WHERE w.execution_id = ?
+		  AND w.status IN ('running', 'pending', 'queued')
+		  AND w.retry_count < ?
+		  AND `+workflowTSExpr+` <= `+cutoffExpr+`
+		  AND (
+		      NOT EXISTS (
+		          SELECT 1 FROM executions e
+		          WHERE e.execution_id = w.execution_id
+		            AND e.status IN ('running', 'pending', 'queued', 'waiting')
+		      )
+		      OR EXISTS (
+		          SELECT 1 FROM executions e
+		          WHERE e.execution_id = w.execution_id
+		            AND e.status IN ('running', 'pending', 'queued', 'waiting')
+		            AND `+executionTSExpr+` <= `+cutoffExpr+`
+		      )
+		  )`)
 	if err != nil {
 		return nil, fmt.Errorf("prepare retry statement: %w", err)
 	}
 	defer workflowStmt.Close()
 
+	// The execution update repeats the staleness predicate: a heartbeat can
+	// land between the workflow guard above and this statement, and the fresh
+	// execution must not be dragged back to pending.
 	executionStmt, err := tx.PrepareContext(ctx, `
-		UPDATE executions
+		UPDATE executions AS e
 		SET status = 'pending',
 		    error_message = ?,
 		    completed_at = NULL,
 		    duration_ms = NULL,
 		    updated_at = ?
-		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued')`)
+		WHERE e.execution_id = ?
+		  AND e.status IN ('running', 'pending', 'queued')
+		  AND `+executionTSExpr+` <= `+cutoffExpr)
 	if err != nil {
 		return nil, fmt.Errorf("prepare execution retry statement: %w", err)
 	}
 	defer executionStmt.Close()
 
+	// Each candidate is wrapped in a savepoint so it can be undone as a unit:
+	// when the paired execution update loses to activity that arrived between
+	// the two statements, the workflow half must not be committed either.
+	const retryCandidateSavepoint = "retry_stale_candidate"
+	releaseCandidate := func() error {
+		_, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT "+retryCandidateSavepoint)
+		return err
+	}
+
 	var retried []string
 	for _, id := range ids {
-		result, err := workflowStmt.ExecContext(ctx, retryReason, now, id)
+		if _, err := tx.ExecContext(ctx, "SAVEPOINT "+retryCandidateSavepoint); err != nil {
+			return retried, fmt.Errorf("savepoint for retry candidate %s: %w", id, err)
+		}
+
+		result, err := workflowStmt.ExecContext(ctx, retryReason, now, id, maxRetries, cutoff, cutoff)
 		if err != nil {
 			return retried, fmt.Errorf("retry workflow execution %s: %w", id, err)
 		}
@@ -1662,11 +1714,50 @@ func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleA
 			return retried, fmt.Errorf("rows affected for workflow execution %s: %w", id, err)
 		}
 		if affected == 0 {
+			if err := releaseCandidate(); err != nil {
+				return retried, fmt.Errorf("release savepoint for workflow execution %s: %w", id, err)
+			}
 			continue
 		}
 
-		if _, err := executionStmt.ExecContext(ctx, retryReason, now, id); err != nil {
+		execResult, err := executionStmt.ExecContext(ctx, retryReason, now, id, cutoff)
+		if err != nil {
 			return retried, fmt.Errorf("retry execution %s: %w", id, err)
+		}
+		execAffected, err := execResult.RowsAffected()
+		if err != nil {
+			return retried, fmt.Errorf("rows affected for execution %s: %w", id, err)
+		}
+		if execAffected == 0 {
+			// The paired execution did not move. A heartbeat landing between
+			// the statements leaves it active but no longer stale, and the
+			// workflow half must be rolled back so the candidate stays
+			// all-or-nothing. The pre-existing workflow-only paths (no paired
+			// row, terminal row, or waiting row) keep their old outcome.
+			var wokeBetweenStatements bool
+			err = tx.QueryRowContext(ctx, `
+				SELECT EXISTS (
+				    SELECT 1 FROM executions AS e
+				    WHERE e.execution_id = ?
+				      AND e.status IN ('running', 'pending', 'queued')
+				      AND `+executionTSExpr+` > `+cutoffExpr+`
+				)`, id, cutoff).Scan(&wokeBetweenStatements)
+			if err != nil {
+				return retried, fmt.Errorf("check execution activity for %s: %w", id, err)
+			}
+			if wokeBetweenStatements {
+				if _, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+retryCandidateSavepoint); err != nil {
+					return retried, fmt.Errorf("rollback retry candidate %s: %w", id, err)
+				}
+				if err := releaseCandidate(); err != nil {
+					return retried, fmt.Errorf("release rolled-back savepoint for %s: %w", id, err)
+				}
+				continue
+			}
+		}
+
+		if err := releaseCandidate(); err != nil {
+			return retried, fmt.Errorf("release savepoint for retry candidate %s: %w", id, err)
 		}
 		retried = append(retried, id)
 	}

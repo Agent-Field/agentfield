@@ -3,8 +3,10 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -17,9 +19,121 @@ type testRollbacker struct {
 	rollbacks int
 }
 
+type prepareCaptureState struct {
+	mu      sync.Mutex
+	queries []string
+}
+
+type prepareCaptureConnector struct {
+	state *prepareCaptureState
+}
+
+type prepareCaptureDriver struct{}
+
+type prepareCaptureConn struct {
+	state *prepareCaptureState
+}
+
+type prepareCaptureTx struct{}
+
+type prepareCaptureStmt struct{}
+
+func (prepareCaptureConnector) Driver() driver.Driver {
+	return prepareCaptureDriver{}
+}
+
+func (c prepareCaptureConnector) Connect(context.Context) (driver.Conn, error) {
+	return &prepareCaptureConn{state: c.state}, nil
+}
+
+func (prepareCaptureDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("prepare capture driver requires a connector")
+}
+
+func (c *prepareCaptureConn) recordPrepare(query string) driver.Stmt {
+	c.state.mu.Lock()
+	c.state.queries = append(c.state.queries, query)
+	c.state.mu.Unlock()
+	return prepareCaptureStmt{}
+}
+
+func (c *prepareCaptureConn) Prepare(query string) (driver.Stmt, error) {
+	return c.recordPrepare(query), nil
+}
+
+func (c *prepareCaptureConn) PrepareContext(_ context.Context, query string) (driver.Stmt, error) {
+	return c.recordPrepare(query), nil
+}
+
+func (*prepareCaptureConn) Close() error { return nil }
+
+func (*prepareCaptureConn) Begin() (driver.Tx, error) {
+	return prepareCaptureTx{}, nil
+}
+
+func (prepareCaptureTx) Commit() error   { return nil }
+func (prepareCaptureTx) Rollback() error { return nil }
+
+func (prepareCaptureStmt) Close() error  { return nil }
+func (prepareCaptureStmt) NumInput() int { return -1 }
+func (prepareCaptureStmt) Exec([]driver.Value) (driver.Result, error) {
+	return driver.RowsAffected(0), nil
+}
+func (prepareCaptureStmt) Query([]driver.Value) (driver.Rows, error) {
+	return nil, errors.New("prepare capture query not supported")
+}
+
+func (s *prepareCaptureState) preparedQueries() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.queries...)
+}
+
 func (r *testRollbacker) Rollback() error {
 	r.rollbacks++
 	return r.err
+}
+
+func TestSQLTxPrepareRebindsByMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want []string
+	}{
+		{
+			name: "postgres",
+			mode: "postgres",
+			want: []string{"SELECT $1", "UPDATE items SET name = $1"},
+		},
+		{
+			name: "sqlite",
+			mode: "local",
+			want: []string{"SELECT ?", "UPDATE items SET name = ?"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := &prepareCaptureState{}
+			rawDB := sql.OpenDB(prepareCaptureConnector{state: state})
+			t.Cleanup(func() { _ = rawDB.Close() })
+
+			rawTx, err := rawDB.Begin()
+			require.NoError(t, err)
+			tx := newSQLTx(rawTx, test.mode)
+
+			stmt, err := tx.PrepareContext(context.Background(), "SELECT ?")
+			require.NoError(t, err)
+			require.NoError(t, stmt.Close())
+
+			stmt, err = tx.Prepare("UPDATE items SET name = ?")
+			require.NoError(t, err)
+			require.NoError(t, stmt.Close())
+			require.NoError(t, tx.Rollback())
+
+			require.Equal(t, test.want, state.preparedQueries())
+		})
+	}
 }
 
 func TestStorageHelperCoverage(t *testing.T) {
