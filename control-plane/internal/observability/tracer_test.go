@@ -32,6 +32,40 @@ func TestInitTracer_ExportsToFullHTTPURL(t *testing.T) {
 	require.Positive(t, requests.Load())
 }
 
+func TestInitTracer_ExportsToFullHTTPURLPaths(t *testing.T) {
+	tests := []struct {
+		name           string
+		endpointSuffix string
+		wantPath       string
+	}{
+		{name: "custom path", endpointSuffix: "/custom/traces", wantPath: "/custom/traces"},
+		{name: "bare slash", endpointSuffix: "/", wantPath: "/v1/traces"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
+			collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, tt.wantPath, r.URL.Path)
+				requests.Add(1)
+				w.Header().Set("Content-Type", "application/x-protobuf")
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer collector.Close()
+
+			tracer, shutdown, err := InitTracer(context.Background(), TracerConfig{
+				Enabled: true, Exporter: "otlp-http", Endpoint: collector.URL + tt.endpointSuffix,
+			})
+			require.NoError(t, err)
+			_, span := tracer.StartExecutionSpan(context.Background(), "exec-1", "run-1", "agent-1")
+			span.End()
+			require.NoError(t, tracer.provider.ForceFlush(context.Background()))
+			require.NoError(t, shutdown(context.Background()))
+			require.Positive(t, requests.Load())
+		})
+	}
+}
+
 func TestInitTracer_EndpointAndExporterValidation(t *testing.T) {
 	_, _, err := InitTracer(context.Background(), TracerConfig{Enabled: true, Endpoint: "http://[bad"})
 	require.ErrorContains(t, err, "invalid OTLP endpoint")
