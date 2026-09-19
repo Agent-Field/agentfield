@@ -85,6 +85,42 @@ def resolve_cli_command(name: str) -> str:
     return shutil.which(name) or name
 
 
+# Cap on the argv text embedded in timeout/crash messages. Providers pass the
+# prompt as a single (often huge) argv element, so an unbounded command line
+# carries the entire prompt into the error message — and the runner's retry
+# classifier matches error text, where prompt prose like "its coded 500 would
+# fall through" used to make a wall-clock timeout look like a transient HTTP
+# failure and re-run the whole call. The preview keeps the binary and the
+# leading arguments an operator needs to tell what ran.
+_COMMAND_PREVIEW_CHARS = 200
+
+
+def format_command_preview(cmd: List[str]) -> str:
+    """Bound an argv for error messages without quoting prompt text.
+
+    Only whole arguments that fit inside ``_COMMAND_PREVIEW_CHARS`` are kept:
+    a too-long element — the prompt providers append positionally — is dropped
+    entirely rather than partially quoted into the message, so prompt text
+    cannot reach the retry classifier. Returns the untruncated command when it
+    already fits.
+    """
+    kept: List[str] = []
+    used = 0
+    for arg in cmd:
+        cost = len(arg) + (1 if kept else 0)
+        if used + cost > _COMMAND_PREVIEW_CHARS:
+            break
+        kept.append(arg)
+        used += cost
+
+    if len(kept) == len(cmd):
+        return " ".join(kept)
+    if not kept:
+        # A single argv element (an absurdly long binary path) exceeds the cap.
+        return f"{cmd[0][:_COMMAND_PREVIEW_CHARS]}..."
+    return f"{' '.join(kept)}... [{len(' '.join(cmd))} chars total]"
+
+
 def _resolve_idle_seconds(idle_seconds: Optional[float]) -> Optional[float]:
     """Resolve the no-progress watchdog window.
 
@@ -402,9 +438,13 @@ async def run_cli(
         fallback_returncode = await _wait_process_exit(proc, _kill_group)
 
     if idle_timed_out:
-        raise TimeoutError(f"CLI command made no progress for {idle}s: {' '.join(cmd)}")
+        raise TimeoutError(
+            f"CLI command made no progress for {idle}s: {format_command_preview(cmd)}"
+        )
     if timed_out:
-        raise TimeoutError(f"CLI command timed out after {timeout}s: {' '.join(cmd)}")
+        raise TimeoutError(
+            f"CLI command timed out after {timeout}s: {format_command_preview(cmd)}"
+        )
 
     returncode = proc.returncode
     if returncode is None:
@@ -417,7 +457,7 @@ async def run_cli(
                 name,
                 max_output_bytes,
                 buf.dropped_bytes,
-                " ".join(cmd[:3]),
+                format_command_preview(cmd),
             )
     return (
         stdout_chunks.joined().decode("utf-8", errors="replace"),

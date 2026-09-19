@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from agentfield.harness._cli import (
     estimate_cli_cost,
     extract_final_text,
+    format_command_preview,
     parse_jsonl,
     resolve_model_and_variant,
     run_cli,
@@ -55,6 +57,57 @@ def test_resolve_model_and_variant_uses_suffix_when_no_explicit_option():
         "openai/gpt-5",
         "minimal",
     )
+
+
+# The live incident's prompt text: a bare "500" quoted into a timeout message
+# made the runner's classifier re-run the whole 90-minute call from scratch.
+_LONG_PROMPT = (
+    "PROMPT-MARKER fix the output check, where its coded 500 would fall "
+    "through the global filter" + ("x" * 5000)
+)
+
+
+def test_format_command_preview_keeps_prefix_and_drops_the_prompt():
+    cmd = [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--agent",
+        "agentfield-harness",
+        _LONG_PROMPT,
+    ]
+
+    preview = format_command_preview(cmd)
+
+    assert preview.startswith(
+        "opencode run --format json --agent agentfield-harness... ["
+    )
+    assert "PROMPT-MARKER" not in preview
+    assert "500" not in preview
+    assert len(preview) < 300
+
+
+def test_format_command_preview_leaves_a_short_command_untouched():
+    assert format_command_preview(["opencode", "run"]) == "opencode run"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_timeout_message_excludes_the_prompt():
+    """End-to-end: the TimeoutError providers surface embeds only the argv
+    prefix, so prompt text never reaches the retry classifier."""
+    cmd = [sys.executable, "-c", "import time; time.sleep(30)", _LONG_PROMPT]
+
+    with pytest.raises(TimeoutError) as excinfo:
+        await run_cli(cmd, timeout=0.2, idle_seconds=0)
+
+    message = str(excinfo.value)
+    assert message.startswith("CLI command timed out after 0.2s: ")
+    assert "import time; time.sleep(30)" in message
+    assert _LONG_PROMPT not in message
+    assert "PROMPT-MARKER" not in message
+    assert message.endswith("chars total]")
+    assert len(message) < 400
 
 
 def _stream_reader(chunks: list[bytes]) -> MagicMock:
