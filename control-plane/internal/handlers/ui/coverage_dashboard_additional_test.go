@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -155,6 +157,27 @@ func TestEnhancedDashboardSummaryHandlerCoverage(t *testing.T) {
 	require.Equal(t, http.StatusOK, cachedResp.Code)
 
 	handler.agentService.(*MockAgentServiceForUI).AssertExpectations(t)
+}
+
+func TestEnhancedDashboardSummaryHandlerQueuedQueryFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := &dashboardOverrideStorage{overrideStorage: &overrideStorage{StorageProvider: setupTestStorage(t)}}
+	store.queryExecutionRecordsFn = func(_ context.Context, filter types.ExecutionFilter) ([]*types.Execution, error) {
+		if filter.Status != nil && *filter.Status == string(types.ExecutionStatusQueued) {
+			return nil, errors.New("queued query failed")
+		}
+		return nil, nil
+	}
+	handler := NewDashboardHandler(store, &mockLifecycleAgentService{})
+	router := gin.New()
+	router.GET("/api/ui/v1/dashboard/enhanced", handler.GetEnhancedDashboardSummaryHandler)
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/ui/v1/dashboard/enhanced", nil))
+
+	require.Equal(t, http.StatusInternalServerError, resp.Code)
+	require.Contains(t, resp.Body.String(), "failed to load active workflow data")
 }
 
 func TestDashboardPureHelpersCoverage(t *testing.T) {

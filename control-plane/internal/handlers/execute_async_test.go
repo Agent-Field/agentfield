@@ -371,6 +371,64 @@ func (s *failQueuedTransitionStorage) UpdateExecutionRecord(ctx context.Context,
 	return nil, errors.New("forced queued-to-running persistence failure")
 }
 
+type dispatchRaceStorage struct {
+	*testExecutionStorage
+	statusOnFirstUpdate string
+	firstUpdateDone     chan struct{}
+	updateCalls         atomic.Int32
+}
+
+func (s *dispatchRaceStorage) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
+	if s.updateCalls.Add(1) != 1 {
+		return s.testExecutionStorage.UpdateExecutionRecord(ctx, executionID, update)
+	}
+	if s.firstUpdateDone != nil {
+		defer close(s.firstUpdateDone)
+	}
+
+	_, err := s.testExecutionStorage.UpdateExecutionRecord(ctx, executionID, func(current *types.Execution) (*types.Execution, error) {
+		current.Status = s.statusOnFirstUpdate
+		current.UpdatedAt = time.Now().UTC()
+		return current, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.testExecutionStorage.UpdateWorkflowExecution(ctx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+		current.Status = s.statusOnFirstUpdate
+		current.UpdatedAt = time.Now().UTC()
+		return current, nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return s.testExecutionStorage.UpdateExecutionRecord(ctx, executionID, update)
+}
+
+func queuedAsyncJobForTest(t *testing.T, store ExecutionStore, baseStore *testExecutionStorage, executionID string) asyncExecutionJob {
+	t.Helper()
+
+	now := time.Now().UTC()
+	exec := &types.Execution{
+		ExecutionID: executionID, RunID: executionID, NodeID: "node-1", AgentNodeID: "node-1",
+		ReasonerID: "reasoner-a", Status: types.ExecutionStatusQueued, CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, baseStore.CreateExecutionRecord(context.Background(), exec))
+	require.NoError(t, baseStore.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{
+		ExecutionID: exec.ExecutionID, WorkflowID: exec.RunID, RunID: &exec.RunID,
+		AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: string(types.ExecutionStatusQueued),
+		CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}))
+	target, err := parseTarget("node-1.reasoner-a")
+	require.NoError(t, err)
+	return asyncExecutionJob{
+		controller: newExecutionController(store, nil, nil, time.Second, ""),
+		plan: preparedExecution{
+			exec: exec, target: target, agent: baseStore.agent, requestBody: []byte(`{}`), executionMode: "async",
+		},
+	}
+}
+
 func TestQueuedTransitionFailureDoesNotPublishStartedOrChangePlanStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var agentCalls atomic.Int32
@@ -464,6 +522,133 @@ func TestTimedOutQueuedExecutionIsSkippedByWorker(t *testing.T) {
 	stored, err := store.GetExecutionRecord(context.Background(), exec.ExecutionID)
 	require.NoError(t, err)
 	require.Equal(t, types.ExecutionStatusTimeout, stored.Status)
+}
+
+func TestQueuedExecutionThatBecomesTerminalDuringDispatchIsSkipped(t *testing.T) {
+	var agentCalls atomic.Int32
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		agentCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer agentServer.Close()
+
+	baseStore := newTestExecutionStorage(testRestartAgent(agentServer.URL))
+	store := &dispatchRaceStorage{
+		testExecutionStorage: baseStore,
+		statusOnFirstUpdate:  types.ExecutionStatusTimeout,
+	}
+	job := queuedAsyncJobForTest(t, store, baseStore, "terminal-during-dispatch")
+	eventCh := store.GetExecutionEventBus().Subscribe("terminal-during-dispatch")
+	t.Cleanup(func() { store.GetExecutionEventBus().Unsubscribe("terminal-during-dispatch") })
+
+	job.processWithContext(context.Background())
+
+	require.EqualValues(t, 1, store.updateCalls.Load(), "the worker should stop after observing the terminal update")
+	require.Zero(t, agentCalls.Load())
+	stored, err := baseStore.GetExecutionRecord(context.Background(), job.plan.exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusTimeout, stored.Status)
+	workflow, err := baseStore.GetWorkflowExecution(context.Background(), job.plan.exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, string(types.ExecutionStatusTimeout), workflow.Status)
+	select {
+	case event := <-eventCh:
+		t.Fatalf("terminal execution emitted an unexpected event before dispatch: %s", event.Type)
+	default:
+	}
+}
+
+func TestQueuedExecutionPausedDuringDispatchStopsWhenResumeWaitFails(t *testing.T) {
+	var agentCalls atomic.Int32
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		agentCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer agentServer.Close()
+
+	baseStore := newTestExecutionStorage(testRestartAgent(agentServer.URL))
+	store := &dispatchRaceStorage{
+		testExecutionStorage: baseStore,
+		statusOnFirstUpdate:  types.ExecutionStatusPaused,
+	}
+	job := queuedAsyncJobForTest(t, store, baseStore, "paused-during-dispatch-cancelled-wait")
+	workerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	job.processWithContext(workerCtx)
+
+	require.EqualValues(t, 1, store.updateCalls.Load(), "a failed resume wait must not retry dispatch")
+	require.Zero(t, agentCalls.Load())
+	stored, err := baseStore.GetExecutionRecord(context.Background(), job.plan.exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusPaused, stored.Status)
+	workflow, err := baseStore.GetWorkflowExecution(context.Background(), job.plan.exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, string(types.ExecutionStatusPaused), workflow.Status)
+}
+
+func TestQueuedExecutionPausedDuringDispatchResumesAndDispatchesOnce(t *testing.T) {
+	var agentCalls atomic.Int32
+	var updateCallsAtAgent atomic.Int32
+	var store *dispatchRaceStorage
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		agentCalls.Add(1)
+		updateCallsAtAgent.Store(store.updateCalls.Load())
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer agentServer.Close()
+
+	baseStore := newTestExecutionStorage(testRestartAgent(agentServer.URL))
+	firstUpdateDone := make(chan struct{})
+	store = &dispatchRaceStorage{
+		testExecutionStorage: baseStore,
+		statusOnFirstUpdate:  types.ExecutionStatusPaused,
+		firstUpdateDone:      firstUpdateDone,
+	}
+	job := queuedAsyncJobForTest(t, store, baseStore, "paused-during-dispatch-resumed")
+	processDone := make(chan struct{})
+	go func() {
+		job.processWithContext(context.Background())
+		close(processDone)
+	}()
+
+	select {
+	case <-firstUpdateDone:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not observe the dispatch-time pause")
+	}
+	require.Eventually(t, func() bool {
+		return baseStore.GetExecutionEventBus().GetSubscriberCount() == 1
+	}, time.Second, time.Millisecond, "worker did not begin waiting for resume")
+
+	_, err := baseStore.UpdateExecutionRecord(context.Background(), job.plan.exec.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+		current.Status = types.ExecutionStatusRunning
+		current.UpdatedAt = time.Now().UTC()
+		return current, nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, baseStore.UpdateWorkflowExecution(context.Background(), job.plan.exec.ExecutionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+		current.Status = string(types.ExecutionStatusRunning)
+		current.UpdatedAt = time.Now().UTC()
+		return current, nil
+	}))
+	baseStore.GetExecutionEventBus().Publish(events.ExecutionEvent{
+		Type: events.ExecutionResumed, ExecutionID: job.plan.exec.ExecutionID,
+		WorkflowID: job.plan.exec.RunID, Status: types.ExecutionStatusRunning, Timestamp: time.Now().UTC(),
+	})
+
+	select {
+	case <-processDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not dispatch after the execution resumed")
+	}
+	require.EqualValues(t, 1, agentCalls.Load())
+	require.EqualValues(t, 2, updateCallsAtAgent.Load(), "the dispatch loop should retry exactly once before calling the agent")
+	require.Eventually(t, func() bool {
+		stored, recordErr := baseStore.GetExecutionRecord(context.Background(), job.plan.exec.ExecutionID)
+		return recordErr == nil && stored != nil && stored.Status == types.ExecutionStatusSucceeded
+	}, 2*time.Second, time.Millisecond, "the resumed execution should persist its successful completion")
 }
 
 func TestExecuteAsyncHandler_PoolStoppedTerminatesPersistedRow(t *testing.T) {
