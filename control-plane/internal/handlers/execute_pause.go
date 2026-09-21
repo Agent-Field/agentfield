@@ -37,17 +37,17 @@ type executionResumeResponse struct {
 
 func PauseExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		handlePauseResume(c, store, types.ExecutionStatusRunning, types.ExecutionStatusPaused)
+		handlePauseResume(c, store, []string{types.ExecutionStatusRunning, types.ExecutionStatusQueued}, types.ExecutionStatusPaused)
 	}
 }
 
 func ResumeExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		handlePauseResume(c, store, types.ExecutionStatusPaused, types.ExecutionStatusRunning)
+		handlePauseResume(c, store, []string{types.ExecutionStatusPaused}, types.ExecutionStatusRunning)
 	}
 }
 
-func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus, nextStatus string) {
+func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatuses []string, nextStatus string) {
 	executionID := c.Param("execution_id")
 	if executionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "execution_id is required"})
@@ -93,8 +93,15 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 			return nil, fmt.Errorf("execution %s not found", executionID)
 		}
 		currentStatus := types.NormalizeExecutionStatus(current.Status)
-		if currentStatus != expectedFromStatus {
-			return nil, fmt.Errorf("execution is in '%s' state; must be '%s'", currentStatus, expectedFromStatus)
+		allowed := false
+		for _, expected := range expectedFromStatuses {
+			if currentStatus == expected {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, fmt.Errorf("execution is in '%s' state; must be '%s'", currentStatus, strings.Join(expectedFromStatuses, "' or '"))
 		}
 		previousStatus = currentStatus
 		current.Status = nextStatus

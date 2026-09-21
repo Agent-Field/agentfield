@@ -291,7 +291,24 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 		return
 	}
 
-	activeExecutions := append(runningExecutions, waitingExecutions...)
+	statusQueued := string(types.ExecutionStatusQueued)
+	queuedExecutions, err := h.store.QueryExecutionRecords(ctx, types.ExecutionFilter{
+		Status:          &statusQueued,
+		Limit:           12,
+		SortBy:          "started_at",
+		SortDescending:  true,
+		ExcludePayloads: true,
+	})
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("failed to query queued executions for enhanced dashboard")
+		RespondInternalError(c, "failed to load active workflow data")
+		return
+	}
+
+	activeExecutions := make([]*types.Execution, 0, len(runningExecutions)+len(waitingExecutions)+len(queuedExecutions))
+	activeExecutions = append(activeExecutions, runningExecutions...)
+	activeExecutions = append(activeExecutions, waitingExecutions...)
+	activeExecutions = append(activeExecutions, queuedExecutions...)
 	sort.Slice(activeExecutions, func(i, j int) bool {
 		return activeExecutions[i].StartedAt.After(activeExecutions[j].StartedAt)
 	})

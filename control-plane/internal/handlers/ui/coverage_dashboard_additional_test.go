@@ -94,6 +94,15 @@ func seedDashboardData(t *testing.T) (*DashboardHandler, *gin.Engine) {
 			Status:      string(types.ExecutionStatusWaiting),
 			StartedAt:   now.Add(-2 * time.Minute),
 		},
+		{
+			ExecutionID: "dash-queued",
+			RunID:       "run-queued",
+			AgentNodeID: "agent-alpha",
+			ReasonerID:  "planner",
+			NodeID:      "agent-alpha",
+			Status:      string(types.ExecutionStatusQueued),
+			StartedAt:   now.Add(-25 * time.Hour),
+		},
 	}
 	for _, record := range records {
 		require.NoError(t, ls.CreateExecutionRecord(ctx, record))
@@ -128,6 +137,14 @@ func TestEnhancedDashboardSummaryHandlerCoverage(t *testing.T) {
 	require.NotNil(t, body.Comparison)
 	require.NotEmpty(t, body.ExecutionTrends.Last7Days)
 	require.NotEmpty(t, body.Workflows.TopWorkflows)
+	queuedVisible := false
+	for _, run := range body.Workflows.ActiveRuns {
+		if run.ExecutionID == "dash-queued" {
+			queuedVisible = true
+			require.Equal(t, string(types.ExecutionStatusQueued), run.Status)
+		}
+	}
+	require.True(t, queuedVisible, "queued execution must remain visible in active dashboard runs")
 	require.NotEmpty(t, body.Incidents)
 	require.NotEmpty(t, body.Hotspots.TopFailingReasoners)
 	require.Len(t, body.ActivityPatterns.HourlyHeatmap, 7)
@@ -185,7 +202,7 @@ func TestDashboardPureHelpersCoverage(t *testing.T) {
 		require.Equal(t, 300.0, computeMedian([]int64{100, 300, 500}))
 	})
 
-		t.Run("hotspots activity workflows and incidents", func(t *testing.T) {
+	t.Run("hotspots activity workflows and incidents", func(t *testing.T) {
 		hotspots := buildHotspotSummary(executions)
 		require.Len(t, hotspots.TopFailingReasoners, 2)
 		foundTopErrors := false
