@@ -32,6 +32,17 @@ var (
 
 const defaultMaxConcurrent = 4
 
+const (
+	openCodeConfigSchema          = "https://opencode.ai/config.json"
+	openCodeAgentName             = "agentfield-harness"
+	openCodeDefaultSteps          = 500
+	openCodeInlineSystemPromptEnv = "AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT"
+	openCodeStepsEnv              = "AGENTFIELD_OPENCODE_STEPS"
+	agentFieldWorkerInstruction   = "You are an AgentField-launched worker. Complete the assigned prompt directly. " +
+		"Do not invoke AgentField orchestration, the `af` CLI, `swe-planner.plan`, " +
+		"or delegate work back to AgentField."
+)
+
 // OpenCodeProvider invokes the opencode CLI as a subprocess.
 type OpenCodeProvider struct {
 	BinPath   string
@@ -64,6 +75,151 @@ func NewOpenCodeProvider(binPath, serverURL string) *OpenCodeProvider {
 	return &OpenCodeProvider{BinPath: binPath, ServerURL: serverURL, runCLI: RunCLIWithStdin}
 }
 
+func openCodePermissions() map[string]any {
+	// Harness tools and permission mode intentionally do not change this
+	// baseline. With the wildcard allow present, translating a tool allowlist
+	// would only add redundant allow-on-top-of-allow rules.
+	return map[string]any{
+		"*":        "allow",
+		"skill":    map[string]any{"agentfield*": "deny"},
+		"question": "deny",
+		"task":     "deny",
+	}
+}
+
+func agentSystemPrompt(options Options) string {
+	callerPrompt := strings.TrimSpace(options.SystemPrompt)
+	if callerPrompt == "" {
+		return agentFieldWorkerInstruction
+	}
+	return callerPrompt + "\n\n" + agentFieldWorkerInstruction
+}
+
+func inlineSystemPromptEnabled(options Options) bool {
+	value, ok := options.Env[openCodeInlineSystemPromptEnv]
+	if !ok {
+		value = os.Getenv(openCodeInlineSystemPromptEnv)
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func openCodeSteps(options Options) int {
+	value, ok := options.Env[openCodeStepsEnv]
+	if !ok {
+		value = os.Getenv(openCodeStepsEnv)
+	}
+	if steps, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && steps > 0 {
+		return steps
+	}
+	return openCodeDefaultSteps
+}
+
+func deepMergeOpenCodeConfig(base, overlay map[string]any) map[string]any {
+	merged := make(map[string]any, len(base)+len(overlay))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range overlay {
+		baseObject, baseOK := merged[key].(map[string]any)
+		overlayObject, overlayOK := value.(map[string]any)
+		if baseOK && overlayOK {
+			merged[key] = deepMergeOpenCodeConfig(baseObject, overlayObject)
+			continue
+		}
+		merged[key] = value
+	}
+	return merged
+}
+
+func normalizeAgentFieldHarnessConfig(config map[string]any, stripSystemPrompt bool) {
+	agents, ok := config["agent"].(map[string]any)
+	if !ok {
+		return
+	}
+	selectedAgent, ok := agents[openCodeAgentName].(map[string]any)
+	if !ok {
+		return
+	}
+	if stripSystemPrompt {
+		delete(selectedAgent, "prompt")
+	}
+	// encoding/json sorts map keys. That places "*" before every lowercase
+	// permission key, so OpenCode sees the wildcard before targeted denials
+	// without custom JSON ordering machinery.
+}
+
+func mergeOpenCodeConfigContent(existingContent, overlayContent string, stripSystemPrompt bool) (string, error) {
+	if strings.TrimSpace(existingContent) == "" {
+		return overlayContent, nil
+	}
+
+	var existingValue any
+	if err := json.Unmarshal([]byte(existingContent), &existingValue); err != nil {
+		return "", fmt.Errorf("OPENCODE_CONFIG_CONTENT must be valid JSON when supplied to the AgentField OpenCode provider: %w", err)
+	}
+	existing, ok := existingValue.(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("OPENCODE_CONFIG_CONTENT must contain a JSON object when supplied to the AgentField OpenCode provider")
+	}
+
+	var overlayValue any
+	if err := json.Unmarshal([]byte(overlayContent), &overlayValue); err != nil {
+		return "", fmt.Errorf("AgentField OpenCode overlay must contain a JSON object")
+	}
+	overlay, ok := overlayValue.(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("AgentField OpenCode overlay must contain a JSON object")
+	}
+
+	merged := deepMergeOpenCodeConfig(existing, overlay)
+	normalizeAgentFieldHarnessConfig(merged, stripSystemPrompt)
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return "", fmt.Errorf("serializing OPENCODE_CONFIG_CONTENT: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func inlineOpenCodePrompt(prompt string, options Options) string {
+	return fmt.Sprintf(
+		"SYSTEM INSTRUCTIONS:\n%s\n\n---\n\nUSER REQUEST:\n%s",
+		agentSystemPrompt(options), prompt,
+	)
+}
+
+func buildOpenCodeConfigContent(options Options, modelValue, variantValue string, includeSystemPrompt bool) (string, error) {
+	agent := map[string]any{
+		"mode":       "primary",
+		"steps":      openCodeSteps(options),
+		"permission": openCodePermissions(),
+	}
+	if includeSystemPrompt {
+		agent["prompt"] = agentSystemPrompt(options)
+	}
+	if modelValue != "" {
+		agent["model"] = modelValue
+	}
+	if variantValue != "" {
+		agent["reasoningEffort"] = variantValue
+	}
+
+	content := map[string]any{
+		"$schema":       openCodeConfigSchema,
+		"default_agent": openCodeAgentName,
+		"agent":         map[string]any{openCodeAgentName: agent},
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return "", fmt.Errorf("serializing AgentField OpenCode overlay: %w", err)
+	}
+	return string(encoded), nil
+}
+
 func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
 	// opencode 1.14+ moved non-interactive execution to the `run` subcommand.
 	// The legacy top-level `-c <dir> -q -p <prompt>` surface was rebound:
@@ -75,7 +231,8 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 	// --format json emits a JSONL event stream (step_start / text / step_finish
 	// / tool_use / error) instead of plain text, which lets us recover the final
 	// message, per-step cost, and turn count, and surface in-band error events.
-	cmd := []string{p.BinPath, "run", "--format", "json"}
+	cmd := []string{p.BinPath, "run", "--format", "json", "--agent", openCodeAgentName}
+	inlineSystemPrompt := inlineSystemPromptEnabled(options)
 
 	// OpenCode uses --dir for the project directory the agent operates on.
 	// ProjectDir is the canonical caller-facing field; fall back to Cwd if
@@ -107,14 +264,9 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 	// response. opencode in non-TTY mode proceeds without permission
 	// prompting, so no flag is needed. See agentfield#582.
 
-	// Prepend system prompt if provided. OpenCode has no native
-	// --system-prompt flag, so inline it ahead of the user prompt.
 	effectivePrompt := prompt
-	if options.SystemPrompt != "" {
-		effectivePrompt = fmt.Sprintf(
-			"SYSTEM INSTRUCTIONS:\n%s\n\n---\n\nUSER REQUEST:\n%s",
-			strings.TrimSpace(options.SystemPrompt), prompt,
-		)
+	if inlineSystemPrompt {
+		effectivePrompt = inlineOpenCodePrompt(prompt, options)
 	}
 
 	// Prompt is positional on `opencode run` (replaces deprecated -p) on
@@ -156,6 +308,25 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 			}
 		}
 	}
+
+	existingConfig, callerSet := env["OPENCODE_CONFIG_CONTENT"]
+	if !callerSet {
+		existingConfig = os.Getenv("OPENCODE_CONFIG_CONTENT")
+	}
+	overlayContent, err := buildOpenCodeConfigContent(
+		options,
+		modelValue,
+		variantValue,
+		!inlineSystemPrompt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	mergedConfig, err := mergeOpenCodeConfigContent(existingConfig, overlayContent, inlineSystemPrompt)
+	if err != nil {
+		return nil, err
+	}
+	env["OPENCODE_CONFIG_CONTENT"] = mergedConfig
 
 	sem := getSemaphore()
 	select {

@@ -292,17 +292,17 @@ func TestOpenCodeProvider_ModelVariantFlagWiring(t *testing.T) {
 		{
 			name:    "suffix maps to --variant",
 			options: Options{Model: "openrouter/z-ai/glm-5.2#high"},
-			wantCmd: []string{"opencode", "run", "--format", "json", "-m", "openrouter/z-ai/glm-5.2", "--variant", "high", "hello"},
+			wantCmd: []string{"opencode", "run", "--format", "json", "--agent", "agentfield-harness", "-m", "openrouter/z-ai/glm-5.2", "--variant", "high", "hello"},
 		},
 		{
 			name:    "explicit variant wins over suffix",
 			options: Options{Model: "openai/gpt-5#low", Variant: "max"},
-			wantCmd: []string{"opencode", "run", "--format", "json", "-m", "openai/gpt-5", "--variant", "max", "hello"},
+			wantCmd: []string{"opencode", "run", "--format", "json", "--agent", "agentfield-harness", "-m", "openai/gpt-5", "--variant", "max", "hello"},
 		},
 		{
 			name:    "bare model has no variant flag",
 			options: Options{Model: "deepseek/deepseek-v4-flash"},
-			wantCmd: []string{"opencode", "run", "--format", "json", "-m", "deepseek/deepseek-v4-flash", "hello"},
+			wantCmd: []string{"opencode", "run", "--format", "json", "--agent", "agentfield-harness", "-m", "deepseek/deepseek-v4-flash", "hello"},
 		},
 	}
 
