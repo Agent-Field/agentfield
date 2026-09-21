@@ -7,9 +7,11 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import queue
 import sys
 import threading
+import time
 
 import pytest
 
@@ -338,6 +340,83 @@ async def test_async_idle_follower_cancels_without_a_log_or_worker_thread(monkey
 
 
 class TestTeeTextIO:
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
+    def test_fork_child_resets_tee_ring_and_follower_locks(self, monkeypatch):
+        import agentfield.node_logs as nl
+
+        ring = ProcessLogRing(max_bytes=1024 * 1024)
+        tee = _TeeTextIO("stdout", io.StringIO(), ring, max_line_bytes=1024)
+        tee._buf = "parent-partial"
+        monkeypatch.setattr(nl, "_global_ring", ring)
+        monkeypatch.setattr(nl, "_installed_tees", [tee])
+        monkeypatch.setattr(nl, "_follow_queues", [queue.Queue()])
+
+        old_tee_lock = tee._write_lock
+        old_ring_lock = ring._lock
+        old_follow_lock = nl._follow_lock
+        holding = threading.Event()
+        release = threading.Event()
+
+        def hold_tee_lock() -> None:
+            with old_tee_lock:
+                holding.set()
+                release.wait(5.0)
+
+        holder = threading.Thread(target=hold_tee_lock)
+        holder.start()
+        assert holding.wait(1.0)
+
+        read_fd, write_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:  # pragma: no cover - assertions happen in the parent
+            os.close(read_fd)
+            child_result = b"error"
+            child_exit = 1
+            try:
+                locks_reset = (
+                    tee._write_lock is not old_tee_lock
+                    and ring._lock is not old_ring_lock
+                    and nl._follow_lock is not old_follow_lock
+                    and nl._follow_queues == []
+                    and tee._buf == ""
+                )
+                if locks_reset:
+                    tee.write("child-line\n")
+                    locks_reset = ring.tail(1)[0].line == "child-line"
+                child_result = b"ok" if locks_reset else b"not-reset"
+                child_exit = 0 if locks_reset else 1
+            except BaseException:
+                pass
+            try:
+                os.write(write_fd, child_result)
+            finally:
+                os.close(write_fd)
+                os._exit(child_exit)
+
+        os.close(write_fd)
+        release.set()
+        holder.join(1.0)
+        assert not holder.is_alive()
+
+        deadline = time.monotonic() + 3.0
+        status = None
+        while status is None and time.monotonic() < deadline:
+            waited_pid, waited_status = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                status = waited_status
+                break
+            time.sleep(0.01)
+        if status is None:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+            os.close(read_fd)
+            pytest.fail("fork child deadlocked on an inherited tee lock")
+
+        child_result = os.read(read_fd, 64)
+        os.close(read_fd)
+        assert os.waitstatus_to_exitcode(status) == 0
+        assert child_result == b"ok"
+
     def test_concurrent_complete_lines_are_not_interleaved_or_duplicated(self):
         original = io.StringIO()
         ring = ProcessLogRing(max_bytes=16 * 1024 * 1024)
