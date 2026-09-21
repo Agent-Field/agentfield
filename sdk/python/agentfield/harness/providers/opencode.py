@@ -40,12 +40,14 @@ _OPENCODE_STDERR_ERROR_PATTERNS = (
 
 _OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json"
 _OPENCODE_AGENT_NAME = "agentfield-harness"
+_OPENCODE_DEFAULT_STEPS = 500
 _AGENTFIELD_WORKER_INSTRUCTION = (
     "You are an AgentField-launched worker. Complete the assigned prompt directly. "
     "Do not invoke AgentField orchestration, the `af` CLI, `swe-planner.plan`, "
     "or delegate work back to AgentField."
 )
 _OPENCODE_INLINE_SYSTEM_PROMPT_ENV = "AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT"
+_OPENCODE_STEPS_ENV = "AGENTFIELD_OPENCODE_STEPS"
 _TRUE_ENV_VALUES = frozenset(("1", "true", "yes", "on"))
 
 
@@ -88,6 +90,23 @@ def _inline_system_prompt_enabled(options: dict[str, object]) -> bool:
     else:
         value = os.environ.get(_OPENCODE_INLINE_SYSTEM_PROMPT_ENV, "")
     return isinstance(value, str) and value.strip().lower() in _TRUE_ENV_VALUES
+
+
+def _opencode_steps(options: dict[str, object]) -> int:
+    env_value = options.get("env")
+    if isinstance(env_value, dict) and _OPENCODE_STEPS_ENV in env_value:
+        value = env_value[_OPENCODE_STEPS_ENV]
+    else:
+        value = os.environ.get(_OPENCODE_STEPS_ENV, "")
+    if isinstance(value, str):
+        try:
+            steps = int(value.strip())
+        except ValueError:
+            pass
+        else:
+            if steps > 0:
+                return steps
+    return _OPENCODE_DEFAULT_STEPS
 
 
 def _deep_merge_config(
@@ -202,7 +221,7 @@ def _build_opencode_config_content(
     """Serialize the per-run OpenCode agent overlay."""
     agent: dict[str, object] = {
         "mode": "primary",
-        "steps": 500,
+        "steps": _opencode_steps(options),
         "permission": _opencode_permissions(),
     }
     if include_system_prompt:
