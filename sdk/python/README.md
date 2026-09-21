@@ -187,6 +187,7 @@ for mount layout, `call_local`, error behavior, and limitations.
 ## Logging
 
 - `AGENTFIELD_LOG_STDOUT` controls the on-by-default structured JSON mirror. Set it to `0`, `false`, `no`, or `off` to disable the mirror; execution-scoped records still dispatch to the control plane.
+- `AGENTFIELD_LOG_QUEUE` controls the Python SDK's bounded stdout writer queue. It is enabled by default for real-fd writes made from a running event loop; see the environment-variable reference for queue sizing, overflow, shutdown, and opt-out details.
 - `AGENTFIELD_LOG_MAX_LINE_BYTES` defaults to 16384 bytes and clamps any integer below 256 to 256. It limits both captured stdout/stderr lines and structured-mirror records; non-integers use the default.
 - `AGENTFIELD_LOGS_ENABLED` controls stdout/stderr capture and the node logs endpoint only, not control-plane execution-log dispatch.
 - `AGENTFIELD_LOG_LEVEL` controls human-readable Python SDK logging and defaults to `WARNING`.
