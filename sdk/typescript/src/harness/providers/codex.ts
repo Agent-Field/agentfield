@@ -2,7 +2,8 @@ import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
-import { runCli, parseJsonl, extractFinalText } from '../cli.js';
+import { markProviderCommand, runCli, parseJsonl, extractFinalText } from '../cli.js';
+import { HarnessProviderUnavailable, providerUnavailable } from '../availability.js';
 import { resolveModelAndVariant } from '../modelVariant.js';
 
 export class CodexProvider implements HarnessProvider {
@@ -39,7 +40,7 @@ export class CodexProvider implements HarnessProvider {
 
     const startApi = Date.now();
     try {
-      const { stdout, stderr, exitCode } = await runCli(cmd, {
+      const { stdout, stderr, exitCode } = await runCli(markProviderCommand('codex', cmd), {
         env: options.env as Record<string, string> | undefined,
         cwd: root,
       });
@@ -71,13 +72,12 @@ export class CodexProvider implements HarnessProvider {
         errorMessage: isError ? stderr.trim() : undefined,
       });
     } catch (err) {
+      if (err instanceof HarnessProviderUnavailable) {
+        throw err;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('ENOENT')) {
-        return createRawResult({
-          isError: true,
-          errorMessage: `Codex binary not found at '${this.bin}'. Install: https://github.com/openai/codex`,
-          metrics: createMetrics({ durationApiMs: Date.now() - startApi }),
-        });
+        throw providerUnavailable('codex', this.bin);
       }
       return createRawResult({
         isError: true,

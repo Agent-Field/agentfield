@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
 import { applyOpenRouterAttributionEnv } from '../ai/openrouterAttribution.js';
+import { ensureCliAvailable } from './availability.js';
 
 export interface CliResult {
   stdout: string;
@@ -9,6 +10,13 @@ export interface CliResult {
 }
 
 const DEFAULT_IDLE_SECONDS = 120;
+const providerCommands = new WeakMap<string[], string>();
+
+/** Attach provider identity without changing the command passed to `spawn`. */
+export function markProviderCommand<T extends string[]>(provider: string, command: T): T {
+  providerCommands.set(command, provider);
+  return command;
+}
 
 /**
  * Resolve the no-progress watchdog window in milliseconds.
@@ -27,7 +35,7 @@ function resolveIdleMs(idleSeconds?: number): number | undefined {
   return seconds > 0 ? seconds * 1000 : undefined;
 }
 
-export function runCli(
+export async function runCli(
   cmd: string[],
   options?: {
     env?: Record<string, string>;
@@ -37,18 +45,23 @@ export function runCli(
     inputText?: string;
   }
 ): Promise<CliResult> {
+  const [bin, ...args] = cmd;
+  const parsedParentDepth = Number.parseInt(process.env.AGENTFIELD_HARNESS_DEPTH ?? '', 10);
+  const parentDepth = Number.isFinite(parsedParentDepth) && parsedParentDepth >= 0
+    ? parsedParentDepth
+    : 0;
+  const env = {
+    ...process.env,
+    AGENTFIELD_HARNESS_DEPTH: String(parentDepth + 1),
+    ...options?.env
+  };
+  applyOpenRouterAttributionEnv(env);
+  const provider = providerCommands.get(cmd);
+  if (provider) {
+    ensureCliAvailable(provider, bin, undefined, env);
+  }
+
   return new Promise((resolve, reject) => {
-    const [bin, ...args] = cmd;
-    const parsedParentDepth = Number.parseInt(process.env.AGENTFIELD_HARNESS_DEPTH ?? '', 10);
-    const parentDepth = Number.isFinite(parsedParentDepth) && parsedParentDepth >= 0
-      ? parsedParentDepth
-      : 0;
-    const env = {
-      ...process.env,
-      AGENTFIELD_HARNESS_DEPTH: String(parentDepth + 1),
-      ...options?.env
-    };
-    applyOpenRouterAttributionEnv(env);
     const hasInput = options?.inputText !== undefined;
     // 'ignore' on stdin gives the child an immediate EOF instead of an open
     // pipe that never closes (a hang risk if the child probes stdin). Providers

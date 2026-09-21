@@ -298,9 +298,17 @@ for report in reports:
     print(report.provider, report.usable, report.issues)
 ```
 
-The preflight currently ships in the Python SDK and the `af` CLI. Equivalent
-TypeScript and Go SDK APIs are planned follow-ups (see #685) and are not
-available yet.
+TypeScript applications can run the same offline check before dispatch:
+
+```typescript
+const reports = await agent.harnessDoctor(['codex', 'opencode', 'pi', 'omp']);
+for (const report of reports) {
+  console.log(report.provider, report.usable, report.issues);
+}
+```
+
+The preflight ships in the Python and TypeScript SDKs and the `af` CLI. The
+equivalent Go SDK API remains a planned follow-up (see #685).
 
 For a complete Go workflow that fans one task out to Pi and OMP concurrently,
 see `examples/go_agent_nodes/cmd/harness_duo`.

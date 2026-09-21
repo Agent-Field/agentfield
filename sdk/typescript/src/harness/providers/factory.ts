@@ -1,15 +1,8 @@
 import type { HarnessProvider } from './base.js';
 import type { HarnessConfig } from '../types.js';
+import { SUPPORTED_PROVIDER_NAMES } from '../availability.js';
 
-export const SUPPORTED_PROVIDERS = new Set([
-  'aforge',
-  'claude-code',
-  'codex',
-  'gemini',
-  'omp',
-  'opencode',
-  'pi',
-]);
+export const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(SUPPORTED_PROVIDER_NAMES);
 export const DEFAULT_HARNESS_PROVIDER = 'aforge';
 export const HARNESS_PROVIDER_ENV_VAR = 'AGENTFIELD_HARNESS_PROVIDER';
 

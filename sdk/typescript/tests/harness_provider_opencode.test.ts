@@ -79,14 +79,15 @@ describe('opencode provider', () => {
     expect(result.messages).toEqual([]);
   });
 
-  it('returns helpful message when binary is not found', async () => {
+  it('raises a typed error when binary disappears before spawn', async () => {
     vi.spyOn(cli, 'runCli').mockRejectedValue(new Error('spawn opencode ENOENT'));
 
     const provider = new OpenCodeProvider('opencode-missing');
-    const result = await provider.execute('hello', {});
-
-    expect(result.isError).toBe(true);
-    expect(result.errorMessage).toContain("OpenCode binary not found at 'opencode-missing'");
+    await expect(provider.execute('hello', {})).rejects.toMatchObject({
+      name: 'HarnessProviderUnavailable',
+      provider: 'opencode',
+      binary: 'opencode-missing',
+    });
   });
 
   it('returns stderr when non-zero exit has no result', async () => {
