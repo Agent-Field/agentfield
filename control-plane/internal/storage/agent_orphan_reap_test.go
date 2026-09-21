@@ -138,7 +138,7 @@ func TestMarkAgentInstanceExecutionsOrphaned_ReapsDepartingAndLegacyOnly(t *test
 		require.NoError(t, err)
 	}
 
-	reaped, err := ls.MarkAgentInstanceExecutionsOrphaned(ctx, "shared-node", "instance-b", "agent_restart_orphaned: drain elapsed")
+	reaped, err := ls.MarkAgentInstanceExecutionsOrphaned(ctx, "shared-node", "instance-b", "agent_restart_orphaned: drain elapsed", time.Time{})
 	require.NoError(t, err)
 	require.Equal(t, 2, reaped)
 
@@ -146,6 +146,55 @@ func TestMarkAgentInstanceExecutionsOrphaned_ReapsDepartingAndLegacyOnly(t *test
 		got, err := ls.GetWorkflowExecution(ctx, id)
 		require.NoError(t, err)
 		require.Equal(t, want, got.Status, id)
+	}
+}
+
+func TestMarkAgentInstanceExecutionsOrphanedHonorsReplacementRegistrationCutoff(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	cutoff := time.Now().UTC()
+	beforeCutoff := cutoff.Add(-time.Minute)
+	afterCutoff := cutoff.Add(time.Minute)
+
+	seedRunningWorkflowExecution(t, ls, "exec-before-registration", "shared-node", beforeCutoff)
+	seedRunningWorkflowExecution(t, ls, "exec-at-registration", "shared-node", cutoff)
+	seedRunningWorkflowExecution(t, ls, "exec-after-registration", "shared-node", afterCutoff)
+
+	db := ls.requireSQLDB()
+	for id, createdAt := range map[string]time.Time{
+		"exec-before-registration": beforeCutoff,
+		"exec-at-registration":     cutoff,
+		"exec-after-registration":  afterCutoff,
+	} {
+		for _, table := range []string{"executions", "workflow_executions"} {
+			_, err := db.ExecContext(ctx,
+				"UPDATE "+table+" SET instance_id = ?, created_at = ? WHERE execution_id = ?",
+				"departing-instance", createdAt, id)
+			require.NoError(t, err)
+		}
+	}
+
+	reaped, err := ls.MarkAgentInstanceExecutionsOrphaned(
+		ctx,
+		"shared-node",
+		"departing-instance",
+		"agent_restart_orphaned: drain elapsed",
+		cutoff,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, reaped)
+
+	for id, want := range map[string]string{
+		"exec-before-registration": "failed",
+		"exec-at-registration":     "running",
+		"exec-after-registration":  "running",
+	} {
+		workflow, err := ls.GetWorkflowExecution(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, want, workflow.Status, id+" workflow row")
+
+		execution, err := ls.GetExecutionRecord(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, want, string(execution.Status), id+" execution row")
 	}
 }
 

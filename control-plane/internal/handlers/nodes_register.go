@@ -348,7 +348,14 @@ func isServerlessDiscoveryHostAllowed(host string, allowedHosts []string) bool {
 }
 
 // RegisterNodeHandler handles the registration of a new agent node.
-func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager, didWebService *services.DIDWebService, tagApprovalService *services.TagApprovalService) gin.HandlerFunc {
+func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager, didWebService *services.DIDWebService, tagApprovalService *services.TagApprovalService, resumeDependencies ...InterruptedRunResumeDependencies) gin.HandlerFunc {
+	var resumeController *executionController
+	if len(resumeDependencies) > 0 {
+		if executionStore, ok := storageProvider.(ExecutionStore); ok {
+			deps := resumeDependencies[0]
+			resumeController = newExecutionController(executionStore, deps.Payloads, deps.Webhooks, deps.Timeout, deps.InternalToken)
+		}
+	}
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		var newNode types.AgentNode
@@ -649,8 +656,14 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 			strings.TrimSpace(newNode.InstanceID) != "" &&
 			existingNode.InstanceID != newNode.InstanceID
 		oldInstanceID := ""
+		reapCreatedBefore := time.Time{}
 		if shouldReapOrphans {
 			oldInstanceID = existingNode.InstanceID
+			// This wall-clock boundary is best-effort when multiple control-plane
+			// replicas have skewed clocks. It prevents this instance-scoped reap
+			// from claiming work created after the replacement registered; the
+			// stale-execution sweep remains the backstop for missed old work.
+			reapCreatedBefore = time.Now().UTC()
 		}
 
 		// Store the new node
@@ -680,7 +693,7 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 					oldInstanceID,
 				)
 				reaper, ok := storageProvider.(interface {
-					MarkAgentInstanceExecutionsOrphaned(context.Context, string, string, string) (int, error)
+					MarkAgentInstanceExecutionsOrphaned(context.Context, string, string, string, time.Time) (int, error)
 				})
 				if !ok {
 					logger.Logger.Error().Str("agent_node_id", nodeID).Msg("storage does not support instance-scoped orphan cleanup; relying on stale sweep")
@@ -688,7 +701,7 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 				}
 				reapCtx, cancelReap := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancelReap()
-				reaped, reapErr := reaper.MarkAgentInstanceExecutionsOrphaned(reapCtx, nodeID, oldInstanceID, reason)
+				reaped, reapErr := reaper.MarkAgentInstanceExecutionsOrphaned(reapCtx, nodeID, oldInstanceID, reason, reapCreatedBefore)
 				if errors.Is(reapCtx.Err(), context.DeadlineExceeded) {
 					logger.Logger.Error().
 						Str("agent_node_id", nodeID).
@@ -711,6 +724,9 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 						Str("old_instance_id", oldInstanceID).
 						Str("new_instance_id", newInstanceID).
 						Msg("🧹 Reaped in-flight executions orphaned by agent restart")
+					if resumeController != nil {
+						resumeController.handOffInterruptedAgentExecutions(reapCtx, nodeID, oldInstanceID)
+					}
 				} else {
 					logger.Logger.Debug().
 						Str("agent_node_id", nodeID).

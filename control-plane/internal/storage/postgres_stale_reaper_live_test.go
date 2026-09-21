@@ -393,6 +393,59 @@ func TestPostgresMarkStaleExecutionsReapsStaleAndSparesFreshExecution(t *testing
 	t.Logf("survived (fresh activity): %s status=%s", freshID, freshExecution.Status)
 }
 
+func TestPostgresMarkAgentInstanceExecutionsOrphanedHonorsReplacementRegistrationCutoff(t *testing.T) {
+	ls, ctx := livePostgresStorage(t)
+	cutoff := time.Now().UTC()
+	suffix := time.Now().UnixNano()
+	createdAtByID := map[string]time.Time{
+		fmt.Sprintf("exec-live-orphan-before-%d", suffix): cutoff.Add(-time.Minute),
+		fmt.Sprintf("exec-live-orphan-after-%d", suffix):  cutoff.Add(time.Minute),
+	}
+
+	for id, createdAt := range createdAtByID {
+		workflow := staleLiveWorkflow(id, createdAt)
+		workflow.AgentNodeID = "shared-node"
+		workflow.InstanceID = "departing-instance"
+		require.NoError(t, ls.StoreWorkflowExecution(ctx, workflow))
+
+		execution := liveExecution(id, createdAt)
+		execution.AgentNodeID = "shared-node"
+		execution.NodeID = "shared-node"
+		execution.InstanceID = "departing-instance"
+		require.NoError(t, ls.CreateExecutionRecord(ctx, execution))
+
+		for _, table := range []string{"executions", "workflow_executions"} {
+			_, err := ls.requireSQLDB().ExecContext(ctx,
+				"UPDATE "+table+" SET created_at = ? WHERE execution_id = ?",
+				createdAt, id)
+			require.NoError(t, err)
+		}
+	}
+
+	reaped, err := ls.MarkAgentInstanceExecutionsOrphaned(
+		ctx,
+		"shared-node",
+		"departing-instance",
+		"agent_restart_orphaned: drain elapsed",
+		cutoff,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, reaped)
+
+	for id, createdAt := range createdAtByID {
+		want := "running"
+		if createdAt.Before(cutoff) {
+			want = "failed"
+		}
+		workflow, err := ls.GetWorkflowExecution(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, want, workflow.Status, id+" workflow row")
+		execution, err := ls.GetExecutionRecord(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, want, string(execution.Status), id+" execution row")
+	}
+}
+
 // TestPostgresRetryStaleWorkflowExecutionsRepassesStaleAndSparesFreshExecution
 // drives the retry reaper end to end. The paired-execution guard is the part of
 // the fix that stops a fresh execution from being re-dispatched.
