@@ -8,7 +8,49 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+	"github.com/stretchr/testify/require"
 )
+
+func TestLocalStorageWorkflowExecutionPersistsQueuedAndReachesRunningDestinations(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+	now := time.Now().UTC()
+	for _, destination := range []types.ExecutionStatus{
+		types.ExecutionStatusRunning,
+		types.ExecutionStatusWaiting,
+		types.ExecutionStatusPaused,
+		types.ExecutionStatusSucceeded,
+		types.ExecutionStatusFailed,
+		types.ExecutionStatusCancelled,
+		types.ExecutionStatusTimeout,
+	} {
+		executionID := "queued-to-" + string(destination)
+		runID := "run-" + string(destination)
+		require.NoError(t, ls.StoreWorkflowExecution(ctx, &types.WorkflowExecution{
+			WorkflowID:          runID,
+			ExecutionID:         executionID,
+			AgentFieldRequestID: "request-" + string(destination),
+			RunID:               &runID,
+			AgentNodeID:         "node-1",
+			ReasonerID:          "reasoner-a",
+			Status:              string(types.ExecutionStatusQueued),
+			StartedAt:           now,
+			CreatedAt:           now,
+			UpdatedAt:           now,
+		}))
+		stored, err := ls.GetWorkflowExecution(ctx, executionID)
+		require.NoError(t, err)
+		require.Equal(t, string(types.ExecutionStatusQueued), stored.Status)
+
+		require.NoError(t, ls.UpdateWorkflowExecution(ctx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+			current.Status = string(destination)
+			current.UpdatedAt = time.Now().UTC()
+			return current, nil
+		}))
+		stored, err = ls.GetWorkflowExecution(ctx, executionID)
+		require.NoError(t, err)
+		require.Equal(t, string(destination), stored.Status)
+	}
+}
 
 func TestLocalStorageStoreWorkflowExecutionPersistsLifecycleFields(t *testing.T) {
 	ctx := context.Background()

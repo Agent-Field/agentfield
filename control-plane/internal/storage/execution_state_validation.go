@@ -23,9 +23,12 @@ func validateExecutionStateTransition(currentStatus, newStatus string) error {
 	newStatus = types.NormalizeExecutionStatus(newStatus)
 
 	validTransitions := map[string][]string{
-		string(types.ExecutionStatusUnknown):   {string(types.ExecutionStatusPending)},
-		string(types.ExecutionStatusPending):   {string(types.ExecutionStatusQueued), string(types.ExecutionStatusRunning), string(types.ExecutionStatusCancelled)},
-		string(types.ExecutionStatusQueued):    {string(types.ExecutionStatusRunning), string(types.ExecutionStatusCancelled)},
+		string(types.ExecutionStatusUnknown): {string(types.ExecutionStatusPending)},
+		string(types.ExecutionStatusPending): {string(types.ExecutionStatusQueued), string(types.ExecutionStatusRunning), string(types.ExecutionStatusCancelled)},
+		// The queued -> running workflow projection update is best-effort, so a
+		// projection still in queued must reach every state its dispatched
+		// running counterpart could, as well as running itself.
+		string(types.ExecutionStatusQueued):    {string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusPaused), string(types.ExecutionStatusSucceeded), string(types.ExecutionStatusFailed), string(types.ExecutionStatusCancelled), string(types.ExecutionStatusTimeout)},
 		string(types.ExecutionStatusWaiting):   {string(types.ExecutionStatusRunning), string(types.ExecutionStatusCancelled), string(types.ExecutionStatusFailed)},
 		string(types.ExecutionStatusRunning):   {string(types.ExecutionStatusWaiting), string(types.ExecutionStatusPaused), string(types.ExecutionStatusSucceeded), string(types.ExecutionStatusFailed), string(types.ExecutionStatusCancelled), string(types.ExecutionStatusTimeout)},
 		string(types.ExecutionStatusPaused):    {string(types.ExecutionStatusRunning), string(types.ExecutionStatusCancelled)},

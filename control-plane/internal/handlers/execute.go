@@ -494,9 +494,6 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 	// The slot was acquired before persistence. process releases it when the
 	// agent call returns (including an HTTP 202 acknowledgement).
 
-	// Emit execution started event with full reasoner context
-	c.publishExecutionStartedEvent(plan)
-
 	job := asyncExecutionJob{
 		controller: c,
 		plan:       *plan,
@@ -522,6 +519,7 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 	}
 	submitted = true
 	reserved = false
+	c.publishExecutionQueuedEvent(plan)
 
 	createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)
 	targetLabel := fmt.Sprintf("%s.%s", plan.target.NodeID, plan.target.TargetName)

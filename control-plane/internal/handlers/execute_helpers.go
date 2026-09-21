@@ -868,10 +868,11 @@ func (j asyncExecutionJob) processWithContext(workerCtx context.Context) {
 
 	currentExec, err := j.controller.store.GetExecutionRecord(bgCtx, j.plan.exec.ExecutionID)
 	if err == nil && currentExec != nil {
-		if currentExec.Status == types.ExecutionStatusCancelled {
+		if types.IsTerminalExecutionStatus(currentExec.Status) {
 			logger.Logger.Info().
 				Str("execution_id", j.plan.exec.ExecutionID).
-				Msg("skipping async agent call; execution cancelled")
+				Str("status", currentExec.Status).
+				Msg("skipping async agent call; execution reached terminal status before dispatch")
 			return
 		}
 		if currentExec.Status == types.ExecutionStatusPaused {
@@ -883,6 +884,40 @@ func (j asyncExecutionJob) processWithContext(workerCtx context.Context) {
 				return
 			}
 		}
+	}
+
+	for {
+		updatedExec, transitioned, transitionErr := j.transitionQueuedExecutionToRunning(bgCtx)
+		if transitionErr != nil {
+			logger.Logger.Warn().
+				Err(transitionErr).
+				Str("execution_id", j.plan.exec.ExecutionID).
+				Msg("failed to mark queued async execution as running; dispatching anyway")
+			break
+		}
+		if updatedExec != nil && types.IsTerminalExecutionStatus(updatedExec.Status) {
+			logger.Logger.Info().
+				Str("execution_id", j.plan.exec.ExecutionID).
+				Str("status", updatedExec.Status).
+				Msg("skipping async agent call; execution reached terminal status before dispatch")
+			return
+		}
+		if updatedExec != nil && updatedExec.Status == types.ExecutionStatusPaused {
+			if waitErr := j.controller.waitForResume(bgCtx, j.plan.exec.ExecutionID); waitErr != nil {
+				logger.Logger.Info().
+					Str("execution_id", j.plan.exec.ExecutionID).
+					Err(waitErr).
+					Msg("aborting async agent call while paused")
+				return
+			}
+			continue
+		}
+		if transitioned {
+			j.plan.exec.Status = types.ExecutionStatusRunning
+			j.plan.exec.UpdatedAt = updatedExec.UpdatedAt
+			j.controller.publishExecutionStartedEvent(&j.plan)
+		}
+		break
 	}
 
 	resultBody, elapsed, asyncAccepted, callErr := j.controller.callAgent(bgCtx, &j.plan)
@@ -936,6 +971,50 @@ func (j asyncExecutionJob) processWithContext(workerCtx context.Context) {
 			}
 		}
 	}
+}
+
+// transitionQueuedExecutionToRunning marks the point at which an admitted
+// async execution leaves the pool queue. The conditional updates preserve the
+// restart lane (whose jobs are already running) and never overwrite a
+// concurrent cancellation. Persistence is best-effort at dispatch: callers log
+// the error and still invoke the agent so a transient storage failure cannot
+// abandon admitted work.
+func (j asyncExecutionJob) transitionQueuedExecutionToRunning(ctx context.Context) (*types.Execution, bool, error) {
+	updatedExec, err := j.controller.store.UpdateExecutionRecord(ctx, j.plan.exec.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+		if current == nil {
+			return nil, fmt.Errorf("execution %s not found", j.plan.exec.ExecutionID)
+		}
+		if current.Status != types.ExecutionStatusQueued {
+			return nil, nil
+		}
+		current.Status = types.ExecutionStatusRunning
+		current.UpdatedAt = time.Now().UTC()
+		return current, nil
+	})
+	transitioned := err == nil && j.plan.exec.Status == types.ExecutionStatusQueued && updatedExec != nil && updatedExec.Status == types.ExecutionStatusRunning
+	if !transitioned {
+		return updatedExec, transitioned, err
+	}
+
+	workflowErr := j.controller.store.UpdateWorkflowExecution(ctx, j.plan.exec.ExecutionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+		if current == nil {
+			return nil, fmt.Errorf("workflow execution %s not found", j.plan.exec.ExecutionID)
+		}
+		if current.Status != string(types.ExecutionStatusQueued) {
+			return current, nil
+		}
+		current.Status = string(types.ExecutionStatusRunning)
+		current.UpdatedAt = time.Now().UTC()
+		return current, nil
+	})
+	if workflowErr != nil {
+		logger.Logger.Warn().
+			Err(workflowErr).
+			Str("execution_id", j.plan.exec.ExecutionID).
+			Msg("failed to mark queued workflow execution as running")
+	}
+
+	return updatedExec, true, nil
 }
 
 func newAsyncWorkerPool(workerCount, queueCapacity int) *asyncWorkerPool {

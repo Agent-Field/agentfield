@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,435 @@ func useAsyncPoolForTest(t *testing.T, pool *asyncWorkerPool) {
 			asyncPoolOnce.Do(func() {})
 		}
 	})
+}
+
+func TestAsyncAdmissionPersistsQueuedUntilWorkerDispatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pool := newAsyncWorkerPool(0, 1)
+	useAsyncPoolForTest(t, pool)
+	store := newTestExecutionStorage(testRestartAgent("http://agent.example"))
+	eventCh := store.GetExecutionEventBus().Subscribe("queued-admission")
+	t.Cleanup(func() { store.GetExecutionEventBus().Unsubscribe("queued-admission") })
+
+	router := gin.New()
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
+	router.GET("/api/v1/executions/:execution_id", GetExecutionStatusHandler(store))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{"foo":"bar"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusAccepted, resp.Code, resp.Body.String())
+
+	var accepted AsyncExecuteResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &accepted))
+	require.Equal(t, string(types.ExecutionStatusQueued), accepted.Status)
+
+	statusResp := httptest.NewRecorder()
+	router.ServeHTTP(statusResp, httptest.NewRequest(http.MethodGet, "/api/v1/executions/"+accepted.ExecutionID, nil))
+	require.Equal(t, http.StatusOK, statusResp.Code, statusResp.Body.String())
+	var status ExecutionStatusResponse
+	require.NoError(t, json.Unmarshal(statusResp.Body.Bytes(), &status))
+	require.Equal(t, string(types.ExecutionStatusQueued), status.Status)
+
+	workflow, err := store.GetWorkflowExecution(context.Background(), accepted.ExecutionID)
+	require.NoError(t, err)
+	require.NotNil(t, workflow)
+	require.Equal(t, string(types.ExecutionStatusQueued), workflow.Status)
+	select {
+	case event := <-eventCh:
+		require.Equal(t, events.ExecutionUpdated, event.Type)
+		require.Equal(t, string(types.ExecutionStatusQueued), event.Status)
+		data, ok := event.Data.(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, "async", data["execution_mode"])
+		require.Equal(t, "reasoner", data["target_type"])
+	case <-time.After(time.Second):
+		t.Fatal("queued admission event was not emitted")
+	}
+
+	stopCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pool.Stop(stopCtx)
+}
+
+func TestAsyncQueueKeepsSecondExecutionQueuedUntilWorkerIsFree(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pool := newAsyncWorkerPool(1, 2)
+	useAsyncPoolForTest(t, pool)
+
+	firstDispatched := make(chan struct{})
+	secondDispatched := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var releaseFirstOnce sync.Once
+	var releaseSecondOnce sync.Once
+	releaseFirstJob := func() { releaseFirstOnce.Do(func() { close(releaseFirst) }) }
+	releaseSecondJob := func() { releaseSecondOnce.Do(func() { close(releaseSecond) }) }
+	defer releaseFirstJob()
+	defer releaseSecondJob()
+
+	var calls atomic.Int32
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch calls.Add(1) {
+		case 1:
+			close(firstDispatched)
+			<-releaseFirst
+		case 2:
+			close(secondDispatched)
+			<-releaseSecond
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer agentServer.Close()
+
+	store := newTestExecutionStorage(testRestartAgent(agentServer.URL))
+	router := gin.New()
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
+	router.GET("/api/v1/executions/:execution_id", GetExecutionStatusHandler(store))
+
+	submit := func() AsyncExecuteResponse {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{}}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		require.Equal(t, http.StatusAccepted, resp.Code, resp.Body.String())
+		var accepted AsyncExecuteResponse
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &accepted))
+		return accepted
+	}
+	readStatus := func(executionID string) string {
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/v1/executions/"+executionID, nil))
+		require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+		var status ExecutionStatusResponse
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &status))
+		return status.Status
+	}
+
+	first := submit()
+	select {
+	case <-firstDispatched:
+	case <-time.After(time.Second):
+		t.Fatal("first execution was not dispatched")
+	}
+
+	second := submit()
+	require.Equal(t, string(types.ExecutionStatusQueued), readStatus(second.ExecutionID))
+	secondWorkflow, err := store.GetWorkflowExecution(context.Background(), second.ExecutionID)
+	require.NoError(t, err)
+	require.NotNil(t, secondWorkflow)
+	require.Equal(t, string(types.ExecutionStatusQueued), secondWorkflow.Status)
+	select {
+	case <-secondDispatched:
+		t.Fatal("second execution dispatched while the only worker was busy")
+	default:
+	}
+
+	releaseFirstJob()
+	select {
+	case <-secondDispatched:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second execution was not dispatched after the worker became free")
+	}
+	require.Equal(t, string(types.ExecutionStatusRunning), readStatus(second.ExecutionID))
+	secondWorkflow, err = store.GetWorkflowExecution(context.Background(), second.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, string(types.ExecutionStatusRunning), secondWorkflow.Status)
+
+	releaseSecondJob()
+	require.Eventually(t, func() bool {
+		firstRecord, firstErr := store.GetExecutionRecord(context.Background(), first.ExecutionID)
+		secondRecord, secondErr := store.GetExecutionRecord(context.Background(), second.ExecutionID)
+		return firstErr == nil && secondErr == nil && firstRecord != nil && secondRecord != nil &&
+			firstRecord.Status == types.ExecutionStatusSucceeded && secondRecord.Status == types.ExecutionStatusSucceeded
+	}, 2*time.Second, 10*time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	pool.Stop(stopCtx)
+}
+
+func TestAsyncDispatchTransitionsQueuedRowsToRunningThenSucceeded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pool := newAsyncWorkerPool(1, 1)
+	useAsyncPoolForTest(t, pool)
+	dispatched := make(chan struct{})
+	releaseAgent := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseAgent) }) }
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(dispatched)
+		<-releaseAgent
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer agentServer.Close()
+	defer release()
+
+	store := newTestExecutionStorage(testRestartAgent(agentServer.URL))
+	eventCh := store.GetExecutionEventBus().Subscribe("dispatch-transition")
+	t.Cleanup(func() { store.GetExecutionEventBus().Unsubscribe("dispatch-transition") })
+	router := gin.New()
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusAccepted, resp.Code, resp.Body.String())
+	var accepted AsyncExecuteResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &accepted))
+
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("agent was not called")
+	}
+	record, err := store.GetExecutionRecord(context.Background(), accepted.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusRunning, record.Status)
+	workflow, err := store.GetWorkflowExecution(context.Background(), accepted.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, string(types.ExecutionStatusRunning), workflow.Status)
+	queuedEventSeen := false
+	startedEventSeen := false
+	deadline := time.After(time.Second)
+	for !queuedEventSeen || !startedEventSeen {
+		select {
+		case event := <-eventCh:
+			switch event.Type {
+			case events.ExecutionUpdated:
+				if event.Status == string(types.ExecutionStatusQueued) {
+					queuedEventSeen = true
+				}
+			case events.ExecutionStarted:
+				require.Equal(t, string(types.ExecutionStatusRunning), event.Status)
+				startedEventSeen = true
+			}
+		case <-deadline:
+			t.Fatalf("expected queued admission and dispatch-time started events; queued=%t started=%t", queuedEventSeen, startedEventSeen)
+		}
+	}
+
+	release()
+	require.Eventually(t, func() bool {
+		record, recordErr := store.GetExecutionRecord(context.Background(), accepted.ExecutionID)
+		workflow, workflowErr := store.GetWorkflowExecution(context.Background(), accepted.ExecutionID)
+		return recordErr == nil && workflowErr == nil && record != nil && workflow != nil &&
+			record.Status == types.ExecutionStatusSucceeded && workflow.Status == string(types.ExecutionStatusSucceeded)
+	}, 2*time.Second, 10*time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	pool.Stop(stopCtx)
+}
+
+func TestSyncAdmissionRemainsRunningWhileAgentCallIsInFlight(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dispatched := make(chan struct{})
+	releaseAgent := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseAgent) }) }
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(dispatched)
+		<-releaseAgent
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer agentServer.Close()
+	defer release()
+
+	store := newTestExecutionStorage(testRestartAgent(agentServer.URL))
+	router := gin.New()
+	router.POST("/api/v1/execute/:target", ExecuteHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/node-1.reasoner-a", strings.NewReader(`{"input":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		router.ServeHTTP(resp, req)
+		close(done)
+	}()
+
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("agent was not called")
+	}
+	records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, types.ExecutionStatusRunning, records[0].Status)
+	workflow, err := store.GetWorkflowExecution(context.Background(), records[0].ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, string(types.ExecutionStatusRunning), workflow.Status)
+
+	release()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sync execution did not complete")
+	}
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+}
+
+func TestCancelledQueuedExecutionIsSkippedByWorker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var agentCalls atomic.Int32
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		agentCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer agentServer.Close()
+
+	store := newTestExecutionStorage(testRestartAgent(agentServer.URL))
+	now := time.Now().UTC()
+	exec := &types.Execution{
+		ExecutionID: "cancel-queued", RunID: "cancel-queued", NodeID: "node-1", AgentNodeID: "node-1",
+		ReasonerID: "reasoner-a", Status: types.ExecutionStatusQueued, CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), exec))
+	require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{
+		ExecutionID: exec.ExecutionID, WorkflowID: exec.RunID, RunID: &exec.RunID,
+		AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: string(types.ExecutionStatusQueued),
+		CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}))
+
+	router := gin.New()
+	router.POST("/api/v1/executions/:execution_id/cancel", CancelExecutionHandler(store))
+	cancelResp := httptest.NewRecorder()
+	router.ServeHTTP(cancelResp, httptest.NewRequest(http.MethodPost, "/api/v1/executions/cancel-queued/cancel", nil))
+	require.Equal(t, http.StatusOK, cancelResp.Code, cancelResp.Body.String())
+
+	target, err := parseTarget("node-1.reasoner-a")
+	require.NoError(t, err)
+	job := asyncExecutionJob{
+		controller: newExecutionController(store, nil, nil, time.Second, ""),
+		plan:       preparedExecution{exec: exec, target: target, agent: store.agent, requestBody: []byte(`{}`)},
+	}
+	job.processWithContext(context.Background())
+	require.Zero(t, agentCalls.Load())
+	stored, err := store.GetExecutionRecord(context.Background(), exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusCancelled, stored.Status)
+	workflow, err := store.GetWorkflowExecution(context.Background(), exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, string(types.ExecutionStatusCancelled), workflow.Status)
+}
+
+type failQueuedTransitionStorage struct {
+	*testExecutionStorage
+	failNext   atomic.Bool
+	mutatorRan atomic.Bool
+}
+
+func (s *failQueuedTransitionStorage) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
+	if !s.failNext.CompareAndSwap(true, false) {
+		return s.testExecutionStorage.UpdateExecutionRecord(ctx, executionID, update)
+	}
+	current, err := s.testExecutionStorage.GetExecutionRecord(ctx, executionID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := update(current); err != nil {
+		return nil, err
+	}
+	s.mutatorRan.Store(true)
+	return nil, errors.New("forced queued-to-running persistence failure")
+}
+
+func TestQueuedTransitionFailureDoesNotPublishStartedOrChangePlanStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var agentCalls atomic.Int32
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		agentCalls.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer agentServer.Close()
+
+	baseStore := newTestExecutionStorage(testRestartAgent(agentServer.URL))
+	store := &failQueuedTransitionStorage{testExecutionStorage: baseStore}
+	store.failNext.Store(true)
+	eventCh := store.GetExecutionEventBus().Subscribe("failed-dispatch-transition")
+	t.Cleanup(func() { store.GetExecutionEventBus().Unsubscribe("failed-dispatch-transition") })
+
+	now := time.Now().UTC()
+	exec := &types.Execution{
+		ExecutionID: "queued-transition-fails", RunID: "queued-transition-fails", NodeID: "node-1", AgentNodeID: "node-1",
+		ReasonerID: "reasoner-a", Status: types.ExecutionStatusQueued, CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, baseStore.CreateExecutionRecord(context.Background(), exec))
+	require.NoError(t, baseStore.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{
+		ExecutionID: exec.ExecutionID, WorkflowID: exec.RunID, RunID: &exec.RunID,
+		AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: string(types.ExecutionStatusQueued),
+		CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}))
+	target, err := parseTarget("node-1.reasoner-a")
+	require.NoError(t, err)
+	job := asyncExecutionJob{
+		controller: newExecutionController(store, nil, nil, time.Second, ""),
+		plan: preparedExecution{
+			exec: exec, target: target, agent: baseStore.agent, requestBody: []byte(`{}`), executionMode: "async",
+		},
+	}
+
+	job.processWithContext(context.Background())
+
+	require.True(t, store.mutatorRan.Load(), "the failing store must invoke the update mutator")
+	require.EqualValues(t, 1, agentCalls.Load(), "admitted work still dispatches after a transient storage failure")
+	require.Equal(t, types.ExecutionStatusQueued, exec.Status, "the in-memory plan must not claim an unpersisted transition")
+	stored, err := baseStore.GetExecutionRecord(context.Background(), exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusQueued, stored.Status)
+	select {
+	case event := <-eventCh:
+		require.NotEqual(t, events.ExecutionStarted, event.Type)
+	default:
+	}
+}
+
+func TestTimedOutQueuedExecutionIsSkippedByWorker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var agentCalls atomic.Int32
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		agentCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer agentServer.Close()
+
+	store := newTestExecutionStorage(testRestartAgent(agentServer.URL))
+	now := time.Now().UTC()
+	exec := &types.Execution{
+		ExecutionID: "queued-reaped", RunID: "queued-reaped", NodeID: "node-1", AgentNodeID: "node-1",
+		ReasonerID: "reasoner-a", Status: types.ExecutionStatusQueued, CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), exec))
+	require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{
+		ExecutionID: exec.ExecutionID, WorkflowID: exec.RunID, RunID: &exec.RunID,
+		AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: string(types.ExecutionStatusQueued),
+		CreatedAt: now, StartedAt: now, UpdatedAt: now,
+	}))
+	_, err := store.UpdateExecutionRecord(context.Background(), exec.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+		current.Status = types.ExecutionStatusTimeout
+		return current, nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateWorkflowExecution(context.Background(), exec.ExecutionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+		current.Status = string(types.ExecutionStatusTimeout)
+		return current, nil
+	}))
+
+	target, err := parseTarget("node-1.reasoner-a")
+	require.NoError(t, err)
+	job := asyncExecutionJob{
+		controller: newExecutionController(store, nil, nil, time.Second, ""),
+		plan:       preparedExecution{exec: exec, target: target, agent: store.agent, requestBody: []byte(`{}`)},
+	}
+	job.processWithContext(context.Background())
+
+	require.Zero(t, agentCalls.Load())
+	stored, err := store.GetExecutionRecord(context.Background(), exec.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusTimeout, stored.Status)
 }
 
 func TestExecuteAsyncHandler_PoolStoppedTerminatesPersistedRow(t *testing.T) {
@@ -399,9 +829,16 @@ func TestExecuteAsyncHandler_QueueFullHasNoPersistence(t *testing.T) {
 	router.ServeHTTP(resp, req)
 	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
 	require.Equal(t, "1", resp.Header().Get("Retry-After"))
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Equal(t, "concurrency_limit", body["error_category"])
+	require.Equal(t, float64(1), body["retry_after"])
 	records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
 	require.NoError(t, err)
 	require.Empty(t, records)
+	workflows, err := store.QueryWorkflowExecutions(context.Background(), types.WorkflowExecutionFilters{})
+	require.NoError(t, err)
+	require.Empty(t, workflows)
 	files, err := filepath.Glob(filepath.Join(payloadDir, "*"))
 	require.NoError(t, err)
 	require.Empty(t, files)
@@ -443,9 +880,13 @@ func TestAsyncWorkerPoolStopFailsQueuedJobsAndRejectsSubmissions(t *testing.T) {
 	require.NoError(t, err)
 	pool := newAsyncWorkerPool(1, 2)
 	for _, id := range []string{"running-1", "queued-1"} {
-		exec := &types.Execution{ExecutionID: id, RunID: id, NodeID: "node-1", AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, CreatedAt: now, StartedAt: now, UpdatedAt: now}
+		status := types.ExecutionStatusRunning
+		if id == "queued-1" {
+			status = types.ExecutionStatusQueued
+		}
+		exec := &types.Execution{ExecutionID: id, RunID: id, NodeID: "node-1", AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: status, CreatedAt: now, StartedAt: now, UpdatedAt: now}
 		require.NoError(t, store.CreateExecutionRecord(context.Background(), exec))
-		require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{ExecutionID: id, WorkflowID: id, RunID: &id, AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: types.ExecutionStatusRunning, StartedAt: now, CreatedAt: now, UpdatedAt: now}))
+		require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{ExecutionID: id, WorkflowID: id, RunID: &id, AgentNodeID: "node-1", ReasonerID: "reasoner-a", Status: string(status), StartedAt: now, CreatedAt: now, UpdatedAt: now}))
 		require.True(t, pool.submit(asyncExecutionJob{controller: newExecutionController(store, nil, nil, time.Second, ""), plan: preparedExecution{exec: exec, target: target, agent: agent, requestBody: []byte(`{"input":{}}`)}}))
 	}
 	<-workerStarted
