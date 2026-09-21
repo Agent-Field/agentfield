@@ -44,12 +44,42 @@ class LogLevel(Enum):
     ERROR = "ERROR"
 
 
+class _UncontendedHandlerLock:
+    """A no-op stand-in for ``logging.Handler``'s serialization lock.
+
+    ``Handler.handle()`` holds that lock across ``emit()``. A synchronous
+    thread blocked inline on a stalled stdout would therefore hold it for the
+    length of the stall and block an event-loop caller before it ever reached
+    the bounded writer — the exact stall this module exists to remove. The
+    writer serializes stdout itself, so the handler needs no lock of its own.
+
+    ``None`` is not usable here: Python 3.13 changed ``handle()`` from
+    ``acquire()``/``release()`` (which skip a falsy lock) to ``with
+    self.lock:``, which raises ``TypeError`` on ``None``.
+    """
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        return True
+
+    def release(self) -> None:
+        pass
+
+    def __enter__(self) -> "_UncontendedHandlerLock":
+        return self
+
+    def __exit__(self, *exc_info: Any) -> bool:
+        return False
+
+    def _at_fork_reinit(self) -> None:
+        pass
+
+
 class _DynamicStdoutHandler(logging.Handler):
     """A handler that resolves stdout at emit time so a later tee sees logs."""
 
     def createLock(self) -> None:
         """Let the shared writer serialize without blocking event-loop callers."""
-        self.lock = None
+        self.lock = _UncontendedHandlerLock()  # type: ignore[assignment]
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
