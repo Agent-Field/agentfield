@@ -162,9 +162,9 @@ CLI-specific command construction to application code.
 | Model and `#variant` | `-m`, `--variant` | `--model`, `--thinking` | `--model`, `--thinking` |
 | Project root | `--dir` | process working directory | `--cwd` plus process working directory |
 | One-shot machine output | JSON output | stdin + JSON event stream | stdin + JSON event stream |
-| System prompt | Native prompt option | Native prompt option | Native prompt option |
-| Tool allowlist | Ignored today | Normalized Pi tool names | Normalized OMP tool names |
-| Plan / auto permissions | Ignored today | Read-only tools / no approval flag | Read-only tools / `--auto-approve` |
+| System prompt | Per-run agent overlay (inline rollback available) | Native prompt option | Native prompt option |
+| Tool allowlist | Ignored; fixed headless baseline | Normalized Pi tool names | Normalized OMP tool names |
+| Plan / auto permissions | Ignored; fixed headless baseline | Read-only tools / no approval flag | Read-only tools / `--auto-approve` |
 | Session resume | Native session option | `--session` | `--resume` |
 | Structured output | Isolated schema file protocol | Same protocol | Same protocol |
 | Metrics | Sessions, turns, tokens, cost, duration | Same normalized fields | Same normalized fields |
@@ -179,9 +179,13 @@ handled consistently: plan mode removes mutating tools, explicit model variants
 override `#variant`, and provider-reported metrics are normalized into the shared
 result type.
 
-OpenCode currently receives only the selected model, project directory, and
-prompt. Its adapters ignore `tools` and `permission_mode`; they do not translate
-either option to native OpenCode flags today.
+OpenCode receives the selected model, project directory, and task prompt, plus
+an explicit generated per-run agent configuration containing the system prompt
+and fixed headless permissions. Its adapters accept `tools` and
+`permission_mode` for provider-neutral API compatibility but intentionally do
+not translate either option to OpenCode permissions: the wildcard baseline is
+already permissive, so tool entries would only add redundant allow rules, and
+`permission_mode` does not select an OpenCode permission mode.
 
 ## Model selection and reasoning-effort variants
 
@@ -220,15 +224,20 @@ Pi and OMP accept the same OpenRouter model strings in every SDK, for example
 The `#` separator is safe in model ids: `:` belongs to OpenRouter suffixes like
 `:free`, and `@` to Vertex-style ids, but no provider uses `#`.
 
-### OpenCode standalone runs (Python)
+### OpenCode standalone runs
 
-The Python OpenCode adapter uses `opencode run` for each call; it does not use
-`opencode serve` or attach to a session. By default, it selects the fixed
+The Python, Go, and TypeScript OpenCode adapters use `opencode run` for each
+call; they do not use `opencode serve` or attach to a session. By default, each
+adapter selects the fixed
 `agentfield-harness` agent with `--agent` and supplies that agent through the
 child process's `OPENCODE_CONFIG_CONTENT` environment variable. The generated
 overlay sets `$schema` to `https://opencode.ai/config.json`, selects
 `agentfield-harness` as the default agent, and fixes its mode to `primary` with
-`steps` set to `500`. It does not modify shared OpenCode configuration files.
+`steps` set to `500`. Set `AGENTFIELD_OPENCODE_STEPS` to a positive integer in
+the per-call environment or ambient process environment to override that
+default; a per-call value takes precedence, and invalid or non-positive values
+fall back to `500`. The adapters do not modify shared OpenCode configuration
+files.
 
 The generated overlay is deep-merged into a caller-provided
 `OPENCODE_CONFIG_CONTENT` value, or into the ambient value when no per-call
@@ -252,11 +261,10 @@ denial for `agentfield*`, which prevents the child from loading AgentField
 orchestration skills while leaving unrelated skills available. OpenCode
 evaluates the last matching permission rule, so this ordering is intentional.
 `question` and `task` are also explicitly denied, and no `ask` permission is
-generated. The Python OpenCode provider currently accepts the common
-`tools` and `permission_mode` options but ignores them; it does not translate
-tool names into redundant permission entries, and `permission_mode` does not
-select an OpenCode permission mode. The wildcard behavior is not per-role
-authorization.
+generated. All three OpenCode providers accept the common `tools` and
+`permission_mode` options but ignore them; they do not translate tool names
+into redundant permission entries, and `permission_mode` does not select an
+OpenCode permission mode. The wildcard behavior is not per-role authorization.
 
 For an opt-in rollback or compatibility test, set
 `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` (in the per-call environment or

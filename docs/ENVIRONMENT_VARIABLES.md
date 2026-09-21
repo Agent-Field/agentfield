@@ -258,7 +258,12 @@ On SIGTERM or a graceful `POST /shutdown`, the node immediately stops heartbeats
 
 For Kubernetes, set `terminationGracePeriodSeconds` to a value greater than the shutdown budget. This leaves time for the terminal callback and normal process teardown after the reasoner drain. `app.serve()` owns the production uvicorn-aware signal lifecycle.
 
-Python OpenCode harness runs use the generated per-run agent configuration by default. Set `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` to opt into the legacy inline system-prompt transport for rollback or compatibility testing. This does not change authentication handling or add credentials to the prompt.
+### OpenCode harness runs (all SDKs)
+
+Python, Go, and TypeScript OpenCode harness runs use the generated per-run agent configuration by default.
+
+- `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT` (optional): Set to `1`, `true`, `yes`, or `on` (case-insensitive, surrounding whitespace ignored) to opt into the legacy inline system-prompt transport for rollback or compatibility testing. This does not change authentication handling or add credentials to the prompt. A value in the per-call harness environment takes precedence over the ambient process environment.
+- `AGENTFIELD_OPENCODE_STEPS` (optional, default `500`): Positive integer serialized as the generated OpenCode agent's `steps`. Invalid, non-numeric, zero, and negative values are ignored. A value in the per-call harness environment takes precedence over the ambient process environment. This setting is independent of the harness `max_turns` option.
 
 ### MiniMax video generation
 
