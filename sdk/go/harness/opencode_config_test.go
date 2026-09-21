@@ -128,17 +128,41 @@ func TestOpenCodeHarnessOverlayAndPromptTransport(t *testing.T) {
 	}
 
 	content := captured.env["OPENCODE_CONFIG_CONTENT"]
-	permissionStart := strings.Index(content, `"permission":{`)
-	if permissionStart < 0 {
-		t.Fatalf("serialized permission object missing from %s", content)
+	wantPermissionJSON := `"permission":{"*":"allow","skill":{"agentfield*":"deny"},"question":"deny","task":"deny"}`
+	if !strings.Contains(content, wantPermissionJSON) {
+		t.Fatalf("generated permission order missing from %s", content)
 	}
-	permissionJSON := content[permissionStart:]
-	wildcardIndex := strings.Index(permissionJSON, `"*"`)
-	for _, denial := range []string{"question", "skill", "task"} {
-		denialIndex := strings.Index(permissionJSON, `"`+denial+`"`)
-		if wildcardIndex < 0 || denialIndex < 0 || wildcardIndex >= denialIndex {
-			t.Fatalf("wildcard must be serialized before %q: %s", denial, permissionJSON)
-		}
+}
+
+func TestOpenCodeHarnessOverlaySerializesCallerSkillBeforeAgentFieldDenial(t *testing.T) {
+	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
+	t.Setenv(openCodeInlineSystemPromptEnv, "")
+	t.Setenv(openCodeStepsEnv, "")
+
+	caller := `{"agent":{"agentfield-harness":{"permission":{"skill":{"agentfield-*":"allow"}}}}}`
+	captured := captureOpenCodeInvocation(t, "hello", Options{
+		Env: map[string]string{"OPENCODE_CONFIG_CONTENT": caller},
+	})
+	content := captured.env["OPENCODE_CONFIG_CONTENT"]
+	wantPermissionJSON := `"permission":{"*":"allow","skill":{"agentfield-*":"allow","agentfield*":"deny"},"question":"deny","task":"deny"}`
+	if !strings.Contains(content, wantPermissionJSON) {
+		t.Fatalf("AgentField skill denial must be serialized after caller rules: %s", content)
+	}
+}
+
+func TestOpenCodeHarnessOverlaySerializesExtraPermissionAfterWildcardBeforeDenials(t *testing.T) {
+	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
+	t.Setenv(openCodeInlineSystemPromptEnv, "")
+	t.Setenv(openCodeStepsEnv, "")
+
+	caller := `{"agent":{"agentfield-harness":{"permission":{"webfetch":"allow"}}}}`
+	captured := captureOpenCodeInvocation(t, "hello", Options{
+		Env: map[string]string{"OPENCODE_CONFIG_CONTENT": caller},
+	})
+	content := captured.env["OPENCODE_CONFIG_CONTENT"]
+	wantPermissionJSON := `"permission":{"*":"allow","webfetch":"allow","skill":{"agentfield*":"deny"},"question":"deny","task":"deny"}`
+	if !strings.Contains(content, wantPermissionJSON) {
+		t.Fatalf("caller permission must be serialized between wildcard and denials: %s", content)
 	}
 }
 

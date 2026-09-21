@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,32 @@ const (
 		"Do not invoke AgentField orchestration, the `af` CLI, `swe-planner.plan`, " +
 		"or delegate work back to AgentField."
 )
+
+type orderedJSONObject struct {
+	keys   []string
+	values map[string]any
+}
+
+func (o orderedJSONObject) MarshalJSON() ([]byte, error) {
+	encoded := []byte{'{'}
+	for index, key := range o.keys {
+		if index > 0 {
+			encoded = append(encoded, ',')
+		}
+		encodedKey, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		encodedValue, err := json.Marshal(o.values[key])
+		if err != nil {
+			return nil, err
+		}
+		encoded = append(encoded, encodedKey...)
+		encoded = append(encoded, ':')
+		encoded = append(encoded, encodedValue...)
+	}
+	return append(encoded, '}'), nil
+}
 
 // OpenCodeProvider invokes the opencode CLI as a subprocess.
 type OpenCodeProvider struct {
@@ -87,6 +114,60 @@ func openCodePermissions() map[string]any {
 	}
 }
 
+func orderedOpenCodePermissions(permission map[string]any) orderedJSONObject {
+	keys := make([]string, 0, len(permission))
+	values := make(map[string]any, len(permission))
+	if value, ok := permission["*"]; ok {
+		keys = append(keys, "*")
+		values["*"] = value
+	}
+
+	otherKeys := make([]string, 0, len(permission))
+	for key := range permission {
+		switch key {
+		case "*", "skill", "question", "task":
+			continue
+		default:
+			otherKeys = append(otherKeys, key)
+		}
+	}
+	sort.Strings(otherKeys)
+	for _, key := range otherKeys {
+		keys = append(keys, key)
+		values[key] = permission[key]
+	}
+
+	if skill, ok := permission["skill"]; ok {
+		keys = append(keys, "skill")
+		if skillObject, ok := skill.(map[string]any); ok {
+			skillKeys := make([]string, 0, len(skillObject))
+			skillValues := make(map[string]any, len(skillObject))
+			for key, value := range skillObject {
+				if key != "agentfield*" {
+					skillKeys = append(skillKeys, key)
+					skillValues[key] = value
+				}
+			}
+			sort.Strings(skillKeys)
+			if value, ok := skillObject["agentfield*"]; ok {
+				skillKeys = append(skillKeys, "agentfield*")
+				skillValues["agentfield*"] = value
+			}
+			values["skill"] = orderedJSONObject{keys: skillKeys, values: skillValues}
+		} else {
+			values["skill"] = skill
+		}
+	}
+	for _, key := range []string{"question", "task"} {
+		if value, ok := permission[key]; ok {
+			keys = append(keys, key)
+			values[key] = value
+		}
+	}
+
+	return orderedJSONObject{keys: keys, values: values}
+}
+
 func agentSystemPrompt(options Options) string {
 	callerPrompt := strings.TrimSpace(options.SystemPrompt)
 	if callerPrompt == "" {
@@ -120,7 +201,9 @@ func openCodeSteps(options Options) int {
 }
 
 func deepMergeOpenCodeConfig(base, overlay map[string]any) map[string]any {
-	merged := make(map[string]any, len(base)+len(overlay))
+	// Sized from the base alone: overlay keys mostly land on existing ones, and
+	// summing both lengths is what CodeQL's allocation-size-overflow rule flags.
+	merged := make(map[string]any, len(base))
 	for key, value := range base {
 		merged[key] = value
 	}
@@ -148,9 +231,11 @@ func normalizeAgentFieldHarnessConfig(config map[string]any, stripSystemPrompt b
 	if stripSystemPrompt {
 		delete(selectedAgent, "prompt")
 	}
-	// encoding/json sorts map keys. That places "*" before every lowercase
-	// permission key, so OpenCode sees the wildcard before targeted denials
-	// without custom JSON ordering machinery.
+	permission, ok := selectedAgent["permission"].(map[string]any)
+	if !ok {
+		return
+	}
+	selectedAgent["permission"] = orderedOpenCodePermissions(permission)
 }
 
 func mergeOpenCodeConfigContent(existingContent, overlayContent string, stripSystemPrompt bool) (string, error) {
@@ -196,7 +281,7 @@ func buildOpenCodeConfigContent(options Options, modelValue, variantValue string
 	agent := map[string]any{
 		"mode":       "primary",
 		"steps":      openCodeSteps(options),
-		"permission": openCodePermissions(),
+		"permission": orderedOpenCodePermissions(openCodePermissions()),
 	}
 	if includeSystemPrompt {
 		agent["prompt"] = agentSystemPrompt(options)
