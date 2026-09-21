@@ -2,6 +2,9 @@
 
 The Python SDK can register LiteLLM observability callbacks and attach AgentField execution correlation data to text completions made through `app.ai`.
 
+For tracing a Pydantic AI agent running inside a reasoner alongside those `app.ai`
+completions, see [Pydantic AI inside an AgentField reasoner](pydantic-ai.md).
+
 Set `AGENTFIELD_LITELLM_CALLBACKS` to a comma-separated list of LiteLLM callback names, for example:
 
 ```bash
