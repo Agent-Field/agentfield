@@ -73,7 +73,7 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DBTX, executionID string, suffix string) (*types.WorkflowExecution, error) {
 	query := `
 		SELECT id, workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
-		       agent_node_id, COALESCE(instance_id, ''), parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
+		       agent_node_id, COALESCE(instance_id, ''), restarted_as_execution_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
 		       reasoner_id, input_data, output_data, input_size, output_size,
 		       status, started_at, completed_at, duration_ms,
 		       state_version, last_event_sequence, active_children, pending_children,
@@ -90,6 +90,7 @@ func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DB
 	var workflowTagsJSON, notesJSON []byte
 	var inputData, outputData sql.NullString
 	var runID sql.NullString
+	var restartedAsExecutionID sql.NullString
 	var pendingTerminal sql.NullString
 	var statusReason sql.NullString
 	var leaseOwner sql.NullString
@@ -98,7 +99,7 @@ func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DB
 	var approvalRequestedAt, approvalRespondedAt, approvalExpiresAt sql.NullTime
 	err := row.Scan(
 		&execution.ID, &execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
-		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID, &execution.InstanceID,
+		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID, &execution.InstanceID, &restartedAsExecutionID,
 		&execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID, &execution.WorkflowDepth,
 		&execution.ReasonerID, &inputData, &outputData,
 		&execution.InputSize, &execution.OutputSize, &execution.Status,
@@ -125,6 +126,9 @@ func (ls *LocalStorage) getWorkflowExecutionByIDSuffix(ctx context.Context, q DB
 	// Handle nullable JSON fields
 	if runID.Valid {
 		execution.RunID = &runID.String
+	}
+	if restartedAsExecutionID.Valid {
+		execution.RestartedAsExecutionID = &restartedAsExecutionID.String
 	}
 	if inputData.Valid {
 		execution.InputData = safeJSONRawMessage(inputData.String, "{}", fmt.Sprintf("execution %s input_data", execution.ExecutionID))
@@ -1858,7 +1862,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 // sqliteWorkflowExecutionInsertQuery captures the column order for workflow execution inserts.
 const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
 	workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
-	agent_node_id, instance_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
+	agent_node_id, instance_id, restarted_as_execution_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
 	reasoner_id, input_data, output_data, input_size, output_size,
 	status, started_at, completed_at, duration_ms,
 	state_version, last_event_sequence, active_children, pending_children,
@@ -1868,7 +1872,7 @@ const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
 	approval_requested_at, approval_responded_at, approval_callback_url, approval_expires_at,
 	workflow_name, workflow_tags, notes, created_at, updated_at
 ) VALUES (
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?
@@ -1905,6 +1909,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 
 		updateQuery := `
 			UPDATE workflow_executions SET
+				restarted_as_execution_id = ?,
 				status = ?, completed_at = ?, duration_ms = ?,
 				state_version = ?, last_event_sequence = ?, active_children = ?, pending_children = ?,
 				pending_terminal_status = ?, status_reason = ?, lease_owner = ?, lease_expires_at = ?,
@@ -1916,6 +1921,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 			WHERE execution_id = ?`
 
 		_, err = q.ExecContext(ctx, updateQuery,
+			execution.RestartedAsExecutionID,
 			execution.Status, execution.CompletedAt, execution.DurationMS,
 			execution.StateVersion, execution.LastEventSequence, execution.ActiveChildren, execution.PendingChildren,
 			execution.PendingTerminalStatus, execution.StatusReason, execution.LeaseOwner, execution.LeaseExpiresAt,
@@ -1960,7 +1966,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 	// Execute INSERT query using the DBTX interface
 	_, err = q.ExecContext(ctx, insertQuery,
 		execution.WorkflowID, execution.ExecutionID, execution.AgentFieldRequestID, execution.RunID,
-		execution.SessionID, execution.ActorID, execution.AgentNodeID, execution.InstanceID,
+		execution.SessionID, execution.ActorID, execution.AgentNodeID, execution.InstanceID, execution.RestartedAsExecutionID,
 		execution.ParentWorkflowID, execution.ParentExecutionID, execution.RootWorkflowID, execution.WorkflowDepth,
 		execution.ReasonerID, execution.InputData, execution.OutputData,
 		execution.InputSize, execution.OutputSize,
@@ -2233,7 +2239,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		SELECT
 			workflow_executions.id, workflow_executions.workflow_id, workflow_executions.execution_id,
 			workflow_executions.agentfield_request_id, workflow_executions.run_id, workflow_executions.session_id, workflow_executions.actor_id,
-			workflow_executions.agent_node_id, COALESCE(workflow_executions.instance_id, ''), workflow_executions.parent_workflow_id, workflow_executions.parent_execution_id,
+			workflow_executions.agent_node_id, COALESCE(workflow_executions.instance_id, ''), workflow_executions.restarted_as_execution_id, workflow_executions.parent_workflow_id, workflow_executions.parent_execution_id,
 			workflow_executions.root_workflow_id, workflow_executions.workflow_depth,
 			workflow_executions.reasoner_id, workflow_executions.input_data, workflow_executions.output_data,
 			workflow_executions.input_size, workflow_executions.output_size,
@@ -2372,6 +2378,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		var pendingTerminal sql.NullString
 		var statusReason sql.NullString
 		var runID sql.NullString
+		var restartedAsExecutionID sql.NullString
 		var leaseOwner sql.NullString
 		var leaseExpires sql.NullTime
 		var approvalRequestID, approvalRequestURL, approvalStatus, approvalResponse, approvalCallbackURL sql.NullString
@@ -2380,7 +2387,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		err := rows.Scan(
 			&execution.ID, &execution.WorkflowID, &execution.ExecutionID,
 			&execution.AgentFieldRequestID, &runID, &execution.SessionID, &execution.ActorID,
-			&execution.AgentNodeID, &execution.InstanceID, &execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID,
+			&execution.AgentNodeID, &execution.InstanceID, &restartedAsExecutionID, &execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID,
 			&execution.WorkflowDepth, &execution.ReasonerID, &inputData,
 			&outputData, &execution.InputSize, &execution.OutputSize,
 			&execution.Status, &execution.StartedAt, &execution.CompletedAt,
@@ -2403,6 +2410,9 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		// Handle nullable input/output data
 		if runID.Valid {
 			execution.RunID = &runID.String
+		}
+		if restartedAsExecutionID.Valid {
+			execution.RestartedAsExecutionID = &restartedAsExecutionID.String
 		}
 		if inputData.Valid {
 			execution.InputData = safeJSONRawMessage(inputData.String, "{}", fmt.Sprintf("execution %s input_data", execution.ExecutionID))

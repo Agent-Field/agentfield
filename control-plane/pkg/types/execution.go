@@ -9,9 +9,10 @@ import (
 // shared RunID across multiple executions. ParentExecutionID creates the DAG edges.
 type Execution struct {
 	// Primary identifiers
-	ExecutionID       string  `json:"execution_id" db:"execution_id"`
-	RunID             string  `json:"run_id" db:"run_id"`
-	ParentExecutionID *string `json:"parent_execution_id,omitempty" db:"parent_execution_id"`
+	ExecutionID            string  `json:"execution_id" db:"execution_id"`
+	RunID                  string  `json:"run_id" db:"run_id"`
+	ParentExecutionID      *string `json:"parent_execution_id,omitempty" db:"parent_execution_id"`
+	RestartedAsExecutionID *string `json:"-" db:"restarted_as_execution_id"`
 
 	// Agent metadata
 	AgentNodeID string `json:"agent_node_id" db:"agent_node_id"`
@@ -50,21 +51,28 @@ type Execution struct {
 
 // ExecutionFilter describes supported filters when querying executions.
 type ExecutionFilter struct {
-	RunID             *string
-	ExecutionID       *string
-	ParentExecutionID *string
-	AgentNodeID       *string
-	ReasonerID        *string
-	Status            *string
-	SessionID         *string
-	ActorID           *string
-	Limit             int
-	Offset            int
-	StartTime         *time.Time
-	EndTime           *time.Time
-	Search            *string
-	SortBy            string
-	SortDescending    bool
+	RunID                *string
+	ExecutionID          *string
+	ParentExecutionID    *string
+	AgentNodeID          *string
+	ReasonerID           *string
+	Status               *string
+	SessionID            *string
+	ActorID              *string
+	Limit                int
+	Offset               int
+	StartTime            *time.Time
+	EndTime              *time.Time
+	UpdatedAfter         *time.Time
+	UpdatedBefore        *time.Time
+	StatusReasons        []string
+	StatusReasonPrefixes []string
+	TerminalOnly         bool
+	RootOnly             bool
+	WithoutRestartedAs   bool
+	Search               *string
+	SortBy               string
+	SortDescending       bool
 	// ExcludePayloads omits input_payload and result_payload from the query result.
 	// Set this for list/dashboard queries that do not need payload data to avoid
 	// transferring large TOAST columns over the wire.

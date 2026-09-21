@@ -52,14 +52,14 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 	insert := `
 		INSERT INTO executions (
 			execution_id, run_id, parent_execution_id,
-			agent_node_id, instance_id, reasoner_id, node_id,
+			agent_node_id, instance_id, restarted_as_execution_id, reasoner_id, node_id,
 			status, status_reason, input_payload, result_payload, error_message,
 			input_uri, result_uri,
 			session_id, actor_id,
 			started_at, completed_at, duration_ms,
 			notes,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	// Serialize notes to JSON
 	var notesJSON []byte
@@ -79,6 +79,7 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 		exec.ParentExecutionID,
 		exec.AgentNodeID,
 		exec.InstanceID,
+		exec.RestartedAsExecutionID,
 		exec.ReasonerID,
 		exec.NodeID,
 		exec.Status,
@@ -108,7 +109,7 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 func (ls *LocalStorage) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
 	query := `
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), restarted_as_execution_id, reasoner_id, node_id,
 		       status, status_reason, input_payload, result_payload, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -150,7 +151,7 @@ func (ls *LocalStorage) GetExecutionRecordsBatch(ctx context.Context, executionI
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(executionIDs)), ",")
 	query := fmt.Sprintf(`
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), restarted_as_execution_id, reasoner_id, node_id,
 		       status, status_reason, input_payload, result_payload, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -212,7 +213,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 	// commits, then re-reads the committed row instead of a stale snapshot.
 	row := tx.QueryRowContext(ctx, `
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), restarted_as_execution_id, reasoner_id, node_id,
 		       status, status_reason, input_payload, result_payload, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -255,6 +256,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 			parent_execution_id = ?,
 			agent_node_id = ?,
 			instance_id = ?,
+			restarted_as_execution_id = ?,
 			reasoner_id = ?,
 			node_id = ?,
 			status = ?,
@@ -280,6 +282,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 		updated.ParentExecutionID,
 		updated.AgentNodeID,
 		updated.InstanceID,
+		updated.RestartedAsExecutionID,
 		updated.ReasonerID,
 		updated.NodeID,
 		updated.Status,
@@ -357,6 +360,35 @@ func (ls *LocalStorage) QueryExecutionRecords(ctx context.Context, filter types.
 		where = append(where, "started_at <= ?")
 		args = append(args, filter.EndTime.UTC())
 	}
+	if filter.UpdatedAfter != nil {
+		where = append(where, "updated_at >= ?")
+		args = append(args, filter.UpdatedAfter.UTC())
+	}
+	if filter.UpdatedBefore != nil {
+		where = append(where, "updated_at <= ?")
+		args = append(args, filter.UpdatedBefore.UTC())
+	}
+	if filter.TerminalOnly {
+		where = append(where, "status IN ('succeeded', 'failed', 'cancelled', 'timeout')")
+	}
+	if filter.RootOnly {
+		where = append(where, "COALESCE(parent_execution_id, '') = ''")
+	}
+	if filter.WithoutRestartedAs {
+		where = append(where, "COALESCE(restarted_as_execution_id, '') = ''")
+	}
+	if len(filter.StatusReasons) > 0 || len(filter.StatusReasonPrefixes) > 0 {
+		var reasonPredicates []string
+		for _, reason := range filter.StatusReasons {
+			reasonPredicates = append(reasonPredicates, "status_reason = ?")
+			args = append(args, reason)
+		}
+		for _, prefix := range filter.StatusReasonPrefixes {
+			reasonPredicates = append(reasonPredicates, "substr(status_reason, 1, ?) = ?")
+			args = append(args, len(prefix), prefix)
+		}
+		where = append(where, "("+strings.Join(reasonPredicates, " OR ")+")")
+	}
 
 	queryBuilder := strings.Builder{}
 	// Omit large TOAST columns when the caller signals payloads are not needed.
@@ -367,7 +399,7 @@ func (ls *LocalStorage) QueryExecutionRecords(ctx context.Context, filter types.
 	}
 	queryBuilder.WriteString(`
 		SELECT execution_id, run_id, parent_execution_id,
-		       agent_node_id, COALESCE(instance_id, ''), reasoner_id, node_id,
+		       agent_node_id, COALESCE(instance_id, ''), restarted_as_execution_id, reasoner_id, node_id,
 		       status, status_reason, ` + payloadCols + `, error_message,
 		       input_uri, result_uri,
 		       session_id, actor_id,
@@ -1518,16 +1550,51 @@ func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAf
 // not write duration_ms here: the row's started_at is preserved, so consumers
 // that need the runtime can compute completed_at - started_at directly.
 func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID, reasonMessage string) (int, error) {
-	return ls.markAgentExecutionsOrphaned(ctx, agentNodeID, "*", reasonMessage)
+	return ls.markAgentExecutionsOrphaned(ctx, agentNodeID, "*", reasonMessage, time.Time{})
 }
 
 // MarkAgentInstanceExecutionsOrphaned limits restart cleanup to the departing
-// process plus legacy rows which predate per-execution instance stamping.
-func (ls *LocalStorage) MarkAgentInstanceExecutionsOrphaned(ctx context.Context, agentNodeID, departingInstanceID, reasonMessage string) (int, error) {
-	return ls.markAgentExecutionsOrphaned(ctx, agentNodeID, departingInstanceID, reasonMessage)
+// process plus legacy rows which predate per-execution instance stamping. A
+// non-zero createdBefore boundary excludes executions created after the
+// replacement registered; a zero boundary preserves the historical behavior.
+func (ls *LocalStorage) MarkAgentInstanceExecutionsOrphaned(ctx context.Context, agentNodeID, departingInstanceID, reasonMessage string, createdBefore time.Time) (int, error) {
+	return ls.markAgentExecutionsOrphaned(ctx, agentNodeID, departingInstanceID, reasonMessage, createdBefore)
 }
 
-func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNodeID, departingInstanceID, reasonMessage string) (int, error) {
+// SetExecutionRestartedAs records the forward restart pointer on both
+// execution representations. The lightweight executions row is required; the
+// workflow row is updated when present for read-model parity.
+func (ls *LocalStorage) SetExecutionRestartedAs(ctx context.Context, sourceExecutionID, newExecutionID string) error {
+	sourceExecutionID = strings.TrimSpace(sourceExecutionID)
+	newExecutionID = strings.TrimSpace(newExecutionID)
+	if sourceExecutionID == "" || newExecutionID == "" {
+		return fmt.Errorf("source and successor execution_id are required")
+	}
+
+	db := ls.requireSQLDB()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin restarted_as update: %w", err)
+	}
+	defer rollbackTx(tx, "SetExecutionRestartedAs:"+sourceExecutionID)
+
+	result, err := tx.ExecContext(ctx, `UPDATE executions SET restarted_as_execution_id = ?, updated_at = ? WHERE execution_id = ?`, newExecutionID, time.Now().UTC(), sourceExecutionID)
+	if err != nil {
+		return fmt.Errorf("update execution restarted_as: %w", err)
+	}
+	if affected, rowsErr := result.RowsAffected(); rowsErr == nil && affected == 0 {
+		return fmt.Errorf("execution %s not found", sourceExecutionID)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow_executions SET restarted_as_execution_id = ?, updated_at = ? WHERE execution_id = ?`, newExecutionID, time.Now().UTC(), sourceExecutionID); err != nil {
+		return fmt.Errorf("update workflow execution restarted_as: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit restarted_as update: %w", err)
+	}
+	return nil
+}
+
+func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNodeID, departingInstanceID, reasonMessage string, createdBefore time.Time) (int, error) {
 	if strings.TrimSpace(agentNodeID) == "" {
 		return 0, fmt.Errorf("agent_node_id is required")
 	}
@@ -1537,6 +1604,18 @@ func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNo
 
 	db := ls.requireSQLDB()
 	now := time.Now().UTC()
+	createdBeforeClause := ""
+	if !createdBefore.IsZero() {
+		createdBeforeClause = " AND " + ls.staleTimestampExpr("created_at") + " < " + ls.staleTimestampExpr("?")
+		createdBefore = createdBefore.UTC()
+	}
+	workflowArgs := []interface{}{
+		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID, departingInstanceID, departingInstanceID,
+		types.ExecutionReasonAwaitingAgentRestart,
+	}
+	if createdBeforeClause != "" {
+		workflowArgs = append(workflowArgs, createdBefore)
+	}
 
 	res, err := db.ExecContext(ctx, `
 		UPDATE workflow_executions
@@ -1544,10 +1623,8 @@ func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNo
 		WHERE agent_node_id = ?
 		  AND (? = '*' OR COALESCE(instance_id, '') = '' OR instance_id = ?)
 		  AND status IN ('running', 'pending', 'queued', 'waiting')
-		  AND COALESCE(status_reason, '') <> ?`,
-		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID, departingInstanceID, departingInstanceID,
-		types.ExecutionReasonAwaitingAgentRestart,
-	)
+		  AND COALESCE(status_reason, '') <> ?`+createdBeforeClause,
+		workflowArgs...)
 	if err != nil {
 		return 0, fmt.Errorf("update orphaned workflow executions: %w", err)
 	}
@@ -1557,16 +1634,15 @@ func (ls *LocalStorage) markAgentExecutionsOrphaned(ctx context.Context, agentNo
 	// intentionally swallowed: workflow_executions is the source of truth,
 	// and the legacy mirror is allowed to lag without blocking restart
 	// recovery.
+	executionArgs := append([]interface{}(nil), workflowArgs...)
 	_, _ = db.ExecContext(ctx, `
 		UPDATE executions
 		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
 		WHERE agent_node_id = ?
 		  AND (? = '*' OR COALESCE(instance_id, '') = '' OR instance_id = ?)
 		  AND status IN ('running', 'pending', 'queued', 'waiting')
-		  AND COALESCE(status_reason, '') <> ?`,
-		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID, departingInstanceID, departingInstanceID,
-		types.ExecutionReasonAwaitingAgentRestart,
-	)
+		  AND COALESCE(status_reason, '') <> ?`+createdBeforeClause,
+		executionArgs...)
 
 	return int(affected), nil
 }
@@ -1788,6 +1864,7 @@ func scanExecution(scanner interface {
 		exec                         types.Execution
 		parentExecutionID, sessionID sql.NullString
 		actorID                      sql.NullString
+		restartedAsExecutionID       sql.NullString
 		inputURI                     sql.NullString
 		resultURI                    sql.NullString
 		statusReason                 sql.NullString
@@ -1805,6 +1882,7 @@ func scanExecution(scanner interface {
 		&parentExecutionID,
 		&exec.AgentNodeID,
 		&exec.InstanceID,
+		&restartedAsExecutionID,
 		&exec.ReasonerID,
 		&exec.NodeID,
 		&exec.Status,
@@ -1832,6 +1910,9 @@ func scanExecution(scanner interface {
 
 	if parentExecutionID.Valid {
 		exec.ParentExecutionID = &parentExecutionID.String
+	}
+	if restartedAsExecutionID.Valid {
+		exec.RestartedAsExecutionID = &restartedAsExecutionID.String
 	}
 	if sessionID.Valid {
 		exec.SessionID = &sessionID.String

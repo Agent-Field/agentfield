@@ -3,29 +3,30 @@ package storage
 import "time"
 
 type ExecutionRecordModel struct {
-	ID                int64      `gorm:"column:id;primaryKey;autoIncrement"`
-	ExecutionID       string     `gorm:"column:execution_id;not null;uniqueIndex"`
-	RunID             string     `gorm:"column:run_id;not null;index"`
-	ParentExecutionID *string    `gorm:"column:parent_execution_id;index"`
-	AgentNodeID       string     `gorm:"column:agent_node_id;not null;index;index:idx_executions_agent_instance,priority:1"`
-	InstanceID        string     `gorm:"column:instance_id;index:idx_executions_agent_instance,priority:2"`
-	ReasonerID        string     `gorm:"column:reasoner_id;not null;index"`
-	NodeID            string     `gorm:"column:node_id;not null;index"`
-	Status            string     `gorm:"column:status;not null;index"`
-	StatusReason      *string    `gorm:"column:status_reason"`
-	InputPayload      []byte     `gorm:"column:input_payload"`
-	ResultPayload     []byte     `gorm:"column:result_payload"`
-	ErrorMessage      *string    `gorm:"column:error_message"`
-	InputURI          *string    `gorm:"column:input_uri"`
-	ResultURI         *string    `gorm:"column:result_uri"`
-	SessionID         *string    `gorm:"column:session_id;index"`
-	ActorID           *string    `gorm:"column:actor_id;index"`
-	StartedAt         time.Time  `gorm:"column:started_at;not null;index"`
-	CompletedAt       *time.Time `gorm:"column:completed_at"`
-	DurationMS        *int64     `gorm:"column:duration_ms"`
-	Notes             string     `gorm:"column:notes;default:'[]'"`
-	CreatedAt         time.Time  `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt         time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+	ID                     int64      `gorm:"column:id;primaryKey;autoIncrement"`
+	ExecutionID            string     `gorm:"column:execution_id;not null;uniqueIndex"`
+	RunID                  string     `gorm:"column:run_id;not null;index"`
+	ParentExecutionID      *string    `gorm:"column:parent_execution_id;index"`
+	AgentNodeID            string     `gorm:"column:agent_node_id;not null;index;index:idx_executions_agent_instance,priority:1"`
+	InstanceID             string     `gorm:"column:instance_id;index:idx_executions_agent_instance,priority:2"`
+	RestartedAsExecutionID *string    `gorm:"column:restarted_as_execution_id"`
+	ReasonerID             string     `gorm:"column:reasoner_id;not null;index"`
+	NodeID                 string     `gorm:"column:node_id;not null;index"`
+	Status                 string     `gorm:"column:status;not null;index"`
+	StatusReason           *string    `gorm:"column:status_reason"`
+	InputPayload           []byte     `gorm:"column:input_payload"`
+	ResultPayload          []byte     `gorm:"column:result_payload"`
+	ErrorMessage           *string    `gorm:"column:error_message"`
+	InputURI               *string    `gorm:"column:input_uri"`
+	ResultURI              *string    `gorm:"column:result_uri"`
+	SessionID              *string    `gorm:"column:session_id;index"`
+	ActorID                *string    `gorm:"column:actor_id;index"`
+	StartedAt              time.Time  `gorm:"column:started_at;not null;index"`
+	CompletedAt            *time.Time `gorm:"column:completed_at"`
+	DurationMS             *int64     `gorm:"column:duration_ms"`
+	Notes                  string     `gorm:"column:notes;default:'[]'"`
+	CreatedAt              time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt              time.Time  `gorm:"column:updated_at;autoUpdateTime"`
 }
 
 func (ExecutionRecordModel) TableName() string { return "executions" }
@@ -114,51 +115,52 @@ type AgentPackageModel struct {
 func (AgentPackageModel) TableName() string { return "agent_packages" }
 
 type WorkflowExecutionModel struct {
-	ID                    int64      `gorm:"column:id;primaryKey;autoIncrement"`
-	WorkflowID            string     `gorm:"column:workflow_id;not null;index;index:idx_workflow_executions_workflow_status,priority:1"`
-	ExecutionID           string     `gorm:"column:execution_id;not null;uniqueIndex"`
-	AgentFieldRequestID   string     `gorm:"column:agentfield_request_id;not null;index"`
-	RunID                 *string    `gorm:"column:run_id;index"`
-	SessionID             *string    `gorm:"column:session_id;index;index:idx_workflow_executions_session_status,priority:1;index:idx_workflow_executions_session_status_time,priority:1;index:idx_workflow_executions_session_time,priority:1"`
-	ActorID               *string    `gorm:"column:actor_id;index;index:idx_workflow_executions_actor_status,priority:1;index:idx_workflow_executions_actor_status_time,priority:1;index:idx_workflow_executions_actor_time,priority:1"`
-	AgentNodeID           string     `gorm:"column:agent_node_id;not null;index;index:idx_workflow_executions_agent_node_status,priority:1;index:idx_workflow_executions_agent_status_time,priority:1;index:idx_workflow_executions_agent_instance,priority:1"`
-	InstanceID            string     `gorm:"column:instance_id;index:idx_workflow_executions_agent_instance,priority:2"`
-	ParentWorkflowID      *string    `gorm:"column:parent_workflow_id;index"`
-	ParentExecutionID     *string    `gorm:"column:parent_execution_id;index"`
-	RootWorkflowID        *string    `gorm:"column:root_workflow_id;index"`
-	WorkflowDepth         int        `gorm:"column:workflow_depth;default:0"`
-	ReasonerID            string     `gorm:"column:reasoner_id;not null"`
-	InputData             []byte     `gorm:"column:input_data"`
-	OutputData            []byte     `gorm:"column:output_data"`
-	InputSize             int        `gorm:"column:input_size"`
-	OutputSize            int        `gorm:"column:output_size"`
-	WorkflowName          *string    `gorm:"column:workflow_name"`
-	WorkflowTags          string     `gorm:"column:workflow_tags"`
-	Status                string     `gorm:"column:status;not null;index;index:idx_workflow_executions_agent_node_status,priority:2;index:idx_workflow_executions_session_status,priority:2;index:idx_workflow_executions_actor_status,priority:2;index:idx_workflow_executions_workflow_status,priority:2;index:idx_workflow_executions_status_time,priority:1;index:idx_workflow_executions_session_status_time,priority:2;index:idx_workflow_executions_actor_status_time,priority:2;index:idx_workflow_executions_agent_status_time,priority:2"`
-	StartedAt             time.Time  `gorm:"column:started_at;not null;index;index:idx_workflow_executions_status_time,priority:2;index:idx_workflow_executions_session_status_time,priority:3;index:idx_workflow_executions_actor_status_time,priority:3;index:idx_workflow_executions_agent_status_time,priority:3;index:idx_workflow_executions_session_time,priority:2;index:idx_workflow_executions_actor_time,priority:2"`
-	CompletedAt           *time.Time `gorm:"column:completed_at"`
-	DurationMS            int        `gorm:"column:duration_ms"`
-	StateVersion          int        `gorm:"column:state_version;not null;default:0"`
-	LastEventSequence     int        `gorm:"column:last_event_sequence;not null;default:0"`
-	ActiveChildren        int        `gorm:"column:active_children;not null;default:0"`
-	PendingChildren       int        `gorm:"column:pending_children;not null;default:0"`
-	PendingTerminalStatus *string    `gorm:"column:pending_terminal_status"`
-	StatusReason          *string    `gorm:"column:status_reason"`
-	LeaseOwner            *string    `gorm:"column:lease_owner"`
-	LeaseExpiresAt        *time.Time `gorm:"column:lease_expires_at"`
-	ErrorMessage          *string    `gorm:"column:error_message"`
-	RetryCount            int        `gorm:"column:retry_count;default:0"`
-	ApprovalRequestID     *string    `gorm:"column:approval_request_id;index:idx_workflow_executions_approval_request_id"`
-	ApprovalRequestURL    *string    `gorm:"column:approval_request_url"`
-	ApprovalStatus        *string    `gorm:"column:approval_status"`
-	ApprovalResponse      *string    `gorm:"column:approval_response"`
-	ApprovalRequestedAt   *time.Time `gorm:"column:approval_requested_at"`
-	ApprovalRespondedAt   *time.Time `gorm:"column:approval_responded_at"`
-	ApprovalCallbackURL   *string    `gorm:"column:approval_callback_url"`
-	ApprovalExpiresAt     *time.Time `gorm:"column:approval_expires_at"`
-	Notes                 string     `gorm:"column:notes;default:'[]'"`
-	CreatedAt             time.Time  `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt             time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+	ID                     int64      `gorm:"column:id;primaryKey;autoIncrement"`
+	WorkflowID             string     `gorm:"column:workflow_id;not null;index;index:idx_workflow_executions_workflow_status,priority:1"`
+	ExecutionID            string     `gorm:"column:execution_id;not null;uniqueIndex"`
+	AgentFieldRequestID    string     `gorm:"column:agentfield_request_id;not null;index"`
+	RunID                  *string    `gorm:"column:run_id;index"`
+	SessionID              *string    `gorm:"column:session_id;index;index:idx_workflow_executions_session_status,priority:1;index:idx_workflow_executions_session_status_time,priority:1;index:idx_workflow_executions_session_time,priority:1"`
+	ActorID                *string    `gorm:"column:actor_id;index;index:idx_workflow_executions_actor_status,priority:1;index:idx_workflow_executions_actor_status_time,priority:1;index:idx_workflow_executions_actor_time,priority:1"`
+	AgentNodeID            string     `gorm:"column:agent_node_id;not null;index;index:idx_workflow_executions_agent_node_status,priority:1;index:idx_workflow_executions_agent_status_time,priority:1;index:idx_workflow_executions_agent_instance,priority:1"`
+	InstanceID             string     `gorm:"column:instance_id;index:idx_workflow_executions_agent_instance,priority:2"`
+	RestartedAsExecutionID *string    `gorm:"column:restarted_as_execution_id"`
+	ParentWorkflowID       *string    `gorm:"column:parent_workflow_id;index"`
+	ParentExecutionID      *string    `gorm:"column:parent_execution_id;index"`
+	RootWorkflowID         *string    `gorm:"column:root_workflow_id;index"`
+	WorkflowDepth          int        `gorm:"column:workflow_depth;default:0"`
+	ReasonerID             string     `gorm:"column:reasoner_id;not null"`
+	InputData              []byte     `gorm:"column:input_data"`
+	OutputData             []byte     `gorm:"column:output_data"`
+	InputSize              int        `gorm:"column:input_size"`
+	OutputSize             int        `gorm:"column:output_size"`
+	WorkflowName           *string    `gorm:"column:workflow_name"`
+	WorkflowTags           string     `gorm:"column:workflow_tags"`
+	Status                 string     `gorm:"column:status;not null;index;index:idx_workflow_executions_agent_node_status,priority:2;index:idx_workflow_executions_session_status,priority:2;index:idx_workflow_executions_actor_status,priority:2;index:idx_workflow_executions_workflow_status,priority:2;index:idx_workflow_executions_status_time,priority:1;index:idx_workflow_executions_session_status_time,priority:2;index:idx_workflow_executions_actor_status_time,priority:2;index:idx_workflow_executions_agent_status_time,priority:2"`
+	StartedAt              time.Time  `gorm:"column:started_at;not null;index;index:idx_workflow_executions_status_time,priority:2;index:idx_workflow_executions_session_status_time,priority:3;index:idx_workflow_executions_actor_status_time,priority:3;index:idx_workflow_executions_agent_status_time,priority:3;index:idx_workflow_executions_session_time,priority:2;index:idx_workflow_executions_actor_time,priority:2"`
+	CompletedAt            *time.Time `gorm:"column:completed_at"`
+	DurationMS             int        `gorm:"column:duration_ms"`
+	StateVersion           int        `gorm:"column:state_version;not null;default:0"`
+	LastEventSequence      int        `gorm:"column:last_event_sequence;not null;default:0"`
+	ActiveChildren         int        `gorm:"column:active_children;not null;default:0"`
+	PendingChildren        int        `gorm:"column:pending_children;not null;default:0"`
+	PendingTerminalStatus  *string    `gorm:"column:pending_terminal_status"`
+	StatusReason           *string    `gorm:"column:status_reason"`
+	LeaseOwner             *string    `gorm:"column:lease_owner"`
+	LeaseExpiresAt         *time.Time `gorm:"column:lease_expires_at"`
+	ErrorMessage           *string    `gorm:"column:error_message"`
+	RetryCount             int        `gorm:"column:retry_count;default:0"`
+	ApprovalRequestID      *string    `gorm:"column:approval_request_id;index:idx_workflow_executions_approval_request_id"`
+	ApprovalRequestURL     *string    `gorm:"column:approval_request_url"`
+	ApprovalStatus         *string    `gorm:"column:approval_status"`
+	ApprovalResponse       *string    `gorm:"column:approval_response"`
+	ApprovalRequestedAt    *time.Time `gorm:"column:approval_requested_at"`
+	ApprovalRespondedAt    *time.Time `gorm:"column:approval_responded_at"`
+	ApprovalCallbackURL    *string    `gorm:"column:approval_callback_url"`
+	ApprovalExpiresAt      *time.Time `gorm:"column:approval_expires_at"`
+	Notes                  string     `gorm:"column:notes;default:'[]'"`
+	CreatedAt              time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt              time.Time  `gorm:"column:updated_at;autoUpdateTime"`
 }
 
 func (WorkflowExecutionModel) TableName() string { return "workflow_executions" }

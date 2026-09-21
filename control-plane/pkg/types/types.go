@@ -686,14 +686,15 @@ type WorkflowExecution struct {
 	ID int64 `json:"id" db:"id"`
 
 	// Core IDs
-	WorkflowID          string  `json:"workflow_id" db:"workflow_id"`
-	ExecutionID         string  `json:"execution_id" db:"execution_id"`
-	AgentFieldRequestID string  `json:"agentfield_request_id" db:"agentfield_request_id"`
-	RunID               *string `json:"run_id,omitempty" db:"run_id"`
-	SessionID           *string `json:"session_id,omitempty" db:"session_id"`
-	ActorID             *string `json:"actor_id,omitempty" db:"actor_id"`
-	AgentNodeID         string  `json:"agent_node_id" db:"agent_node_id"`
-	InstanceID          string  `json:"instance_id,omitempty" db:"instance_id"`
+	WorkflowID             string  `json:"workflow_id" db:"workflow_id"`
+	ExecutionID            string  `json:"execution_id" db:"execution_id"`
+	AgentFieldRequestID    string  `json:"agentfield_request_id" db:"agentfield_request_id"`
+	RunID                  *string `json:"run_id,omitempty" db:"run_id"`
+	SessionID              *string `json:"session_id,omitempty" db:"session_id"`
+	ActorID                *string `json:"actor_id,omitempty" db:"actor_id"`
+	AgentNodeID            string  `json:"agent_node_id" db:"agent_node_id"`
+	InstanceID             string  `json:"instance_id,omitempty" db:"instance_id"`
+	RestartedAsExecutionID *string `json:"-" db:"restarted_as_execution_id"`
 
 	// DAG Relationship Fields
 	ParentWorkflowID  *string `json:"parent_workflow_id,omitempty" db:"parent_workflow_id"`

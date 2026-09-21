@@ -673,7 +673,8 @@ func workflowExecutionDriverRow(executionID, status string, now time.Time) []dri
 		nil,
 		nil,
 		"agent-scripted",
-		"", // instance_id (COALESCE)
+		"",  // instance_id (COALESCE)
+		nil, // restarted_as_execution_id
 		nil,
 		nil,
 		nil,

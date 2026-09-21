@@ -29,6 +29,15 @@ const (
 // fail the very execution that was waiting for it.
 const ExecutionReasonAwaitingAgentRestart = "awaiting_agent_restart"
 
+const (
+	// ExecutionReasonAgentShutdownCancelled identifies an execution cancelled by
+	// an SDK while its agent process was draining for shutdown.
+	ExecutionReasonAgentShutdownCancelled = "agent_shutdown_cancelled"
+	// AgentShutdownCancellationError is emitted identically by every SDK when
+	// graceful shutdown cancels an in-flight reasoner.
+	AgentShutdownCancellationError = "cancelled during graceful shutdown"
+)
+
 var canonicalExecutionStatuses = map[ExecutionStatus]struct{}{
 	ExecutionStatusUnknown:   {},
 	ExecutionStatusPending:   {},
