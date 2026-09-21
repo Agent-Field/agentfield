@@ -150,12 +150,18 @@ func configureAgentRestartSettings(nodeHealth config.NodeHealthConfig) {
 	}
 	orphanReapEnabled := nodeHealth.EffectiveAgentOrphanReapEnabled()
 	handlers.SetAgentOrphanReapEnabled(orphanReapEnabled)
+	handlers.SetResumeInterruptedRuns(nodeHealth.EffectiveResumeInterruptedRuns())
+	handlers.SetResumeInterruptedMaxAttempts(nodeHealth.EffectiveResumeInterruptedMaxAttempts())
+	handlers.SetResumeInterruptedWindow(nodeHealth.EffectiveResumeInterruptedWindow())
+	handlers.SetResumeInterruptedLimit(nodeHealth.EffectiveResumeInterruptedLimit())
+	handlers.SetResumeInterruptedDelay(nodeHealth.EffectiveResumeInterruptedDelay())
 	if !orphanReapEnabled {
 		logger.Logger.Warn().Msg("agent orphan reap on re-registration is disabled (AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED=false); in-flight executions of a departing instance are left to the stale-execution sweep")
 	}
 	logger.Logger.Info().
 		Dur("agent_restart_grace", handlers.AgentRestartGrace()).
 		Dur("agent_drain_grace", handlers.AgentDrainGrace()).
+		Bool("resume_interrupted_runs", handlers.ResumeInterruptedRuns()).
 		Msg("configured agent restart and drain grace windows")
 }
 
@@ -750,6 +756,11 @@ func (s *AgentFieldServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
 	}
+	go handlers.ResumeInterruptedRunsOnStartup(
+		s.streamCtx, s.storage, s.payloadStore, s.webhookDispatcher,
+		s.config.AgentField.ExecutionQueue.AgentCallTimeout,
+		s.config.Features.DID.Authorization.InternalToken,
+	)
 	s.maintenanceReadyOnce.Do(func() {
 		if s.maintenanceReady != nil {
 			close(s.maintenanceReady)

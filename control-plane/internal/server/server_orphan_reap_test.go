@@ -62,3 +62,31 @@ func TestConfigureAgentRestartSettingsAppliesGraceWindows(t *testing.T) {
 	require.Equal(t, 7*time.Second, handlers.AgentRestartGrace())
 	require.Equal(t, 11*time.Second, handlers.AgentDrainGrace())
 }
+
+func TestConfigureAgentRestartSettingsAppliesInterruptedResumeBounds(t *testing.T) {
+	previousEnabled := handlers.ResumeInterruptedRuns()
+	previousAttempts := handlers.ResumeInterruptedMaxAttempts()
+	previousWindow := handlers.ResumeInterruptedWindow()
+	previousLimit := handlers.ResumeInterruptedLimit()
+	previousDelay := handlers.ResumeInterruptedDelay()
+	t.Cleanup(func() {
+		handlers.SetResumeInterruptedRuns(previousEnabled)
+		handlers.SetResumeInterruptedMaxAttempts(previousAttempts)
+		handlers.SetResumeInterruptedWindow(previousWindow)
+		handlers.SetResumeInterruptedLimit(previousLimit)
+		handlers.SetResumeInterruptedDelay(previousDelay)
+	})
+	enabled := true
+	configureAgentRestartSettings(config.NodeHealthConfig{
+		ResumeInterruptedRuns:        &enabled,
+		ResumeInterruptedMaxAttempts: 3,
+		ResumeInterruptedWindow:      2 * time.Hour,
+		ResumeInterruptedLimit:       12,
+		ResumeInterruptedDelay:       4 * time.Second,
+	})
+	require.True(t, handlers.ResumeInterruptedRuns())
+	require.Equal(t, 3, handlers.ResumeInterruptedMaxAttempts())
+	require.Equal(t, 2*time.Hour, handlers.ResumeInterruptedWindow())
+	require.Equal(t, 12, handlers.ResumeInterruptedLimit())
+	require.Equal(t, 4*time.Second, handlers.ResumeInterruptedDelay())
+}

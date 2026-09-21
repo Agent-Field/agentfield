@@ -166,4 +166,20 @@ func mergeDBNodeHealthConfig(target *config.NodeHealthConfig, dbCfg config.NodeH
 		enabled := *dbCfg.AgentOrphanReapEnabled
 		target.AgentOrphanReapEnabled = &enabled
 	}
+	if dbCfg.ResumeInterruptedRuns != nil {
+		enabled := *dbCfg.ResumeInterruptedRuns
+		target.ResumeInterruptedRuns = &enabled
+	}
+	if dbCfg.ResumeInterruptedMaxAttempts != 0 {
+		target.ResumeInterruptedMaxAttempts = dbCfg.ResumeInterruptedMaxAttempts
+	}
+	if dbCfg.ResumeInterruptedWindow != 0 {
+		target.ResumeInterruptedWindow = dbCfg.ResumeInterruptedWindow
+	}
+	if dbCfg.ResumeInterruptedLimit != 0 {
+		target.ResumeInterruptedLimit = dbCfg.ResumeInterruptedLimit
+	}
+	if dbCfg.ResumeInterruptedDelay != 0 {
+		target.ResumeInterruptedDelay = dbCfg.ResumeInterruptedDelay
+	}
 }
