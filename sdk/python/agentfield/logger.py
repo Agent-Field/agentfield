@@ -11,12 +11,12 @@ This module provides a centralized logging system for the AgentField SDK that:
 import json
 import logging
 import os
-import sys
 import threading
 from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from . import log_writer
 from .execution_context import ExecutionContext, get_current_context
 
 if TYPE_CHECKING:
@@ -47,10 +47,13 @@ class LogLevel(Enum):
 class _DynamicStdoutHandler(logging.Handler):
     """A handler that resolves stdout at emit time so a later tee sees logs."""
 
+    def createLock(self) -> None:
+        """Let the shared writer serialize without blocking event-loop callers."""
+        self.lock = None
+
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            sys.stdout.write(self.format(record) + self.terminator)
-            sys.stdout.flush()
+            log_writer.emit_line(self.format(record))
         except Exception:
             # Logging is always best-effort and must not fail SDK callers.
             self.handleError(record)
@@ -192,7 +195,7 @@ class AgentFieldLogger:
         try:
             if self._stdout_mirror_enabled():
                 line = self._bounded_mirror_line(record)
-                print(line, file=sys.stdout, flush=True)
+                log_writer.emit_line(line)
         except Exception:
             # Broken stdout and capture-ring contention must never affect execution.
             pass

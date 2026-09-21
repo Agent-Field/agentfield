@@ -1,6 +1,9 @@
+import asyncio
 import io
 import json
 import logging
+import sys
+import tempfile
 import threading
 import time
 from unittest.mock import Mock
@@ -15,6 +18,59 @@ from agentfield.logger import (
     set_cp_client,
     set_log_level,
 )
+
+
+@pytest.mark.unit
+def test_structured_record_from_loop_is_deferred_until_writer_drains(monkeypatch):
+    class BlockingStream:
+        def __init__(self, stream):
+            self.stream = stream
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def write(self, value):
+            self.started.set()
+            assert self.release.wait(2.0)
+            return self.stream.write(value)
+
+        def flush(self):
+            self.stream.flush()
+
+    monkeypatch.delenv("AGENTFIELD_LOG_STDOUT", raising=False)
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as target:
+        stream = BlockingStream(target)
+        with monkeypatch.context() as context:
+            context.setattr("sys.stdout", stream)
+            logger = AgentFieldLogger("structured.stdout.writer")
+
+            async def emit() -> None:
+                logger._emit_structured_record({"event_type": "test"})
+
+            asyncio.run(emit())
+            assert stream.started.wait(1.0)
+            target.seek(0)
+            assert target.read() == ""
+
+            stream.release.set()
+            assert logger_module.log_writer.flush(1.0) is True
+
+        target.seek(0)
+        assert json.loads(target.read()) == {"event_type": "test"}
+
+
+@pytest.mark.unit
+def test_structured_record_disabled_does_not_call_log_writer(monkeypatch):
+    emit_line = Mock()
+    monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", "false")
+    monkeypatch.setattr(logger_module.log_writer, "emit_line", emit_line)
+    logger = AgentFieldLogger("structured.stdout.writer-disabled")
+
+    logger._emit_structured_record({"event_type": "test"})
+
+    emit_line.assert_not_called()
 
 
 @pytest.mark.unit
@@ -287,7 +343,7 @@ def test_structured_mirror_is_bounded_valid_json_and_cp_receives_full_record(
 ):
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
     stream = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stdout", stream)
     logger = AgentFieldLogger("bounded-structured")
     dispatch = Mock()
     monkeypatch.setattr(logger, "_dispatch_to_cp", dispatch)
@@ -317,7 +373,7 @@ def test_structured_mirror_is_bounded_valid_json_and_cp_receives_full_record(
 def test_structured_mirror_elides_oversized_message(monkeypatch):
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
     stream = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stdout", stream)
 
     AgentFieldLogger("oversized-message").log_execution(
         "λ" * 4000, event_type="test.oversized-message"
@@ -333,7 +389,7 @@ def test_structured_mirror_elides_oversized_message(monkeypatch):
 def test_structured_mirror_elides_oversized_non_dict_attributes(monkeypatch):
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
     stream = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stdout", stream)
     logger = AgentFieldLogger("non-dict-attributes")
     record = logger._build_execution_record(
         message="kept", level="INFO", event_type="test.non-dict"
@@ -351,7 +407,7 @@ def test_structured_mirror_elides_oversized_non_dict_attributes(monkeypatch):
 @pytest.mark.unit
 def test_structured_mirror_many_large_attributes_stays_fast(monkeypatch):
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "4000")
-    monkeypatch.setattr(logger_module.sys, "stdout", io.StringIO())
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
     attributes = {f"key-{index}": "x" * 50_000 for index in range(200)}
 
     start = time.perf_counter()
@@ -368,7 +424,7 @@ def test_structured_mirror_serializes_large_string_payload_at_most_once(monkeypa
     budget = 16384
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", str(budget))
     stream = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stdout", stream)
     calls = []
     real_dumps = logger_module.json.dumps
 
@@ -416,7 +472,7 @@ def test_structured_mirror_fitting_nested_record_is_not_walked_recursively(
 
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "16384")
     stream = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stdout", stream)
     record = {
         "message": "bounded",
         "attributes": {
@@ -440,7 +496,7 @@ def test_structured_mirror_fitting_nested_record_is_not_walked_recursively(
 def test_structured_mirror_non_string_attribute_keys_have_exact_sizes(monkeypatch):
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "512")
     stream = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stdout", stream)
     attributes = {0: "x" * 4000, True: "y", None: "z"}
     logger = AgentFieldLogger("non-string-keys")
 
@@ -464,7 +520,7 @@ def test_structured_mirror_non_string_attribute_keys_have_exact_sizes(monkeypatc
 def test_structured_mirror_without_attributes_reports_exact_original_size(monkeypatch):
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", "256")
     stream = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stdout", stream)
     record = {
         "ts": "t" * 1000,
         "level": "info",
@@ -492,7 +548,7 @@ def test_structured_mirror_precheck_exception_falls_back_to_serialization(monkey
     budget = 512
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", str(budget))
     stream = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stdout", stream)
     record = {"message": "kept", "attributes": {"value": _TripwireStr("safe")}}
 
     AgentFieldLogger("precheck-exception")._emit_structured_record(record)
@@ -526,7 +582,7 @@ def test_public_structured_logger_emits_only_bounded_json_lines(monkeypatch):
     monkeypatch.setenv("AGENTFIELD_LOG_MAX_LINE_BYTES", str(cap))
     monkeypatch.setenv("AGENTFIELD_LOG_STDOUT", "true")
     stream = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stdout", stream)
     logger = get_logger("agentfield")
     set_log_level("INFO")
 
@@ -570,7 +626,7 @@ def test_structured_stdout_errors_never_escape(monkeypatch, error):
         def flush(self):
             raise error
 
-    monkeypatch.setattr(logger_module.sys, "stdout", BrokenStream())
+    monkeypatch.setattr(sys, "stdout", BrokenStream())
     logger = AgentFieldLogger("broken-structured-stdout")
     monkeypatch.setattr(logger, "_dispatch_to_cp", Mock())
 
@@ -581,9 +637,9 @@ def test_structured_stdout_errors_never_escape(monkeypatch, error):
 def test_logger_created_before_tee_uses_current_stdout(monkeypatch):
     before = io.StringIO()
     after = io.StringIO()
-    monkeypatch.setattr(logger_module.sys, "stdout", before)
+    monkeypatch.setattr(sys, "stdout", before)
     logger = AgentFieldLogger("lazy-stdout")
-    monkeypatch.setattr(logger_module.sys, "stdout", after)
+    monkeypatch.setattr(sys, "stdout", after)
 
     logger.logger.error("captured after install")
 
