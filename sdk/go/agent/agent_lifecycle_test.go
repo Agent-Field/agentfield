@@ -550,6 +550,88 @@ func TestShutdownTimeoutCancelsAcceptedAsyncExecutionAndReportsTerminalStatus(t 
 	}
 }
 
+func TestAsyncContextCancellationDistinguishesGracefulShutdown(t *testing.T) {
+	tests := []struct {
+		name        string
+		cancel      func(t *testing.T, a *Agent, executionID string)
+		wantStatus  string
+		wantMessage string
+	}{
+		{
+			name: "agent graceful shutdown",
+			cancel: func(t *testing.T, a *Agent, _ string) {
+				t.Helper()
+				require.NoError(t, a.shutdown(context.Background()))
+			},
+			wantStatus:  "cancelled",
+			wantMessage: "cancelled during graceful shutdown",
+		},
+		{
+			name: "caller cancellation",
+			cancel: func(t *testing.T, a *Agent, executionID string) {
+				t.Helper()
+				require.True(t, a.CancelExecution(executionID))
+			},
+			wantStatus:  "failed",
+			wantMessage: context.Canceled.Error(),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			statusPosted := make(chan map[string]any, 1)
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/api/v1/nodes/node-1/shutdown":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, `{}`)
+				case strings.HasPrefix(r.URL.Path, "/api/v1/executions/") && strings.HasSuffix(r.URL.Path, "/status"):
+					var payload map[string]any
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+					statusPosted <- payload
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer cp.Close()
+
+			a, err := New(Config{
+				NodeID:          "node-1",
+				Version:         "1.0.0",
+				AgentFieldURL:   cp.URL,
+				ShutdownTimeout: time.Millisecond,
+				Logger:          log.New(io.Discard, "", 0),
+			})
+			require.NoError(t, err)
+			a.httpClient = cp.Client()
+			started := make(chan struct{})
+			a.RegisterReasoner("cancel-aware", func(ctx context.Context, _ map[string]any) (any, error) {
+				close(started)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			})
+
+			executionID := "exec-" + strings.ReplaceAll(test.name, " ", "-")
+			request := httptest.NewRequest(http.MethodPost, "/reasoners/cancel-aware", strings.NewReader(`{}`))
+			request.Header.Set("X-Execution-ID", executionID)
+			response := httptest.NewRecorder()
+			a.Handler().ServeHTTP(response, request)
+			require.Equal(t, http.StatusAccepted, response.Code)
+			<-started
+
+			test.cancel(t, a, executionID)
+			select {
+			case payload := <-statusPosted:
+				require.Equal(t, test.wantStatus, payload["status"])
+				require.Equal(t, test.wantMessage, payload["error"])
+			case <-time.After(time.Second):
+				t.Fatal("terminal status was not posted")
+			}
+		})
+	}
+}
+
 func TestRegisteredHeartbeatInterval(t *testing.T) {
 	a, err := New(Config{
 		NodeID:               "node-1",

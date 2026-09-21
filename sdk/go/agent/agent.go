@@ -1683,8 +1683,14 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	}
 
 	if err != nil {
-		payload["status"] = "failed"
-		payload["error"] = err.Error()
+		status := "failed"
+		errorMessage := err.Error()
+		if errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled) && a.isShuttingDown() {
+			status = "cancelled"
+			errorMessage = "cancelled during graceful shutdown"
+		}
+		payload["status"] = status
+		payload["error"] = errorMessage
 		// A reasoner that ran, determined its own work failed, and wants its
 		// structured outcome preserved returns &ReasonerFailed{Result: ...}.
 		// Carry that result/details onto the failed-status payload so the single
@@ -1706,7 +1712,7 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 			"duration_ms": durationMS,
 			"error":       err.Error(),
 		})
-		a.maybeGenerateVC(execCtx, input, nil, "failed", err.Error(), durationMS, reasoner)
+		a.maybeGenerateVC(execCtx, input, nil, status, errorMessage, durationMS, reasoner)
 	} else {
 		payload["status"] = "succeeded"
 		payload["result"] = result
