@@ -163,7 +163,7 @@ def test_full_pipe_does_not_stall_event_loop():
                 return
             output.extend(chunk)
 
-    reader = threading.Thread(target=drain)
+    reader = threading.Thread(target=drain, daemon=True)
     reader.start()
     try:
         assert log_writer.flush(2.0) is True
@@ -197,7 +197,9 @@ def test_plain_handler_does_not_block_event_loop_behind_sync_writer(monkeypatch)
         context.setattr("sys.stdout", stream)
         logger = AgentFieldLogger("log-writer-handler-lock")
         logger.set_level("INFO")
-        sync_thread = threading.Thread(target=logger.info, args=("sync-blocked",))
+        sync_thread = threading.Thread(
+            target=logger.info, args=("sync-blocked",), daemon=True
+        )
         sync_thread.start()
         assert stream.started.wait(1.0)
         assert sync_thread.is_alive()
@@ -219,7 +221,7 @@ def test_plain_handler_does_not_block_event_loop_behind_sync_writer(monkeypatch)
                     return
                 output.extend(chunk)
 
-        reader = threading.Thread(target=drain)
+        reader = threading.Thread(target=drain, daemon=True)
         reader.start()
         sync_thread.join(2.0)
         assert not sync_thread.is_alive()
@@ -273,7 +275,9 @@ def test_sync_plain_log_stays_behind_dequeued_line(monkeypatch):
             asyncio.run(emit_first())
             assert stream.started.wait(1.0)
 
-            sync_thread = threading.Thread(target=logger.info, args=("sync-second",))
+            sync_thread = threading.Thread(
+                target=logger.info, args=("sync-second",), daemon=True
+            )
             sync_thread.start()
             sync_thread.join(1.0)
             assert not sync_thread.is_alive()

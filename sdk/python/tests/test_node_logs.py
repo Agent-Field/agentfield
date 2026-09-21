@@ -362,7 +362,7 @@ class TestTeeTextIO:
                 holding.set()
                 release.wait(5.0)
 
-        holder = threading.Thread(target=hold_tee_lock)
+        holder = threading.Thread(target=hold_tee_lock, daemon=True)
         holder.start()
         assert holding.wait(1.0)
 
