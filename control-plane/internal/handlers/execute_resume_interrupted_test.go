@@ -40,6 +40,80 @@ func withResumeInterruptedSettings(t *testing.T, enabled bool, attempts, limit i
 	})
 }
 
+type executionStoreWithoutRunMetadataReader struct {
+	ExecutionStore
+}
+
+type workflowRunReadErrorStore struct {
+	ExecutionStore
+	err error
+}
+
+func (s *workflowRunReadErrorStore) GetWorkflowRun(context.Context, string) (*types.WorkflowRun, error) {
+	return nil, s.err
+}
+
+type interruptedHandoffFailureStore struct {
+	ExecutionStore
+	getErr   error
+	queryErr error
+}
+
+func (s *interruptedHandoffFailureStore) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.ExecutionStore.GetExecutionRecord(ctx, executionID)
+}
+
+func (s *interruptedHandoffFailureStore) QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error) {
+	if s.queryErr != nil {
+		return nil, s.queryErr
+	}
+	return s.ExecutionStore.QueryExecutionRecords(ctx, filter)
+}
+
+func TestResumeAttemptForRunHandlesMissingAndMalformedMetadata(t *testing.T) {
+	base := newTestExecutionStorage(nil)
+	controllerWithoutReader := newExecutionController(
+		&executionStoreWithoutRunMetadataReader{ExecutionStore: base}, nil, nil, time.Second, "",
+	)
+	require.Zero(t, controllerWithoutReader.resumeAttemptForRun(t.Context(), "run-without-reader"))
+
+	readError := errors.New("run read failed")
+	controllerWithReadError := newExecutionController(
+		&workflowRunReadErrorStore{ExecutionStore: base, err: readError}, nil, nil, time.Second, "",
+	)
+	require.Zero(t, controllerWithReadError.resumeAttemptForRun(t.Context(), "unreadable-run"))
+
+	controller := newExecutionController(base, nil, nil, time.Second, "")
+	require.Zero(t, controller.resumeAttemptForRun(t.Context(), ""))
+	require.Zero(t, controller.resumeAttemptForRun(t.Context(), "missing-run"))
+
+	tests := []struct {
+		name     string
+		metadata json.RawMessage
+		want     int
+	}{
+		{name: "metadata absent"},
+		{name: "malformed metadata", metadata: json.RawMessage(`not-json`)},
+		{name: "malformed lineage", metadata: json.RawMessage(`{"lineage":"not-an-object"}`)},
+		{name: "non-resume lineage", metadata: json.RawMessage(`{"lineage":{"kind":"restart","resume_attempt":7}}`)},
+		{name: "resume lineage", metadata: json.RawMessage(`{"lineage":{"kind":"resume","resume_attempt":3}}`), want: 3},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runID := "metadata-" + strings.ReplaceAll(test.name, " ", "-")
+			require.NoError(t, base.StoreWorkflowRun(t.Context(), &types.WorkflowRun{
+				RunID:    runID,
+				Metadata: test.metadata,
+			}))
+
+			require.Equal(t, test.want, controller.resumeAttemptForRun(t.Context(), runID))
+		})
+	}
+}
+
 func TestStatusCallbackMarksOnlyGracefulShutdownCancellation(t *testing.T) {
 	withResumeInterruptedSettings(t, false, 1, 25, time.Hour, 0)
 	store := newTestExecutionStorage(nil)
@@ -682,9 +756,10 @@ func TestHandOffInterruptedRunGuardsReasonRootPointerAndAttemptBound(t *testing.
 		name string
 		exec *types.Execution
 	}{
-		{name: "unrelated failure", exec: &types.Execution{ExecutionID: "guard-other", RunID: "guard-run-other", StatusReason: &other}},
-		{name: "child", exec: &types.Execution{ExecutionID: "guard-child", RunID: "guard-run-child", ParentExecutionID: &parent, StatusReason: &orphan}},
-		{name: "already restarted", exec: &types.Execution{ExecutionID: "guard-pointer", RunID: "guard-run-pointer", RestartedAsExecutionID: &successor, StatusReason: &orphan}},
+		{name: "nonterminal", exec: &types.Execution{ExecutionID: "guard-running", RunID: "guard-run-running", Status: types.ExecutionStatusRunning, StatusReason: &orphan}},
+		{name: "unrelated failure", exec: &types.Execution{ExecutionID: "guard-other", RunID: "guard-run-other", Status: types.ExecutionStatusFailed, StatusReason: &other}},
+		{name: "child", exec: &types.Execution{ExecutionID: "guard-child", RunID: "guard-run-child", Status: types.ExecutionStatusFailed, ParentExecutionID: &parent, StatusReason: &orphan}},
+		{name: "already restarted", exec: &types.Execution{ExecutionID: "guard-pointer", RunID: "guard-run-pointer", Status: types.ExecutionStatusFailed, RestartedAsExecutionID: &successor, StatusReason: &orphan}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -705,6 +780,89 @@ func TestHandOffInterruptedRunGuardsReasonRootPointerAndAttemptBound(t *testing.
 	}))
 	_, ok := controller.handOffInterruptedRun(t.Context(), maxAttempt)
 	require.False(t, ok)
+
+	claimed := &types.Execution{
+		ExecutionID: "guard-claimed", RunID: "guard-run-claimed",
+		Status: types.ExecutionStatusFailed, StatusReason: &orphan,
+	}
+	interruptedHandoffClaims.Store(claimed.ExecutionID, struct{}{})
+	t.Cleanup(func() { interruptedHandoffClaims.Delete(claimed.ExecutionID) })
+	_, ok = controller.handOffInterruptedRun(t.Context(), claimed)
+	require.False(t, ok, "an in-flight handoff claim must suppress a duplicate successor")
+}
+
+func TestHandOffInterruptedRunHonorsDisabledFeatureAndStorageFailures(t *testing.T) {
+	orphan := "agent_restart_orphaned: replacement started"
+	interrupted := &types.Execution{
+		ExecutionID: "handoff-failure", RunID: "handoff-failure-run",
+		Status: types.ExecutionStatusFailed, StatusReason: &orphan,
+	}
+
+	t.Run("feature disabled", func(t *testing.T) {
+		withResumeInterruptedSettings(t, false, 1, 25, time.Hour, 0)
+		controller := newExecutionController(newTestExecutionStorage(nil), nil, nil, time.Second, "")
+
+		successorID, ok := controller.handOffInterruptedRun(t.Context(), interrupted)
+
+		require.False(t, ok)
+		require.Empty(t, successorID)
+	})
+
+	t.Run("fresh execution read fails", func(t *testing.T) {
+		withResumeInterruptedSettings(t, true, 1, 25, time.Hour, 0)
+		store := &interruptedHandoffFailureStore{
+			ExecutionStore: newTestExecutionStorage(nil),
+			getErr:         errors.New("execution refresh failed"),
+		}
+		controller := newExecutionController(store, nil, nil, time.Second, "")
+
+		successorID, ok := controller.handOffInterruptedRun(t.Context(), interrupted)
+
+		require.False(t, ok)
+		require.Empty(t, successorID)
+		_, claimed := interruptedHandoffClaims.Load(interrupted.ExecutionID)
+		require.False(t, claimed)
+	})
+
+	t.Run("workflow root query fails", func(t *testing.T) {
+		withResumeInterruptedSettings(t, true, 1, 25, time.Hour, 0)
+		base := newTestExecutionStorage(nil)
+		seedExecutionRecord(t, base, interrupted)
+		store := &interruptedHandoffFailureStore{
+			ExecutionStore: base,
+			queryErr:       errors.New("workflow root query failed"),
+		}
+		controller := newExecutionController(store, nil, nil, time.Second, "")
+
+		successorID, ok := controller.handOffInterruptedRun(t.Context(), interrupted)
+
+		require.False(t, ok)
+		require.Empty(t, successorID)
+		stored, err := base.GetExecutionRecord(t.Context(), interrupted.ExecutionID)
+		require.NoError(t, err)
+		require.Nil(t, stored.RestartedAsExecutionID)
+	})
+}
+
+func TestScheduleInterruptedRunHandoffTreatsNegativeDelayAsImmediate(t *testing.T) {
+	withResumeInterruptedSettings(t, true, 1, 25, time.Hour, -time.Second)
+	reason := types.ExecutionReasonAgentShutdownCancelled
+	interrupted := &types.Execution{
+		ExecutionID: "negative-delay-handoff", RunID: "negative-delay-run",
+		Status: types.ExecutionStatusCancelled, StatusReason: &reason,
+	}
+	store := &interruptedHandoffFailureStore{
+		ExecutionStore: newTestExecutionStorage(nil),
+		getErr:         errors.New("expected immediate refresh failure"),
+	}
+	controller := newExecutionController(store, nil, nil, time.Second, "")
+
+	controller.scheduleInterruptedRunHandoff(interrupted)
+
+	require.Eventually(t, func() bool {
+		_, claimed := interruptedHandoffClaims.Load(interrupted.ExecutionID)
+		return !claimed
+	}, time.Second, 5*time.Millisecond)
 }
 
 type startupQueryCountingStore struct {

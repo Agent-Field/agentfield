@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -498,14 +499,15 @@ func TestRestartExecutionHandlerValidationErrors(t *testing.T) {
 	router.POST("/api/v1/executions/:execution_id/restart", RestartExecutionHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, 90*time.Second, ""))
 
 	tests := []struct {
-		name string
-		body string
-		want int
+		name      string
+		body      string
+		want      int
+		wantError string
 	}{
-		{name: "invalid json", body: `{"scope":`, want: http.StatusBadRequest},
-		{name: "invalid scope", body: `{"scope":"node"}`, want: http.StatusBadRequest},
-		{name: "invalid reuse", body: `{"reuse":"cached"}`, want: http.StatusBadRequest},
-		{name: "missing source execution", body: `{}`, want: http.StatusNotFound},
+		{name: "invalid json", body: `{"scope":`, want: http.StatusBadRequest, wantError: "invalid request body"},
+		{name: "invalid scope", body: `{"scope":"node"}`, want: http.StatusBadRequest, wantError: "scope must be one of: workflow, execution"},
+		{name: "invalid reuse", body: `{"reuse":"cached"}`, want: http.StatusBadRequest, wantError: "reuse must be one of: succeeded-before, all-succeeded, none"},
+		{name: "missing source execution", body: `{}`, want: http.StatusNotFound, wantError: "execution missing not found"},
 	}
 
 	for _, tt := range tests {
@@ -517,9 +519,121 @@ func TestRestartExecutionHandlerValidationErrors(t *testing.T) {
 			router.ServeHTTP(resp, req)
 
 			require.Equal(t, tt.want, resp.Code)
-			require.Contains(t, resp.Body.String(), "error")
+			var response map[string]string
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &response))
+			require.Contains(t, response["error"], tt.wantError)
 		})
 	}
+}
+
+type restartFailureStore struct {
+	*testExecutionStorage
+	getErr          error
+	queryErr        error
+	forceEmptyQuery bool
+}
+
+func (s *restartFailureStore) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.testExecutionStorage.GetExecutionRecord(ctx, executionID)
+}
+
+func (s *restartFailureStore) QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error) {
+	if s.queryErr != nil {
+		return nil, s.queryErr
+	}
+	if s.forceEmptyQuery {
+		return nil, nil
+	}
+	return s.testExecutionStorage.QueryExecutionRecords(ctx, filter)
+}
+
+func TestRestartResponseErrorReturnsPublicMessageOrCause(t *testing.T) {
+	require.Equal(t, "public message", (&restartResponseError{message: "public message"}).Error())
+
+	cause := errors.New("storage unavailable")
+	require.Equal(t, cause.Error(), (&restartResponseError{message: "public message", cause: cause}).Error())
+}
+
+func TestRestartExecutionHandlerRequiresExecutionID(t *testing.T) {
+	router := gin.New()
+	router.POST("/restart", RestartExecutionHandler(newTestExecutionStorage(nil), services.NopPayloadStore{}, nil, time.Second, ""))
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/restart", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.JSONEq(t, `{"error":"execution_id is required"}`, response.Body.String())
+}
+
+func TestRestartExecutionHandlerReportsStorageAndWorkflowLookupFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*restartFailureStore)
+		wantCode  int
+		wantBody  string
+	}{
+		{
+			name: "source load error",
+			configure: func(store *restartFailureStore) {
+				store.getErr = errors.New("source read failed")
+			},
+			wantCode: http.StatusInternalServerError,
+			wantBody: `{"error":"failed to load source execution"}`,
+		},
+		{
+			name: "workflow root load error",
+			configure: func(store *restartFailureStore) {
+				store.queryErr = errors.New("root query failed")
+			},
+			wantCode: http.StatusInternalServerError,
+			wantBody: `{"error":"failed to load workflow root"}`,
+		},
+		{
+			name: "workflow run has no root",
+			configure: func(store *restartFailureStore) {
+				store.forceEmptyQuery = true
+			},
+			wantCode: http.StatusNotFound,
+			wantBody: `{"error":"run source-run not found"}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := newTestExecutionStorage(nil)
+			seedExecutionRecord(t, base, &types.Execution{
+				ExecutionID: "source-execution",
+				RunID:       "source-run",
+				Status:      types.ExecutionStatusFailed,
+			})
+			store := &restartFailureStore{testExecutionStorage: base}
+			test.configure(store)
+			router := gin.New()
+			router.POST("/executions/:execution_id/restart", RestartExecutionHandler(store, services.NopPayloadStore{}, nil, time.Second, ""))
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/executions/source-execution/restart", strings.NewReader(`{}`))
+			request.Header.Set("Content-Type", "application/json")
+
+			router.ServeHTTP(response, request)
+
+			require.Equal(t, test.wantCode, response.Code)
+			require.JSONEq(t, test.wantBody, response.Body.String())
+		})
+	}
+}
+
+func TestStartRestartRejectsNilSourceExecution(t *testing.T) {
+	controller := newExecutionController(newTestExecutionStorage(nil), services.NopPayloadStore{}, nil, time.Second, "")
+
+	response, err := controller.startRestart(t.Context(), nil, restartOptions{Scope: "workflow"})
+
+	require.Nil(t, response)
+	require.EqualError(t, err, "source execution is required")
 }
 
 func TestExecutionReuseInfoParsesReplayStatusReason(t *testing.T) {
