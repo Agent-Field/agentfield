@@ -346,6 +346,13 @@ func renderStatus(exec *types.Execution) ExecutionStatusResponse {
 // fields from the corresponding WorkflowExecution record, if one exists.
 func (c *executionController) renderStatusWithApproval(ctx context.Context, exec *types.Execution) ExecutionStatusResponse {
 	resp := renderStatus(exec)
+	if exec.RestartedAsExecutionID != nil {
+		if successorID := strings.TrimSpace(*exec.RestartedAsExecutionID); successorID != "" {
+			if successor, err := c.store.GetExecutionRecord(ctx, successorID); err == nil && successor != nil {
+				resp.RestartedAs = &RestartedAsRef{ExecutionID: successorID, RunID: successor.RunID}
+			}
+		}
+	}
 
 	// Resolve webhook_registered from the execution_webhooks table since the
 	// field is not persisted on the execution record itself (db:"-").

@@ -32,7 +32,12 @@ type WorkflowExecutionEventRequest struct {
 // WorkflowExecutionEventHandler ingests workflow step events emitted by agents and mirrors
 // them into the executions table so the UI can render full DAGs, even when steps are executed
 // locally within the same process.
-func WorkflowExecutionEventHandler(store ExecutionStore) gin.HandlerFunc {
+func WorkflowExecutionEventHandler(store ExecutionStore, resumeDependencies ...InterruptedRunResumeDependencies) gin.HandlerFunc {
+	var resumeController *executionController
+	if len(resumeDependencies) > 0 {
+		deps := resumeDependencies[0]
+		resumeController = newExecutionController(store, deps.Payloads, deps.Webhooks, deps.Timeout, deps.InternalToken)
+	}
 	return func(c *gin.Context) {
 		var req WorkflowExecutionEventRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -60,7 +65,8 @@ func WorkflowExecutionEventHandler(store ExecutionStore) gin.HandlerFunc {
 			}
 
 			if existing == nil {
-				if err := store.CreateExecutionRecord(ctx, buildExecutionRecordFromEvent(&req, now)); err != nil {
+				created := buildExecutionRecordFromEvent(&req, now)
+				if err := store.CreateExecutionRecord(ctx, created); err != nil {
 					// Likely a unique-constraint loss to a concurrent event
 					// for the same execution_id — re-read and merge.
 					lastErr = err
@@ -75,12 +81,12 @@ func WorkflowExecutionEventHandler(store ExecutionStore) gin.HandlerFunc {
 					// Log but don't fail the request.
 					fmt.Printf("WARN: failed to create workflow execution record for %s: %v\n", req.ExecutionID, storeErr)
 				}
-				c.JSON(http.StatusOK, gin.H{"success": true, "created": true})
+				writeWorkflowExecutionEventSuccess(c, gin.H{"success": true, "created": true}, resumeController, created)
 				return
 			}
 
 			rowVanished := false
-			_, err = store.UpdateExecutionRecord(ctx, req.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+			updated, err := store.UpdateExecutionRecord(ctx, req.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
 				if current == nil {
 					// Row deleted between read and update (e.g. cleanup) —
 					// UpdateExecutionRecord's UPDATE would affect zero rows,
@@ -123,12 +129,25 @@ func WorkflowExecutionEventHandler(store ExecutionStore) gin.HandlerFunc {
 				}
 			}
 
-			c.JSON(http.StatusOK, gin.H{"success": true, "updated": true})
+			writeWorkflowExecutionEventSuccess(c, gin.H{"success": true, "updated": true}, resumeController, updated)
 			return
 		}
 
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to persist execution event after retries: %v", lastErr)})
 	}
+}
+
+func writeWorkflowExecutionEventSuccess(c *gin.Context, response gin.H, resumeController *executionController, persisted *types.Execution) {
+	c.JSON(http.StatusOK, response)
+	if resumeController == nil || persisted == nil || !types.IsTerminalExecutionStatus(persisted.Status) || persisted.StatusReason == nil {
+		return
+	}
+
+	// The SDK treats this lifecycle stream as fire-and-forget. Schedule the
+	// handoff after writing the established response so a restart failure or
+	// slow dispatch cannot change or delay the endpoint.
+	snapshot := *persisted
+	resumeController.scheduleInterruptedRunHandoff(&snapshot)
 }
 
 func applyEventToWorkflowExecution(current *types.WorkflowExecution, req *WorkflowExecutionEventRequest, now time.Time) {
@@ -139,6 +158,9 @@ func applyEventToWorkflowExecution(current *types.WorkflowExecution, req *Workfl
 
 	current.Status = types.NormalizeExecutionStatus(req.Status)
 	current.UpdatedAt = now
+	if reason := workflowEventInterruptionReason(current.Status, req.Error); reason != nil {
+		current.StatusReason = reason
+	}
 	if current.StartedAt.IsZero() {
 		current.StartedAt = now
 	}
@@ -181,6 +203,7 @@ func buildExecutionRecordFromEvent(req *WorkflowExecutionEventRequest, now time.
 		NodeID:            agentNodeID,
 		ReasonerID:        reasonerID,
 		Status:            status,
+		StatusReason:      workflowEventInterruptionReason(status, req.Error),
 		InputPayload:      inputPayload,
 		ResultPayload:     resultPayload,
 		StartedAt:         now,
@@ -230,6 +253,9 @@ func applyEventToExecution(current *types.Execution, req *WorkflowExecutionEvent
 
 	current.Status = incomingStatus
 	current.UpdatedAt = now
+	if reason := workflowEventInterruptionReason(incomingStatus, req.Error); reason != nil {
+		current.StatusReason = reason
+	}
 
 	if current.StartedAt.IsZero() {
 		current.StartedAt = now
@@ -295,6 +321,7 @@ func buildWorkflowExecutionFromEvent(req *WorkflowExecutionEventRequest, now tim
 		AgentNodeID:  agentNodeID,
 		ReasonerID:   reasonerID,
 		Status:       status,
+		StatusReason: workflowEventInterruptionReason(status, req.Error),
 		InputData:    inputPayload,
 		OutputData:   outputPayload,
 		StartedAt:    now,
@@ -319,6 +346,14 @@ func buildWorkflowExecutionFromEvent(req *WorkflowExecutionEventRequest, now tim
 	}
 
 	return wfExec
+}
+
+func workflowEventInterruptionReason(status, eventError string) *string {
+	if status != string(types.ExecutionStatusCancelled) || eventError != types.AgentShutdownCancellationError {
+		return nil
+	}
+	reason := types.ExecutionReasonAgentShutdownCancelled
+	return &reason
 }
 
 func marshalJSON(value interface{}) json.RawMessage {

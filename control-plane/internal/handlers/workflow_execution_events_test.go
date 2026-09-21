@@ -117,6 +117,70 @@ func TestWorkflowExecutionEventHandler_PreservesGatewayInputEnvelope(t *testing.
 	require.JSONEq(t, string(gatewayPayload), string(current.InputPayload))
 }
 
+func TestWorkflowExecutionEventHandler_ClassifiesGracefulShutdownCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	storage := newTestExecutionStorage(nil)
+	handler := WorkflowExecutionEventHandler(storage)
+	now := time.Now().UTC()
+	runID := "run-existing-cancel"
+	require.NoError(t, storage.CreateExecutionRecord(t.Context(), &types.Execution{
+		ExecutionID: "existing-cancel", RunID: runID, Status: types.ExecutionStatusRunning,
+		StartedAt: now, CreatedAt: now, UpdatedAt: now,
+	}))
+	require.NoError(t, storage.StoreWorkflowExecution(t.Context(), &types.WorkflowExecution{
+		WorkflowID: runID, ExecutionID: "existing-cancel", RunID: &runID,
+		Status: types.ExecutionStatusRunning, StartedAt: now, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	for _, test := range []struct {
+		name           string
+		executionID    string
+		errorMessage   string
+		expectedReason *string
+	}{
+		{
+			name:           "updates existing row",
+			executionID:    "existing-cancel",
+			errorMessage:   types.AgentShutdownCancellationError,
+			expectedReason: stringPointer(types.ExecutionReasonAgentShutdownCancelled),
+		},
+		{
+			name:           "creates row",
+			executionID:    "created-cancel",
+			errorMessage:   types.AgentShutdownCancellationError,
+			expectedReason: stringPointer(types.ExecutionReasonAgentShutdownCancelled),
+		},
+		{
+			name:         "does not classify another cancellation",
+			executionID:  "ordinary-cancel",
+			errorMessage: "cancelled by user",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := postWorkflowExecutionEvent(t, handler, WorkflowExecutionEventRequest{
+				ExecutionID: test.executionID,
+				RunID:       "run-" + test.executionID,
+				AgentNodeID: "node-1",
+				ReasonerID:  "reasoner-a",
+				Status:      types.ExecutionStatusCancelled,
+				Error:       test.errorMessage,
+			})
+			require.Equal(t, http.StatusOK, response.Code)
+
+			execution, err := storage.GetExecutionRecord(t.Context(), test.executionID)
+			require.NoError(t, err)
+			require.NotNil(t, execution)
+			require.Equal(t, test.expectedReason, execution.StatusReason)
+
+			workflow, err := storage.GetWorkflowExecution(t.Context(), test.executionID)
+			require.NoError(t, err)
+			require.NotNil(t, workflow)
+			require.Equal(t, test.expectedReason, workflow.StatusReason)
+		})
+	}
+}
+
 // TestWorkflowExecutionEventHandler_TerminalRegression covers the case where
 // fire-and-forget workflow events from the SDK arrive out of order — e.g. an
 // outer reasoner emits "failed" while an inner reasoner emits a delayed
@@ -179,4 +243,21 @@ func TestWorkflowExecutionEventHandler_TerminalRegression(t *testing.T) {
 	assert.Equal(t, string(types.ExecutionStatusFailed), exec.Status, "terminal status must not regress to running")
 	require.NotNil(t, exec.CompletedAt)
 	assert.True(t, exec.CompletedAt.Equal(originalCompletedAt), "CompletedAt must not be cleared by a regressing event")
+}
+
+func postWorkflowExecutionEvent(t *testing.T, handler gin.HandlerFunc, payload WorkflowExecutionEventRequest) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/workflow/executions/events", bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	handler(ctx)
+	return response
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
