@@ -272,10 +272,11 @@ the ambient environment). That path keeps the generated agent selection and
 targeted permissions, removes the selected agent's configured system prompt
 from the merged configuration, and places the caller system prompt, fixed
 worker instruction, and task into one prompt. POSIX sends that prompt as the
-positional argument and Windows sends it over stdin. The default path keeps the
-task prompt (including the runner's schema instructions, when applicable) as
-the only user-facing prompt and configures the system prompt on the generated
-agent.
+positional argument; on Windows, the Python and Go adapters send it over stdin,
+while the TypeScript adapter always passes it as the positional argument. The
+default path keeps the task prompt (including the runner's schema instructions,
+when applicable) as the only user-facing prompt and configures the system
+prompt on the generated agent.
 
 ## Verify
 

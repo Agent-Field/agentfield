@@ -337,7 +337,9 @@ describe('opencode provider', () => {
       variant: 'max',
       system_prompt: '  Work autonomously.  ',
       tools: ['Read', 'Write', 'Bash'],
+      permissionMode: 'default',
       permission_mode: 'plan',
+      maxTurns: 4,
       max_turns: 3,
       env: { CUSTOM: 'kept' },
     });
@@ -375,6 +377,7 @@ describe('opencode provider', () => {
       model: 'openai/gpt-5',
       reasoningEffort: 'max',
     });
+    expect(agent).not.toHaveProperty('maxTurns');
     expect(agent).not.toHaveProperty('max_turns');
     expect(Object.keys(agent.permission)).toEqual(['*', 'skill', 'question', 'task']);
   });
