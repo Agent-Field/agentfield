@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   HarnessProviderUnavailable,
@@ -8,7 +8,31 @@ import {
 import { buildProvider } from '../src/harness/providers/factory.js';
 import type { HarnessConfig } from '../src/harness/types.js';
 
+const { execFileMock } = vi.hoisted(() => ({
+  execFileMock: vi.fn(),
+}));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, execFile: execFileMock };
+});
+
+function mockExecFileOutput(stdout: string): void {
+  execFileMock.mockImplementation((...args: unknown[]) => {
+    const callback = args[args.length - 1] as (
+      error: Error | null,
+      stdout: string,
+      stderr: string
+    ) => void;
+    callback(null, stdout, '');
+  });
+}
+
 describe('harness provider availability', () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+  });
+
   it('reports an installed CLI provider with version and auth details', async () => {
     const versionProbe = vi.fn().mockResolvedValue('codex-cli 1.2.3\nextra');
 
@@ -18,7 +42,7 @@ describe('harness provider availability', () => {
       versionProbe,
     });
 
-    expect(versionProbe).toHaveBeenCalledWith(['codex', '--version']);
+    expect(versionProbe).toHaveBeenCalledWith(['/usr/local/bin/codex', '--version']);
     expect(health).toEqual({
       provider: 'codex',
       binary: '/usr/local/bin/codex',
@@ -66,6 +90,48 @@ describe('harness provider availability', () => {
       usable: false,
       issues: ['version_probe_failed'],
     });
+  });
+
+  it('runs the default version probe directly against the resolved binary path', async () => {
+    mockExecFileOutput('opencode 1.0.0\n');
+
+    const [health] = await harnessDoctor(['opencode'], {
+      env: {},
+      resolveBinary: () => '/usr/local/bin/opencode',
+    });
+
+    expect(execFileMock).toHaveBeenCalledWith(
+      '/usr/local/bin/opencode',
+      ['--version'],
+      expect.objectContaining({ windowsHide: true, windowsVerbatimArguments: false }),
+      expect.any(Function)
+    );
+    expect(health).toMatchObject({ version: 'opencode 1.0.0', usable: true, issues: [] });
+  });
+
+  it('routes Windows batch shims through cmd.exe for the default version probe', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    mockExecFileOutput('codex-cli 9.9.9\n');
+
+    try {
+      const [health] = await harnessDoctor(['codex'], {
+        env: {},
+        resolveBinary: () => 'C:\\Program Files\\npm\\codex.cmd',
+      });
+
+      expect(execFileMock).toHaveBeenCalledWith(
+        process.env.ComSpec ?? 'cmd.exe',
+        ['/d', '/s', '/c', '""C:\\Program Files\\npm\\codex.cmd" "--version""'],
+        expect.objectContaining({ windowsHide: true, windowsVerbatimArguments: true }),
+        expect.any(Function)
+      );
+      expect(health).toMatchObject({ version: 'codex-cli 9.9.9', usable: true, issues: [] });
+    } finally {
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform);
+      }
+    }
   });
 
   it('checks the optional Claude wrapper without launching a provider run', async () => {

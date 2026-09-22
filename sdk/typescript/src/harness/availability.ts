@@ -116,6 +116,7 @@ export class HarnessProviderUnavailable extends Error {
 }
 
 export type BinaryResolver = (binary: string, env: Environment) => string | undefined;
+/** Receives the resolved binary path followed by the provider's version arguments. */
 export type VersionProbe = (command: string[]) => Promise<string>;
 export type WrapperProbe = (provider: 'claude-code') => Promise<boolean>;
 
@@ -187,13 +188,33 @@ export function providerUnavailable(provider: string, binary: string): HarnessPr
   });
 }
 
+const WINDOWS_BATCH_EXTENSIONS = new Set(['.bat', '.cmd']);
+
+function isWindowsBatchFile(command: string): boolean {
+  return process.platform === 'win32'
+    && WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
+}
+
+/** Quote one token for a `cmd.exe /s /c` line; the whole line gets outer quotes. */
+function quoteCmdToken(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 async function defaultVersionProbe(command: string[]): Promise<string> {
   const { execFile } = await import('node:child_process');
   return new Promise((resolve, reject) => {
+    // Node refuses to spawn batch files without a shell (CVE-2024-27980), so
+    // Windows .cmd/.bat shims run through cmd.exe. The /s outer-quote form
+    // keeps resolved paths containing spaces intact.
+    const batch = isWindowsBatchFile(command[0]);
+    const file = batch ? (process.env.ComSpec ?? 'cmd.exe') : command[0];
+    const args = batch
+      ? ['/d', '/s', '/c', `"${command.map(quoteCmdToken).join(' ')}"`]
+      : command.slice(1);
     execFile(
-      command[0],
-      command.slice(1),
-      { timeout: 2_000, windowsHide: true },
+      file,
+      args,
+      { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: batch },
       (error, stdout, stderr) => {
         if (error) {
           reject(error);
@@ -266,7 +287,7 @@ export async function harnessDoctor(
       issues.push('binary_not_found');
     } else {
       try {
-        const output = (await versionProbe([binaryName, ...spec.versionArgs])).trim();
+        const output = (await versionProbe([binary, ...spec.versionArgs])).trim();
         version = output ? output.split(/\r?\n/, 1)[0] : 'unknown';
       } catch {
         issues.push('version_probe_failed');
