@@ -121,7 +121,7 @@ export type VersionProbe = (command: string[]) => Promise<string>;
 export type WrapperProbe = (provider: 'claude-code') => Promise<boolean>;
 
 export interface HarnessDoctorOptions {
-  /** Environment values used for the offline authentication signal. */
+  /** Environment values used for the offline check (binary discovery and the authentication signal). */
   env?: Environment;
   resolveBinary?: BinaryResolver;
   versionProbe?: VersionProbe;
@@ -280,7 +280,7 @@ export async function harnessDoctor(
     }
 
     const binaryName = spec.binary as string;
-    const binary = resolveBinary(binaryName, process.env) ?? null;
+    const binary = resolveBinary(binaryName, env) ?? null;
     const issues: string[] = [];
     let version: string | null = null;
     if (binary === null) {

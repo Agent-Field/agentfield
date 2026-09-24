@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -75,6 +79,100 @@ describe('harness provider availability', () => {
       usable: false,
       issues: ['binary_not_found'],
     });
+  });
+
+  it('passes options.env to the binary resolver', async () => {
+    const env = { PATH: '/custom/doctor/path', OPENAI_API_KEY: 'configured' };
+    const resolveBinary = vi.fn().mockReturnValue('/custom/doctor/path/codex');
+
+    const [health] = await harnessDoctor(['codex'], {
+      env,
+      resolveBinary,
+      versionProbe: async () => 'codex-cli 0.0.0-test',
+    });
+
+    expect(resolveBinary).toHaveBeenCalledWith('codex', env);
+    expect(resolveBinary.mock.calls[0]?.[1]).toBe(env);
+    expect(health).toMatchObject({
+      binary: '/custom/doctor/path/codex',
+      installed: true,
+      auth: 'configured',
+      usable: true,
+    });
+  });
+
+  it('discovers binaries on the options.env PATH instead of process.env', async () => {
+    const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agentfield-doctor-'));
+    const binaryPath = path.join(directory, process.platform === 'win32' ? 'codex.exe' : 'codex');
+    await fs.promises.writeFile(binaryPath, '');
+    if (process.platform !== 'win32') {
+      await fs.promises.chmod(binaryPath, 0o755);
+    }
+    const empty = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agentfield-doctor-empty-'));
+
+    try {
+      const [found] = await harnessDoctor(['codex'], {
+        env: { PATH: directory },
+        versionProbe: async () => 'codex-cli 0.0.0-test',
+      });
+      expect(found).toMatchObject({
+        binary: path.resolve(binaryPath),
+        installed: true,
+        usable: true,
+        issues: [],
+      });
+
+      const [missing] = await harnessDoctor(['codex'], {
+        env: { PATH: empty },
+        versionProbe: async () => 'codex-cli 0.0.0-test',
+      });
+      expect(missing).toMatchObject({
+        binary: null,
+        installed: false,
+        usable: false,
+        issues: ['binary_not_found'],
+      });
+    } finally {
+      await fs.promises.rm(directory, { recursive: true, force: true });
+      await fs.promises.rm(empty, { recursive: true, force: true });
+    }
+  });
+
+  it('reads PATHEXT from options.env during Windows executable resolution', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agentfield-doctor-pathext-'));
+    const batchPath = path.join(directory, 'codex.cmd');
+    await fs.promises.writeFile(batchPath, '@echo off\r\n');
+
+    try {
+      const [matched] = await harnessDoctor(['codex'], {
+        env: { PATH: directory, PATHEXT: '.CMD' },
+        versionProbe: async () => 'codex-cli 0.0.0-test',
+      });
+      expect(matched).toMatchObject({
+        binary: path.resolve(batchPath),
+        installed: true,
+        usable: true,
+        issues: [],
+      });
+
+      const [missed] = await harnessDoctor(['codex'], {
+        env: { PATH: directory, PATHEXT: '.EXE' },
+        versionProbe: async () => 'codex-cli 0.0.0-test',
+      });
+      expect(missed).toMatchObject({
+        binary: null,
+        installed: false,
+        usable: false,
+        issues: ['binary_not_found'],
+      });
+    } finally {
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform);
+      }
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('marks a broken version probe as unusable', async () => {
