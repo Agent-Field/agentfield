@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -24,8 +25,8 @@ import (
 
 // DIDService handles DID generation, management, and resolution.
 type DIDService struct {
-	// mu serializes every operation that allocates or changes identities, so
-	// two registrations can never be handed the same derivation path.
+	// mu serializes allocation within this service instance. Other replicas
+	// are coordinated by the storage conflict check and retry.
 	mu                 sync.Mutex
 	config             *config.DIDConfig
 	keystore           *KeystoreService
@@ -166,6 +167,12 @@ func (s *DIDService) GetRegistry(agentfieldServerID string) (*types.DIDRegistry,
 func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return retryDIDAllocation(func() (*types.DIDRegistrationResponse, error) {
+		return s.registerAgentOnce(req)
+	})
+}
+
+func (s *DIDService) registerAgentOnce(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 
 	if !s.config.Enabled {
 		return &types.DIDRegistrationResponse{
@@ -231,6 +238,32 @@ func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DI
 
 // handleNewRegistration handles registration for new agents (original logic).
 func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
+	return s.handleNewRegistrationOnce(req)
+}
+
+// Each attempt reads the issued identities again before deriving a path. The
+// per-service mutex does not serialize other control-plane replicas.
+const maxDIDAllocationAttempts = 64
+
+func retryDIDAllocation(attempt func() (*types.DIDRegistrationResponse, error)) (*types.DIDRegistrationResponse, error) {
+	for i := 0; i < maxDIDAllocationAttempts; i++ {
+		response, err := attempt()
+		if !errors.Is(err, storage.ErrDIDAllocationConflict) && !errors.Is(err, storage.ErrDIDNodeAlreadyRegistered) && !storage.IsTransientDIDTransactionError(err) {
+			return response, err
+		}
+		if i+1 < maxDIDAllocationAttempts {
+			var jitter [1]byte
+			_, _ = rand.Read(jitter[:])
+			time.Sleep(time.Duration(1+int(jitter[0])%3) * time.Millisecond)
+		}
+	}
+	return &types.DIDRegistrationResponse{
+		Success: false,
+		Error:   fmt.Sprintf("DID allocation kept colliding after %d attempts", maxDIDAllocationAttempts),
+	}, nil
+}
+
+func (s *DIDService) handleNewRegistrationOnce(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 	// Get af server ID dynamically
 	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
@@ -412,6 +445,9 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 		return []string{req.AgentNodeID}, nil
 	})
 	if err != nil {
+		if errors.Is(err, storage.ErrDIDAllocationConflict) || errors.Is(err, storage.ErrDIDNodeAlreadyRegistered) || storage.IsTransientDIDTransactionError(err) {
+			return nil, err
+		}
 		return &types.DIDRegistrationResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to store updated registry: %v", err),
@@ -1086,18 +1122,14 @@ func (s *DIDService) GetExistingAgentDID(agentNodeID string) (*types.AgentDIDInf
 		return nil, fmt.Errorf("failed to get af server ID: %w", err)
 	}
 
-	// Get af server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(agentfieldServerID)
+	stored, err := s.registry.readThroughAgent(agentfieldServerID, agentNodeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get DID registry: %w", err)
+		return nil, err
 	}
-
-	agentInfo, exists := registry.AgentNodes[agentNodeID]
-	if !exists {
+	if stored == nil {
 		return nil, fmt.Errorf("agent not found: %s", agentNodeID)
 	}
-
-	return &agentInfo, nil
+	return stored, nil
 }
 
 // PerformDifferentialAnalysis compares existing vs new reasoners/skills to determine what needs to be updated.
@@ -1373,7 +1405,7 @@ func (s *DIDService) handlePartialRegistration(req *types.DIDRegistrationRequest
 			AllSkills:          req.Skills,
 		}
 
-		return s.partialRegisterAgent(partialReq)
+		return s.partialRegisterAgentOnce(partialReq)
 	}
 
 	// If we reach here, only removals were needed
@@ -1402,6 +1434,12 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 
 // partialRegisterAgent is PartialRegisterAgent for callers holding s.mu.
 func (s *DIDService) partialRegisterAgent(req *types.PartialDIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
+	return retryDIDAllocation(func() (*types.DIDRegistrationResponse, error) {
+		return s.partialRegisterAgentOnce(req)
+	})
+}
+
+func (s *DIDService) partialRegisterAgentOnce(req *types.PartialDIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 	if !s.config.Enabled {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -1424,6 +1462,10 @@ func (s *DIDService) partialRegisterAgent(req *types.PartialDIDRegistrationReque
 			Success: false,
 			Error:   fmt.Sprintf("failed to get af server ID: %v", err),
 		}, nil
+	}
+	// Refresh before allocating so direct partial registrations see other replicas.
+	if _, err := s.registry.readThroughAgent(agentfieldServerID, req.AgentNodeID); err != nil {
+		return &types.DIDRegistrationResponse{Success: false, Error: fmt.Sprintf("failed to refresh agent: %v", err)}, nil
 	}
 
 	// Get af server registry using dynamic ID
@@ -1455,6 +1497,38 @@ func (s *DIDService) partialRegisterAgent(req *types.PartialDIDRegistrationReque
 			Error:   fmt.Sprintf("refusing to extend agent %s: its derivation path does not reproduce its DID", req.AgentNodeID),
 		}, nil
 	}
+	// A competing registration may already have issued some requested components.
+	var missingReasoners, missingSkills []string
+	for _, id := range req.NewReasonerIDs {
+		if _, exists := existingAgent.Reasoners[id]; !exists {
+			missingReasoners = append(missingReasoners, id)
+		}
+	}
+	for _, id := range req.NewSkillIDs {
+		if _, exists := existingAgent.Skills[id]; !exists {
+			missingSkills = append(missingSkills, id)
+		}
+	}
+	if len(missingReasoners)+len(missingSkills) == 0 {
+		// Another replica issued the requested components. Keep the partial
+		// response limited to those components and omit the agent signing key.
+		identityPackage := s.buildExistingIdentityPackage(&existingAgent)
+		identityPackage.AgentDID.PrivateKeyJWK = ""
+		issuedReasoners := make(map[string]types.DIDIdentity, len(req.NewReasonerIDs))
+		for _, id := range req.NewReasonerIDs {
+			issuedReasoners[id] = identityPackage.ReasonerDIDs[id]
+		}
+		issuedSkills := make(map[string]types.DIDIdentity, len(req.NewSkillIDs))
+		for _, id := range req.NewSkillIDs {
+			issuedSkills[id] = identityPackage.SkillDIDs[id]
+		}
+		identityPackage.ReasonerDIDs = issuedReasoners
+		identityPackage.SkillDIDs = issuedSkills
+		return &types.DIDRegistrationResponse{
+			Success: true, IdentityPackage: identityPackage,
+			Message: "Partial registration successful: 0 new reasoners, 0 new skills",
+		}, nil
+	}
 	existingAgent = cloneAgentInfo(existingAgent)
 	used, err := s.registry.usedIdentities(context.Background())
 	if err != nil {
@@ -1469,7 +1543,7 @@ func (s *DIDService) partialRegisterAgent(req *types.PartialDIDRegistrationReque
 	newReasonerDIDs := make(map[string]types.DIDIdentity)
 	newReasonerInfos := make(map[string]types.ReasonerDIDInfo)
 
-	for _, reasonerID := range req.NewReasonerIDs {
+	for _, reasonerID := range missingReasoners {
 		reasoner := s.findReasonerByID(req.AllReasoners, reasonerID)
 		if reasoner == nil {
 			return &types.DIDRegistrationResponse{
@@ -1521,7 +1595,7 @@ func (s *DIDService) partialRegisterAgent(req *types.PartialDIDRegistrationReque
 	newSkillDIDs := make(map[string]types.DIDIdentity)
 	newSkillInfos := make(map[string]types.SkillDIDInfo)
 
-	for _, skillID := range req.NewSkillIDs {
+	for _, skillID := range missingSkills {
 		skill := s.findSkillByID(req.AllSkills, skillID)
 		if skill == nil {
 			return &types.DIDRegistrationResponse{
@@ -1600,6 +1674,9 @@ func (s *DIDService) partialRegisterAgent(req *types.PartialDIDRegistrationReque
 		return []string{req.AgentNodeID}, nil
 	})
 	if err != nil {
+		if errors.Is(err, storage.ErrDIDAllocationConflict) || errors.Is(err, storage.ErrDIDNodeAlreadyRegistered) || storage.IsTransientDIDTransactionError(err) {
+			return nil, err
+		}
 		return &types.DIDRegistrationResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to store updated registry: %v", err),

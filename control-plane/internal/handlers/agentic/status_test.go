@@ -298,6 +298,21 @@ func (m *mockStatusStorage) ListAgentFieldServerDIDs(ctx context.Context) ([]*ty
 func (m *mockStatusStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int) error {
 	return nil
 }
+
+// GetActiveAgentDID selects the first active identity for a node in this test store.
+func (m *mockStatusStorage) GetActiveAgentDID(ctx context.Context, serverID, nodeID string) (*types.AgentDIDInfo, error) {
+	rows, err := m.ListAgentDIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row != nil && row.AgentFieldServerID == serverID && row.AgentNodeID == nodeID && row.Status != types.AgentDIDStatusRevoked {
+			return row, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockStatusStorage) GetAgentDID(ctx context.Context, agentID string) (*types.AgentDIDInfo, error) {
 	return nil, nil
 }

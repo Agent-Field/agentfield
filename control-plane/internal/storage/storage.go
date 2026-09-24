@@ -516,6 +516,8 @@ type StorageProvider interface {
 	// The ctx scopes the read, and agentID identifies the agent DID record to load.
 	// Returns the agent DID info or an error if it is missing or unreadable.
 	GetAgentDID(ctx context.Context, agentID string) (*types.AgentDIDInfo, error)
+	// GetActiveAgentDID reads the earliest active identity for one server and node.
+	GetActiveAgentDID(ctx context.Context, serverID, nodeID string) (*types.AgentDIDInfo, error)
 	// ListAgentDIDs lists stored DID records for agents.
 	// The ctx scopes the query and does not require additional parameters.
 	// Returns agent DID records or an error if the query fails.

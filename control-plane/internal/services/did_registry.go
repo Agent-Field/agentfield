@@ -193,6 +193,111 @@ func (r *DIDRegistry) ListRegistries() ([]*types.DIDRegistry, error) {
 	return registries, nil
 }
 
+// unverifiableStoredIdentityError stops registration without an allocation retry.
+// Startup can repair legacy paths, but this read-only path cannot.
+type unverifiableStoredIdentityError struct {
+	nodeID, componentType, componentName string
+}
+
+func (e *unverifiableStoredIdentityError) Error() string {
+	identity := "agent"
+	if e.componentType != "" {
+		identity = fmt.Sprintf("%s %s", e.componentType, e.componentName)
+	}
+	return fmt.Sprintf("stored identity for node %s (%s) was written without a verifiable derivation path; restart this control plane to recover and persist derivation paths written by older versions; if it still cannot be recovered, revoke the agent (or retire the component) as docs/ENVIRONMENT_VARIABLES.md describes", e.nodeID, identity)
+}
+
+// readThroughAgent adds only verified identities absent from this replica's
+// memory (D1.1-D1.3). It never repairs storage or replaces a local identity.
+func (r *DIDRegistry) readThroughAgent(serverID, nodeID string) (*types.AgentDIDInfo, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current := r.registries[serverID]
+	if current == nil {
+		return nil, fmt.Errorf("registry not found for af server: %s", serverID)
+	}
+	ctx := context.Background()
+	agent, inMemory := current.AgentNodes[nodeID]
+	if !inMemory {
+		// D1.2: use the same earliest active row selected by startup loading.
+		stored, err := r.storageProvider.GetActiveAgentDID(ctx, serverID, nodeID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to look up stored agent %s: %w", nodeID, err)
+		}
+		if stored == nil {
+			return nil, nil
+		}
+		if !identityMatchesPath(current.MasterSeed, stored.DerivationPath, stored.DID) {
+			return nil, &unverifiableStoredIdentityError{nodeID: nodeID}
+		}
+		agent = *stored
+		agent.Reasoners = make(map[string]types.ReasonerDIDInfo)
+		agent.Skills = make(map[string]types.SkillDIDInfo)
+		normalizePublicKeyJWK(&agent.PublicKeyJWK, agent.DID)
+	}
+
+	// D1.1: components are read by the agent DID already held in memory.
+	components, err := r.storageProvider.ListComponentDIDs(ctx, agent.DID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load components for agent %s: %w", nodeID, err)
+	}
+	var additions []string
+	changed := !inMemory
+	// Storage returns newest first; startup's last assignment keeps the
+	// earliest active component when old databases contain duplicate names.
+	for i := len(components) - 1; i >= 0; i-- {
+		component := components[i]
+		switch component.ComponentType {
+		case "reasoner":
+			if _, exists := agent.Reasoners[component.ComponentName]; exists {
+				continue
+			}
+		case "skill":
+			if _, exists := agent.Skills[component.ComponentName]; exists {
+				continue
+			}
+		default:
+			continue
+		}
+		if !identityMatchesPath(current.MasterSeed, component.DerivationPath, component.ComponentDID) {
+			return nil, &unverifiableStoredIdentityError{nodeID: nodeID, componentType: component.ComponentType, componentName: component.ComponentName}
+		}
+		if !changed {
+			agent = cloneAgentInfo(agent)
+			changed = true
+		}
+		publicKey := json.RawMessage(component.PublicKeyJWK)
+		normalizePublicKeyJWK(&publicKey, component.ComponentDID)
+		switch component.ComponentType {
+		case "reasoner":
+			agent.Reasoners[component.ComponentName] = types.ReasonerDIDInfo{DID: component.ComponentDID, FunctionName: component.ComponentName, PublicKeyJWK: publicKey, DerivationPath: component.DerivationPath, Capabilities: []string{}, ExposureLevel: "private", CreatedAt: component.CreatedAt}
+		case "skill":
+			agent.Skills[component.ComponentName] = types.SkillDIDInfo{DID: component.ComponentDID, FunctionName: component.ComponentName, PublicKeyJWK: publicKey, DerivationPath: component.DerivationPath, Tags: []string{}, ExposureLevel: "private", CreatedAt: component.CreatedAt}
+		}
+		additions = append(additions, component.ComponentDID)
+	}
+	if changed {
+		next := *current
+		next.AgentNodes = make(map[string]types.AgentDIDInfo, len(current.AgentNodes)+1)
+		for id, identity := range current.AgentNodes {
+			next.AgentNodes[id] = identity
+		}
+		next.AgentNodes[nodeID] = agent
+		next.TotalDIDs += len(additions)
+		if !inMemory {
+			next.TotalDIDs++
+		}
+		r.registries[serverID] = &next
+		if !inMemory {
+			delete(r.quarantined, agent.DID)
+		}
+		for _, did := range additions {
+			delete(r.quarantined, did)
+		}
+	}
+	return &agent, nil
+}
+
 // DeleteRegistry deletes a DID registry for a af server.
 func (r *DIDRegistry) DeleteRegistry(agentfieldServerID string) error {
 	r.mu.Lock()
