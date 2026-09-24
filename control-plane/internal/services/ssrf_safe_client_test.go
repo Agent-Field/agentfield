@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,4 +302,165 @@ func TestNewSSRFSafeClient_AllowlistedLoopback(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// embeddedAndSpecialUseRefused lists addresses that reach internal or
+// special-use space: IPv6 forms that carry an IPv4 destination (NAT64, 6to4,
+// Teredo, IPv4-mapped, IPv4-compatible, IPv4-translated), the shared address
+// space, the benchmarking networks and the unspecified addresses. Every one
+// must be refused by the registration pre-check and by the dial hook.
+var embeddedAndSpecialUseRefused = []struct {
+	name string
+	ip   string
+}{
+	{"nat64 well-known to loopback", "64:ff9b::7f00:1"},
+	{"nat64 well-known to metadata", "64:ff9b::a9fe:a9fe"},
+	{"nat64 local-use to loopback", "64:ff9b:1::7f00:1"},
+	{"6to4 to loopback", "2002:7f00:1::1"},
+	{"6to4 to metadata", "2002:a9fe:a9fe::1"},
+	{"teredo", "2001:0:4136:e378:8000:63bf:80ff:fffe"},
+	{"ipv4-mapped loopback", "::ffff:127.0.0.1"},
+	{"ipv4-mapped metadata", "::ffff:169.254.169.254"},
+	{"ipv4-compatible loopback", "::127.0.0.1"},
+	{"ipv4-translated loopback", "::ffff:0:7f00:1"},
+	{"shared address space", "100.64.0.1"},
+	{"shared address space high", "100.127.255.255"},
+	{"benchmarking", "198.18.0.1"},
+	{"benchmarking high", "198.19.255.255"},
+	{"ipv4 unspecified", "0.0.0.0"},
+	{"ipv6 unspecified", "::"},
+}
+
+// publicControls must stay reachable. They include the neighbours of the new
+// ranges and an IPv4-mapped public address, which is what a mis-spelled
+// translated prefix (::ffff:0:0/96, read by Go as all of IPv4) would block.
+var publicControls = []struct {
+	name string
+	ip   string
+}{
+	{"public ipv4", "8.8.8.8"},
+	{"public ipv6", "2606:4700:4700::1111"},
+	{"public ipv6 beside teredo", "2001:4860:4860::8888"},
+	{"ipv4-mapped public", "::ffff:8.8.8.8"},
+	{"just below shared address space", "100.63.255.255"},
+	{"just above shared address space", "100.128.0.0"},
+	{"just below benchmarking", "198.17.255.255"},
+	{"just above benchmarking", "198.20.0.0"},
+}
+
+func TestIsPrivateIP_EmbeddedIPv4AndSpecialUse(t *testing.T) {
+	for _, tt := range embeddedAndSpecialUseRefused {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			require.NotNil(t, ip, "test address %q must parse", tt.ip)
+			assert.True(t, isPrivateIP(ip), "isPrivateIP(%s) must refuse", tt.ip)
+		})
+	}
+	for _, tt := range publicControls {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			require.NotNil(t, ip, "test address %q must parse", tt.ip)
+			assert.False(t, isPrivateIP(ip), "isPrivateIP(%s) must allow", tt.ip)
+		})
+	}
+}
+
+// urlHost spells an IP literal as a URL host, bracketing every IPv6
+// spelling, including the IPv4-mapped ones.
+func urlHost(ip string) string {
+	if strings.Contains(ip, ":") {
+		return "[" + ip + "]"
+	}
+	return ip
+}
+
+func TestValidateWebhookURL_EmbeddedIPv4AndSpecialUse(t *testing.T) {
+	original := webhookAllowedHosts()
+	defer SetWebhookAllowedHosts(original)
+	SetWebhookAllowedHosts(nil)
+
+	for _, tt := range embeddedAndSpecialUseRefused {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := "http://" + urlHost(tt.ip) + ":8080/cb"
+			err := ValidateWebhookURL(raw)
+			require.Error(t, err, "expected %s to be refused", raw)
+			assert.Contains(t, err.Error(), "private/internal address")
+		})
+	}
+	for _, tt := range publicControls {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := "https://" + urlHost(tt.ip) + "/cb"
+			assert.NoError(t, ValidateWebhookURL(raw), "expected %s to be allowed", raw)
+		})
+	}
+}
+
+func TestNewSSRFSafeClient_RefusesEmbeddedIPv4AndSpecialUseAtDial(t *testing.T) {
+	original := webhookAllowedHosts()
+	defer SetWebhookAllowedHosts(original)
+	SetWebhookAllowedHosts(nil)
+
+	client := NewSSRFSafeClient(2 * time.Second)
+	for _, tt := range embeddedAndSpecialUseRefused {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+urlHost(tt.ip)+":80/cb", nil)
+			require.NoError(t, err)
+			resp, err := client.Do(req)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "ssrf: webhook target resolves to private/internal address")
+		})
+	}
+}
+
+func TestNewSSRFSafeClient_PassesPublicAddressesToTheDialer(t *testing.T) {
+	original := webhookAllowedHosts()
+	defer SetWebhookAllowedHosts(original)
+	SetWebhookAllowedHosts(nil)
+
+	transport, ok := NewSSRFSafeClient(2 * time.Second).Transport.(*http.Transport)
+	require.True(t, ok)
+
+	// A cancelled context lets the guard run on the literal (no DNS is needed
+	// for one) and then stops the dialer before any packet leaves, so the
+	// error shows the guard let the address through rather than refusing it.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tt := range publicControls {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := transport.DialContext(ctx, "tcp", net.JoinHostPort(tt.ip, "443"))
+			if conn != nil {
+				conn.Close()
+			}
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "ssrf:")
+		})
+	}
+}
+
+func TestNewSSRFSafeClient_RefusesRedirectToTransitionAddress(t *testing.T) {
+	original := webhookAllowedHosts()
+	defer SetWebhookAllowedHosts(original)
+	// Only the loopback origin is trusted; the redirect target is not.
+	SetWebhookAllowedHosts([]string{"127.0.0.0/8"})
+
+	hits := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Redirect(w, r, "http://[64:ff9b::7f00:1]:80/cb", http.StatusFound)
+	}))
+	defer ts.Close()
+
+	client := NewSSRFSafeClient(5 * time.Second)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL, nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "private/internal address 64:ff9b::7f00:1")
+	assert.Equal(t, 1, hits, "the trusted origin is reached once, the redirect target never")
 }

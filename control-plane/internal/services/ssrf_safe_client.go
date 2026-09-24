@@ -79,18 +79,22 @@ var privateRanges []*net.IPNet
 
 func init() {
 	cidrs := []string{
-		"127.0.0.0/8",    // IPv4 loopback
-		"10.0.0.0/8",     // RFC-1918
-		"172.16.0.0/12",  // RFC-1918
-		"192.168.0.0/16", // RFC-1918
-		"169.254.0.0/16", // Link-local
-		"::1/128",        // IPv6 loopback
-		"fe80::/10",      // IPv6 link-local
-		"fc00::/7",       // IPv6 unique local (ULA)
-		"64:ff9b::/96",   // RFC-6052 NAT64 well-known prefix (embeds an IPv4 dst)
-		"64:ff9b:1::/48", // RFC-8215 NAT64 local-use prefix
-		"2002::/16",      // RFC-3056 6to4 (embeds an IPv4 dst in bits 16-47)
-		"2001::/32",      // RFC-4380 Teredo (embeds an IPv4 server/client)
+		"127.0.0.0/8",     // IPv4 loopback
+		"10.0.0.0/8",      // RFC-1918
+		"172.16.0.0/12",   // RFC-1918
+		"192.168.0.0/16",  // RFC-1918
+		"169.254.0.0/16",  // Link-local
+		"100.64.0.0/10",   // RFC-6598 shared address space (carrier-grade NAT)
+		"198.18.0.0/15",   // RFC-2544 benchmarking networks
+		"::1/128",         // IPv6 loopback
+		"fe80::/10",       // IPv6 link-local
+		"fc00::/7",        // IPv6 unique local (ULA)
+		"64:ff9b::/96",    // RFC-6052 NAT64 well-known prefix (embeds an IPv4 dst)
+		"64:ff9b:1::/48",  // RFC-8215 NAT64 local-use prefix
+		"2002::/16",       // RFC-3056 6to4 (embeds an IPv4 dst in bits 16-47)
+		"2001::/32",       // RFC-4380 Teredo (embeds an IPv4 server/client)
+		"::/96",           // RFC-4291 IPv4-compatible, deprecated (embeds an IPv4 dst)
+		"::ffff:0:0:0/96", // RFC-2765 IPv4-translated (never ::ffff:0:0/96: Go reads that as all of IPv4)
 	}
 	for _, cidr := range cidrs {
 		_, network, err := net.ParseCIDR(cidr)
@@ -102,7 +106,9 @@ func init() {
 }
 
 // isPrivateIP returns true if the IP belongs to a loopback, link-local,
-// RFC-1918 private, or unspecified range.
+// RFC-1918 private, unspecified or special-use range, or to an IPv6 form
+// that embeds an IPv4 destination (mapped, compatible, translated, NAT64,
+// 6to4, Teredo).
 func isPrivateIP(ip net.IP) bool {
 	if ip == nil {
 		return true // treat unparseable as private (deny by default)
