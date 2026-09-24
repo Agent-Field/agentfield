@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -294,6 +295,171 @@ func TestDIDTakeover_SQLiteCrossInstancePartialAllocation(t *testing.T) {
 func TestDIDTakeover_PostgresCrossInstancePartialAllocation(t *testing.T) {
 	first, second, _ := postgresTakeoverStores(t)
 	runCrossInstancePartialAllocation(t, first, second)
+}
+
+// C2.1-C2.4: surviving agents block a new seed for unchanged, moved, and pinned homes.
+func TestDIDTakeover_MissingRegistryRefusesAndRecovers(t *testing.T) {
+	for _, selected := range []string{"server-a", "moved-home", "pinned-id"} {
+		t.Run(selected, func(t *testing.T) {
+			env := newContinuityEnv(t)
+			env.restart()
+			old := env.service(env.registry(), "server-a")
+			before := register(t, old, "node-old", []string{"r"}, nil)
+			require.NoError(t, env.provider.Close(context.Background()))
+			env.provider = nil
+			db, err := sql.Open("sqlite3", filepath.Join(env.stateDir, "agentfield.db"))
+			require.NoError(t, err)
+			_, err = db.Exec("DELETE FROM did_registry WHERE agentfield_server_id = ?", "server-a")
+			require.NoError(t, err)
+			require.NoError(t, db.Close())
+			env.restart()
+			registry := env.registry()
+			// Both startup doors initialize the DID service through this registry path.
+			configuredID := ""
+			if selected == "pinned-id" {
+				configuredID = selected
+			}
+			serverID, err := SelectAgentFieldServerID(registry, configuredID, selected)
+			require.NoError(t, err)
+			require.Equal(t, selected, serverID)
+			keystore, err := NewKeystoreService(&config.KeystoreConfig{Path: env.keyDir, Type: "local"})
+			require.NoError(t, err)
+			startup := NewDIDService(&config.DIDConfig{Enabled: true}, keystore, registry)
+			initErr := startup.Initialize(serverID)
+			require.Error(t, initErr)
+			message := initErr.Error()
+			for _, required := range []string{"registry is missing", "server-a", "1 orphaned agents", "node-old", "restore", "master seed", "UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = 'server-a';"} {
+				require.Contains(t, strings.ToLower(message), strings.ToLower(required))
+			}
+			servers, err := env.provider.ListAgentFieldServerDIDs(context.Background())
+			require.NoError(t, err)
+			require.Empty(t, servers)
+			agents, err := env.provider.ListAgentDIDs(context.Background())
+			require.NoError(t, err)
+			require.Len(t, agents, 1)
+			require.Equal(t, before.IdentityPackage.AgentDID.DID, agents[0].DID)
+			require.Equal(t, types.AgentDIDStatusActive, agents[0].Status)
+
+			// C2.4: the documented SQL explicitly acknowledges lost key material.
+			require.NoError(t, env.provider.Close(context.Background()))
+			env.provider = nil
+			db, err = sql.Open("sqlite3", filepath.Join(env.stateDir, "agentfield.db"))
+			require.NoError(t, err)
+			_, err = db.Exec("UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = 'server-a';")
+			require.NoError(t, err)
+			require.NoError(t, db.Close())
+			env.restart()
+			svc := env.service(env.registry(), selected)
+			after := register(t, svc, "node-old", []string{"r"}, nil)
+			require.NotEqual(t, before.IdentityPackage.AgentDID.DID, after.IdentityPackage.AgentDID.DID)
+			requirePackageConsistent(t, after.IdentityPackage)
+			env.restart()
+			restarted := env.service(env.registry(), selected)
+			require.Equal(t, after.IdentityPackage.AgentDID.DID, register(t, restarted, "node-old", []string{"r"}, nil).IdentityPackage.AgentDID.DID)
+		})
+	}
+}
+
+// C2.1: report every orphaned server and cap the displayed node list.
+func TestDIDTakeover_MissingRegistryListsServersAndCapsNodes(t *testing.T) {
+	env := newContinuityEnv(t)
+	env.restart()
+	svcA := env.service(env.registry(), "server-a")
+	for i := 0; i < 12; i++ {
+		register(t, svcA, fmt.Sprintf("node-%02d", i), nil, nil)
+	}
+	svcB := env.service(env.registry(), "server-b")
+	register(t, svcB, "other-node", nil, nil)
+	require.NoError(t, env.provider.Close(context.Background()))
+	env.provider = nil
+	db, err := sql.Open("sqlite3", filepath.Join(env.stateDir, "agentfield.db"))
+	require.NoError(t, err)
+	_, err = db.Exec("DELETE FROM did_registry")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	env.restart()
+	registry := env.registry()
+	keystore, err := NewKeystoreService(&config.KeystoreConfig{Path: env.keyDir, Type: "local"})
+	require.NoError(t, err)
+	err = NewDIDService(&config.DIDConfig{Enabled: true}, keystore, registry).Initialize("new-server")
+	require.Error(t, err)
+	for _, part := range []string{"server-a", "server-b", "12 orphaned agents", "1 orphaned agents", "node-00", "node-09", "and 2 more", "other-node"} {
+		require.Contains(t, err.Error(), part)
+	}
+	require.NotContains(t, err.Error(), "node-10")
+}
+
+// C2.3-C2.5: an empty database starts, while another server's orphans do not
+// block a server whose own registry is still present.
+func TestDIDTakeover_OtherServerOrphansDoNotBlock(t *testing.T) {
+	env := newContinuityEnv(t)
+	env.restart()
+	svcA := env.service(env.registry(), "server-a")
+	register(t, svcA, "node-a", nil, nil)
+	env.service(env.registry(), "server-b")
+	require.NoError(t, env.provider.Close(context.Background()))
+	env.provider = nil
+	db, err := sql.Open("sqlite3", filepath.Join(env.stateDir, "agentfield.db"))
+	require.NoError(t, err)
+	_, err = db.Exec("DELETE FROM did_registry WHERE agentfield_server_id = ?", "server-a")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	env.restart()
+	svcB := env.service(env.registry(), "server-b")
+	register(t, svcB, "node-b", nil, nil)
+}
+
+// C2.1, C2.4, and C2.7: the common creation path refuses orphaned identities
+// on Postgres as well, and the documented revoke restores startup.
+func TestDIDTakeover_PostgresMissingRegistryRefusesAndRecovers(t *testing.T) {
+	first, second, dsn := postgresTakeoverStores(t)
+	keyDir := filepath.Join(t.TempDir(), "keys")
+	svc, _ := openReproService(t, first, "server-a", keyDir)
+	before := register(t, svc, "node", []string{"r"}, nil)
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	defer db.Close()
+	// Simulate a damaged backup that retained agent rows but lost the registry.
+	rows, err := db.Query(`SELECT conname FROM pg_constraint WHERE conrelid = 'agent_dids'::regclass AND confrelid = 'did_registry'::regclass`)
+	require.NoError(t, err)
+	var constraints []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		constraints = append(constraints, name)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	for _, name := range constraints {
+		_, err = db.Exec(`ALTER TABLE agent_dids DROP CONSTRAINT "` + strings.ReplaceAll(name, `"`, `""`) + `"`)
+		require.NoError(t, err)
+	}
+	_, err = db.Exec("DELETE FROM did_registry WHERE agentfield_server_id = $1", "server-a")
+	require.NoError(t, err)
+	registry := NewDIDRegistryWithStorage(second)
+	require.NoError(t, registry.Initialize())
+	keystore, err := NewKeystoreService(&config.KeystoreConfig{Path: keyDir, Type: "local"})
+	require.NoError(t, err)
+	newService := func(r *DIDRegistry) *DIDService { return NewDIDService(svc.config, keystore, r) }
+	err = newService(registry).Initialize("server-a")
+	require.ErrorContains(t, err, "registry is missing")
+	require.ErrorContains(t, err, "node")
+	servers, err := second.ListAgentFieldServerDIDs(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, servers)
+	_, err = db.Exec("UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = 'server-a';")
+	require.NoError(t, err)
+	registry = NewDIDRegistryWithStorage(second)
+	require.NoError(t, registry.Initialize())
+	recovered := newService(registry)
+	require.NoError(t, recovered.Initialize("server-a"))
+	after := register(t, recovered, "node", []string{"r"}, nil)
+	require.NotEqual(t, before.IdentityPackage.AgentDID.DID, after.IdentityPackage.AgentDID.DID)
+	registry = NewDIDRegistryWithStorage(second)
+	require.NoError(t, registry.Initialize())
+	restarted := newService(registry)
+	require.NoError(t, restarted.Initialize("server-a"))
+	require.Equal(t, after.IdentityPackage.AgentDID.DID, register(t, restarted, "node", []string{"r"}, nil).IdentityPackage.AgentDID.DID)
 }
 
 // C1.2-C1.3 upgrade path: main stored placeholder paths for agent and

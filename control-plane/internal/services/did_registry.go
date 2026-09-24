@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/encryption"
@@ -96,6 +97,9 @@ func (r *DIDRegistry) CreateRegistry(registry *types.DIDRegistry) (*types.DIDReg
 		snapshot := *existing
 		return &snapshot, nil
 	}
+	if err := r.refuseNewRegistryWithOrphanedAgents(serverID); err != nil {
+		return nil, err
+	}
 	if err := r.storeServerRow(registry); err != nil {
 		return nil, err
 	}
@@ -124,6 +128,57 @@ func (r *DIDRegistry) CreateRegistry(registry *types.DIDRegistry) (*types.DIDReg
 	r.registries[serverID] = registry
 	snapshot := *registry
 	return &snapshot, nil
+}
+
+// Check before persisting a newly minted seed. Reading agents before
+// registries prevents observing agents without their registry row.
+func (r *DIDRegistry) refuseNewRegistryWithOrphanedAgents(serverID string) error {
+	ctx := context.Background()
+	agents, err := r.storageProvider.ListAgentDIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check existing agent identities: %w", err)
+	}
+	servers, err := r.storageProvider.ListAgentFieldServerDIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check existing DID registries: %w", err)
+	}
+	knownServers := make(map[string]bool, len(servers))
+	for _, server := range servers {
+		knownServers[server.AgentFieldServerID] = true
+	}
+	if knownServers[serverID] {
+		return nil // Another replica already created the registry to adopt.
+	}
+	orphans := make(map[string][]string)
+	for _, agent := range agents {
+		if agent != nil && agent.Status != types.AgentDIDStatusRevoked && !knownServers[agent.AgentFieldServerID] {
+			orphans[agent.AgentFieldServerID] = append(orphans[agent.AgentFieldServerID], agent.AgentNodeID)
+		}
+	}
+	if len(orphans) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(orphans))
+	for id := range orphans {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var details, sqlLines []string
+	for _, id := range ids {
+		nodes := orphans[id]
+		sort.Strings(nodes)
+		listed := nodes
+		if len(listed) > 10 {
+			listed = listed[:10]
+		}
+		summary := strings.Join(listed, ", ")
+		if len(nodes) > len(listed) {
+			summary += fmt.Sprintf(", and %d more", len(nodes)-len(listed))
+		}
+		details = append(details, fmt.Sprintf("%d orphaned agents of server %q (%s)", len(nodes), id, summary))
+		sqlLines = append(sqlLines, fmt.Sprintf("UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = '%s';", strings.ReplaceAll(id, "'", "''")))
+	}
+	return fmt.Errorf("DID registry is missing while %s exist. To recover, restore the did_registry row or the whole database from a backup (the master seed exists only there). If that identity is permanently lost, revoke its agents and restart; they get new identities when they next register:\n%s", strings.Join(details, "; "), strings.Join(sqlLines, "\n"))
 }
 
 // UpdateAgents applies a change to a server's agents. fn receives a private
@@ -438,14 +493,14 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 	}
 
 	ctx := context.Background()
-	agentfieldServerDIDs, err := r.storageProvider.ListAgentFieldServerDIDs(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list af server DIDs: %w", err)
-	}
-
 	agentDIDs, err := r.storageProvider.ListAgentDIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list agent DIDs: %w", err)
+	}
+
+	agentfieldServerDIDs, err := r.storageProvider.ListAgentFieldServerDIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list af server DIDs: %w", err)
 	}
 	agentsByServer := make(map[string][]*types.AgentDIDInfo)
 	for _, agentDIDInfo := range agentDIDs {
