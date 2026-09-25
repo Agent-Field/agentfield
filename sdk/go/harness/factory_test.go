@@ -53,15 +53,7 @@ func TestBuildProvider_ExplicitProviders(t *testing.T) {
 			provider, err := BuildProvider(tt.name, "test-bin")
 			require.NoError(t, err)
 			require.NotNil(t, provider)
-
-			switch tt.name {
-			case ProviderClaudeCode:
-				_, ok := provider.(*ClaudeCodeProvider)
-				assert.True(t, ok)
-			case ProviderOpenCode:
-				_, ok := provider.(*OpenCodeProvider)
-				assert.True(t, ok)
-			}
+			assert.IsType(t, tt.want, provider)
 		})
 	}
 }
