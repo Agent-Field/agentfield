@@ -39,6 +39,33 @@ func TestBuildProvider_DefaultsToAforge(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestBuildProvider_ExplicitProviders(t *testing.T) {
+	tests := []struct {
+		name string
+		want any
+	}{
+		{name: ProviderClaudeCode, want: &ClaudeCodeProvider{}},
+		{name: ProviderOpenCode, want: &OpenCodeProvider{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, err := BuildProvider(tt.name, "test-bin")
+			require.NoError(t, err)
+			require.NotNil(t, provider)
+
+			switch tt.name {
+			case ProviderClaudeCode:
+				_, ok := provider.(*ClaudeCodeProvider)
+				assert.True(t, ok)
+			case ProviderOpenCode:
+				_, ok := provider.(*OpenCodeProvider)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
 func TestBuildProvider_RejectsUnknownName(t *testing.T) {
 	provider, err := BuildProvider("nope", "")
 	assert.Nil(t, provider)
