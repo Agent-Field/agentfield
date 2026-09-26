@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.141-rc.5] - 2026-09-26
+
+
+### Testing
+
+- Test(go): cover explicit harness provider factory paths (#1073)
+
+* test(go): cover explicit harness provider factory paths
+
+* test(go): use expected provider type in factory table (13b4460)
+
 ## [0.1.141-rc.4] - 2026-09-26
 
 
