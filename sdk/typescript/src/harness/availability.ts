@@ -195,26 +195,21 @@ function isWindowsBatchFile(command: string): boolean {
     && WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
 }
 
-/** Quote one token for a `cmd.exe /s /c` line; the whole line gets outer quotes. */
-function quoteCmdToken(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
 async function defaultVersionProbe(command: string[]): Promise<string> {
   const { execFile } = await import('node:child_process');
   return new Promise((resolve, reject) => {
-    // Node refuses to spawn batch files without a shell (CVE-2024-27980), so
-    // Windows .cmd/.bat shims run through cmd.exe. The /s outer-quote form
-    // keeps resolved paths containing spaces intact.
+    // Node refuses to spawn .cmd/.bat without a shell (CVE-2024-27980), so
+    // those shims go through cmd.exe. Each path and argument is its own argv
+    // element. No /s: Node quotes an argument that contains spaces, and cmd /s
+    // strips the outer quotes of the whole line and splits C:\Program Files\....
+    // A joined /c string is what CodeQL flags, so do not build one.
     const batch = isWindowsBatchFile(command[0]);
     const file = batch ? (process.env.ComSpec ?? 'cmd.exe') : command[0];
-    const args = batch
-      ? ['/d', '/s', '/c', `"${command.map(quoteCmdToken).join(' ')}"`]
-      : command.slice(1);
+    const args = batch ? ['/d', '/c', ...command] : command.slice(1);
     execFile(
       file,
       args,
-      { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: batch },
+      { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: false },
       (error, stdout, stderr) => {
         if (error) {
           reject(error);
