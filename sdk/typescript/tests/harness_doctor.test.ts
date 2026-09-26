@@ -207,7 +207,7 @@ describe('harness provider availability', () => {
     expect(health).toMatchObject({ version: 'opencode 1.0.0', usable: true, issues: [] });
   });
 
-  it('probes a Windows batch shim by passing the resolved path as argv', async () => {
+  it('routes Windows batch shims through cmd.exe argv without a joined command string', async () => {
     const platform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     mockExecFileOutput('codex-cli 9.9.9\n');
@@ -219,8 +219,8 @@ describe('harness provider availability', () => {
       });
 
       expect(execFileMock).toHaveBeenCalledWith(
-        'C:\\Program Files\\npm\\codex.cmd',
-        ['--version'],
+        process.env.ComSpec ?? 'cmd.exe',
+        ['/d', '/s', '/c', 'C:\\Program Files\\npm\\codex.cmd', '--version'],
         expect.objectContaining({ windowsHide: true, windowsVerbatimArguments: false }),
         expect.any(Function)
       );

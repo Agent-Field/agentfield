@@ -188,14 +188,23 @@ export function providerUnavailable(provider: string, binary: string): HarnessPr
   });
 }
 
+const WINDOWS_BATCH_EXTENSIONS = new Set(['.bat', '.cmd']);
+
+function isWindowsBatchFile(command: string): boolean {
+  return process.platform === 'win32'
+    && WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
+}
+
 async function defaultVersionProbe(command: string[]): Promise<string> {
   const { execFile } = await import('node:child_process');
   return new Promise((resolve, reject) => {
-    // Pass the resolved binary as an argv element. Do not build a cmd.exe /c
-    // command line: CodeQL models that as shell interpretation of the path.
-    // PATHEXT resolution stays in findExecutable; this probe only executes
-    // the path it already received.
-    const [file, ...args] = command;
+    // Node refuses to spawn .cmd/.bat without a shell (CVE-2024-27980), so
+    // those shims go through cmd.exe. Each path and argument is its own argv
+    // element. Do not concatenate a command string: CodeQL models a joined
+    // /c line as shell interpretation of the resolved path.
+    const batch = isWindowsBatchFile(command[0]);
+    const file = batch ? (process.env.ComSpec ?? 'cmd.exe') : command[0];
+    const args = batch ? ['/d', '/s', '/c', ...command] : command.slice(1);
     execFile(
       file,
       args,
