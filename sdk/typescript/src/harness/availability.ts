@@ -188,33 +188,18 @@ export function providerUnavailable(provider: string, binary: string): HarnessPr
   });
 }
 
-const WINDOWS_BATCH_EXTENSIONS = new Set(['.bat', '.cmd']);
-
-function isWindowsBatchFile(command: string): boolean {
-  return process.platform === 'win32'
-    && WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
-}
-
-/** Quote one token for a `cmd.exe /s /c` line; the whole line gets outer quotes. */
-function quoteCmdToken(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
 async function defaultVersionProbe(command: string[]): Promise<string> {
   const { execFile } = await import('node:child_process');
   return new Promise((resolve, reject) => {
-    // Node refuses to spawn batch files without a shell (CVE-2024-27980), so
-    // Windows .cmd/.bat shims run through cmd.exe. The /s outer-quote form
-    // keeps resolved paths containing spaces intact.
-    const batch = isWindowsBatchFile(command[0]);
-    const file = batch ? (process.env.ComSpec ?? 'cmd.exe') : command[0];
-    const args = batch
-      ? ['/d', '/s', '/c', `"${command.map(quoteCmdToken).join(' ')}"`]
-      : command.slice(1);
+    // Pass the resolved binary as an argv element. Do not build a cmd.exe /c
+    // command line: CodeQL models that as shell interpretation of the path.
+    // PATHEXT resolution stays in findExecutable; this probe only executes
+    // the path it already received.
+    const [file, ...args] = command;
     execFile(
       file,
       args,
-      { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: batch },
+      { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: false },
       (error, stdout, stderr) => {
         if (error) {
           reject(error);
