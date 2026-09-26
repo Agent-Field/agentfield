@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.141-rc.4] - 2026-09-26
+
+
+### Added
+
+- Feat(go-sdk): add harness doctor preflight and provider availability specs (#1074)
+
+Closes the Go SDK half of #685. Python (harness/_doctor.py) and
+TypeScript (harness/availability.ts) both ship harness_doctor with a
+ProviderHealth report; Go had nothing, even though the issue notes Go is
+subprocess-only so doctor and errors matter most there.
+
+- harness/availability.go: ProviderSpec table for all eight Go providers
+  (binary, version args, install command, auth env vars), mirroring the
+  Python and TypeScript spec data. Adds ProviderUnavailableError, which
+  names the exact install command and any unset auth variables, plus the
+  ErrProviderUnavailable sentinel for errors.Is and ensureCLIAvailable
+  for PATH resolution.
+- harness/doctor.go: Doctor(ctx, DoctorOptions) returning ProviderHealth
+  per provider (installed / version / auth / usable / issues), with field
+  names and issue codes matching the other two SDKs. Static PATH and env
+  checks by default; DoctorOptions.Probe opts into running each
+  provider's version command, following the issue's 'lean static by
+  default, probe behind a flag' guidance. Unusable() filters to the
+  providers that block, so callers can exit non-zero on exactly those.
+- agent/harness.go: Agent.HarnessDoctor(ctx, providers...) for parity
+  with app.harness_doctor() and agent.harnessDoctor().
+
+Two deliberate divergences from Python/TS, documented in the spec table:
+claude-code is a binary spec here because the Go provider shells out to
+the claude CLI rather than importing a language wrapper, and cursor is
+Go-only today (binary 'agent').
+
+Doctor takes injectable LookPath and VersionProbe hooks so tests never
+depend on which CLIs happen to be installed; the suite is fully
+platform-independent. Coverage on the new files: most functions 100%,
+Doctor 94.9%.
+
+Scoped to the library API. The 'af harness doctor' CLI subcommand lives
+in the control-plane module and is left as follow-up. (cbc9e37)
+
 ## [0.1.141-rc.3] - 2026-09-25
 
 
