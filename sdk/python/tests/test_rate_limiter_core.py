@@ -98,6 +98,54 @@ def test_calculate_backoff_applies_jitter_and_max_cap():
 
 
 @pytest.mark.unit
+def test_calculate_backoff_leaves_global_random_state_alone():
+    """A backoff must not hijack the host process's global random stream."""
+    limiter = StatelessRateLimiter(base_delay=0.5, jitter_factor=0.3, max_delay=1.0)
+    limiter._container_seed = 42
+
+    random.seed(20260929)
+    untouched = [random.random() for _ in range(3)]
+
+    random.seed(20260929)
+    limiter._calculate_backoff_delay(4)
+    after_backoff = [random.random() for _ in range(3)]
+
+    assert after_backoff == untouched
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_execute_with_retry_leaves_global_random_state_alone(monkeypatch):
+    """The public retry path keeps caller randomness intact across attempts."""
+    limiter = StatelessRateLimiter(max_retries=2, base_delay=0.01, jitter_factor=0.25)
+    limiter._container_seed = 7
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("agentfield.rate_limiter.asyncio.sleep", fake_sleep)
+
+    attempts = {"count": 0}
+
+    async def flaky_call():
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise DummyHTTPError()
+        return "ok"
+
+    random.seed(1234)
+    untouched = [random.random() for _ in range(3)]
+
+    random.seed(1234)
+    result = await limiter.execute_with_retry(flaky_call)
+
+    assert result == "ok"
+    assert len(sleeps) == 2
+    assert [random.random() for _ in range(3)] == untouched
+
+
+@pytest.mark.unit
 def test_extract_retry_after_uses_attribute_fallback():
     limiter = StatelessRateLimiter()
 
