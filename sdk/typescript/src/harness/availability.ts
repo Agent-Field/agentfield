@@ -195,21 +195,49 @@ function isWindowsBatchFile(command: string): boolean {
     && WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
 }
 
+const BATCH_PROBE_ENV_PREFIX = 'AGENTFIELD_PROBE_ARG_';
+
+/**
+ * Build a `cmd.exe` invocation for a `.cmd`/`.bat` shim. Node refuses to spawn
+ * batch files without a shell (CVE-2024-27980), so they have to go through
+ * cmd.exe. The `/c` line is a fixed template of `%VAR%` references; the path
+ * and arguments travel in the child's environment. cmd.exe expands each
+ * variable once, after it has split the line, and the template quotes every
+ * reference, so `&`, `^`, `(`, `%` and spaces in a path stay literal. Passing
+ * the path as a bare argv element instead breaks on `&` and `(x86)` because
+ * cmd.exe without `/s` drops the quotes Node adds.
+ */
+function batchProbeInvocation(command: string[]): {
+  file: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+} {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const tokens = command.map((value, index) => {
+    const name = `${BATCH_PROBE_ENV_PREFIX}${index}`;
+    env[name] = value;
+    return `"%${name}%"`;
+  });
+  return {
+    file: process.env.ComSpec ?? 'cmd.exe',
+    // /s strips only the outermost quote pair, leaving each "%VAR%" quoted.
+    // /v:off keeps ! in a path literal even if delayed expansion is enabled.
+    args: ['/d', '/v:off', '/s', '/c', `"${tokens.join(' ')}"`],
+    env,
+  };
+}
+
 async function defaultVersionProbe(command: string[]): Promise<string> {
   const { execFile } = await import('node:child_process');
   return new Promise((resolve, reject) => {
-    // Node refuses to spawn .cmd/.bat without a shell (CVE-2024-27980), so
-    // those shims go through cmd.exe. Each path and argument is its own argv
-    // element. No /s: Node quotes an argument that contains spaces, and cmd /s
-    // strips the outer quotes of the whole line and splits C:\Program Files\....
-    // A joined /c string is what CodeQL flags, so do not build one.
     const batch = isWindowsBatchFile(command[0]);
-    const file = batch ? (process.env.ComSpec ?? 'cmd.exe') : command[0];
-    const args = batch ? ['/d', '/c', ...command] : command.slice(1);
+    const { file, args, env } = batch
+      ? batchProbeInvocation(command)
+      : { file: command[0], args: command.slice(1), env: process.env };
     execFile(
       file,
       args,
-      { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: false },
+      { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: batch, env },
       (error, stdout, stderr) => {
         if (error) {
           reject(error);
