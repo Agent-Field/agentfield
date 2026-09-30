@@ -1801,6 +1801,13 @@ func (a *Agent) postExecutionStatus(ctx context.Context, callbackURL string, pay
 				return nil
 			}
 			lastErr = fmt.Errorf("status update returned %d", resp.StatusCode)
+			if !isTransientPollStatus(resp.StatusCode) {
+				// A client error such as 404 (unknown execution) or 409
+				// (terminal status conflict) will not change on a resend,
+				// so fail fast instead of backing off.
+				cancel()
+				return lastErr
+			}
 		}
 		cancel()
 		if attempt < 4 {
