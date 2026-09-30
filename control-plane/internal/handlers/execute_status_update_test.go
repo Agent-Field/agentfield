@@ -372,6 +372,28 @@ func TestUpdateExecutionStatusHandler_NotFound(t *testing.T) {
 	}
 }
 
+func TestUpdateExecutionStatusHandler_UnknownExecutionIsNotFoundWithLocalStorage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	// The real storage hands the updater a nil execution for an unknown ID
+	// instead of returning an error, so this goes through the same path as a
+	// deployed control plane.
+	store, _ := setupTestStorage(t)
+	payloads := services.NewFilePayloadStore(t.TempDir())
+
+	router := gin.New()
+	router.PUT("/api/v1/executions/:execution_id/status", UpdateExecutionStatusHandler(store, payloads, nil, 90*time.Second))
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/executions/exec-does-not-exist/status", strings.NewReader(`{"status": "succeeded"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusNotFound, resp.Code, resp.Body.String())
+	var errorResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &errorResp))
+	require.Contains(t, strings.ToLower(errorResp["error"].(string)), "not found")
+}
+
 func TestUpdateExecutionStatusHandler_ProgressUpdate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

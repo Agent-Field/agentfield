@@ -634,6 +634,11 @@ func (c *executionController) handleBatchStatus(ctx *gin.Context) {
 // like a server fault.
 var errTerminalStatusConflict = errors.New("terminal status conflict")
 
+// errExecutionNotFound marks a callback for an execution the store does not
+// have. Storage hands the updater a nil execution rather than an error for an
+// unknown ID, so the handler relies on this to answer 404 instead of 500.
+var errExecutionNotFound = errors.New("execution not found")
+
 func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
 	executionID := ctx.Param("execution_id")
@@ -675,7 +680,7 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	updated, err := c.store.UpdateExecutionRecord(reqCtx, executionID, func(current *types.Execution) (*types.Execution, error) {
 		terminalNoop = false
 		if current == nil {
-			return nil, fmt.Errorf("execution %s not found", executionID)
+			return nil, fmt.Errorf("execution %s: %w", executionID, errExecutionNotFound)
 		}
 
 		// Guard: executions in "waiting" state can only transition to
@@ -790,6 +795,10 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	if err != nil {
 		if errors.Is(err, errTerminalStatusConflict) {
 			ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("failed to update execution: %v", err)})
+			return
+		}
+		if errors.Is(err, errExecutionNotFound) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
 			return
 		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update execution: %v", err)})
