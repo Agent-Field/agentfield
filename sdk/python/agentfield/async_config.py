@@ -8,6 +8,23 @@ polling strategies, resource limits, and performance tuning parameters.
 from dataclasses import dataclass
 import os
 
+# Default-on flags opt out with a falsey value, matching log_writer._queue_enabled,
+# logger._stdout_mirror_enabled, node_logs.logs_enabled and
+# openrouter_attribution.attribution_enabled. Default-off flags opt in with a truthy
+# one, matching litellm_observability._TRUE_VALUES. Either way a value outside the
+# vocabulary leaves the field at its default, which is what from_environment()
+# promises for unparseable input.
+_FALSE_VALUES = ("0", "false", "no", "off")
+_TRUE_VALUES = ("1", "true", "yes", "on")
+
+
+def _env_flag_default_on(value: str) -> bool:
+    return value.strip().lower() not in _FALSE_VALUES
+
+
+def _env_flag_default_off(value: str) -> bool:
+    return value.strip().lower() in _TRUE_VALUES
+
 
 @dataclass
 class AsyncConfig:
@@ -97,6 +114,10 @@ class AsyncConfig:
         - AGENTFIELD_ASYNC_MAX_EXECUTION_TIMEOUT=1800
         - AGENTFIELD_ASYNC_BATCH_SIZE=50
 
+        Boolean flags take the usual shell vocabulary: a flag that defaults to
+        true is turned off with 0/false/no/off, and one that defaults to false is
+        turned on with 1/true/yes/on. Any other value leaves the default in place.
+
         Returns:
             AsyncConfig instance with values from environment variables
         """
@@ -163,25 +184,25 @@ class AsyncConfig:
         config.enable_async_execution = get_env_var(
             "enable_async_execution",
             config.enable_async_execution,
-            lambda x: x.lower() == "true",
+            _env_flag_default_on,
         )
         config.enable_batch_polling = get_env_var(
             "enable_batch_polling",
             config.enable_batch_polling,
-            lambda x: x.lower() == "true",
+            _env_flag_default_on,
         )
         config.enable_result_caching = get_env_var(
             "enable_result_caching",
             config.enable_result_caching,
-            lambda x: x.lower() == "true",
+            _env_flag_default_on,
         )
         config.fallback_to_sync = get_env_var(
-            "fallback_to_sync", config.fallback_to_sync, lambda x: x.lower() == "true"
+            "fallback_to_sync", config.fallback_to_sync, _env_flag_default_on
         )
         config.enable_event_stream = get_env_var(
             "enable_event_stream",
             config.enable_event_stream,
-            lambda x: x.lower() == "true",
+            _env_flag_default_off,
         )
         config.event_stream_path = get_env_var(
             "event_stream_path", config.event_stream_path

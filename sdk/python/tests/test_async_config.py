@@ -1,3 +1,5 @@
+import pytest
+
 from agentfield.async_config import AsyncConfig
 from agentfield.client import AgentFieldClient
 
@@ -70,3 +72,88 @@ def test_client_keeps_explicit_async_config(monkeypatch):
     client = AgentFieldClient(async_config=explicit_config)
 
     assert client.async_config is explicit_config
+
+
+# The four flags below default to True, so an environment variable has to be able
+# to turn them *off*. The package already settles this shape for default-on env
+# flags: log_writer._queue_enabled, logger._stdout_mirror_enabled,
+# node_logs.logs_enabled and openrouter_attribution.attribution_enabled all treat
+# ("0", "false", "no", "off") as the opt-out vocabulary and everything else as
+# "keep the default".
+DEFAULT_ON_FLAGS = [
+    ("AGENTFIELD_ASYNC_ENABLE_ASYNC_EXECUTION", "enable_async_execution"),
+    ("AGENTFIELD_ASYNC_ENABLE_BATCH_POLLING", "enable_batch_polling"),
+    ("AGENTFIELD_ASYNC_ENABLE_RESULT_CACHING", "enable_result_caching"),
+    ("AGENTFIELD_ASYNC_FALLBACK_TO_SYNC", "fallback_to_sync"),
+]
+
+TRUTHY_VALUES = ["1", "true", "TRUE", "yes", "on", " true "]
+FALSEY_VALUES = ["0", "false", "FALSE", "no", "off", " false "]
+UNPARSEABLE_VALUES = ["maybe", "", "2"]
+
+EVENT_STREAM_ENV = "AGENTFIELD_ASYNC_ENABLE_EVENT_STREAM"
+
+
+@pytest.mark.parametrize("env_name,field", DEFAULT_ON_FLAGS)
+@pytest.mark.parametrize("value", TRUTHY_VALUES)
+def test_default_on_flag_accepts_conventional_truthy_values(
+    monkeypatch, env_name, field, value
+):
+    """`=1`/`=yes`/`=on` must not silently disable a default-on feature."""
+    monkeypatch.setenv(env_name, value)
+
+    assert getattr(AsyncConfig.from_environment(), field) is True
+
+
+@pytest.mark.parametrize("env_name,field", DEFAULT_ON_FLAGS)
+@pytest.mark.parametrize("value", FALSEY_VALUES)
+def test_default_on_flag_still_opts_out(monkeypatch, env_name, field, value):
+    """The opt-out vocabulary that already works keeps working."""
+    monkeypatch.setenv(env_name, value)
+
+    assert getattr(AsyncConfig.from_environment(), field) is False
+
+
+@pytest.mark.parametrize("env_name,field", DEFAULT_ON_FLAGS)
+@pytest.mark.parametrize("value", UNPARSEABLE_VALUES)
+def test_default_on_flag_falls_back_to_default_when_unparseable(
+    monkeypatch, env_name, field, value
+):
+    """A value that means nothing must leave the field at its default.
+
+    This is the contract PR #714 states for from_environment(): it "only
+    overrides fields when the corresponding env var is set (falling back to the
+    default on unparseable values)". The float and int converters honour that
+    through get_env_var's except clause; a boolean converter that never raises
+    has to honour it through its vocabulary instead.
+    """
+    monkeypatch.setenv(env_name, value)
+
+    expected = getattr(AsyncConfig(), field)
+    assert getattr(AsyncConfig.from_environment(), field) is expected
+
+
+@pytest.mark.parametrize("value", TRUTHY_VALUES)
+def test_event_stream_opts_in_with_truthy_values(monkeypatch, value):
+    """enable_event_stream defaults to False, so it needs the opt-in vocabulary."""
+    monkeypatch.setenv(EVENT_STREAM_ENV, value)
+
+    assert AsyncConfig.from_environment().enable_event_stream is True
+
+
+@pytest.mark.parametrize("value", FALSEY_VALUES + UNPARSEABLE_VALUES)
+def test_event_stream_stays_off_for_falsey_or_unparseable(monkeypatch, value):
+    monkeypatch.setenv(EVENT_STREAM_ENV, value)
+
+    assert AsyncConfig.from_environment().enable_event_stream is False
+
+
+def test_boolean_env_flags_reach_the_client_default(monkeypatch):
+    """The public path: AgentFieldClient() with no explicit async_config."""
+    monkeypatch.setenv("AGENTFIELD_ASYNC_ENABLE_RESULT_CACHING", "1")
+    monkeypatch.setenv("AGENTFIELD_ASYNC_ENABLE_EVENT_STREAM", "yes")
+
+    client = AgentFieldClient()
+
+    assert client.async_config.enable_result_caching is True
+    assert client.async_config.enable_event_stream is True
