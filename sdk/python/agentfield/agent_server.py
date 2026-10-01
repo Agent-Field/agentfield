@@ -9,6 +9,7 @@ from typing import Optional
 
 import uvicorn
 from agentfield.agent_utils import AgentUtils
+from agentfield.async_config import _env_flag_default_off
 from agentfield.logger import log_debug, log_error, log_info, log_success, log_warn
 from agentfield.utils import get_free_port
 from fastapi import FastAPI, Request
@@ -754,7 +755,9 @@ class AgentServer:
             env_port = os.getenv("PORT")
             if env_port and env_port.isdigit():
                 suggested_port = int(env_port)
-                if os.getenv("AGENTFIELD_STRICT_PORT") == "1":
+                if _env_flag_default_off(
+                    os.getenv("AGENTFIELD_STRICT_PORT", "false")
+                ):
                     # The AgentField runner assigned this exact port and polls it
                     # for readiness. Bind it authoritatively — never silently move
                     # to another port, or the runner would poll a port nothing is
@@ -789,7 +792,9 @@ class AgentServer:
                         port = get_free_port()  # Fallback to default range
                         if self.agent.dev_mode:
                             log_debug(f"Using fallback port: {port}")
-            elif auto_port or os.getenv("AGENTFIELD_AUTO_PORT") == "true":
+            elif auto_port or _env_flag_default_off(
+                os.getenv("AGENTFIELD_AUTO_PORT", "false")
+            ):
                 # Auto-port mode: find any available port
                 try:
                     port = get_free_port()
