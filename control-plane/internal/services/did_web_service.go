@@ -5,13 +5,18 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
+
+// ErrDIDDocumentStorage marks a DID lookup failure that can be retried.
+var ErrDIDDocumentStorage = errors.New("DID document storage unavailable")
 
 // DIDWebService handles did:web generation, storage, and resolution.
 type DIDWebService struct {
@@ -23,6 +28,7 @@ type DIDWebService struct {
 // DIDWebStorage defines the storage interface for DID documents.
 type DIDWebStorage interface {
 	StoreDIDDocument(ctx context.Context, record *types.DIDDocumentRecord) error
+	// GetDIDDocument returns storage.ErrDIDDocumentNotFound for an absent DID.
 	GetDIDDocument(ctx context.Context, did string) (*types.DIDDocumentRecord, error)
 	GetDIDDocumentByAgentID(ctx context.Context, agentID string) (*types.DIDDocumentRecord, error)
 	RevokeDIDDocument(ctx context.Context, did string) error
@@ -129,6 +135,9 @@ func (s *DIDWebService) ResolveDID(ctx context.Context, did string) (*types.DIDR
 	// Get the DID document record
 	record, err := s.storage.GetDIDDocument(ctx, did)
 	if err != nil {
+		if !errors.Is(err, storage.ErrDIDDocumentNotFound) {
+			return nil, fmt.Errorf("%w: %w", ErrDIDDocumentStorage, err)
+		}
 		return &types.DIDResolutionResult{
 			DIDResolutionMetadata: types.DIDResolutionMetadata{
 				Error: "notFound",
@@ -195,10 +204,7 @@ func (s *DIDWebService) RevokeDID(ctx context.Context, did string) error {
 func (s *DIDWebService) IsDIDRevoked(ctx context.Context, did string) bool {
 	record, err := s.storage.GetDIDDocument(ctx, did)
 	if err != nil {
-		// Check if this is a "not found" error vs a real storage failure.
-		// Not found means the DID was never registered — treat as not revoked.
-		// Any other error (DB timeout, connection failure) — fail closed.
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no rows") {
+		if errors.Is(err, storage.ErrDIDDocumentNotFound) {
 			return false
 		}
 		logger.Logger.Warn().Err(err).Str("did", did).Msg("Storage error checking DID revocation, failing closed")
