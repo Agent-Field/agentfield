@@ -104,6 +104,11 @@ export class AIClient {
     };
   }
 
+  /** Prompt-template overrides configured on this agent, if any (issue #229). */
+  get promptTemplates(): AIConfig['promptTemplates'] {
+    return this.config.promptTemplates;
+  }
+
   async generate<T>(prompt: string, options: AIRequestOptions & { schema: ZodSchema<T> }): Promise<T>;
   async generate(prompt: string, options?: AIRequestOptions): Promise<string>;
   async generate<T = any>(prompt: string, options: AIRequestOptions = {}): Promise<T | string> {
