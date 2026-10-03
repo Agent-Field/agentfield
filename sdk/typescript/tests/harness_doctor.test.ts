@@ -12,14 +12,30 @@ import {
 import { buildProvider } from '../src/harness/providers/factory.js';
 import type { HarnessConfig } from '../src/harness/types.js';
 
-const { execFileMock } = vi.hoisted(() => ({
+const { execFileMock, realExecFile } = vi.hoisted(() => ({
   execFileMock: vi.fn(),
+  realExecFile: {} as { execFile?: typeof import('node:child_process').execFile },
 }));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
+  realExecFile.execFile = actual.execFile;
   return { ...actual, execFile: execFileMock };
 });
+
+/**
+ * Point the mock at the real node:child_process execFile so one test can
+ * genuinely spawn processes without loosening the mock for the whole file.
+ */
+function passThroughToRealExecFile(): void {
+  execFileMock.mockImplementation((...args: unknown[]) => {
+    const actual = realExecFile.execFile as ((...cbArgs: unknown[]) => unknown) | undefined;
+    if (!actual) {
+      throw new Error('real node:child_process execFile was not captured');
+    }
+    return actual(...args);
+  });
+}
 
 function mockExecFileOutput(stdout: string): void {
   execFileMock.mockImplementation((...args: unknown[]) => {
@@ -246,6 +262,45 @@ describe('harness provider availability', () => {
       }
     }
   });
+
+  // Real end-to-end case: spawns cmd.exe and the batch shim for real, so it
+  // only runs where a Windows cmd.exe exists (e.g. the windows-latest CI job).
+  it.runIf(process.platform === 'win32')(
+    'probes a real batch shim under a spaced temp directory through cmd.exe',
+    async () => {
+      const marker = `af-batch-probe-marker-${process.pid}-${Date.now()}`;
+      // The mkdtemp prefix contains a space, so the resolved shim path can only
+      // survive cmd.exe if it reaches it through the fixed %AGENTFIELD_PROBE_ARG_*%
+      // template as one properly quoted expansion.
+      const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agentfield-doctor win-'));
+      const probePath = path.join(directory, 'probe.cmd');
+      // %~f0 is the probe's own full path; %* is the version argument list.
+      await fs.promises.writeFile(probePath, `@echo off\r\necho ${marker} %~f0 %*\r\n`);
+      const batchPath = path.join(directory, 'codex.cmd');
+      await fs.promises.writeFile(batchPath, `@echo off\r\ncall "${probePath}" %*\r\n`);
+
+      passThroughToRealExecFile();
+
+      try {
+        const [health] = await harnessDoctor(['codex'], {
+          env: { ...process.env, PATH: directory, PATHEXT: '.CMD' },
+        });
+
+        expect(health).toMatchObject({
+          binary: path.resolve(batchPath),
+          installed: true,
+          usable: true,
+          issues: [],
+        });
+        expect(health.version).toContain(marker);
+        expect(health.version?.toLowerCase()).toContain(path.resolve(probePath).toLowerCase());
+        expect(health.version).toContain('--version');
+      } finally {
+        execFileMock.mockReset();
+        await fs.promises.rm(directory, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('checks the optional Claude wrapper without launching a provider run', async () => {
     const [health] = await harnessDoctor(['claude-code'], {
