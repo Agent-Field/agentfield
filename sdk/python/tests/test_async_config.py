@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import pytest
 
 from agentfield.async_config import AsyncConfig
@@ -157,3 +159,83 @@ def test_boolean_env_flags_reach_the_client_default(monkeypatch):
 
     assert client.async_config.enable_result_caching is True
     assert client.async_config.enable_event_stream is True
+
+
+# Issue #1089: each polarity wrapper bakes in the field's built-in default, so a
+# subclass that changes a default gets the wrapper's answer for an unrecognised
+# string instead of its own. One parser that rejects unknown values lets
+# get_env_var's existing fallback supply the class's real default.
+
+
+@dataclass
+class CachingOffConfig(AsyncConfig):
+    """Flips a default-on flag's built-in default."""
+
+    enable_result_caching: bool = False
+
+
+@dataclass
+class StreamOnConfig(AsyncConfig):
+    """Flips the default-off flag's built-in default."""
+
+    enable_event_stream: bool = True
+
+
+def test_unrecognised_value_keeps_a_subclass_default_on_flag_off(monkeypatch):
+    """The fallback must come from the class, not from the parser's polarity."""
+    monkeypatch.setenv("AGENTFIELD_ASYNC_ENABLE_RESULT_CACHING", "maybe")
+
+    assert CachingOffConfig.from_environment().enable_result_caching is False
+
+
+def test_unrecognised_value_keeps_a_subclass_default_off_flag_on(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_ASYNC_ENABLE_EVENT_STREAM", "nonsense")
+
+    assert StreamOnConfig.from_environment().enable_event_stream is True
+
+
+@pytest.mark.parametrize(
+    "field,env_suffix",
+    [
+        ("enable_async_execution", "ENABLE_ASYNC_EXECUTION"),
+        ("enable_batch_polling", "ENABLE_BATCH_POLLING"),
+        ("enable_result_caching", "ENABLE_RESULT_CACHING"),
+        ("fallback_to_sync", "FALLBACK_TO_SYNC"),
+        ("enable_event_stream", "ENABLE_EVENT_STREAM"),
+    ],
+)
+@pytest.mark.parametrize("value", UNPARSEABLE_VALUES)
+def test_every_flag_falls_back_to_its_own_class_default(
+    monkeypatch, field, env_suffix, value
+):
+    """All five flags, both classes: an unknown value never invents a boolean."""
+    monkeypatch.setenv(f"AGENTFIELD_ASYNC_{env_suffix}", value)
+
+    for cls in (AsyncConfig, CachingOffConfig, StreamOnConfig):
+        expected = getattr(cls(), field)
+        assert getattr(cls.from_environment(), field) is expected
+
+
+def test_env_flag_rejects_values_outside_the_vocabulary():
+    """One parser, no baked-in polarity: the caller decides what unknown means."""
+    from agentfield.async_config import _env_flag
+
+    assert _env_flag(" ON ") is True
+    assert _env_flag("Off") is False
+
+    for value in ("maybe", "", "2", "truthy"):
+        with pytest.raises(ValueError):
+            _env_flag(value)
+
+
+def test_polarity_wrappers_keep_their_contract_for_external_callers():
+    """logger.py imports _env_flag_default_off (PR #1090); both wrappers must hold."""
+    from agentfield.async_config import _env_flag_default_off, _env_flag_default_on
+
+    assert _env_flag_default_off("1") is True
+    assert _env_flag_default_off("off") is False
+    assert _env_flag_default_off("maybe") is False
+
+    assert _env_flag_default_on("0") is False
+    assert _env_flag_default_on("yes") is True
+    assert _env_flag_default_on("maybe") is True
