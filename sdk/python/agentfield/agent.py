@@ -180,11 +180,11 @@ except ImportError:
 
 
 # Values that count as "on" for opt-in boolean environment variables.
-_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _env_flag_enabled(name: str) -> bool:
-    """Return True when ``name`` is set to a truthy value (``1``/``true``/``yes``).
+    """Return True when ``name`` is set to a truthy value (``1``/``true``/``yes``/``on``).
 
     Comparison is case-insensitive and tolerates surrounding whitespace. Unset,
     empty and unrecognised values are all treated as False, so a flag has to be
