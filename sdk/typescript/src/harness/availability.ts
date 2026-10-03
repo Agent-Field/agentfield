@@ -201,11 +201,27 @@ const BATCH_PROBE_ENV_PREFIX = 'AGENTFIELD_PROBE_ARG_';
  * Build a `cmd.exe` invocation for a `.cmd`/`.bat` shim. Node refuses to spawn
  * batch files without a shell (CVE-2024-27980), so they have to go through
  * cmd.exe. The `/c` line is a fixed template of `%VAR%` references; the path
- * and arguments travel in the child's environment. cmd.exe expands each
- * variable once, after it has split the line, and the template quotes every
- * reference, so `&`, `^`, `(`, `%` and spaces in a path stay literal. Passing
- * the path as a bare argv element instead breaks on `&` and `(x86)` because
- * cmd.exe without `/s` drops the quotes Node adds.
+ * and arguments travel in the child's environment.
+ *
+ * cmd.exe parses percent expansion BEFORE it splits the line or interprets
+ * metacharacters: each `%VAR%` is replaced first, and only afterwards are the
+ * resulting characters treated as separators or operators. That is why values
+ * reach the command line safely here — the template wraps every reference in
+ * double quotes, so after expansion each token is already a quoted argument,
+ * and `&`, `^`, `(`, `%`, `!` and spaces inside it stay literal. `/s` makes
+ * cmd.exe strip only the outer quote pair of the fixed template, again leaving
+ * each `"%VAR%"` expansion quoted instead of unwrapping the first and last
+ * quote on the line. `/v:off` disables delayed `!` expansion so `!` in a value
+ * stays literal even when delayed expansion is otherwise enabled. `/d` skips
+ * AutoRun registry scripts.
+ *
+ * This is not a claim that environment data can never be interpreted: the
+ * guarantee rests on the quote/control-character invariant below. The guard in
+ * `defaultVersionProbe` runs before any value is copied into the child's
+ * environment, so no `%VAR%` can ever expand to a double quote or a control
+ * character, and therefore no expansion can close a quote early or inject
+ * command syntax. Passing the path as a bare argv element instead breaks on
+ * `&` and `(x86)` because cmd.exe without `/s` drops the quotes Node adds.
  */
 function batchProbeInvocation(command: string[]): {
   file: string;
@@ -220,8 +236,9 @@ function batchProbeInvocation(command: string[]): {
   });
   return {
     file: process.env.ComSpec ?? 'cmd.exe',
-    // /s strips only the outermost quote pair, leaving each "%VAR%" quoted.
-    // /v:off keeps ! in a path literal even if delayed expansion is enabled.
+    // /s removes the outer quote pair of the fixed template, so each "%VAR%"
+    // expansion stays quoted.
+    // /v:off disables delayed ! expansion; /d disables AutoRun.
     args: ['/d', '/v:off', '/s', '/c', `"${tokens.join(' ')}"`],
     env,
   };
@@ -229,23 +246,49 @@ function batchProbeInvocation(command: string[]): {
 
 async function defaultVersionProbe(command: string[]): Promise<string> {
   const { execFile } = await import('node:child_process');
+
   return new Promise((resolve, reject) => {
-    const batch = isWindowsBatchFile(command[0]);
-    const { file, args, env } = batch
-      ? batchProbeInvocation(command)
-      : { file: command[0], args: command.slice(1), env: process.env };
-    execFile(
-      file,
-      args,
-      { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: batch, env },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        const output = String(stdout || stderr).trim();
-        resolve(output ? output.split(/\r?\n/, 1)[0] : 'unknown');
+    const onProbeOutput = (error: Error | null, stdout: string, stderr: string): void => {
+      if (error) {
+        reject(error);
+        return;
       }
+      const output = String(stdout || stderr).trim();
+      resolve(output ? output.split(/\r?\n/, 1)[0] : 'unknown');
+    };
+
+    if (isWindowsBatchFile(command[0])) {
+      // Guard the cmd.exe branch only: every value is copied into the child's
+      // environment, so reject a double quote or any control character before
+      // insertion. The direct branch below is left unchanged.
+      for (const value of command) {
+        for (let index = 0; index < value.length; index += 1) {
+          const codePoint = value.charCodeAt(index);
+          if (codePoint === 0x22 || codePoint < 0x20) {
+            reject(new TypeError(
+              `Windows batch probe values must not contain double quotes or control characters; ` +
+              `offending code point ${codePoint} in ${JSON.stringify(value)}`
+            ));
+            return;
+          }
+        }
+      }
+
+      const { file, args, env } = batchProbeInvocation(command);
+      execFile(
+        file,
+        args,
+        { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: true, env },
+        onProbeOutput
+      );
+      return;
+    }
+
+    execFile(
+      command[0],
+      command.slice(1),
+      { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: false },
+      onProbeOutput
     );
   });
 }

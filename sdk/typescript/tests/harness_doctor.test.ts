@@ -263,6 +263,77 @@ describe('harness provider availability', () => {
     }
   });
 
+  // Deterministic guard contract, run on every host platform. The platform is
+  // mocked to win32 only so the cmd.exe batch branch is selected; execFile is
+  // mocked, so nothing is ever spawned. The guard rejects a double quote or a
+  // control character in ANY element of the command (path and arguments
+  // alike) before a value reaches the child's environment; provider
+  // `versionArgs` are fixed literals, so the path cases below exercise the
+  // same validation loop the arguments run through.
+  it.each([
+    ['a double quote', 'C:\\Program Files\\Co"dex\\codex.cmd'],
+    ['a newline', 'C:\\Program Files\\Co\ndex\\codex.cmd'],
+    ['a tab', 'C:\\Program Files\\Co\tdex\\codex.cmd'],
+    ['an escape control character', 'C:\\Program Files\\Co\u001bdex\\codex.cmd'],
+  ])('rejects a batch shim path with %s before execFile is invoked', async (_label, shim) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    mockExecFileOutput('codex-cli 1.0.0\n');
+
+    try {
+      const [health] = await harnessDoctor(['codex'], {
+        env: {},
+        resolveBinary: () => shim,
+      });
+
+      // Rejected before execFile: the mock never observed a spawn attempt,
+      // which distinguishes guard rejection from a failed child process.
+      expect(execFileMock).not.toHaveBeenCalled();
+      // Observable through the public harnessDoctor route: the probe error is
+      // caught and reported as unusable health.
+      expect(health).toMatchObject({
+        binary: shim,
+        installed: true,
+        version: null,
+        usable: false,
+        issues: ['version_probe_failed'],
+      });
+    } finally {
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform);
+      }
+    }
+  });
+
+  it('executes non-batch paths directly and unchanged, even with quotes or control characters', async () => {
+    // The guard is scoped to the cmd.exe batch branch only; the direct branch
+    // passes the resolved path through to execFile as-is.
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    const directPath = '/usr/local/bi"n\tdex/opencode';
+    mockExecFileOutput('opencode 1.0.0\n');
+
+    try {
+      const [health] = await harnessDoctor(['opencode'], {
+        env: {},
+        resolveBinary: () => directPath,
+      });
+
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+      expect(execFileMock).toHaveBeenCalledWith(
+        directPath,
+        ['--version'],
+        { timeout: 2_000, windowsHide: true, windowsVerbatimArguments: false },
+        expect.any(Function)
+      );
+      expect(health).toMatchObject({ version: 'opencode 1.0.0', usable: true, issues: [] });
+    } finally {
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform);
+      }
+    }
+  });
+
   // Real end-to-end case: spawns cmd.exe and the batch shim for real, so it
   // only runs where a Windows cmd.exe exists (e.g. the windows-latest CI job).
   it.runIf(process.platform === 'win32')(
