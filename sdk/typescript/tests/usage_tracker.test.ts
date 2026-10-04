@@ -222,13 +222,16 @@ describe('AI SDK usage extraction', () => {
     });
   });
 
-  it('skips empty results and calls made outside an execution', () => {
+  it('marks missing receipts and skips calls made outside an execution', () => {
     const ctx = makeContext('exec-u2');
     ExecutionContext.run(ctx, () => {
       recordAiSdkUsage({ source: { usage: undefined }, model: 'gpt-4o' });
       recordAiSdkUsage({ source: {}, model: 'gpt-4o' });
     });
-    expect(ctx.costTracker.hasEntries).toBe(false);
+    expect(ctx.costTracker.serialize().entries).toHaveLength(2);
+    for (const entry of ctx.costTracker.serialize().entries) {
+      expect(entry).toMatchObject({ usage_status: 'missing', routing_provider: 'unknown' });
+    }
     // Outside any execution: must not throw.
     expect(() => recordAiSdkUsage({ source: { usage: sdkUsage }, model: 'gpt-4o' })).not.toThrow();
   });
