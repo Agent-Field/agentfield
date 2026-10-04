@@ -305,6 +305,12 @@ Attribution is sent as `HTTP-Referer` and `X-Title`:
 
 When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution values are used as fallbacks, so a deployment that already declares its identity keeps it after switching gateways: `AGENTFIELD_OPENROUTER_SITE_URL`, `OR_SITE_URL`, `AGENTFIELD_OPENROUTER_APP_NAME`, `OR_APP_NAME`. The opt-out travels with them: when `AGENTFIELD_OPENROUTER_ATTRIBUTION=false`, these values are not inherited and the Infron defaults apply instead. To control Infron attribution specifically, set the `AGENTFIELD_INFRON_*` vars explicitly or disable it with `AGENTFIELD_INFRON_ATTRIBUTION=false`.
 
+### Cheaper Inference
+
+- `CHEAPER_INFERENCE_API_KEY`: API key for the Cheaper Inference gateway. When it is the only gateway key set, the Go SDK's `ai.DefaultConfig()` points at `https://api.cheaperinference.com/v1`. `OPENAI_API_KEY`, `OPENROUTER_API_KEY` and `INFRON_API_KEY` all keep precedence over it, so adding this key never reroutes an existing deployment.
+
+Cheaper Inference is OpenAI-compatible and serves bare model ids (`gpt-5.4-mini`). A `cheaperinference/` model prefix is a routing marker only and is stripped before the request is sent.
+
 ### Harness (SDKs)
 
 - `AGENTFIELD_HARNESS_DEPTH`: Marks subprocesses running inside an AgentField

@@ -122,6 +122,17 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 		}
 	}
 
+	// Same for the "cheaperinference/" routing prefix: the gateway serves
+	// bare model ids such as "gpt-5.4-mini".
+	if c.config.IsCheaperInference() && req.Model != "" {
+		if stripped := stripCheaperInferencePrefix(req.Model); stripped != req.Model {
+			model = stripped
+			shadow := *req
+			shadow.Model = stripped
+			req = &shadow
+		}
+	}
+
 	// If the model needs max_completion_tokens and we have a max_tokens value,
 	// serialize with the rewritten field name — but only for endpoints known
 	// to understand it.
