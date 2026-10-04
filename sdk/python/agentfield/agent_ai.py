@@ -1020,13 +1020,20 @@ class AgentAI:
                     raise
 
             if final_config.stream:
-                from agentfield.cost_tracker import get_current_cost_tracker, derive_provider
+                from agentfield.cost_tracker import (
+                    derive_provider,
+                    get_current_cost_tracker,
+                )
                 from .usage_stream import UsageTrackingStream
-                tracker = get_current_cost_tracker() or getattr(self.agent, "cost_tracker", None)
+                tracker = get_current_cost_tracker() or getattr(
+                    self.agent, "cost_tracker", None
+                )
                 if tracker is None:
                     return resp
                 requested_model = litellm_params.get("model", final_config.model)
-                return UsageTrackingStream(resp, tracker, requested_model, derive_provider(requested_model))
+                return UsageTrackingStream(
+                    resp, tracker, requested_model, derive_provider(requested_model)
+                )
 
             from .multimodal_response import detect_multimodal_response
 
@@ -1039,7 +1046,10 @@ class AgentAI:
             # discard tokens that were successfully extracted.
             usage = multimodal_response.usage
             if usage:
-                from agentfield.cost_tracker import get_current_cost_tracker, derive_provider
+                from agentfield.cost_tracker import (
+                    derive_provider,
+                    get_current_cost_tracker,
+                )
 
                 tracker = get_current_cost_tracker()
                 if tracker is None and hasattr(self.agent, "cost_tracker"):
@@ -1053,8 +1063,12 @@ class AgentAI:
                     ctx = get_current_context()
                     tracker.record(
                         model=model_name,
-                        provider=derive_provider(litellm_params.get("model", final_config.model)),
-                        routing_provider=derive_provider(litellm_params.get("model", final_config.model)),
+                        provider=derive_provider(
+                            litellm_params.get("model", final_config.model)
+                        ),
+                        routing_provider=derive_provider(
+                            litellm_params.get("model", final_config.model)
+                        ),
                         prompt_tokens=usage.get("prompt_tokens", 0),
                         completion_tokens=usage.get("completion_tokens", 0),
                         total_tokens=usage.get("total_tokens", 0),
@@ -1067,12 +1081,21 @@ class AgentAI:
                     )
 
             else:
-                from agentfield.cost_tracker import get_current_cost_tracker, derive_provider
-                tracker = get_current_cost_tracker() or getattr(self.agent, "cost_tracker", None)
+                from agentfield.cost_tracker import (
+                    derive_provider,
+                    get_current_cost_tracker,
+                )
+                tracker = get_current_cost_tracker() or getattr(
+                    self.agent, "cost_tracker", None
+                )
                 if tracker is not None:
                     route = derive_provider(litellm_params.get("model", final_config.model))
-                    tracker.record(model=final_config.model, provider=route,
-                                   routing_provider=route, usage_status="missing")
+                    tracker.record(
+                        model=final_config.model,
+                        provider=route,
+                        routing_provider=route,
+                        usage_status="missing",
+                    )
 
             if schema:
                 try:

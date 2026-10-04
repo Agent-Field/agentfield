@@ -1,4 +1,5 @@
 """Observe consumed stream receipts without eagerly draining a caller's stream."""
+
 from typing import Any
 
 
@@ -56,12 +57,21 @@ class UsageTrackingStream:
         self._done = True
         usage = self._usage
         if isinstance(usage, dict):
-            self._tracker.record(model=self._model, provider=self._provider, routing_provider=self._provider,
-                                 prompt_tokens=usage.get("prompt_tokens", 0),
-                                 completion_tokens=usage.get("completion_tokens", 0),
-                                 total_tokens=usage.get("total_tokens", 0))
+            self._tracker.record(
+                model=self._model,
+                provider=self._provider,
+                routing_provider=self._provider,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0),
+            )
         else:
-            self._tracker.record(model=self._model, provider=self._provider, routing_provider=self._provider, usage_status="missing")
+            self._tracker.record(
+                model=self._model,
+                provider=self._provider,
+                routing_provider=self._provider,
+                usage_status="missing",
+            )
 
     async def aclose(self):
         try:
