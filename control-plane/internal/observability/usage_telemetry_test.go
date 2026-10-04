@@ -21,7 +21,7 @@ func TestUsageOutboxRetriesRestartDedupAndPrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.ctx = context.Background()
-	row := &types.ExecutionUsage{RoutingProvider: "openrouter", Provider: "anthropic", Model: "private/customer/deepseek-v4", InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
+	row := &types.ExecutionUsage{Source: "llm", RoutingProvider: "openrouter", Provider: "anthropic", Model: "private/customer/deepseek-v4", InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
 	s.recordUsage("secret-execution", 0, row)
 	s.recordUsage("secret-execution", 0, row)
 	files, _ := os.ReadDir(s.usageOutbox)
@@ -54,7 +54,7 @@ func TestUsageOutboxRetriesRestartDedupAndPrivacy(t *testing.T) {
 
 func TestMissingUsageOmitsTokensAndLegacyRouteIsUnknown(t *testing.T) {
 	s, _ := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
-	s.recordUsage("execution", 0, &types.ExecutionUsage{Provider: "openrouter", Model: "custom-secret", UsageStatus: "missing", TotalTokens: 123})
+	s.recordUsage("execution", 0, &types.ExecutionUsage{Source: "llm", Provider: "openrouter", Model: "custom-secret", UsageStatus: "missing", TotalTokens: 123})
 	files, _ := os.ReadDir(s.usageOutbox)
 	data, _ := os.ReadFile(filepath.Join(s.usageOutbox, files[0].Name()))
 	var e TelemetryEvent
@@ -74,12 +74,27 @@ func TestUsageModelFamilyBoundedAndTokenTotalAuthoritative(t *testing.T) {
 		}
 	}
 	s, _ := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
-	s.recordUsage("sum", 0, &types.ExecutionUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 99})
+	s.recordUsage("sum", 0, &types.ExecutionUsage{Source: "llm", InputTokens: 10, OutputTokens: 5, TotalTokens: 99})
 	files, _ := os.ReadDir(s.usageOutbox)
 	data, _ := os.ReadFile(filepath.Join(s.usageOutbox, files[0].Name()))
 	var e TelemetryEvent
 	_ = json.Unmarshal(data, &e)
 	if e.Properties["total_tokens"] != float64(15) {
 		t.Fatal(e.Properties)
+	}
+}
+
+func TestUsageTelemetryExcludesHarnessRollupsAndUnknownSources(t *testing.T) {
+	s, _ := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
+	for i, source := range []string{"harness", "", "parent_rollup"} {
+		s.recordUsage("parent", i, &types.ExecutionUsage{Source: source, InputTokens: 100, OutputTokens: 20})
+	}
+	if _, err := os.Stat(s.usageOutbox); !os.IsNotExist(err) {
+		t.Fatal("non-LLM usage was queued")
+	}
+	s.recordUsage("child", 0, &types.ExecutionUsage{Source: "llm", InputTokens: 10, OutputTokens: 2})
+	files, _ := os.ReadDir(s.usageOutbox)
+	if len(files) != 1 {
+		t.Fatalf("expected one owned SDK call, got %d", len(files))
 	}
 }

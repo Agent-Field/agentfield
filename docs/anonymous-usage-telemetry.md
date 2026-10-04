@@ -1,7 +1,10 @@
 # Anonymous token reconciliation
 
 When anonymous telemetry is enabled, the control plane reports `usage_delta`
-for each persisted SDK usage entry. It reports entries belonging to the current
+for each persisted SDK-native `source=llm` usage entry. Harness entries and
+entries with unknown sources are excluded from anonymous totals, preventing
+external coding-agent rollups from overlapping self-reported usage. Local
+accounting retains those entries unchanged. It reports entries belonging to the current
 execution only; parent workflow totals are never added over child usage.
 The event contains bounded `routing_provider`, `model_family`, `usage_status`,
 `accounting_source=control_plane`, usage context, release version and token counts.

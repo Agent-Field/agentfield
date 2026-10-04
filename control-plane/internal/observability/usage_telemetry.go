@@ -47,7 +47,7 @@ func usageModelFamily(model string) string {
 }
 
 func (s *TelemetryService) recordUsage(executionID string, index int, row *types.ExecutionUsage) {
-	if s == nil || row == nil || executionID == "" || s.usageOutbox == "" {
+	if s == nil || row == nil || executionID == "" || s.usageOutbox == "" || row.Source != "llm" {
 		return
 	}
 	props := s.withUsageContext(map[string]interface{}{
