@@ -91,8 +91,8 @@
         "nanoid": "3.3.18",
         "esbuild": "0.28.1",
         "ws": "8.21.0",
-        "brace-expansion@1": "1.1.18",
-        "brace-expansion@2": "2.1.4",
+        "brace-expansion@1": "1.1.21",
+        "brace-expansion@2": "2.1.7",
         "postcss": "$postcss",
         "@humanfs/node": "0.16.8",
         "postcss-selector-parser": "6.1.4"
@@ -105,8 +105,8 @@
             "nanoid": "3.3.18",
             "esbuild": "0.28.1",
             "ws": "8.21.0",
-            "brace-expansion@1": "1.1.18",
-            "brace-expansion@2": "2.1.4",
+            "brace-expansion@1": "1.1.21",
+            "brace-expansion@2": "2.1.7",
             "postcss": "8.5.25",
             "@humanfs/node": "0.16.8",
             "postcss-selector-parser": "6.1.4"

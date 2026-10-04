@@ -16,7 +16,7 @@
   },
   "overrides": {
     "js-yaml": "4.3.2",
-    "fast-uri": "3.1.7",
+    "fast-uri": "3.1.8",
     "body-parser": "2.3.0",
     "@ai-sdk/provider-utils": "4.0.51",
     "@ai-sdk/provider-utils-v5": "npm:@ai-sdk/provider-utils@4.0.51",

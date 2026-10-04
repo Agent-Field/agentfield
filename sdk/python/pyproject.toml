@@ -32,11 +32,14 @@ dependencies = [
     # LiteLLM 1.97.0 crashes on Python 3.10 building ModelResponse, and
     # 1.98.0 imports typing.NotRequired (only available in Python 3.11+).
     # The 3.10 cap can be lifted once upstream guards that import the way
-    # litellm/types/compression.py does. The 3.11+ branch floats on purpose;
-    # .github/workflows/litellm-canary.yml tests it weekly against the
-    # latest release so a break is caught before users hit it.
+    # litellm/types/compression.py does.
+    #
+    # 1.104.0+ requires langfuse>=4.7 for the standard `langfuse` callback,
+    # which conflicts with our langfuse extra (v2 client API). Cap below
+    # 1.104.0 until we migrate the canary/extra to langfuse_otel or Langfuse
+    # v4. Weekly .github/workflows/litellm-canary.yml still floats latest.
     "litellm!=1.97.0,<1.98.0; python_version < '3.11'",
-    "litellm; python_version >= '3.11'",
+    "litellm<1.104.0; python_version >= '3.11'",
     "psutil",
     "PyYAML>=6.0",
     "aiohttp>=3.8",
