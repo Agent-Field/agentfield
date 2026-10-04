@@ -25,7 +25,11 @@ files also suppress callback replays locally. The existing terminal callback
 no-op guard prevents reingesting the same terminal result. The SDK must retain
 entry ordering when retrying an execution envelope.
 
-The queue accepts at most 10,000 pending events. Pending events and acknowledgements
+The queue accepts at most 10,000 pending events, with a cached pending count
+initialized from disk on first enqueue after restart. Acknowledgements live in
+a separate directory so saving and flushing new receipts does not scan historical
+acknowledgements. Cleanup runs at startup and every ten minutes, retaining at most
+10,000 recent acknowledgements after each cleanup. Pending events and acknowledgements
 expire after 30 days; rejected or expired pending events produce local warnings.
 Telemetry opt-out disables both enqueue and delivery. Local accounting is unchanged.
 These events are useful coverage measurements, not an exact billing ledger:

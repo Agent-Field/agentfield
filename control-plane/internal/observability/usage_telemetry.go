@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,22 +91,25 @@ func (s *TelemetryService) storeUsage(event TelemetryEvent) error {
 		return err
 	}
 	path := filepath.Join(s.usageOutbox, event.EventID)
-	for _, ext := range []string{".json", ".sent"} {
-		if _, err := os.Stat(path + ext); err == nil {
+	for _, file := range []string{path + ".json", filepath.Join(s.usageOutbox, "ack", event.EventID+".sent")} {
+		if _, err := os.Stat(file); err == nil {
 			return nil
 		}
 	}
-	files, err := os.ReadDir(s.usageOutbox)
-	if err != nil {
-		return err
-	}
-	pending := 0
-	for _, file := range files {
-		if strings.HasSuffix(file.Name(), ".json") {
-			pending++
+	if !s.usagePendingInitialized {
+		files, err := os.ReadDir(s.usageOutbox)
+		if err != nil {
+			return err
 		}
+		s.usagePending = 0
+		for _, file := range files {
+			if strings.HasSuffix(file.Name(), ".json") {
+				s.usagePending++
+			}
+		}
+		s.usagePendingInitialized = true
 	}
-	if pending >= usageOutboxLimit {
+	if s.usagePending >= usageOutboxLimit {
 		return fmt.Errorf("usage outbox reached %d pending events", usageOutboxLimit)
 	}
 	data, err := json.Marshal(event)
@@ -134,6 +138,7 @@ func (s *TelemetryService) storeUsage(event TelemetryEvent) error {
 	if err = os.Rename(tmp, path+".json"); err != nil {
 		return err
 	}
+	s.usagePending++
 	return syncUsageDirectory(s.usageOutbox)
 }
 
@@ -150,11 +155,16 @@ func (s *TelemetryService) usageWorker() {
 	defer s.wg.Done()
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
+	cleanup := time.NewTicker(10 * time.Minute)
+	defer cleanup.Stop()
+	s.cleanupUsageAcknowledgements()
 	s.flushUsage()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
+		case <-cleanup.C:
+			s.cleanupUsageAcknowledgements()
 		case <-tick.C:
 			s.flushUsage()
 		case <-s.usageWake:
@@ -173,7 +183,7 @@ func (s *TelemetryService) flushUsage() {
 			return
 		}
 		name := file.Name()
-		if !strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".sent") {
+		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
 		path := filepath.Join(s.usageOutbox, name)
@@ -185,7 +195,11 @@ func (s *TelemetryService) flushUsage() {
 			if strings.HasSuffix(name, ".json") {
 				logger.Logger.Warn().Msg("anonymous usage outbox expired an undelivered event after 30 days")
 			}
-			_ = os.Remove(path)
+			s.usageMu.Lock()
+			if os.Remove(path) == nil && s.usagePendingInitialized {
+				s.usagePending--
+			}
+			s.usageMu.Unlock()
 			continue
 		}
 		if !strings.HasSuffix(name, ".json") {
@@ -206,10 +220,57 @@ func (s *TelemetryService) flushUsage() {
 			return
 		} // retry later, without bypassing an unavailable relay
 		s.usageMu.Lock()
-		err = os.Rename(path, strings.TrimSuffix(path, ".json")+".sent")
+		ackDir := filepath.Join(s.usageOutbox, "ack")
+		err = os.MkdirAll(ackDir, 0700)
 		if err == nil {
+			err = os.Rename(path, filepath.Join(ackDir, strings.TrimSuffix(name, ".json")+".sent"))
+		}
+		if err == nil {
+			if s.usagePendingInitialized {
+				s.usagePending--
+			}
+			_ = syncUsageDirectory(ackDir)
 			_ = syncUsageDirectory(s.usageOutbox)
 		}
 		s.usageMu.Unlock()
+	}
+}
+
+// Acknowledgements are separate from the hot pending directory. Cleanup scans
+// history only at startup and every ten minutes, never for each new receipt.
+// Keep at most 10,000 recent acknowledgements after cleanup; relay EventID
+// deduplication remains the guard for retries outside this local window.
+func (s *TelemetryService) cleanupUsageAcknowledgements() {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	dir := filepath.Join(s.usageOutbox, "ack")
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type ack struct {
+		name     string
+		modified time.Time
+	}
+	recent := make([]ack, 0, len(files))
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".sent") {
+			continue
+		}
+		info, err := file.Info()
+		if err != nil {
+			continue
+		}
+		if time.Since(info.ModTime()) > usageRetention {
+			_ = os.Remove(filepath.Join(dir, file.Name()))
+			continue
+		}
+		recent = append(recent, ack{file.Name(), info.ModTime()})
+	}
+	sort.Slice(recent, func(i, j int) bool { return recent[i].modified.After(recent[j].modified) })
+	if len(recent) > usageOutboxLimit {
+		for _, file := range recent[usageOutboxLimit:] {
+			_ = os.Remove(filepath.Join(dir, file.name))
+		}
 	}
 }

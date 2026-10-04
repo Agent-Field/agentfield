@@ -98,3 +98,39 @@ func TestUsageTelemetryExcludesHarnessRollupsAndUnknownSources(t *testing.T) {
 		t.Fatalf("expected one owned SDK call, got %d", len(files))
 	}
 }
+
+func TestUsageAcknowledgementsSeparateFromPendingAndExpire(t *testing.T) {
+	s, _ := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
+	s.ctx = context.Background()
+	s.sender = func(context.Context, string, time.Duration, TelemetryEvent) error { return nil }
+	row := &types.ExecutionUsage{Source: "llm", InputTokens: 3, OutputTokens: 1}
+	s.recordUsage("done", 0, row)
+	s.flushUsage()
+	ackDir := filepath.Join(s.usageOutbox, "ack")
+	files, err := os.ReadDir(ackDir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("ack files=%v error=%v", files, err)
+	}
+	s.recordUsage("pending", 0, row)
+	pending, _ := filepath.Glob(filepath.Join(s.usageOutbox, "*.json"))
+	if len(pending) != 1 {
+		t.Fatalf("pending=%v", pending)
+	}
+	old := filepath.Join(ackDir, "expired.sent")
+	if err = os.WriteFile(old, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Now().Add(-usageRetention - time.Hour)
+	if err = os.Chtimes(old, when, when); err != nil {
+		t.Fatal(err)
+	}
+	s.cleanupUsageAcknowledgements()
+	if _, err = os.Stat(old); !os.IsNotExist(err) {
+		t.Fatal("expired acknowledgement survived")
+	}
+	s.recordUsage("done", 0, row) // recent acknowledgement still prevents replay
+	pending, _ = filepath.Glob(filepath.Join(s.usageOutbox, "*.json"))
+	if len(pending) != 1 {
+		t.Fatalf("duplicate pending=%v", pending)
+	}
+}

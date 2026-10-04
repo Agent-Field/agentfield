@@ -15,6 +15,25 @@ class UsageTrackingStream:
     def __getattr__(self, name):
         return getattr(self._stream, name)
 
+    async def __aenter__(self):
+        enter = getattr(self._stream, "__aenter__", None)
+        if enter is not None:
+            entered = await enter()
+            if entered is not None:
+                self._stream = entered
+                self._iterator = entered.__aiter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            exit = getattr(self._stream, "__aexit__", None)
+            if exit is not None:
+                return await exit(exc_type, exc, tb)
+            await self.aclose()
+            return False
+        finally:
+            self._finish()
+
     def __aiter__(self):
         return self
 
@@ -29,7 +48,6 @@ class UsageTrackingStream:
             usage = chunk.get("usage")
         if usage is not None:
             self._usage = usage.model_dump() if hasattr(usage, "model_dump") else usage
-            self._finish()
         return chunk
 
     def _finish(self):

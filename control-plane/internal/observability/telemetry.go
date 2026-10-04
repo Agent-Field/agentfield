@@ -75,10 +75,12 @@ type TelemetryService struct {
 	timeout      time.Duration
 	sender       telemetrySender
 
-	usageOutbox string
-	usageMu     sync.Mutex
-	usageWake   chan struct{}
-	reported    telemetryReportedSet
+	usageOutbox             string
+	usagePending            int
+	usagePendingInitialized bool
+	usageMu                 sync.Mutex
+	usageWake               chan struct{}
+	reported                telemetryReportedSet
 
 	queue  chan TelemetryEvent
 	ctx    context.Context
