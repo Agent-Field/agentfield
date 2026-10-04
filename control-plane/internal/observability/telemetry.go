@@ -75,7 +75,10 @@ type TelemetryService struct {
 	timeout      time.Duration
 	sender       telemetrySender
 
-	reported telemetryReportedSet
+	usageOutbox string
+	usageMu     sync.Mutex
+	usageWake   chan struct{}
+	reported    telemetryReportedSet
 
 	queue  chan TelemetryEvent
 	ctx    context.Context
@@ -122,6 +125,8 @@ func NewTelemetryService(cfg config.TelemetryConfig, agentfieldHome, storageMode
 		timeout:      timeout,
 		sender:       sendTelemetryEvent,
 		queue:        make(chan TelemetryEvent, defaultTelemetryQueueSize),
+		usageOutbox:  filepath.Join(agentfieldHome, "telemetry", "usage-outbox"),
+		usageWake:    make(chan struct{}, 1),
 	}, nil
 }
 
@@ -219,7 +224,9 @@ func (s *TelemetryService) Start(ctx context.Context) {
 		return
 	}
 	s.ctx, s.cancel = context.WithCancel(ctx)
-	s.wg.Add(3)
+	events.SetUsageObserver(s.recordUsage)
+	s.wg.Add(4)
+	go s.usageWorker()
 	go s.worker()
 	go s.subscribeNodeEvents()
 	go s.subscribeExecutionEvents()
@@ -237,6 +244,7 @@ func (s *TelemetryService) Stop() {
 	if s == nil {
 		return
 	}
+	events.SetUsageObserver(nil)
 	s.Enqueue("control_plane_stopped", nil)
 	if s.cancel != nil {
 		s.cancel()

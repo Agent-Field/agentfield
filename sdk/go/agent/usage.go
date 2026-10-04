@@ -68,6 +68,16 @@ func (a *Agent) recordAIUsage(ctx context.Context, resp *ai.Response) {
 // the LLM provider returned a native cost (e.g. OpenRouter usage accounting).
 func (a *Agent) recordLLMUsage(ctx context.Context, model string, usage *ai.Usage) {
 	if usage == nil {
+		if tracker := costTrackerFromContext(ctx); tracker != nil {
+			provider := "unknown"
+			if a.aiClient != nil {
+				provider = a.aiClient.RoutingProvider()
+				if model == "" {
+					model = a.aiClient.Model()
+				}
+			}
+			tracker.Record(CostEntry{Model: model, Provider: provider, RoutingProvider: provider, UsageStatus: "missing"})
+		}
 		return
 	}
 	tracker := costTrackerFromContext(ctx)
@@ -87,7 +97,13 @@ func (a *Agent) recordLLMUsage(ctx context.Context, model string, usage *ai.Usag
 		cost = &c
 		costSource = "provider"
 	}
+	provider := "unknown"
+	if a.aiClient != nil {
+		provider = a.aiClient.RoutingProvider()
+	}
 	tracker.Record(CostEntry{
+		Provider:            provider,
+		RoutingProvider:     provider,
 		Model:               model,
 		InputTokens:         usage.PromptTokens,
 		OutputTokens:        usage.CompletionTokens,

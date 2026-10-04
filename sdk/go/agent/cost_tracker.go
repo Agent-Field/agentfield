@@ -23,7 +23,9 @@ const UsageEnvelopeKey = "__agentfield_usage__"
 // serialized form is the cross-language wire contract.
 type CostEntry struct {
 	// Model is the model slug the call ran against (e.g. "openai/gpt-4o").
-	Model string
+	Model           string
+	UsageStatus     string
+	RoutingProvider string
 
 	InputTokens  int
 	OutputTokens int
@@ -186,6 +188,12 @@ func (t *CostTracker) Serialize() map[string]any {
 			"cost_usd":              nullableFloat(e.CostUSD),
 			"cost_source":           nullableString(e.CostSource),
 		})
+		if e.RoutingProvider != "" {
+			entries[len(entries)-1]["routing_provider"] = e.RoutingProvider
+		}
+		if e.UsageStatus != "" {
+			entries[len(entries)-1]["usage_status"] = e.UsageStatus
+		}
 		totalInput += e.InputTokens
 		totalOutput += e.OutputTokens
 		totalTokens += entryTotal

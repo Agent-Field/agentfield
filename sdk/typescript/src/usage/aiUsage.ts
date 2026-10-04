@@ -124,7 +124,13 @@ export function recordAiSdkUsage(params: {
       tokens.totalTokens > 0 ||
       tokens.cacheReadTokens > 0 ||
       tokens.cacheCreationTokens > 0;
-    if (!hasTokens && cost === null) return;
+    if (!hasTokens && cost === null) {
+      if (params.source.totalUsage === undefined && params.source.usage === undefined) {
+        tracker.record({ model: params.model, provider: params.provider ?? 'unknown',
+          routingProvider: params.provider ?? 'unknown', usageStatus: 'missing' });
+      }
+      return;
+    }
 
     tracker.record({
       model: params.model,
@@ -136,6 +142,7 @@ export function recordAiSdkUsage(params: {
           ? params.reasonerName
           : current?.metadata.reasonerId ?? null,
       source: 'llm',
+      routingProvider: params.provider ?? undefined,
       provider: params.provider ?? undefined
     });
   } catch {

@@ -2823,9 +2823,7 @@ func (a *Agent) AIStream(ctx context.Context, prompt string, opts ...ai.Option) 
 				break forward
 			}
 		}
-		if usage != nil {
-			a.recordLLMUsage(ctx, model, usage)
-		}
+		a.recordLLMUsage(ctx, model, usage)
 	}()
 	return out, errs
 }

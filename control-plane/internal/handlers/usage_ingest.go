@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -52,6 +53,10 @@ func (c *executionController) ingestUsage(ctx context.Context, exec *types.Execu
 			Str("execution_id", exec.ExecutionID).
 			Int("entries", len(rows)).
 			Msg("failed to persist execution usage; continuing")
+		return
+	}
+	for i, row := range rows {
+		events.PublishUsage(exec.ExecutionID, i, row)
 	}
 }
 
@@ -89,6 +94,8 @@ func parseUsageEntries(exec *types.Execution, usageRaw map[string]interface{}) [
 			Reasoner:            usageString(entry["reasoner"]),
 			Source:              usageString(entry["source"]),
 			Provider:            usageString(entry["provider"]),
+			UsageStatus:         usageString(entry["usage_status"]),
+			RoutingProvider:     usageString(entry["routing_provider"]),
 			Model:               usageString(entry["model"]),
 			Harness:             usageString(entry["harness"]),
 			InputTokens:         input,

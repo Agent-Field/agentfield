@@ -102,13 +102,13 @@ describe('AIClient usage capture', () => {
     expect(wire.total_cost_usd).toBe(0.0042);
   });
 
-  it('records nothing when the result has no usage, and nothing outside an execution', async () => {
+  it('marks a missing usage receipt, and records nothing outside an execution', async () => {
     generateTextMock.mockResolvedValue({ text: 'bare' });
     const client = new AIClient({ apiKey: 'k' });
 
     const ctx = makeContext('exec-ai-3');
     await ExecutionContext.run(ctx, () => client.generate('prompt'));
-    expect(ctx.costTracker.hasEntries).toBe(false);
+    expect(ctx.costTracker.serialize().entries).toEqual([expect.objectContaining({ usage_status: 'missing' })]);
 
     // Outside an execution the call still succeeds.
     generateTextMock.mockResolvedValue({ text: 'ok', usage: sdkUsage(1, 1) });
@@ -330,4 +330,30 @@ describe('harness usage capture', () => {
       model: 'claude-opus-4-8'
     });
   });
+});
+
+it('captures caller-consumed stream usage without eager consumption', async () => {
+  let consumed = 0;
+  async function* textStream() { consumed++; yield 'hello'; }
+  streamTextMock.mockReturnValue({ textStream: textStream(), totalUsage: Promise.resolve(sdkUsage(7, 2)) });
+  const ctx = makeContext('stream-usage');
+  const client = new AIClient({ provider: 'openrouter', apiKey: 'k', model: 'deepseek/deepseek-v4' });
+  const stream = await ExecutionContext.run(ctx, () => client.stream('hello'));
+  expect(consumed).toBe(0);
+  let text = '';
+  for await (const chunk of stream) text += chunk;
+  expect(text).toBe('hello');
+  expect(ctx.costTracker.serialize().entries).toEqual([expect.objectContaining({ routing_provider: 'openrouter', total_tokens: 9 })]);
+});
+
+it('marks abandoned streams missing without draining them', async () => {
+  let consumed = 0;
+  async function* textStream() { consumed++; yield 'hello'; consumed++; yield 'ignored'; }
+  streamTextMock.mockReturnValue({ textStream: textStream() });
+  const ctx = makeContext('abandoned-usage');
+  const client = new AIClient({ provider: 'openrouter', apiKey: 'k', model: 'qwen/qwen3' });
+  const stream = await ExecutionContext.run(ctx, () => client.stream('hello'));
+  for await (const _chunk of stream) break;
+  expect(consumed).toBe(1);
+  expect(ctx.costTracker.serialize().entries).toEqual([expect.objectContaining({ usage_status: 'missing' })]);
 });

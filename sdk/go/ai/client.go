@@ -17,6 +17,17 @@ type Client struct {
 	rateLimiter *RateLimiter
 }
 
+// RoutingProvider identifies the API route independently of the returned model vendor.
+func (c *Client) RoutingProvider() string {
+	if c.config.IsOpenRouter() {
+		return "openrouter"
+	}
+	if strings.Contains(strings.ToLower(c.config.BaseURL), "api.openai.com") {
+		return "openai"
+	}
+	return "unknown"
+}
+
 // ClientOption configures an AI client during construction.
 type ClientOption func(*Client)
 

@@ -22,6 +22,7 @@ import {
   mergeOpenRouterAttributionHeaders,
 } from './openrouterAttribution.js';
 import { withOpenRouterUsageInclude } from './openrouterUsage.js';
+import { ExecutionContext } from '../context/ExecutionContext.js';
 import { recordAiSdkUsage } from '../usage/aiUsage.js';
 import {
   audioMediaType,
@@ -144,21 +145,35 @@ export class AIClient {
     return (response).text as string;
   }
 
-  // NOTE: stream() usage is deliberately NOT captured. The AI SDK's
-  // streamResult.usage/.totalUsage promises "automatically consume the
-  // stream": attaching to them would force full background consumption of a
-  // stream the caller may abandon early, changing stream semantics.
+  // Observe usage only after the caller consumes the stream. Merely creating
+  // the stream must not start background consumption of an abandoned response.
   async stream(prompt: string, options: AIRequestOptions = {}): Promise<AIStream> {
-    const model = this.buildModel(options);
+    const { provider, modelName } = this.resolveModelChoice(options);
+    const tracker = ExecutionContext.getCurrent()?.costTracker;
     const streamResult = streamText({
-      model: model,
+      model: this.buildModel(options),
       prompt: this.buildPrompt(prompt, options.content),
       system: options.system,
       temperature: options.temperature ?? this.config.temperature,
       maxOutputTokens: options.maxTokens ?? this.config.maxTokens
     });
-
-    return streamResult.textStream;
+    if (!tracker) return streamResult.textStream;
+    return (async function* () {
+      let completed = false;
+      try {
+        for await (const text of streamResult.textStream) yield text;
+        try {
+          const usage = await streamResult.totalUsage;
+          if (usage) recordAiSdkUsage({ source: { totalUsage: usage }, model: modelName, provider, tracker });
+          else tracker.record({ model: modelName, provider, routingProvider: provider, usageStatus: 'missing' });
+        } catch {
+          tracker.record({ model: modelName, provider, routingProvider: provider, usageStatus: 'missing' });
+        }
+        completed = true;
+      } finally {
+        if (!completed) tracker.record({ model: modelName, provider, routingProvider: provider, usageStatus: 'missing' });
+      }
+    })();
   }
 
   async embed(value: string, options: AIEmbeddingOptions = {}) {

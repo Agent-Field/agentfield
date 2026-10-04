@@ -6,6 +6,8 @@ import "time"
 // execution. One execution may produce many rows (one per LLM/harness entry
 // reported by the agent SDK in the result envelope's "usage" object).
 type ExecutionUsage struct {
+	RoutingProvider     string // explicit API route; absent for older SDKs
+	UsageStatus         string // "missing" when an SDK observed a call without a usage receipt
 	ID                  int64
 	ExecutionID         string
 	WorkflowID          string
