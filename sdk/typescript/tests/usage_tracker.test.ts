@@ -291,3 +291,14 @@ describe('withOpenRouterUsageInclude', () => {
     expect(base.mock.calls[2][1]).toBeUndefined();
   });
 });
+
+it('records a known zero-token receipt as reported rather than missing', () => {
+  const ctx = makeContext('known-zero-receipt');
+  ExecutionContext.run(ctx, () => {
+    recordAiSdkUsage({ source: { usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }, model: 'gpt-4o', provider: 'openrouter' });
+  });
+  expect(ctx.costTracker.serialize().entries).toEqual([expect.objectContaining({
+    routing_provider: 'openrouter', input_tokens: 0, output_tokens: 0, total_tokens: 0
+  })]);
+  expect(ctx.costTracker.serialize().entries[0].usage_status).toBeUndefined();
+});

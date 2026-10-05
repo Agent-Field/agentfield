@@ -6,6 +6,7 @@ from agentfield.agent_registry import (
 import queue
 import threading
 
+
 class DummyAgent:
     pass
 
@@ -90,3 +91,26 @@ def test_agent_registry_concurrent_set():
     assert thread_results["b"] is not main_thread_agent
 
     clear_current_agent()
+
+
+def test_obsolete_agent_finalizer_preserves_current_owner():
+    import gc
+    from agentfield.agent import Agent
+
+    clear_current_agent()
+    old_agent = object.__new__(Agent)
+    current_agent = DummyAgent()
+    set_current_agent(current_agent)
+    del old_agent
+    gc.collect()
+    assert get_current_agent_instance() is current_agent
+    clear_current_agent()
+
+
+def test_current_agent_finalizer_clears_its_own_registry_entry():
+    from agentfield.agent import Agent
+
+    current_agent = object.__new__(Agent)
+    set_current_agent(current_agent)
+    current_agent.__del__()
+    assert get_current_agent_instance() is None

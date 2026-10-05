@@ -5588,8 +5588,12 @@ class Agent(FastAPI):
                     # Ignore async cleanup errors in destructor
                     pass
 
-            # Clear agent from thread-local storage as final cleanup
-            clear_current_agent()
+            # An obsolete agent may be collected after a newer agent has been
+            # registered in this context. Its finalizer must not clear that owner.
+            from agentfield.agent_registry import get_current_agent_instance
+
+            if get_current_agent_instance() is self:
+                clear_current_agent()
         except Exception:
             # Ignore errors in destructor to prevent warnings during garbage collection
             pass

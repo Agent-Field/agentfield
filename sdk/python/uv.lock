@@ -30,6 +30,7 @@ dev = [
     { name = "freezegun" },
     { name = "hypothesis" },
     { name = "langfuse" },
+    { name = "litellm" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -63,6 +64,7 @@ harness-opencode = [
 ]
 langfuse = [
     { name = "langfuse" },
+    { name = "litellm" },
 ]
 
 [package.metadata]
@@ -81,6 +83,8 @@ requires-dist = [
     { name = "langfuse", marker = "extra == 'langfuse'", specifier = ">=2.59.7,<3" },
     { name = "litellm", marker = "python_full_version < '3.11'", specifier = "!=1.97.0,<1.98.0" },
     { name = "litellm", marker = "python_full_version >= '3.11'" },
+    { name = "litellm", marker = "extra == 'dev'", specifier = "<1.104.0" },
+    { name = "litellm", marker = "extra == 'langfuse'", specifier = "<1.104.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==1.18.2" },
     { name = "openai-codex", marker = "extra == 'harness-all'", specifier = ">=0.1.0b3" },
     { name = "openai-codex", marker = "extra == 'harness-codex'", specifier = ">=0.1.0b3" },

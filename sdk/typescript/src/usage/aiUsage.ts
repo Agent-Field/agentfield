@@ -124,11 +124,14 @@ export function recordAiSdkUsage(params: {
       tokens.totalTokens > 0 ||
       tokens.cacheReadTokens > 0 ||
       tokens.cacheCreationTokens > 0;
-    if (!hasTokens && cost === null) {
-      if (params.source.totalUsage === undefined && params.source.usage === undefined) {
-        tracker.record({ model: params.model, provider: params.provider ?? 'unknown',
-          routingProvider: params.provider ?? 'unknown', usageStatus: 'missing' });
-      }
+    const receipt = params.source.totalUsage ?? params.source.usage;
+    const hasTokenReceipt = isRecord(receipt) &&
+      ['inputTokens', 'outputTokens', 'totalTokens'].some(
+        key => typeof receipt[key] === 'number' && Number.isFinite(receipt[key])
+      );
+    if (!hasTokens && cost === null && !hasTokenReceipt) {
+      tracker.record({ model: params.model, provider: params.provider ?? 'unknown',
+        routingProvider: params.provider ?? 'unknown', usageStatus: 'missing' });
       return;
     }
 

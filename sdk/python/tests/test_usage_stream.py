@@ -112,3 +112,34 @@ async def test_async_context_manager_protocol_is_preserved():
         assert source.entered
     assert source.exited
     assert tracker.serialize()["entries"][0]["usage_status"] == "missing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_tokens", ["broken", 10**400, -1, float("nan")])
+async def test_malformed_usage_marks_missing_without_corrupting_output(bad_tokens):
+    async def source():
+        yield SimpleNamespace(content="hello", usage={"prompt_tokens": bad_tokens})
+
+    tracker = CostTracker()
+    stream = UsageTrackingStream(
+        source(), tracker, "openrouter/qwen/qwen3", "openrouter"
+    )
+    assert [chunk.content async for chunk in stream] == ["hello"]
+    assert tracker.serialize()["entries"][0]["usage_status"] == "missing"
+
+
+@pytest.mark.asyncio
+async def test_tracker_failure_does_not_change_successful_stream():
+    class BrokenTracker:
+        def record(self, **kwargs):
+            raise RuntimeError("optional accounting failed")
+
+    async def source():
+        yield SimpleNamespace(
+            content="hello", usage={"prompt_tokens": 1, "completion_tokens": 1}
+        )
+
+    stream = UsageTrackingStream(
+        source(), BrokenTracker(), "openrouter/qwen/qwen3", "openrouter"
+    )
+    assert [chunk.content async for chunk in stream] == ["hello"]

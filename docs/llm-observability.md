@@ -26,7 +26,11 @@ export LANGFUSE_HOST=https://cloud.langfuse.com
 export AGENTFIELD_LITELLM_CALLBACKS=langfuse
 ```
 
-The extra deliberately installs LangFuse 2.x, the client API supported by LiteLLM's standard `langfuse` callback. Installing an unbounded LangFuse 3.x or 4.x package with that callback can degrade to a logged no-op, so AgentField refuses the standard callback at registration time when the compatible client is missing or outside its tested range. Use the extra rather than installing `langfuse` separately. Other callback integrations remain separate packages; for example, install and configure `logfire` before selecting the `logfire` callback.
+The extra deliberately installs LangFuse 2.x together with LiteLLM <1.104.0,
+the callback range supporting that client API. LiteLLM 1.104.0 migrated its
+standard callback to LangFuse >=4.7,<5, so the optional LangFuse and development
+extras constrain LiteLLM until that integration is migrated and verified.
+The base SDK can still use newer LiteLLM when this extra is not requested. Installing an unbounded LangFuse 3.x or 4.x package with that callback can degrade to a logged no-op, so AgentField refuses the standard callback at registration time when the compatible client is missing or outside its tested range. Use the extra rather than installing `langfuse` separately. Other callback integrations remain separate packages; for example, install and configure `logfire` before selecting the `logfire` callback.
 
 ## Execution metadata
 

@@ -66,6 +66,8 @@ langfuse = [
     # Keep this aligned with LiteLLM's own proxy-runtime compatibility range;
     # installing an unbounded Langfuse v3/v4 package silently disables traces.
     "langfuse>=2.59.7,<3",
+    # LiteLLM 1.104 migrates its callback to LangFuse 4.7; keep the v2 extra coherent.
+    "litellm<1.104.0",
 ]
 harness-claude = [
     "claude-agent-sdk>=0.1",
@@ -90,6 +92,8 @@ dev = [
     "tomli>=2.0; python_version < '3.11'",
     # Exercise the real optional callback in SDK CI and the LiteLLM canary.
     "langfuse>=2.59.7,<3",
+    # LiteLLM 1.104 migrates its callback to LangFuse 4.7; keep the v2 extra coherent.
+    "litellm<1.104.0",
     "pytest>=9.0.3,<10",
     "pytest-asyncio>=1.3,<2",
     "pytest-cov>=4.1,<5",

@@ -271,3 +271,22 @@ func TestToolCallLoopTraceSkipsMissingUsage(t *testing.T) {
 	require.NotNil(t, trace)
 	assert.Empty(t, trace.Usage)
 }
+
+func TestRoutingProviderUsesHostnameNotPrivateURLText(t *testing.T) {
+	for _, tc := range []struct{ endpoint, model, want string }{
+		{"https://api.openai.com/v1", "gpt-4o", "openai"},
+		{"https://API.OPENAI.COM:443/v1", "gpt-4o", "openai"},
+		{"https://fooapi.openai.com/v1", "gpt-4o", "unknown"},
+		{"https://private.example/api.openai.com", "gpt-4o", "unknown"},
+		{"https://private.example/openrouter.ai", "gpt-4o", "unknown"},
+		{"https://openrouter.ai/api/v1", "anthropic/claude", "openrouter"},
+		{"https://proxy.example/v1", "openrouter/qwen/qwen3", "openrouter"},
+	} {
+		t.Run(tc.endpoint, func(t *testing.T) {
+			client := &Client{config: &Config{BaseURL: tc.endpoint, Model: tc.model}}
+			if got := client.RoutingProvider(); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}

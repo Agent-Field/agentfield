@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -19,11 +20,18 @@ type Client struct {
 
 // RoutingProvider identifies the API route independently of the returned model vendor.
 func (c *Client) RoutingProvider() string {
-	if c.config.IsOpenRouter() {
-		return "openrouter"
+	endpoint, err := url.Parse(c.config.BaseURL)
+	if err == nil {
+		switch strings.ToLower(endpoint.Hostname()) {
+		case "openrouter.ai":
+			return "openrouter"
+		case "api.openai.com":
+			return "openai"
+		}
 	}
-	if strings.Contains(strings.ToLower(c.config.BaseURL), "api.openai.com") {
-		return "openai"
+	// An explicit routing prefix also identifies an OpenRouter proxy route.
+	if strings.HasPrefix(strings.ToLower(c.config.Model), "openrouter/") {
+		return "openrouter"
 	}
 	return "unknown"
 }
