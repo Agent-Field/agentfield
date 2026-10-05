@@ -57,6 +57,30 @@ type TurnUsage struct {
 	Usage *Usage
 }
 
+// TracedMessage tags a message the loop sent with where it came from, so
+// callers can tell SDK-injected text apart from user and model content.
+// Message holds a reference to the message in the loop (not a copy), so the
+// wire messages are never reshaped to make tagging easier (issue #229).
+//
+// Source uses the cross-SDK taxonomy shared with the Python and TypeScript
+// SDKs: "user", "assistant", "sdk.tool_system_prompt", "sdk.tool_result",
+// "sdk.tool_error", "sdk.tool_limit". ("sdk.schema_instruction" exists only in
+// the Python SDK, which injects it; Go uses native structured output.)
+type TracedMessage struct {
+	Message Message `json:"message"`
+	Source  string  `json:"source"`
+}
+
+// Message source tags shared across the SDKs.
+const (
+	TraceSourceUser             = "user"
+	TraceSourceAssistant        = "assistant"
+	TraceSourceToolSystemPrompt = "sdk.tool_system_prompt"
+	TraceSourceToolResult       = "sdk.tool_result"
+	TraceSourceToolError        = "sdk.tool_error"
+	TraceSourceToolLimit        = "sdk.tool_limit"
+)
+
 // ToolCallTrace records the full trace of a tool-call loop.
 type ToolCallTrace struct {
 	Calls          []ToolCallRecord
@@ -69,6 +93,11 @@ type ToolCallTrace struct {
 	// order, so callers can account for the loop's full cost. Responses
 	// without usage data are skipped.
 	Usage []TurnUsage
+
+	// Messages tags each message the loop sent with its source. Additive and
+	// omitempty so existing callers that marshal a trace do not start seeing a
+	// null field (issue #229).
+	Messages []TracedMessage `json:"Messages,omitempty"`
 }
 
 // recordUsage appends resp's usage to the trace when present.
@@ -178,6 +207,26 @@ func (c *Client) ExecuteToolCallLoopResult(
 	}
 	loopMessages := append([]Message(nil), messages...)
 
+	// Tag the caller-supplied messages as user content.
+	for i := range loopMessages {
+		trace.Messages = append(trace.Messages, TracedMessage{
+			Message: loopMessages[i],
+			Source:  TraceSourceUser,
+		})
+	}
+	// The tool system prompt (config.SystemPrompt) is prepended to each request
+	// via WithSystem rather than kept in loopMessages, so record it once as an
+	// SDK-injected message when set.
+	if strings.TrimSpace(config.SystemPrompt) != "" {
+		trace.Messages = append(trace.Messages, TracedMessage{
+			Message: Message{
+				Role:    "system",
+				Content: []ContentPart{{Type: "text", Text: config.SystemPrompt}},
+			},
+			Source: TraceSourceToolSystemPrompt,
+		})
+	}
+
 	for turn := 0; turn < config.MaxTurns; turn++ {
 		trace.TotalTurns = turn + 1
 
@@ -200,14 +249,23 @@ func (c *Client) ExecuteToolCallLoopResult(
 
 		// Append assistant message with tool calls
 		loopMessages = append(loopMessages, resp.Choices[0].Message)
+		trace.Messages = append(trace.Messages, TracedMessage{
+			Message: resp.Choices[0].Message,
+			Source:  TraceSourceAssistant,
+		})
 
 		// Execute each tool call
 		for _, tc := range resp.ToolCalls() {
 			if totalCalls >= config.MaxToolCalls {
-				loopMessages = append(loopMessages, Message{
+				limitMsg := Message{
 					Role:       "tool",
 					Content:    []ContentPart{{Type: "text", Text: encodeToolContent(map[string]string{"error": promptConfig.ToolCallLimitReached})}},
 					ToolCallID: tc.ID,
+				}
+				loopMessages = append(loopMessages, limitMsg)
+				trace.Messages = append(trace.Messages, TracedMessage{
+					Message: limitMsg,
+					Source:  TraceSourceToolLimit,
 				})
 				continue
 			}
@@ -233,17 +291,27 @@ func (c *Client) ExecuteToolCallLoopResult(
 
 			if err != nil {
 				record.Error = err.Error()
-				loopMessages = append(loopMessages, Message{
+				errMsg := Message{
 					Role:       "tool",
 					Content:    []ContentPart{{Type: "text", Text: encodeToolContent(promptConfig.ToolErrorFormatter(toolName, err))}},
 					ToolCallID: tc.ID,
+				}
+				loopMessages = append(loopMessages, errMsg)
+				trace.Messages = append(trace.Messages, TracedMessage{
+					Message: errMsg,
+					Source:  TraceSourceToolError,
 				})
 			} else {
 				record.Result = toolResult
-				loopMessages = append(loopMessages, Message{
+				resultMsg := Message{
 					Role:       "tool",
 					Content:    []ContentPart{{Type: "text", Text: encodeToolContent(promptConfig.ToolResultFormatter(toolName, toolResult))}},
 					ToolCallID: tc.ID,
+				}
+				loopMessages = append(loopMessages, resultMsg)
+				trace.Messages = append(trace.Messages, TracedMessage{
+					Message: resultMsg,
+					Source:  TraceSourceToolResult,
 				})
 			}
 

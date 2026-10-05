@@ -138,7 +138,10 @@ export class ReasonerContext<TInput = any> {
     const mergedConfig = {
       ...config,
       maxTurns: options.maxTurns ?? config.maxTurns ?? 10,
-      maxToolCalls: options.maxToolCalls ?? config.maxToolCalls ?? 25
+      maxToolCalls: options.maxToolCalls ?? config.maxToolCalls ?? 25,
+      // Carry the agent's prompt-template overrides into the loop (issue #229).
+      promptTemplates:
+        this.aiClient.promptTemplates ?? config.promptTemplates
     };
 
     // Resolve the provider/model pair once so the tool loop can attribute

@@ -24,6 +24,14 @@ from typing import (
 )
 
 from agentfield.logger import log_debug, log_error, log_warn
+from agentfield.prompt_templates import (
+    TRACE_SOURCE_ASSISTANT,
+    TRACE_SOURCE_TOOL_ERROR,
+    TRACE_SOURCE_TOOL_LIMIT,
+    TRACE_SOURCE_TOOL_RESULT,
+    PromptTemplates,
+    TracedMessage,
+)
 from agentfield.types import (
     AgentCapability,
     DiscoveryResponse,
@@ -53,6 +61,9 @@ class ToolCallConfig:
     tags: Optional[List[str]] = None
     agent_ids: Optional[List[str]] = None
     health_status: Optional[str] = None
+    # Overridable text and formatters the loop injects into tool messages.
+    # Defaults reproduce the SDK's prior output byte-for-byte (issue #229).
+    prompt_templates: PromptTemplates = field(default_factory=PromptTemplates)
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +92,9 @@ class ToolCallTrace:
     total_tool_calls: int = 0
     final_response: Optional[str] = None
     hydration_retries: int = 0
+    # Each message the loop sent, tagged with its source. Additive and defaulted
+    # so existing callers that construct a ToolCallTrace are unaffected (#229).
+    messages: List[TracedMessage] = field(default_factory=list)
 
 
 class ToolCallResponse:
@@ -460,7 +474,11 @@ async def execute_tool_call_loop(
             continue
 
         # Append assistant message with tool calls
-        messages.append(response_message.model_dump())
+        assistant_message = response_message.model_dump()
+        messages.append(assistant_message)
+        trace.messages.append(
+            TracedMessage(message=assistant_message, source=TRACE_SOURCE_ASSISTANT)
+        )
 
         # Execute each tool call
         _timeout_break = False
@@ -471,16 +489,16 @@ async def execute_tool_call_loop(
                     f"stopping tool execution"
                 )
                 # Add a message telling the LLM about the limit
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": json.dumps(
-                            {
-                                "error": "Tool call limit reached. Please provide a final response."
-                            }
-                        ),
-                    }
+                limit_message = {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(
+                        {"error": config.prompt_templates.tool_call_limit_reached}
+                    ),
+                }
+                messages.append(limit_message)
+                trace.messages.append(
+                    TracedMessage(message=limit_message, source=TRACE_SOURCE_TOOL_LIMIT)
                 )
                 continue
 
@@ -492,16 +510,20 @@ async def execute_tool_call_loop(
             invocation_target = _unsanitize_tool_name(func_name)
             raw_args = getattr(tc.function, "arguments", None)
             if raw_args is None:
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": json.dumps(
-                            {
-                                "error": f"Tool call to '{func_name}' is missing the 'arguments' field. Please retry with valid JSON arguments."
-                            }
-                        ),
-                    }
+                missing_args_message = {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(
+                        {
+                            "error": f"Tool call to '{func_name}' is missing the 'arguments' field. Please retry with valid JSON arguments."
+                        }
+                    ),
+                }
+                messages.append(missing_args_message)
+                trace.messages.append(
+                    TracedMessage(
+                        message=missing_args_message, source=TRACE_SOURCE_TOOL_ERROR
+                    )
                 )
                 continue
             try:
@@ -525,12 +547,18 @@ async def execute_tool_call_loop(
                 record.result = result
                 record.latency_ms = (time.monotonic() - start_time) * 1000
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": json.dumps(result, default=str),
-                    }
+                result_message = {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": config.prompt_templates.format_tool_result(
+                        func_name, result
+                    ),
+                }
+                messages.append(result_message)
+                trace.messages.append(
+                    TracedMessage(
+                        message=result_message, source=TRACE_SOURCE_TOOL_RESULT
+                    )
                 )
 
                 log_debug(
@@ -544,17 +572,18 @@ async def execute_tool_call_loop(
 
                 log_error(f"Tool call timed out: {func_name} - {e}")
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": json.dumps(
-                            {
-                                "error": f"Tool execution timed out: {e}",
-                                "tool": func_name,
-                            }
-                        ),
-                    }
+                timeout_message = {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": config.prompt_templates.format_tool_error(
+                        func_name, f"Tool execution timed out: {e}"
+                    ),
+                }
+                messages.append(timeout_message)
+                trace.messages.append(
+                    TracedMessage(
+                        message=timeout_message, source=TRACE_SOURCE_TOOL_ERROR
+                    )
                 )
 
                 trace.calls.append(record)
@@ -567,12 +596,16 @@ async def execute_tool_call_loop(
 
                 log_error(f"Tool call failed: {func_name} - {e}")
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": json.dumps({"error": str(e), "tool": func_name}),
-                    }
+                error_message = {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": config.prompt_templates.format_tool_error(
+                        func_name, str(e)
+                    ),
+                }
+                messages.append(error_message)
+                trace.messages.append(
+                    TracedMessage(message=error_message, source=TRACE_SOURCE_TOOL_ERROR)
                 )
 
             trace.calls.append(record)

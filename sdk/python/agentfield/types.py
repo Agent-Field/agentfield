@@ -7,6 +7,7 @@ from agentfield.openrouter_attribution import (
     apply_litellm_attribution,
     apply_openrouter_usage_accounting,
 )
+from agentfield.prompt_templates import PromptTemplates
 
 
 class AgentStatus(str, Enum):
@@ -559,6 +560,14 @@ class AIConfig(BaseModel):
     max_input_tokens: Optional[int] = Field(
         default=None,
         description="Maximum input context tokens (overrides auto-detection)",
+    )
+
+    # All SDK-injected prompt text and tool-message formatters live here so they
+    # are discoverable and overridable in one place. Defaults reproduce the
+    # SDK's prior behavior exactly (issue #229).
+    prompt_templates: PromptTemplates = Field(
+        default_factory=PromptTemplates,
+        description="Overridable templates for text the SDK injects into LLM calls.",
     )
 
     # Pydantic V2: allow fields that start with `model_`

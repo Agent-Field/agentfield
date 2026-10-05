@@ -17,6 +17,16 @@ import type {
 import type { Agent } from '../agent/Agent.js';
 import type { AIRequestOptions } from './AIClient.js';
 import { recordAiSdkUsage } from '../usage/aiUsage.js';
+import {
+  type PromptTemplates,
+  type ResolvedPromptTemplates,
+  type TracedMessage,
+  resolvePromptTemplates,
+  TRACE_SOURCE_TOOL_ERROR,
+  TRACE_SOURCE_TOOL_LIMIT,
+  TRACE_SOURCE_TOOL_RESULT,
+  TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
+} from './PromptTemplates.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -41,6 +51,11 @@ export interface ToolCallConfig {
   agentIds?: string[];
   /** Filter by health status (default: "healthy"). */
   healthStatus?: string;
+  /**
+   * Overridable text and tool-message framing. Defaults reproduce the SDK's
+   * prior output byte-for-byte (issue #229).
+   */
+  promptTemplates?: Partial<PromptTemplates>;
 }
 
 const DEFAULT_MAX_TURNS = 10;
@@ -65,6 +80,12 @@ export interface ToolCallTrace {
   totalTurns: number;
   totalToolCalls: number;
   finalResponse?: string;
+  /**
+   * Each message the loop sent, tagged with its source. Optional and additive
+   * so callers that build a ToolCallTrace in their own tests are unaffected
+   * (issue #229).
+   */
+  messages?: TracedMessage[];
 }
 
 // ---------------------------------------------------------------------------
@@ -369,7 +390,8 @@ function wrapToolsWithObservability(
   agent: Agent,
   trace: ToolCallTrace,
   maxToolCalls: number,
-  getCurrentTurn: () => number
+  getCurrentTurn: () => number,
+  templates: ResolvedPromptTemplates
 ): { tools: ToolSet; getTotalCalls: () => number } {
   let totalCalls = 0;
   const observableTools: ToolSet = {};
@@ -392,7 +414,12 @@ function wrapToolsWithObservability(
             turn: getCurrentTurn()
           };
           trace.calls.push(record);
-          return { error: 'Tool call limit reached. Please provide a final response.' };
+          const limitContent = { error: templates.toolCallLimitReached };
+          (trace.messages ??= []).push({
+            message: limitContent,
+            source: TRACE_SOURCE_TOOL_LIMIT
+          });
+          return limitContent;
         }
 
         const record: ToolCallRecord = {
@@ -410,12 +437,23 @@ function wrapToolsWithObservability(
           record.result = result;
           record.latencyMs = Date.now() - start;
           trace.calls.push(record);
-          return result;
+          const resultContent = templates.toolResultFormatter(name, result);
+          (trace.messages ??= []).push({
+            message: resultContent,
+            source: TRACE_SOURCE_TOOL_RESULT
+          });
+          return resultContent;
         } catch (err: any) {
-          record.error = err.message ?? String(err);
+          const message = err.message ?? String(err);
+          record.error = message;
           record.latencyMs = Date.now() - start;
           trace.calls.push(record);
-          return { error: record.error, tool: name };
+          const errorContent = templates.toolErrorFormatter(name, message);
+          (trace.messages ??= []).push({
+            message: errorContent,
+            source: TRACE_SOURCE_TOOL_ERROR
+          });
+          return errorContent;
         }
       }
     });
@@ -436,6 +474,16 @@ export async function executeToolCallLoop(
 ): Promise<{ text: string; trace: ToolCallTrace }> {
   const maxTurns = config.maxTurns ?? DEFAULT_MAX_TURNS;
   const maxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
+  const templates = resolvePromptTemplates(config.promptTemplates);
+
+  // toolSystemPrompt defaults to undefined (nothing injected), so existing
+  // tools= calls are unchanged. When set, append it after the caller's system
+  // prompt.
+  const effectiveSystem = templates.toolSystemPrompt
+    ? options.system
+      ? `${options.system}\n\n${templates.toolSystemPrompt}`
+      : templates.toolSystemPrompt
+    : options.system;
 
   // Attribute usage to the resolved model when the caller supplied it; fall
   // back to the per-request model override. Without either there is no model
@@ -452,6 +500,14 @@ export async function executeToolCallLoop(
     totalTurns: 0,
     totalToolCalls: 0
   };
+
+  // Record the opt-in tool system prompt as an SDK-injected message when set.
+  if (templates.toolSystemPrompt) {
+    (trace.messages ??= []).push({
+      message: { role: 'system', content: templates.toolSystemPrompt },
+      source: TRACE_SOURCE_TOOL_SYSTEM_PROMPT
+    });
+  }
 
   let activeTools = toolMap;
 
@@ -472,7 +528,7 @@ export async function executeToolCallLoop(
     const selectionResult = await generateText({
       model: buildModel(),
       prompt,
-      system: options.system,
+      system: effectiveSystem,
       temperature: options.temperature,
       maxOutputTokens: options.maxTokens,
       tools: selectionTools,
@@ -506,14 +562,14 @@ export async function executeToolCallLoop(
 
   let currentTurn = 0;
   const { tools: observableTools } = wrapToolsWithObservability(
-    activeTools, agent, trace, maxToolCalls, () => currentTurn
+    activeTools, agent, trace, maxToolCalls, () => currentTurn, templates
   );
 
   const model = buildModel();
   const result = await generateText({
     model,
     prompt,
-    system: options.system,
+    system: effectiveSystem,
     temperature: options.temperature,
     maxOutputTokens: options.maxTokens,
     tools: observableTools,
