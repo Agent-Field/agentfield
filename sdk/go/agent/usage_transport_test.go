@@ -371,11 +371,22 @@ func TestAIRecordsUsageIntoTracker(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "openrouter/qwen/qwen3-coder", entries[0]["model"])
 	assert.Equal(t, "openrouter", entries[0]["provider"])
+	assert.Equal(t, "unknown", entries[0]["routing_provider"])
 	assert.Equal(t, "code", entries[0]["reasoner"])
 	assert.Equal(t, 100, entries[0]["input_tokens"])
 	assert.Equal(t, 50, entries[0]["output_tokens"])
 	assert.Equal(t, 7, entries[0]["cache_read_tokens"])
 	assert.Equal(t, "provider", entries[0]["cost_source"])
+
+	// Missing receipts retain the same model-derived local provider too.
+	missingTracker := NewCostTracker()
+	a.recordLLMUsage(contextWithCostTracker(context.Background(), missingTracker), "", nil)
+	missing := missingTracker.Serialize()["entries"].([]map[string]any)
+	require.Len(t, missing, 1)
+	assert.Equal(t, "openrouter", missing[0]["provider"])
+	assert.Equal(t, "unknown", missing[0]["routing_provider"])
+	assert.Equal(t, "missing", missing[0]["usage_status"])
+
 }
 
 // TestAIStreamRecordsFinalUsageChunk maps to the contract: streamed calls

@@ -76,7 +76,7 @@ func (a *Agent) recordLLMUsage(ctx context.Context, model string, usage *ai.Usag
 					model = a.aiClient.Model()
 				}
 			}
-			tracker.Record(CostEntry{Model: model, Provider: provider, RoutingProvider: provider, UsageStatus: "missing"})
+			tracker.Record(CostEntry{Model: model, RoutingProvider: provider, UsageStatus: "missing"})
 		}
 		return
 	}
@@ -102,7 +102,6 @@ func (a *Agent) recordLLMUsage(ctx context.Context, model string, usage *ai.Usag
 		provider = a.aiClient.RoutingProvider()
 	}
 	tracker.Record(CostEntry{
-		Provider:            provider,
 		RoutingProvider:     provider,
 		Model:               model,
 		InputTokens:         usage.PromptTokens,
