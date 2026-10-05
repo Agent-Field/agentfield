@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/gin-gonic/gin"
 )
 
@@ -282,6 +284,13 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 
 		if err != nil {
 			logger.Logger.Warn().Err(err).Str("caller_did", callerDID).Msg("DID signature verification error")
+			if errors.Is(err, services.ErrDIDDocumentStorage) {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+					"error":   "verification_unavailable",
+					"message": "DID verification temporarily unavailable",
+				})
+				return
+			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error":   "verification_error",
 				"message": "Failed to verify DID signature",

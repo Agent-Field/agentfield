@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
+
+// ErrDIDDocumentNotFound distinguishes a missing DID from a storage failure.
+var ErrDIDDocumentNotFound = errors.New("DID document not found")
 
 // TransactionalStorage methods (not fully implemented for local storage yet)
 func (ls *LocalStorage) BeginTransaction() (Transaction, error) {
@@ -743,7 +747,7 @@ func (ls *LocalStorage) GetDIDDocument(ctx context.Context, did string) (*types.
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("DID document not found: %s", did)
+			return nil, fmt.Errorf("%w: %s", ErrDIDDocumentNotFound, did)
 		}
 		return nil, fmt.Errorf("failed to get DID document: %w", err)
 	}
