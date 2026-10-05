@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
@@ -254,5 +256,27 @@ func TestIngestUsageAbsentIsNoOp(t *testing.T) {
 
 	if len(store.created) != 0 {
 		t.Errorf("CreateExecutionUsage called %d times for absent usage, want 0", len(store.created))
+	}
+}
+
+func TestUsageObserverRunsOnlyAfterSuccessfulPersistence(t *testing.T) {
+	defer events.SetUsageObserver(nil)
+	store := &fakeUsageStore{}
+	controller := &executionController{store: store}
+	calls := 0
+	events.SetUsageObserver(func(id string, index int, row *types.ExecutionUsage) {
+		if len(store.created) != 1 || id != sampleExec().ExecutionID || row != store.created[0][index] {
+			t.Fatal("observer received a receipt before persistence or with a changed identity")
+		}
+		calls++
+	})
+	controller.ingestUsage(context.Background(), sampleExec(), contractUsage())
+	if calls != 2 {
+		t.Fatalf("observer calls=%d", calls)
+	}
+	store.err = errors.New("storage unavailable")
+	controller.ingestUsage(context.Background(), sampleExec(), contractUsage())
+	if calls != 2 {
+		t.Fatal("failed persistence published usage")
 	}
 }

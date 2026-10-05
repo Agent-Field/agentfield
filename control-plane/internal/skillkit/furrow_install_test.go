@@ -7,7 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/furrow"
 )
 
 func TestInstallAgentfieldUseEnsuresFurrow(t *testing.T) {
@@ -35,6 +38,12 @@ func TestInstallAgentfieldUseEnsuresFurrow(t *testing.T) {
 
 	if _, err := Install(InstallOptions{SkillName: "agentfield-use", Targets: []string{"codex"}}); err != nil {
 		t.Fatalf("Install(agentfield-use): %v", err)
+	}
+	if _, supported := furrow.AssetName(runtime.GOOS, runtime.GOARCH); !supported {
+		if _, err := os.Stat(filepath.Join(home, "bin", "furrow")); !os.IsNotExist(err) {
+			t.Fatalf("unsupported platform unexpectedly provisioned furrow: %v", err)
+		}
+		return
 	}
 	info, err := os.Stat(filepath.Join(home, "bin", "furrow"))
 	if err != nil {

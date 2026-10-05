@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/Agent-Field/agentfield/control-plane/internal/config"
-	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 func TestUsageOutboxRetriesRestartDedupAndPrivacy(t *testing.T) {
@@ -132,5 +135,192 @@ func TestUsageAcknowledgementsSeparateFromPendingAndExpire(t *testing.T) {
 	pending, _ = filepath.Glob(filepath.Join(s.usageOutbox, "*.json"))
 	if len(pending) != 1 {
 		t.Fatalf("duplicate pending=%v", pending)
+	}
+}
+
+func TestUsageRejectsInvalidReceiptsAndOutboxFailures(t *testing.T) {
+	s, err := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, row := range []*types.ExecutionUsage{
+		{Source: "llm", InputTokens: -1},
+		{Source: "llm", OutputTokens: usageSafeInteger + 1},
+		{Source: "llm", InputTokens: usageSafeInteger, OutputTokens: 1},
+	} {
+		s.recordUsage("invalid", i, row)
+	}
+	s.recordUsage("", 0, &types.ExecutionUsage{Source: "llm"})
+	s.recordUsage("nil", 0, nil)
+	if _, err = os.Stat(s.usageOutbox); !os.IsNotExist(err) {
+		t.Fatal("invalid receipts queued")
+	}
+	if usageProvider("unbounded-vendor") != "other" || usageModelFamily("") != "unknown" {
+		t.Fatal("unbounded dimensions")
+	}
+	// A blocked durable directory must not turn recording into an execution error.
+	s.usageOutbox = filepath.Join(t.TempDir(), "blocked")
+	if err = os.WriteFile(s.usageOutbox, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.recordUsage("durability-error", 0, &types.ExecutionUsage{Source: "llm", InputTokens: 1})
+	if err = s.storeUsage(TelemetryEvent{EventID: "blocked"}); err == nil {
+		t.Fatal("storage failure was hidden")
+	}
+	if err = syncUsageDirectory(filepath.Join(t.TempDir(), "absent")); err == nil {
+		t.Fatal("absent directory sync succeeded")
+	}
+}
+
+func TestUsageOutboxCapacitySerializationAndRestartCount(t *testing.T) {
+	s, _ := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
+	if err := os.MkdirAll(s.usageOutbox, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.usageOutbox, "existing.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.storeUsage(TelemetryEvent{EventID: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	if s.usagePending != 2 {
+		t.Fatalf("restart count=%d", s.usagePending)
+	}
+	if err := s.storeUsage(TelemetryEvent{EventID: "malformed", Properties: map[string]interface{}{"invalid": make(chan int)}}); err == nil {
+		t.Fatal("unsupported receipt serialized")
+	}
+	s.usagePending = usageOutboxLimit
+	if err := s.storeUsage(TelemetryEvent{EventID: "overflow"}); err == nil {
+		t.Fatal("outbox accepted excess pending receipt")
+	}
+	if _, err := os.Stat(filepath.Join(s.usageOutbox, "overflow.json")); !os.IsNotExist(err) {
+		t.Fatal("overflow event written")
+	}
+}
+
+func TestUsageFlushExpiresPendingSkipsCorruptionAndHonorsCancellation(t *testing.T) {
+	s, _ := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
+	s.ctx = context.Background()
+	s.recordUsage("expired", 0, &types.ExecutionUsage{Source: "llm", InputTokens: 1})
+	files, _ := filepath.Glob(filepath.Join(s.usageOutbox, "*.json"))
+	old := time.Now().Add(-usageRetention - time.Hour)
+	if err := os.Chtimes(files[0], old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.usageOutbox, "broken.json"), []byte("{broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.usageOutbox, "unrelated.txt"), []byte("ignore"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	s.sender = func(context.Context, string, time.Duration, TelemetryEvent) error { calls++; return nil }
+	s.flushUsage()
+	if calls != 0 || s.usagePending != 0 {
+		t.Fatalf("expired/corrupt receipts delivered calls=%d pending=%d", calls, s.usagePending)
+	}
+	if _, err := os.Stat(files[0]); !os.IsNotExist(err) {
+		t.Fatal("expired pending receipt retained")
+	}
+	s.recordUsage("cancelled", 0, &types.ExecutionUsage{Source: "llm", InputTokens: 1})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.ctx = ctx
+	s.flushUsage()
+	if calls != 0 {
+		t.Fatal("cancelled worker sent receipt")
+	}
+}
+
+func TestUsageAcknowledgementFailurePreservesPendingForRetry(t *testing.T) {
+	s, _ := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
+	s.ctx = context.Background()
+	s.recordUsage("ack-failure", 0, &types.ExecutionUsage{Source: "llm", InputTokens: 1})
+	ackDir := filepath.Join(s.usageOutbox, "ack")
+	if err := os.WriteFile(ackDir, []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	s.sender = func(context.Context, string, time.Duration, TelemetryEvent) error { calls++; return nil }
+	s.flushUsage()
+	if s.usagePending != 1 {
+		t.Fatal("failed acknowledgement dropped pending receipt")
+	}
+	if err := os.Remove(ackDir); err != nil {
+		t.Fatal(err)
+	}
+	s.flushUsage()
+	if calls != 2 || s.usagePending != 0 {
+		t.Fatalf("retry calls=%d pending=%d", calls, s.usagePending)
+	}
+}
+
+func TestUsageWorkerLifecycleWakeAndOptOut(t *testing.T) {
+	disabled := false
+	home := t.TempDir()
+	disabledService, err := NewTelemetryService(config.TelemetryConfig{Enabled: &disabled, Endpoint: "x", InstallID: "test"}, home, "local", "v1")
+	if err != nil || disabledService != nil {
+		t.Fatal("optout created telemetry")
+	}
+	disabledService.Start(context.Background())
+	disabledService.Stop()
+	disabledService.recordUsage("disabled", 0, &types.ExecutionUsage{Source: "llm"})
+	if _, err = os.Stat(filepath.Join(home, "telemetry")); !os.IsNotExist(err) {
+		t.Fatal("optout wrote telemetry")
+	}
+	s, _ := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
+	delivered := make(chan string, 4)
+	s.sender = func(_ context.Context, _ string, _ time.Duration, event TelemetryEvent) error {
+		if event.EventName == "usage_delta" {
+			delivered <- event.EventID
+		}
+		return nil
+	}
+	s.Start(context.Background())
+	defer s.Stop()
+	events.PublishUsage("worker", 0, &types.ExecutionUsage{Source: "llm", InputTokens: 2})
+	select {
+	case <-delivered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not deliver queued receipt")
+	}
+	s.Stop()
+	events.PublishUsage("after-stop", 0, &types.ExecutionUsage{Source: "llm", InputTokens: 2})
+	pending, _ := filepath.Glob(filepath.Join(s.usageOutbox, "*.json"))
+	if len(pending) != 0 {
+		t.Fatal("unsubscribed observer queued usage")
+	}
+}
+
+func TestAcknowledgementCleanupKeepsNewestBoundedHistory(t *testing.T) {
+	s, _ := NewTelemetryService(config.TelemetryConfig{Endpoint: "x", InstallID: "test"}, t.TempDir(), "local", "v1")
+	dir := filepath.Join(s.usageOutbox, "ack")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldest := filepath.Join(dir, "oldest.sent")
+	for i := 0; i <= usageOutboxLimit; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("receipt-%05d.sent", i))
+		if i == 0 {
+			path = oldest
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(oldest, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ignore.txt"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.cleanupUsageAcknowledgements()
+	files, _ := filepath.Glob(filepath.Join(dir, "*.sent"))
+	if len(files) != usageOutboxLimit {
+		t.Fatalf("history count=%d", len(files))
+	}
+	if _, err := os.Stat(oldest); !os.IsNotExist(err) {
+		t.Fatal("oldest acknowledgement survived capacity cleanup")
 	}
 }
