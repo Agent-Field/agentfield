@@ -357,3 +357,33 @@ it('marks abandoned streams missing without draining them', async () => {
   expect(consumed).toBe(1);
   expect(ctx.costTracker.serialize().entries).toEqual([expect.objectContaining({ usage_status: 'missing' })]);
 });
+
+
+it('attributes all OpenAI-adapter call paths to the resolved OpenRouter endpoint', async () => {
+  const client = new AIClient({ provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'k', model: 'anthropic/claude' });
+  const ctx = makeContext('adapter-endpoint');
+  generateTextMock.mockResolvedValue({ text: 'done', steps: [], usage: sdkUsage(3, 2) });
+  generateObjectMock.mockResolvedValue({ object: {}, usage: sdkUsage(3, 2) });
+  async function* textStream() { yield 'hello'; }
+  streamTextMock.mockReturnValue({ textStream: textStream(), totalUsage: Promise.resolve(sdkUsage(3, 2)) });
+  await ExecutionContext.run(ctx, async () => {
+    await client.generate('hello');
+    await client.generate('hello', { schema: {} as any });
+    const stream = await client.stream('hello');
+    for await (const _chunk of stream) { /* consume */ }
+    await executeToolCallLoop({ discover: vi.fn(), call: vi.fn() } as any, 'hello', {} as any, {}, false, () => ({}), {}, client.resolveModelChoice());
+  });
+  expect(ctx.costTracker.serialize().entries).toHaveLength(4);
+  for (const entry of ctx.costTracker.serialize().entries) {
+    expect(entry.provider).toBe('openai');
+    expect(entry.routing_provider).toBe('openrouter');
+  }
+});
+
+it('bounds endpoint classification and defaults without confusing private URL text', () => {
+  expect(new AIClient({ provider: 'openai' }).resolveModelChoice().routingProvider).toBe('openai');
+  expect(new AIClient({ provider: 'google' }).resolveModelChoice().routingProvider).toBe('google');
+  for (const baseUrl of ['https://fooapi.openai.com/v1', 'https://private.example/openrouter.ai']) {
+    expect(new AIClient({ provider: 'openrouter', baseUrl }).resolveModelChoice().routingProvider).toBe('other');
+  }
+});

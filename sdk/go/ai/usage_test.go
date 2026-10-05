@@ -280,7 +280,7 @@ func TestRoutingProviderUsesHostnameNotPrivateURLText(t *testing.T) {
 		{"https://private.example/api.openai.com", "gpt-4o", "unknown"},
 		{"https://private.example/openrouter.ai", "gpt-4o", "unknown"},
 		{"https://openrouter.ai/api/v1", "anthropic/claude", "openrouter"},
-		{"https://proxy.example/v1", "openrouter/qwen/qwen3", "openrouter"},
+		{"https://proxy.example/v1", "openrouter/qwen/qwen3", "unknown"},
 	} {
 		t.Run(tc.endpoint, func(t *testing.T) {
 			client := &Client{config: &Config{BaseURL: tc.endpoint, Model: tc.model}}

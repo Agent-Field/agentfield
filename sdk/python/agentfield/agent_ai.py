@@ -1019,6 +1019,16 @@ class AgentAI:
                     log_debug(f"LiteLLM call failed: {e}")
                     raise
 
+            from .usage_routing import routing_provider
+            from agentfield.cost_tracker import derive_provider
+
+            request_provider = derive_provider(
+                litellm_params.get("model", final_config.model)
+            )
+            request_route = routing_provider(
+                request_provider, litellm_params.get("api_base")
+            )
+
             if final_config.stream:
                 from agentfield.cost_tracker import (
                     derive_provider,
@@ -1032,7 +1042,7 @@ class AgentAI:
                     return resp
                 requested_model = litellm_params.get("model", final_config.model)
                 return UsageTrackingStream(
-                    resp, tracker, requested_model, derive_provider(requested_model)
+                    resp, tracker, requested_model, request_provider, request_route
                 )
 
             from .multimodal_response import detect_multimodal_response
@@ -1066,9 +1076,7 @@ class AgentAI:
                         provider=derive_provider(
                             litellm_params.get("model", final_config.model)
                         ),
-                        routing_provider=derive_provider(
-                            litellm_params.get("model", final_config.model)
-                        ),
+                        routing_provider=request_route,
                         prompt_tokens=usage.get("prompt_tokens", 0),
                         completion_tokens=usage.get("completion_tokens", 0),
                         total_tokens=usage.get("total_tokens", 0),
@@ -1093,7 +1101,7 @@ class AgentAI:
                     tracker.record(
                         model=final_config.model,
                         provider=route,
-                        routing_provider=route,
+                        routing_provider=request_route,
                         usage_status="missing",
                     )
 

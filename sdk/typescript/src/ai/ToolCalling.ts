@@ -432,7 +432,7 @@ export async function executeToolCallLoop(
   needsLazyHydration: boolean,
   buildModel: () => any,
   options: AIRequestOptions = {},
-  modelChoice?: { provider?: string; modelName?: string }
+  modelChoice?: { provider?: string; modelName?: string; routingProvider?: string }
 ): Promise<{ text: string; trace: ToolCallTrace }> {
   const maxTurns = config.maxTurns ?? DEFAULT_MAX_TURNS;
   const maxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
@@ -443,7 +443,7 @@ export async function executeToolCallLoop(
   const usageModel = modelChoice?.modelName ?? options.model;
   const recordLoopUsage = (result: { usage?: unknown; totalUsage?: unknown; steps?: any[] }) => {
     if (usageModel) {
-      recordAiSdkUsage({ source: result, model: usageModel, provider: modelChoice?.provider });
+      recordAiSdkUsage({ source: result, model: usageModel, provider: modelChoice?.provider, routingProvider: modelChoice?.routingProvider });
     }
   };
 

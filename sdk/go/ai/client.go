@@ -29,10 +29,6 @@ func (c *Client) RoutingProvider() string {
 			return "openai"
 		}
 	}
-	// An explicit routing prefix also identifies an OpenRouter proxy route.
-	if strings.HasPrefix(strings.ToLower(c.config.Model), "openrouter/") {
-		return "openrouter"
-	}
 	return "unknown"
 }
 

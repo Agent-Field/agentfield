@@ -39,3 +39,10 @@ provider calls outside SDK accounting and opted-out installations are unobserved
 A missing receipt has no known token total. Usage timestamps currently reflect
 control-plane ingestion, so long-running executions can move usage across days.
 The hosted relay must accept this additive schema before deploying clients.
+
+Request routing is separate from the model vendor and SDK adapter. An explicit
+OpenRouter endpoint is classified as `openrouter` even through an OpenAI adapter.
+Only exact known endpoint hosts identify those routes; a private or custom
+endpoint is `other` (or `unknown` if invalid), rather than inferred from URL
+path text or an OpenRouter model prefix. With no explicit endpoint, the SDK's
+requested provider determines the bounded route. Endpoint URLs are never sent.

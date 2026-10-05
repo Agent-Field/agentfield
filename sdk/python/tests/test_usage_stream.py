@@ -143,3 +143,17 @@ async def test_tracker_failure_does_not_change_successful_stream():
         source(), BrokenTracker(), "openrouter/qwen/qwen3", "openrouter"
     )
     assert [chunk.content async for chunk in stream] == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_adapter_provider_separate_from_openrouter_route():
+    async def source():
+        yield SimpleNamespace(usage={"prompt_tokens": 3, "completion_tokens": 2})
+
+    tracker = CostTracker()
+    stream = UsageTrackingStream(source(), tracker, "gpt-4o", "openai", "openrouter")
+    async for _ in stream:
+        pass
+    entry = tracker.serialize()["entries"][0]
+    assert entry["provider"] == "openai"
+    assert entry["routing_provider"] == "openrouter"

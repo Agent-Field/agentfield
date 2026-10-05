@@ -5,12 +5,20 @@ from typing import Any
 
 
 class UsageTrackingStream:
-    def __init__(self, stream: Any, tracker: Any, model: str, provider: str | None):
+    def __init__(
+        self,
+        stream: Any,
+        tracker: Any,
+        model: str,
+        provider: str | None,
+        routing_provider: str | None = None,
+    ):
         self._stream = stream
         self._iterator = stream.__aiter__()
         self._tracker = tracker
         self._model = model
         self._provider = provider
+        self._routing_provider = routing_provider or provider
         self._usage: Any = None
         self._done = False
 
@@ -79,7 +87,7 @@ class UsageTrackingStream:
                 self._tracker.record(
                     model=self._model,
                     provider=self._provider,
-                    routing_provider=self._provider,
+                    routing_provider=self._routing_provider,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     completion_tokens=int(usage.get("completion_tokens", 0)),
                     total_tokens=int(usage.get("total_tokens", 0)),
@@ -88,7 +96,7 @@ class UsageTrackingStream:
                 self._tracker.record(
                     model=self._model,
                     provider=self._provider,
-                    routing_provider=self._provider,
+                    routing_provider=self._routing_provider,
                     usage_status="missing",
                 )
         except Exception:
