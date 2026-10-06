@@ -31,6 +31,58 @@ func persistWorkflowExecution(ctx context.Context, storageProvider storage.Stora
 			Str("execution_id", execution.ExecutionID).
 			Msg("failed to persist workflow execution state")
 	}
+	finalizeLegacyExecutionRecord(ctx, storageProvider, execution)
+}
+
+// createLegacyExecutionRecord writes the executions row for a legacy
+// /reasoners or /skills call before it is dispatched, so the agent's
+// status callback (POST /api/v1/executions/:id/status) finds it.
+func createLegacyExecutionRecord(ctx context.Context, storageProvider storage.StorageProvider, wfExec *types.WorkflowExecution) {
+	exec := &types.Execution{
+		ExecutionID:       wfExec.ExecutionID,
+		RunID:             wfExec.WorkflowID,
+		ParentExecutionID: wfExec.ParentExecutionID,
+		AgentNodeID:       wfExec.AgentNodeID,
+		ReasonerID:        wfExec.ReasonerID,
+		NodeID:            wfExec.AgentNodeID,
+		Status:            string(types.ExecutionStatusRunning),
+		InputPayload:      json.RawMessage(wfExec.InputData),
+		SessionID:         wfExec.SessionID,
+		ActorID:           wfExec.ActorID,
+		StartedAt:         wfExec.StartedAt,
+		CreatedAt:         wfExec.CreatedAt,
+		UpdatedAt:         wfExec.UpdatedAt,
+	}
+	if err := storageProvider.CreateExecutionRecord(ctx, exec); err != nil {
+		logger.Logger.Error().
+			Err(err).
+			Str("execution_id", wfExec.ExecutionID).
+			Msg("failed to create execution record for legacy call")
+	}
+}
+
+// finalizeLegacyExecutionRecord copies the outcome of a legacy call onto its
+// executions row, unless the agent's own status callback already made it terminal.
+func finalizeLegacyExecutionRecord(ctx context.Context, storageProvider storage.StorageProvider, wfExec *types.WorkflowExecution) {
+	_, err := storageProvider.UpdateExecutionRecord(ctx, wfExec.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+		if current == nil || types.IsTerminalExecutionStatus(current.Status) {
+			// Returning nil leaves the row as it is.
+			return nil, nil
+		}
+		current.Status = wfExec.Status
+		current.ErrorMessage = wfExec.ErrorMessage
+		current.ResultPayload = wfExec.OutputData
+		current.CompletedAt = wfExec.CompletedAt
+		current.DurationMS = wfExec.DurationMS
+		current.UpdatedAt = time.Now()
+		return current, nil
+	})
+	if err != nil {
+		logger.Logger.Warn().
+			Err(err).
+			Str("execution_id", wfExec.ExecutionID).
+			Msg("failed to finalize execution record for legacy call")
+	}
 }
 
 // ExecuteReasonerResponse represents the response from executing a reasoner
@@ -205,6 +257,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		}
 		workflowExecution.InputData = inputJSON
 		workflowExecution.InputSize = len(inputJSON)
+		createLegacyExecutionRecord(ctx, storageProvider, workflowExecution)
 
 		// Prepare request to agent node with workflow context propagation
 		agentURL := fmt.Sprintf("%s/reasoners/%s", targetNode.BaseURL, reasonerName)
@@ -583,6 +636,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		}
 		workflowExecution.InputData = inputJSON
 		workflowExecution.InputSize = len(inputJSON)
+		createLegacyExecutionRecord(ctx, storageProvider, workflowExecution)
 
 		// Prepare request to agent node with workflow context propagation
 		agentURL := fmt.Sprintf("%s/skills/%s", targetNode.BaseURL, skillName)

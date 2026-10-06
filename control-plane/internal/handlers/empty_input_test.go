@@ -31,6 +31,14 @@ func (s *reasonerTestStorage) GetAgent(ctx context.Context, id string) (*types.A
 	return nil, nil
 }
 
+func (s *reasonerTestStorage) CreateExecutionRecord(ctx context.Context, execution *types.Execution) error {
+	return nil
+}
+
+func (s *reasonerTestStorage) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
+	return update(nil)
+}
+
 func (s *reasonerTestStorage) StoreWorkflowExecution(ctx context.Context, execution *types.WorkflowExecution) error {
 	if execution != nil {
 		copy := *execution
