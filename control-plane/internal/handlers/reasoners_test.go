@@ -7,10 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
@@ -375,4 +378,208 @@ func TestExecuteReasonerHandler_ServerlessPayloadAndHeaderPropagation(t *testing
 	require.Equal(t, "wf-serverless", execCtx["workflow_id"])
 	require.Equal(t, "session-1", execCtx["session_id"])
 	require.NotEmpty(t, execCtx["execution_id"])
+}
+
+func (s *reasonerHandlerStorage) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
+	return s.exec.GetExecutionRecord(ctx, executionID)
+}
+
+func (s *reasonerHandlerStorage) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
+	return s.exec.UpdateExecutionRecord(ctx, executionID, update)
+}
+
+type legacyDispatchObservation struct {
+	executionID string
+	record      *types.Execution
+}
+
+// legacyRowAgent returns a stub agent that captures the executions row as it
+// exists while the control plane is dispatching to it.
+func legacyRowAgent(t *testing.T, store *reasonerHandlerStorage, observed chan<- legacyDispatchObservation) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		executionID := r.Header.Get("X-Execution-ID")
+		rec, err := store.GetExecutionRecord(r.Context(), executionID)
+		if err != nil {
+			rec = nil
+		}
+		observed <- legacyDispatchObservation{executionID: executionID, record: rec}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+}
+
+func TestExecuteReasonerHandler_CreatesExecutionRowBeforeDispatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newReasonerHandlerStorage(nil)
+	observed := make(chan legacyDispatchObservation, 1)
+	agentServer := legacyRowAgent(t, store, observed)
+	defer agentServer.Close()
+	store.agent = newReasonerAgent(agentServer.URL)
+
+	router := gin.New()
+	router.POST("/reasoners/:reasoner_id", ExecuteReasonerHandler(store))
+
+	req := httptest.NewRequest(http.MethodPost, "/reasoners/node-1.ping", strings.NewReader(`{"input":{"q":1}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Workflow-ID", "wf-legacy")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	obs := <-observed
+	require.NotEmpty(t, obs.executionID)
+	require.NotNil(t, obs.record, "executions row must exist while the agent is being called")
+	require.Equal(t, string(types.ExecutionStatusRunning), obs.record.Status)
+	require.Equal(t, "wf-legacy", obs.record.RunID)
+	require.Equal(t, "node-1", obs.record.AgentNodeID)
+	require.Equal(t, "ping", obs.record.ReasonerID)
+	require.JSONEq(t, `{"q":1}`, string(obs.record.InputPayload))
+
+	final, err := store.GetExecutionRecord(context.Background(), obs.executionID)
+	require.NoError(t, err)
+	require.NotNil(t, final)
+	require.Equal(t, string(types.ExecutionStatusSucceeded), final.Status)
+	require.JSONEq(t, `{"ok":true}`, string(final.ResultPayload))
+	require.NotNil(t, final.CompletedAt)
+}
+
+func TestExecuteSkillHandler_CreatesExecutionRowBeforeDispatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newReasonerHandlerStorage(nil)
+	observed := make(chan legacyDispatchObservation, 1)
+	agentServer := legacyRowAgent(t, store, observed)
+	defer agentServer.Close()
+	agent := newReasonerAgent(agentServer.URL)
+	agent.Skills = []types.SkillDefinition{{ID: "ping"}}
+	store.agent = agent
+
+	router := gin.New()
+	router.POST("/skills/:skill_id", ExecuteSkillHandler(store))
+
+	req := httptest.NewRequest(http.MethodPost, "/skills/node-1.ping", strings.NewReader(`{"input":{"q":1}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	obs := <-observed
+	require.NotEmpty(t, obs.executionID)
+	require.NotNil(t, obs.record, "executions row must exist while the agent is being called")
+	require.Equal(t, string(types.ExecutionStatusRunning), obs.record.Status)
+	require.Equal(t, "ping", obs.record.ReasonerID)
+
+	final, err := store.GetExecutionRecord(context.Background(), obs.executionID)
+	require.NoError(t, err)
+	require.NotNil(t, final)
+	require.Equal(t, string(types.ExecutionStatusSucceeded), final.Status)
+}
+
+// TestExecuteReasonerHandler_AgentStatusCallbackFindsExecution reproduces #1086
+// end to end on the real local storage: while the legacy endpoint is
+// dispatching, the agent posts its status callback to the real
+// UpdateExecutionStatusHandler. Without the executions row that callback is a
+// 404. The legacy handler must also keep the terminal status the agent
+// reported instead of overwriting it with its own result.
+func TestExecuteReasonerHandler_AgentStatusCallbackFindsExecution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+
+	store := storage.NewLocalStorage(storage.LocalStorageConfig{})
+	err := store.Initialize(ctx, storage.StorageConfig{
+		Mode: "local",
+		Local: storage.LocalStorageConfig{
+			DatabasePath: filepath.Join(t.TempDir(), "agentfield.db"),
+			KVStorePath:  filepath.Join(t.TempDir(), "agentfield.bolt"),
+		},
+	})
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "fts5") {
+		t.Skip("sqlite3 compiled without FTS5")
+	}
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(ctx) })
+
+	router := gin.New()
+	router.POST("/api/v1/reasoners/:reasoner_id", ExecuteReasonerHandler(store))
+	router.POST("/api/v1/executions/:execution_id/status",
+		UpdateExecutionStatusHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, 90*time.Second))
+	controlPlane := httptest.NewServer(router)
+	defer controlPlane.Close()
+
+	executionIDs := make(chan string, 1)
+	callbackCodes := make(chan int, 1)
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		executionID := r.Header.Get("X-Execution-ID")
+		executionIDs <- executionID
+		code := 0
+		resp, err := http.Post(
+			controlPlane.URL+"/api/v1/executions/"+executionID+"/status",
+			"application/json",
+			strings.NewReader(`{"status":"failed","error":"agent reported failure"}`),
+		)
+		if err == nil {
+			code = resp.StatusCode
+			_ = resp.Body.Close()
+		}
+		callbackCodes <- code
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer agentServer.Close()
+	require.NoError(t, store.RegisterAgent(ctx, newReasonerAgent(agentServer.URL)))
+
+	resp, err := http.Post(controlPlane.URL+"/api/v1/reasoners/node-1.ping", "application/json", strings.NewReader(`{}`))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	executionID := <-executionIDs
+	require.NotEmpty(t, executionID)
+	require.Equal(t, http.StatusOK, <-callbackCodes, "agent status callback for a legacy execution must not 404")
+
+	final, err := store.GetExecutionRecord(ctx, executionID)
+	require.NoError(t, err)
+	require.NotNil(t, final)
+	require.Equal(t, string(types.ExecutionStatusFailed), final.Status)
+	require.NotNil(t, final.ErrorMessage)
+	require.Equal(t, "agent reported failure", *final.ErrorMessage)
+}
+
+type failingCreateRecordStorage struct {
+	*reasonerHandlerStorage
+}
+
+func (s *failingCreateRecordStorage) CreateExecutionRecord(ctx context.Context, execution *types.Execution) error {
+	return errors.New("insert failed")
+}
+
+// A failed executions insert is logged and the legacy call still goes through,
+// so the endpoint gains no new failure mode.
+func TestExecuteReasonerHandler_ExecutionRowInsertFailureDoesNotFailCall(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newReasonerHandlerStorage(nil)
+	observed := make(chan legacyDispatchObservation, 1)
+	agentServer := legacyRowAgent(t, store, observed)
+	defer agentServer.Close()
+	store.agent = newReasonerAgent(agentServer.URL)
+
+	router := gin.New()
+	router.POST("/reasoners/:reasoner_id", ExecuteReasonerHandler(&failingCreateRecordStorage{store}))
+
+	req := httptest.NewRequest(http.MethodPost, "/reasoners/node-1.ping", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	obs := <-observed
+	require.Nil(t, obs.record)
+
+	wfExec, err := store.GetWorkflowExecution(context.Background(), obs.executionID)
+	require.NoError(t, err)
+	require.NotNil(t, wfExec)
+	require.Equal(t, string(types.ExecutionStatusSucceeded), string(wfExec.Status))
 }
