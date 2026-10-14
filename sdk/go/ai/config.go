@@ -12,6 +12,10 @@ import (
 // refer to the same service, so grepping for either one should land here.
 const defaultInfronBaseURL = "https://llm.onerouter.pro/v1"
 
+// defaultCheaperInferenceBaseURL is the Cheaper Inference gateway's
+// OpenAI-compatible endpoint.
+const defaultCheaperInferenceBaseURL = "https://api.cheaperinference.com/v1"
+
 // Config holds AI/LLM configuration for making API calls.
 type Config struct {
 	// API Key for OpenAI or OpenRouter
@@ -21,6 +25,7 @@ type Config struct {
 	// Default: https://api.openai.com/v1
 	// OpenRouter: https://openrouter.ai/api/v1
 	// Infron: https://llm.onerouter.pro/v1
+	// Cheaper Inference: https://api.cheaperinference.com/v1
 	BaseURL string
 
 	// Default model to use (e.g., "gpt-4o", "openai/gpt-4o" for OpenRouter)
@@ -61,12 +66,13 @@ type Config struct {
 // It reads from environment variables:
 // - OPENAI_API_KEY or OPENROUTER_API_KEY
 // - INFRON_API_KEY
+// - CHEAPER_INFERENCE_API_KEY
 // - AI_BASE_URL (defaults to OpenAI)
 // - AI_MODEL (defaults to gpt-4o)
 //
-// A gateway key that was already honored before Infron existed keeps
-// precedence, so adding an Infron key to an existing environment never
-// silently reroutes it.
+// A gateway key that was already honored before Infron or Cheaper Inference
+// existed keeps precedence, so adding one of those keys to an existing
+// environment never silently reroutes it.
 func DefaultConfig() *Config {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	baseURL := "https://api.openai.com/v1"
@@ -78,6 +84,13 @@ func DefaultConfig() *Config {
 	if infronKey := os.Getenv("INFRON_API_KEY"); infronKey != "" && apiKey == "" {
 		apiKey = infronKey
 		baseURL = defaultInfronBaseURL
+	}
+
+	// Check for Cheaper Inference configuration. Same rule as Infron: it
+	// applies only when no other gateway key is set.
+	if ciKey := os.Getenv("CHEAPER_INFERENCE_API_KEY"); ciKey != "" && apiKey == "" {
+		apiKey = ciKey
+		baseURL = defaultCheaperInferenceBaseURL
 	}
 
 	// Check for OpenRouter configuration
@@ -145,6 +158,13 @@ func (c *Config) IsOpenRouter() bool {
 func (c *Config) IsInfron() bool {
 	return strings.Contains(strings.ToLower(c.BaseURL), "onerouter.pro") ||
 		strings.HasPrefix(strings.ToLower(c.Model), infronModelPrefix)
+}
+
+// IsCheaperInference returns true if the base URL is for the Cheaper Inference
+// gateway, or the model carries the "cheaperinference/" routing prefix.
+func (c *Config) IsCheaperInference() bool {
+	return strings.Contains(strings.ToLower(c.BaseURL), "cheaperinference.com") ||
+		strings.HasPrefix(strings.ToLower(c.Model), cheaperInferenceModelPrefix)
 }
 
 // RateLimitEnabled reports whether automatic rate-limit retries are configured.

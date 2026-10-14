@@ -145,6 +145,29 @@ Note that Infron reports native cost at the top level of the body (and of the
 final stream chunk) rather than nested under `usage.cost`. The SDK normalizes
 both shapes into `Usage.Cost`, so cost tracking reads the same either way.
 
+### Cheaper Inference Configuration
+
+Cheaper Inference is an OpenAI-compatible gateway that serves bare model ids:
+
+```go
+aiConfig := &ai.Config{
+    APIKey:  os.Getenv("CHEAPER_INFERENCE_API_KEY"),
+    BaseURL: "https://api.cheaperinference.com/v1",
+    Model:   "gpt-5.4-mini",
+}
+```
+
+`ai.DefaultConfig()` picks this up from `CHEAPER_INFERENCE_API_KEY`
+automatically. A gateway key already present in the environment keeps
+precedence.
+
+A `cheaperinference/` model prefix is accepted as a routing marker, and is
+stripped before the request goes out:
+
+```go
+Model: "cheaperinference/gpt-5.4-mini"  // sent as gpt-5.4-mini
+```
+
 ### Rate Limiting & Circuit Breaker
 
 The client can automatically retry rate-limited AI calls (HTTP 429/503, or
