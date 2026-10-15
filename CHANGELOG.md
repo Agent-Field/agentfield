@@ -6,6 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.11] - 2026-10-15
+
+
+### Added
+
+- Feat(sdk/go/ai): support IO Intelligence (io.net) provider (#1102)
+
+* feat(sdk/go/ai): support IO Intelligence (io.net) provider
+
+Mirror the Infron gateway support (#874) for IO Intelligence, io.net's
+OpenAI-compatible Chat Completions endpoint:
+
+- DefaultConfig picks up IONET_API_KEY when no provider key with higher
+  precedence is set, pointing at
+  https://api.intelligence.io.solutions/api/v1 (OPENAI, INFRON and
+  OPENROUTER keys all keep precedence, so adding IONET_API_KEY never
+  silently reroutes an existing deployment).
+- IsIonet() detects the endpoint by base URL or an ionet/ model prefix.
+- The ionet/ model prefix is a routing marker only and is stripped
+  before the request goes out: the endpoint serves bare Hugging
+  Face-style org/name ids (e.g.
+  meta-llama/Llama-3.3-70B-Instruct).
+- No usage opt-in or attribution headers: io.net reports usage in the
+  standard Chat Completions shape.
+- Documented in docs/ENVIRONMENT_VARIABLES.md and the Go SDK README,
+  next to the Infron sections.
+
+go test ./ai/... passes; the new suite covers env pickup and
+precedence, IsIonet, prefix stripping on the wire, no usage opt-in,
+and max_tokens preservation.
+
+* fix(sdk/go/ai): default to an io.net model when the io.net key is selected
+
+* fix(sdk/go/ai): decide the io.net default model with the same detection as the request path
+
+* docs(sdk/go/ai): state that the ionet/ marker never reroutes a request
+
+* docs(sdk/go/ai): refresh the APIKey doc comment and note catalog rotation
+
+* test(sdk/go/ai): isolate the config-error and ionet tests from ambient keys
+
+The config-validation subtest cleared the OpenAI, OpenRouter, base-URL and
+model variables but not the Infron and io.net keys, so an exported io.net key
+turned it into a live request against the real endpoint. Clear all six
+selection variables in the subtest, move the ionet env handling to t.Setenv
+like the rest of the package, and add a tools/tool_choice passthrough case
+for the ionet/ model marker.
+
+---------
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com> (0e134b1)
+
 ## [0.1.142-rc.10] - 2026-10-14
 
 
