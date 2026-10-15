@@ -93,11 +93,13 @@ func resolveTraceEndpoint(exporterName, endpoint string) string {
 
 func newTraceExporter(ctx context.Context, exporterName, endpoint string, insecure bool) (sdktrace.SpanExporter, error) {
 	hasScheme := strings.Contains(endpoint, "://")
+	var parsedEndpoint *url.URL
 	if hasScheme {
 		parsed, err := url.Parse(endpoint)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return nil, fmt.Errorf("invalid OTLP endpoint %q", endpoint)
 		}
+		parsedEndpoint = parsed
 	}
 
 	if exporterName == "otlp-grpc" {
@@ -118,6 +120,10 @@ func newTraceExporter(ctx context.Context, exporterName, endpoint string, insecu
 
 	opts := []otlptracehttp.Option{}
 	if hasScheme {
+		if parsedEndpoint.Path == "" || parsedEndpoint.Path == "/" {
+			parsedEndpoint.Path = "/v1/traces"
+			endpoint = parsedEndpoint.String()
+		}
 		opts = append(opts, otlptracehttp.WithEndpointURL(endpoint))
 	} else {
 		opts = append(opts, otlptracehttp.WithEndpoint(endpoint))

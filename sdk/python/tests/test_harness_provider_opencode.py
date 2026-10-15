@@ -170,6 +170,54 @@ async def test_opencode_overlay_configures_agent_and_run_options(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("37", 37), ("0", 500), ("-2", 500), ("not-a-number", 500)],
+)
+async def test_opencode_steps_per_call_override_validation(
+    monkeypatch: pytest.MonkeyPatch, value: str, expected: int
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = cmd, cwd, timeout, input_text
+        captured["env"] = env
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    monkeypatch.setenv("AGENTFIELD_OPENCODE_STEPS", "91")
+
+    await OpenCodeProvider().execute(
+        "hello",
+        {
+            "max_turns": 3,
+            "env": {"AGENTFIELD_OPENCODE_STEPS": value},
+        },
+    )
+
+    overlay = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert overlay["agent"]["agentfield-harness"]["steps"] == expected
+
+
+@pytest.mark.asyncio
+async def test_opencode_steps_ambient_override(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = cmd, cwd, timeout, input_text
+        captured["env"] = env
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    monkeypatch.setenv("AGENTFIELD_OPENCODE_STEPS", "  73  ")
+
+    await OpenCodeProvider().execute("hello", {"max_turns": 3})
+
+    overlay = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert overlay["agent"]["agentfield-harness"]["steps"] == 73
+
+
+@pytest.mark.asyncio
 async def test_opencode_overlay_merges_per_call_config_without_clobbering(
     monkeypatch: pytest.MonkeyPatch,
 ):

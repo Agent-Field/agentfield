@@ -146,10 +146,13 @@ class StatelessRateLimiter:
             base_delay = min(self.base_delay * (2**attempt), self.max_delay)
 
         # Add container-specific jitter to distribute load
-        # Use container seed to ensure consistent but distributed jitter
-        random.seed(self._container_seed + attempt)
+        # Use container seed to ensure consistent but distributed jitter.
+        # Seeded on a private Random instance, never on the module-level one:
+        # random.seed() here would overwrite the host process's random stream
+        # on every retry.
+        rng = random.Random(self._container_seed + attempt)
         jitter_range = base_delay * self.jitter_factor
-        jitter = random.uniform(-jitter_range, jitter_range)
+        jitter = rng.uniform(-jitter_range, jitter_range)
 
         # Ensure minimum delay and apply jitter
         delay = max(0.1, base_delay + jitter)

@@ -156,15 +156,12 @@ it.each(providers)('$name classifies a successful exit without output', async ({
   expect(result).toMatchObject({ isError: true, failureType: 'no_output', returnCode: 0 });
 });
 
-it.each([
-  { message: 'spawn ENOENT', failureType: 'crash' },
-  { message: 'CLI timed out after 1000ms', failureType: 'timeout' },
-])('classifies a rejected CLI as $failureType', async ({ message, failureType }) => {
-  vi.spyOn(cli, 'runCli').mockRejectedValue(new Error(message));
+it('classifies a rejected CLI timeout', async () => {
+  vi.spyOn(cli, 'runCli').mockRejectedValue(new Error('CLI timed out after 1000ms'));
 
   const result = await new PiProvider().execute('hello', {});
 
-  expect(result).toMatchObject({ isError: true, failureType });
+  expect(result).toMatchObject({ isError: true, failureType: 'timeout' });
 });
 
 describe.each([
@@ -274,13 +271,13 @@ function expectApprovalFlags(cmd: string[], allowed?: string): void {
 it.each([
   { provider: new PiProvider('pi-missing'), installHint: '@earendil-works/pi-coding-agent' },
   { provider: new OMPProvider('omp-missing'), installHint: 'omp.sh/install' },
-])('returns actionable install guidance for a missing binary', async ({ provider, installHint }) => {
+])('raises a typed error with actionable install guidance for a missing binary', async ({ provider, installHint }) => {
   vi.spyOn(cli, 'runCli').mockRejectedValue(new Error('spawn ENOENT'));
 
-  const result = await provider.execute('hello', {});
-
-  expect(result.isError).toBe(true);
-  expect(result.errorMessage).toContain(installHint);
+  await expect(provider.execute('hello', {})).rejects.toMatchObject({
+    name: 'HarnessProviderUnavailable',
+    installCommand: expect.stringContaining(installHint),
+  });
 });
 
 describe('provider factory', () => {

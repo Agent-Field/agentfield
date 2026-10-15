@@ -6,6 +6,1394 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.10] - 2026-10-14
+
+
+### Fixed
+
+- Fix(sdk/python): let AsyncConfig env flags fall back to the class default (#1100)
+
+The two boolean parsers added in #1082 each bake in a polarity: _env_flag_default_on
+returns True for anything outside the falsey vocabulary and _env_flag_default_off
+returns False for anything outside the truthy one. That is correct for AsyncConfig's
+own field defaults, but it makes the fallback independent of the class -- a subclass
+that changes a default gets the parser's answer for an unrecognised string instead of
+its own:
+
+    @dataclass
+    class CachingOff(AsyncConfig):
+        enable_result_caching: bool = False
+
+    # AGENTFIELD_ASYNC_ENABLE_RESULT_CACHING=maybe
+    CachingOff.from_environment().enable_result_caching   # True, should be False
+
+Add one polarity-free parser, _env_flag, that raises ValueError outside the
+vocabulary, and use it for all five flags. get_env_var already catches
+(ValueError, TypeError) and returns the default_value it was handed, which
+from_environment() passes as config.<field> -- so the fallback now comes from the
+class, exactly as the float and int converters in the same function already do.
+
+This is the second half of #1089; the remaining strict parsers in logger.py,
+agent.py and agent_server.py are handled separately in #1090.
+
+It also matches the Go control plane, which has always parsed this way:
+config.applyBoolEnv leaves *target untouched and logs a warning when
+strconv.ParseBool rejects the string, and the handler tests pin parseBool(" YeS ")
+-> true, parseBool("0") -> false, parseBool("maybe") -> error.
+
+_env_flag_default_on and _env_flag_default_off are kept, now expressed in terms of
+_env_flag, for call sites that know their default statically -- #1090 imports
+_env_flag_default_off into logger.py for the default-off AGENTFIELD_LOG_* flags, so
+removing them would break an open PR. A test pins both wrappers' contract.
+
+AsyncConfig's own observable behaviour is unchanged: with no AGENTFIELD_ASYNC_*
+variable set the converters are never reached, and digesting every field of
+from_environment() on both trees gives the same SHA-256
+(5960894a0c0bd6c817a09800eee26998e09625f7dfb23cd3d75ce1ee9088eb90). For a set
+variable, every value in the vocabulary parses as before and every value outside it
+still yields the field default -- the default just now comes from the class.
+
+Fixes the AsyncConfig half of #1089. (88a5f73)
+
+## [0.1.142-rc.9] - 2026-10-05
+
+
+### Other
+
+- Telemetry updates (752cc57)
+
+## [0.1.142-rc.8] - 2026-10-03
+
+
+### Testing
+
+- Test(sdk): verify Windows batch probe end-to-end and harden cmd.exe branch
+
+Batch probe hardening (split call sites, quote/control-char guard, corrected parsing comment) plus real Windows E2E verification of the env-template probe. Spark suite 1029 passed via SSH; windows-latest harness-doctor job passed.
+
+Assisted-by: CodeAF (mimo-v2.6-pro)
+
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com> (d6f19d4)
+
+## [0.1.142-rc.7] - 2026-10-01
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 2 updates (#1085)
+
+Bumps the uv group with 2 updates in the /sdk/python directory: [litellm](https://github.com/BerriAI/litellm) and [urllib3](https://github.com/urllib3/urllib3).
+
+
+Updates `litellm` from 1.87.0 to 1.88.6
+- [Release notes](https://github.com/BerriAI/litellm/releases)
+- [Commits](https://github.com/BerriAI/litellm/compare/v1.87.0...v1.88.6)
+
+Updates `urllib3` from 2.7.0 to 2.8.0
+- [Release notes](https://github.com/urllib3/urllib3/releases)
+- [Changelog](https://github.com/urllib3/urllib3/blob/main/CHANGES.rst)
+- [Commits](https://github.com/urllib3/urllib3/compare/2.7.0...2.8.0)
+
+---
+updated-dependencies:
+- dependency-name: litellm
+  dependency-version: 1.88.6
+  dependency-type: direct:production
+  dependency-group: uv
+- dependency-name: urllib3
+  dependency-version: 2.8.0
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (c41e4a5)
+
+## [0.1.142-rc.6] - 2026-10-01
+
+
+### Fixed
+
+- Fix(events): cache non-duplicate status events so A→B→A flips are not dropped (#1079) (5df7496)
+
+## [0.1.142-rc.5] - 2026-10-01
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 2 updates (#1084)
+
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [electron](https://github.com/electron/electron).
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [axios](https://github.com/axios/axios).
+
+
+Updates `electron` from 42.9.1 to 42.10.0
+- [Release notes](https://github.com/electron/electron/releases)
+- [Commits](https://github.com/electron/electron/compare/v42.9.1...v42.10.0)
+
+Updates `axios` from 1.18.0 to 1.20.0
+- [Release notes](https://github.com/axios/axios/releases)
+- [Changelog](https://github.com/axios/axios/blob/v1.x/CHANGELOG.md)
+- [Commits](https://github.com/axios/axios/compare/v1.18.0...v1.20.0)
+
+---
+updated-dependencies:
+- dependency-name: electron
+  dependency-version: 42.10.0
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: axios
+  dependency-version: 1.20.0
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (484bddf)
+
+## [0.1.142-rc.4] - 2026-10-01
+
+
+### Fixed
+
+- Fix(sdk/go): stop retrying execution status callbacks on non-retryable 4xx (#1081) (4a87b1c)
+
+## [0.1.142-rc.3] - 2026-10-01
+
+
+### Fixed
+
+- Fix(control-plane): return 404 for status callbacks on unknown executions (#1080) (e447e0b)
+
+- Fix(sdk/python): parse AGENTFIELD_ASYNC boolean flags with the repo's env vocabulary (#1082)
+
+AsyncConfig.from_environment() read all five boolean feature flags with
+`lambda x: x.lower() == "true"`. Four of those fields default to True, so the
+only values that could be expressed were "true" and "false": setting
+AGENTFIELD_ASYNC_ENABLE_RESULT_CACHING=1 -- or =yes, or =on -- evaluated to
+False and silently disabled result caching, the opposite of what the value says.
+The same inversion applied to enable_async_execution, enable_batch_polling and
+fallback_to_sync, and it reaches users by default because both Agent (agent.py:846)
+and AgentFieldClient (client.py:182) build their async_config from
+from_environment() when none is passed.
+
+The lambda also never raises, so get_env_var's `except (ValueError, TypeError):
+return default_value` fallback is unreachable for booleans and an unparseable
+value overrides the field with False instead of leaving the default. PR #714,
+which wired this into the client default, documents the intended contract:
+from_environment() "only overrides fields when the corresponding env var is set
+(falling back to the default on unparseable values)".
+
+Use the vocabulary the package already uses, split by the field's default:
+default-on flags opt out with ("0", "false", "no", "off") like
+log_writer._queue_enabled, logger._stdout_mirror_enabled, node_logs.logs_enabled
+and openrouter_attribution.attribution_enabled; the default-off enable_event_stream
+opts in with ("1", "true", "yes", "on") like litellm_observability._TRUE_VALUES.
+A value outside the vocabulary now leaves the field at its default, which is what
+makes the documented fallback hold without the converter having to raise.
+
+With no AGENTFIELD_ASYNC_* variable set the converters are never reached --
+get_env_var returns the default before consulting them -- so from_environment()
+produces a byte-identical AsyncConfig to before (verified by digesting every
+field on both trees). Only explicit opt-in/opt-out values change behaviour, and
+every value that already worked still does: "true"/"false"/"0" are unchanged,
+while "1"/"yes"/"on"/whitespace-padded values now mean what they say.
+
+logger.py's three AGENTFIELD_LOG_* flags use the same `== "true"` shape but all
+default to False, so they fail in the less harmful direction; left alone here to
+keep this to one seam. (e960677)
+
+## [0.1.142-rc.2] - 2026-10-01
+
+
+### Fixed
+
+- Fix(sdk/python): keep rate limiter jitter off the global random state (#1078)
+
+_calculate_backoff_delay called random.seed(self._container_seed + attempt)
+before drawing jitter, which reseeds the module-level generator shared by the
+whole host process. Every rate-limit retry therefore reset the application's
+random stream to a value derived from HOSTNAME and the pid, so all later
+random.random()/choice()/shuffle()/sample() calls in the process returned a
+repeatable sequence instead of continuing the stream the caller seeded.
+
+It also degraded the SDK's own jitter: rate_limiter.py is the only module that
+seeds the global generator, but client.py:1295 (_next_poll_interval) and
+harness/_runner.py:415 and :423 (transient-error backoff) draw from it, so one
+rate-limited LLM call made their poll intervals and backoff delays a
+deterministic function of the container seed -- identical across containers
+that share a hostname/pid shape, which is exactly the synchronisation jitter
+exists to prevent.
+
+Draw from a private random.Random instance instead. The returned jitter is
+bit-identical (verified across 240 seed/attempt/range combinations by
+comparing float.hex()), because CPython's module-level random.uniform
+delegates to a module-level Random seeded through the same path. Backoff
+timing, retry counts, and per-container jitter distribution are unchanged;
+the seed just stops leaking into global state, which also stops concurrent
+callers from drawing jitter off a seed another caller installed.
+
+This matches what the Go and TypeScript SDKs already do: sdk/go/ai/
+rate_limiter.go:321 uses rand.New(rand.NewSource(containerSeed + attempt)) and
+sdk/typescript/src/ai/RateLimiter.ts:172 uses a local _createJitterRng closure,
+both with the same seeding scheme and the same (u*2-1)*r formula that
+random.uniform(-r, r) expands to.
+
+The existing test_calculate_backoff_applies_jitter_and_max_cap already computes
+its expectation with random.Random(container_seed + attempt) and compares only
+the returned number, which is why this survived: nothing asserted on the global
+state. Adds two tests pinning the contract at both the helper and the public
+execute_with_retry path.
+
+enable_rate_limit_retry defaults to True (types.py:497) and agent_ai.py:605-609
+re-forces it, so the affected path is the default one. (b675e2d)
+
+## [0.1.142-rc.1] - 2026-10-01
+
+
+### Chores
+
+- Chore(deps): bump pyjwt (#1083)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [pyjwt](https://github.com/jpadilla/pyjwt).
+
+
+Updates `pyjwt` from 2.13.0 to 2.15.0
+- [Release notes](https://github.com/jpadilla/pyjwt/releases)
+- [Changelog](https://github.com/jpadilla/pyjwt/blob/master/CHANGELOG.rst)
+- [Commits](https://github.com/jpadilla/pyjwt/compare/2.13.0...2.15.0)
+
+---
+updated-dependencies:
+- dependency-name: pyjwt
+  dependency-version: 2.15.0
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (88ae7ca)
+
+- Chore(deps): bump ip-address (#1077)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [ip-address](https://github.com/beaugunderson/ip-address).
+
+
+Updates `ip-address` from 10.4.0 to 10.7.2
+- [Release notes](https://github.com/beaugunderson/ip-address/releases)
+- [Commits](https://github.com/beaugunderson/ip-address/compare/v10.4.0...v10.7.2)
+
+---
+updated-dependencies:
+- dependency-name: ip-address
+  dependency-version: 10.7.2
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (c5750ee)
+
+## [0.1.141] - 2026-09-29
+
+## [0.1.141-rc.7] - 2026-09-29
+
+
+### Fixed
+
+- Fix(sdk): probe harness binaries as argv, not a cmd.exe command string (#1075)
+
+* fix(sdk): probe harness binaries as argv, not cmd.exe /c
+
+CodeQL alerts 60, 61, and 62 flag defaultVersionProbe for building a
+cmd.exe /c command line from a resolved binary path. Pass that path as
+an execFile argv element instead. PATHEXT resolution is unchanged.
+
+Assisted-by: CodeAF (grok-4.7)
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* fix(sdk): run Windows batch probes as separate cmd.exe argv
+
+Node rejects execFile of a .cmd or .bat (CVE-2024-27980). Keep cmd.exe
+as the interpreter for those shims only, and pass /d, /s, /c, the
+resolved path, and the version args as separate argv elements.
+
+Assisted-by: CodeAF (grok-4.7)
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* fix(sdk): drop cmd /s from the Windows batch version probe
+
+Node quotes an argv element that contains spaces. cmd /s then strips the
+outer quotes of the whole line and splits C:\Program Files\.... Pass
+/d /c and the resolved path as separate argv elements, with no /s and
+no joined command string.
+
+Assisted-by: CodeAF (grok-4.7)
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* fix(sdk): pass Windows batch probe paths through the child env
+
+The argv form (cmd.exe /d /c <path> --version, no /s) let cmd.exe
+re-parse the path: a directory named `x) & echo PWNED (y` ran the
+injected command, and `&`, `^`, `;,=` paths failed the probe. The
+original /s form was safe from injection but expanded %VAR% in paths.
+
+The /c line is now a fixed template of quoted %AGENTFIELD_PROBE_ARG_N%
+references, with the path and args set in the child's environment.
+cmd.exe expands each variable once after splitting the line, so every
+metacharacter stays literal, and no path data reaches the command
+string that CodeQL tracks. /v:off keeps `!` literal.
+
+Verified on real cmd.exe (Windows 11, Node 22) across 10 hostile shim
+directories: all return the version, none injects.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (bf11859)
+
+## [0.1.141-rc.6] - 2026-09-29
+
+
+### Chores
+
+- Chore(deps): bump ip-address (#1076)
+
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [ip-address](https://github.com/beaugunderson/ip-address).
+
+
+Updates `ip-address` from 10.4.0 to 10.7.2
+- [Release notes](https://github.com/beaugunderson/ip-address/releases)
+- [Commits](https://github.com/beaugunderson/ip-address/compare/v10.4.0...v10.7.2)
+
+---
+updated-dependencies:
+- dependency-name: ip-address
+  dependency-version: 10.7.2
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (5be6276)
+
+## [0.1.141-rc.5] - 2026-09-26
+
+
+### Testing
+
+- Test(go): cover explicit harness provider factory paths (#1073)
+
+* test(go): cover explicit harness provider factory paths
+
+* test(go): use expected provider type in factory table (13b4460)
+
+## [0.1.141-rc.4] - 2026-09-26
+
+
+### Added
+
+- Feat(go-sdk): add harness doctor preflight and provider availability specs (#1074)
+
+Closes the Go SDK half of #685. Python (harness/_doctor.py) and
+TypeScript (harness/availability.ts) both ship harness_doctor with a
+ProviderHealth report; Go had nothing, even though the issue notes Go is
+subprocess-only so doctor and errors matter most there.
+
+- harness/availability.go: ProviderSpec table for all eight Go providers
+  (binary, version args, install command, auth env vars), mirroring the
+  Python and TypeScript spec data. Adds ProviderUnavailableError, which
+  names the exact install command and any unset auth variables, plus the
+  ErrProviderUnavailable sentinel for errors.Is and ensureCLIAvailable
+  for PATH resolution.
+- harness/doctor.go: Doctor(ctx, DoctorOptions) returning ProviderHealth
+  per provider (installed / version / auth / usable / issues), with field
+  names and issue codes matching the other two SDKs. Static PATH and env
+  checks by default; DoctorOptions.Probe opts into running each
+  provider's version command, following the issue's 'lean static by
+  default, probe behind a flag' guidance. Unusable() filters to the
+  providers that block, so callers can exit non-zero on exactly those.
+- agent/harness.go: Agent.HarnessDoctor(ctx, providers...) for parity
+  with app.harness_doctor() and agent.harnessDoctor().
+
+Two deliberate divergences from Python/TS, documented in the spec table:
+claude-code is a binary spec here because the Go provider shells out to
+the claude CLI rather than importing a language wrapper, and cursor is
+Go-only today (binary 'agent').
+
+Doctor takes injectable LookPath and VersionProbe hooks so tests never
+depend on which CLIs happen to be installed; the suite is fully
+platform-independent. Coverage on the new files: most functions 100%,
+Doctor 94.9%.
+
+Scoped to the library API. The 'af harness doctor' CLI subcommand lives
+in the control-plane module and is left as follow-up. (cbc9e37)
+
+## [0.1.141-rc.3] - 2026-09-25
+
+
+### Fixed
+
+- Fix(sdk/python): skip schema output dir for schema-free harness runs (#1072)
+
+HarnessRunner.run() allocated the per-run .agentfield-out-* directory
+before dispatching the provider even when schema is None. That directory
+only ever holds .agentfield_output.json (#684, #891), and every consumer
+of it is already inside an `if schema is not None` guard, so a text-only
+run paid a filesystem write it never read back. When the project root
+could not accept one — a read-only mount, an immutable CI workspace — a
+plain permission_mode="plan" call failed during setup, before the coding
+agent was invoked at all.
+
+Allocate the directory only for schema-bearing runs. Their per-run
+isolation and cleanup are unchanged, so concurrent runs sharing one cwd
+still cannot overwrite or delete each other's output.
+
+Refs #684, #891 (8805c96)
+
+## [0.1.141-rc.2] - 2026-09-24
+
+
+### Added
+
+- Feat(sdk/typescript): add harness provider preflight (#1069)
+
+* feat(sdk/typescript): add harness provider preflight
+
+* fix(sdk/typescript): probe harness doctor versions via the resolved binary
+
+harnessDoctor passed the bare provider name to the version probe while
+findExecutable had already resolved a PATHEXT-qualified path. On Windows
+the bare name misses npm shims (ENOENT) and spawning a resolved .cmd/.bat
+without a shell is rejected by Node (EINVAL, CVE-2024-27980), so shim-based
+providers like codex always reported version_probe_failed and usable=false.
+
+Probe the resolved absolute path instead, and route Windows batch shims
+through cmd.exe /d /s /c with the outer-quote form so paths with spaces
+survive. POSIX behavior is unchanged: the same file that findExecutable
+verified is executed directly. The VersionProbe contract now documents
+that command[0] is the resolved path.
+
+* fix(sdk/typescript): pass options.env to harness doctor binary resolution
+
+harnessDoctor resolved binaries against process.env even when callers
+supplied HarnessDoctorOptions.env, so a report could mix installation
+state from the process environment with authentication state from the
+custom one. Binary discovery (PATH lookup and Windows PATHEXT matching)
+now uses the same env as the offline auth signal.
+
+Addresses PR #1069 review feedback. (5b0bf9b)
+
+## [0.1.141-rc.1] - 2026-09-24
+
+
+### Testing
+
+- Test(sdk/go): cover verifier constraint and request branches (#1071) (0ef73eb)
+
+## [0.1.140] - 2026-09-21
+
+## [0.1.140-rc.6] - 2026-09-21
+
+
+### Other
+
+- Hand a run interrupted by a rollout to a restart, and let the original execution id follow it (#1068)
+
+* feat(control-plane): persist a forward restart pointer on executions
+
+Restarts always mint a new execution id, so a consumer polling the id it
+originally received has no way to discover that the work continued
+somewhere else. Record the successor on the source row instead.
+
+Adds restarted_as_execution_id to executions and workflow_executions
+(migration 036, mirrored in the SQLite models so AutoMigrate picks it up),
+a SetExecutionRestartedAs writer, and the execution-filter predicates the
+resume sweep needs: updated_at bounds, terminal-only, root-only and
+status-reason matching.
+
+Also defines the agent_shutdown_cancelled status reason and the
+cross-SDK "cancelled during graceful shutdown" literal it keys off, so a
+reasoner cancelled by a draining pod stops being indistinguishable from a
+user cancel.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* feat(control-plane): expose restarted_as and classify drain cancels
+
+Splits the restart mechanics out of the gin handler into startRestart so
+the same path can be driven without an HTTP request, keeping the endpoint's
+status codes, headers, body and queue-full behaviour byte-identical.
+
+Every restart now stamps the forward pointer on the source execution and
+on the run root it restarted, and mirrors it into the source run's
+lineage metadata. GET /executions/{id} returns it as restarted_as, but
+only once the successor actually resolves, so a consumer is never handed
+a pointer into a run that has since been cleaned up. A healthy execution
+costs no extra query.
+
+A terminal cancelled callback carrying the SDK graceful-shutdown error is
+stored as agent_shutdown_cancelled. The SDK's fire-and-forget lifecycle
+event stream is the path that actually terminalizes a drain-cancelled
+orchestrator in practice, so it classifies identically.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* feat(control-plane): opt-in handoff of runs interrupted by a rollout
+
+A rolling deploy that kills a long-running orchestrator leaves its run
+terminally dead; the only recovery is the caller re-submitting. With
+AGENTFIELD_RESUME_INTERRUPTED_RUNS=true the control plane does that
+itself: an interrupted run root is handed to the existing workflow-scope
+restart with reuse all-succeeded, so children that already succeeded are
+replayed rather than dispatched again, and the dead execution is stamped
+with the forward pointer.
+
+Interruption means agent_restart_orphaned, control_plane_shutdown or
+agent_shutdown_cancelled — nothing else is ever resumed. Any of the three
+can terminalize a run, so the handoff is triggered from the orphan reap,
+the status callback, the lifecycle-event stream, and a bounded sweep at
+startup for the case where the control plane itself restarted.
+
+Bounded on purpose: run roots only, never an execution that already has a
+successor, chain depth capped by _MAX_ATTEMPTS, startup capped by _LIMIT
+and _WINDOW, and no storage query at all when disabled. Inline handoffs
+are scheduled after _DELAY on a detached context with every guard
+re-evaluated against a freshly read record, so the replacement pod has
+registered before the successor is dispatched and two triggers for the
+same root still produce one successor.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(control-plane): stop the orphan reap from claiming post-replacement work
+
+An execution created while the old pod is gone and the replacement has
+not yet registered is stamped with the departing instance id, and the
+deferred reap then fails it. Measured end to end: the handoff's successor
+ran to completion on the new pod while the control plane had already
+marked it agent_restart_orphaned.
+
+The reap now carries the instant the replacement registered and skips any
+row created at or after it — work created after a replacement announces
+itself cannot belong to the process that left. A zero cutoff behaves
+exactly as before, so existing callers are unaffected. Wall-clock based
+and therefore approximate under control-plane clock skew; the
+stale-execution sweep remains the backstop.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(sdk/go): report the cross-SDK graceful-shutdown cancellation contract
+
+The Python and TypeScript SDKs both report a reasoner cancelled by their
+own graceful shutdown as status cancelled with the error "cancelled
+during graceful shutdown". The Go SDK reported status failed with the raw
+"context canceled", so a Go agent's drain looked like an ordinary failure
+and the control plane could not tell it apart from a real error.
+
+Only a cancellation caused by the agent's own shutdown is remapped; a
+caller cancellation or a timeout keeps its current behaviour.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* docs: restarted_as, the new status reason, and the handoff's real bounds
+
+Documents the forward pointer on execution reads, the
+agent_shutdown_cancelled status reason, and the five
+AGENTFIELD_RESUME_INTERRUPTED_* knobs, in the same tables the existing
+drain and reap settings live in.
+
+Says plainly that the orchestrator re-executes from its first line —
+there is no snapshot of interpreter state — and that what makes the
+restart cheap is replaying the already-succeeded app.call children.
+
+Adds a Limitations section rather than overselling: single control plane,
+one attempt per interruption, stale-sweep timeouts are not resumed, the
+startup sweep is one bounded page per boot, the attempt counter is
+best-effort metadata, and the reap cutoff is wall-clock based.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* test(control-plane): cover the restart and handoff branches the patch gate flagged
+
+Covers the config-merge branches for the new resume settings, the restart
+endpoint's validation and load-failure paths, and the handoff's guards:
+each interruption reason and a rejected one, lineage attempt resolution
+when the store cannot read run metadata or the metadata is absent or
+malformed, and the early returns when the feature is off or the restart
+itself fails.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (ee7d65d)
+
+## [0.1.140-rc.5] - 2026-09-21
+
+
+### Other
+
+- Report admitted async executions as queued until the control plane dispatches them (#1067)
+
+* fix(control-plane): report async executions as queued until dispatch
+
+An admitted async execution answered 202 with status "queued" but was
+persisted as "running" before a pool worker had picked it up, so
+GET /api/v1/executions/{id} disagreed with the body the caller had just
+been handed and reported work as running while it sat in the queue.
+
+Persist the async lane as queued at admission and flip to running in the
+worker, immediately before the agent call. The flip is a conditional
+read-modify-write: it only acts on a row that is still queued, so it
+cannot clobber a cancel or pause that won the race, and it leaves the
+restart lane (already running) alone. It counts as transitioned only when
+the write came back persisted, so a storage failure does not emit
+execution.started or fake a running plan. The worker also stops before
+dispatching anything that reached a terminal status while it waited.
+
+execution.started now fires at dispatch rather than at admission, and
+admission emits an execution.updated event carrying the queued status so
+event consumers still learn about the new run.
+
+queued gains the destinations a running row has, because the workflow
+projection flip is best-effort and a row still marked queued must be able
+to reach every state its dispatched counterpart could — otherwise a
+partial flip strands it. Migration 036 teaches the Postgres
+workflow_executions CHECK about queued; executions already allowed it.
+
+Admission itself is unchanged: the queue stays bounded and over-capacity
+requests still get 503 + Retry-After with nothing persisted.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(control-plane): keep queued executions pausable and on the dashboard
+
+Two consumers assumed a just-admitted async execution was already
+running. Pause hardcoded running as its only source status, so pausing a
+run that had not been dispatched yet now returned 409; the enhanced
+dashboard built its active-run list from running and waiting records
+only, so an admitted run vanished from the dashboard until a worker
+picked it up.
+
+Accept queued as a pausable source — the worker already waits for resume
+before dispatching a paused execution, so pausing before dispatch just
+means the agent is not called until resume — and include queued in the
+dashboard's active-run query.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* docs: describe the async queued -> running lifecycle
+
+Say plainly that the 202 body and GET both report queued until a worker
+dispatches, that queued is non-terminal so callers poll through it, and
+that the queue is bounded rather than an unbounded backlog.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* test(control-plane): cover the dispatch-time races on a queued execution
+
+The dispatch loop's post-transition branches had no coverage: an
+execution that reached a terminal status between the worker's read and
+its update, and one that was paused in that same window (both when the
+resume wait fails and when it succeeds and the loop retries). Also cover
+the error path of the dashboard's new queued-execution query.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (b30dd2f)
+
+## [0.1.140-rc.4] - 2026-09-21
+
+
+### Fixed
+
+- Fix(control-plane): don't reap a parent whose child just finished (#1059) (#1063)
+
+* fix(control-plane): don't reap a parent whose child just finished
+
+Closes #1059. The stale reaper could time out a running parent in the
+brief window (~50-600ms) between its child reaching a terminal state and
+the parent posting its own result. The parent's own updated_at does not
+move while it waits on the child, and the existing guard only skipped a
+parent while it had a non-terminal child. The moment the child posted
+succeeded, the guard vanished and nothing refreshed the parent's clock,
+so the reaper could mark the parent (and its workflow) timeout, and the
+parent's real success callback was then rejected with HTTP 409.
+
+Fix (issue's Option 1, query-contained): in MarkStaleExecutions and
+MarkStaleWorkflowExecutions, also skip a parent when a child reached a
+terminal state after the cutoff (COALESCE(c.completed_at, c.updated_at)
+> cutoff). A child that finished long before the cutoff no longer
+shields the parent, so genuinely stuck parents are still reaped and
+orphan cleanup keeps working.
+
+Timeout children are excluded from the shield (c.status != 'timeout'):
+the reaper's own kills set a recent completed_at/updated_at, and letting
+them shield would stall the bottom-up chain unwind. Applied to both the
+candidate SELECT and the re-evaluating UPDATE in each function.
+
+Tests: recently-finished child shields the parent; long-finished child
+does not; reaper-timeout child does not; bottom-up unwind preserved.
+Same cases for MarkStaleWorkflowExecutions.
+
+PR #1046 protected a workflow whose own clock advances; this covers the
+distinct case where the parent's clock never advances while it waits.
+
+Note: RetryStaleWorkflowExecutions has the same guard shape and race; I
+kept this PR to the two functions the issue names and can extend to the
+retry path in a follow-up if desired.
+
+* fix(control-plane): address #1063 review — CP-clock shield, retry path, docs
+
+Review by @AbirAbbas on #1063 surfaced three things:
+
+1. completed_at is the agent's clock (UpdateExecutionStatusHandler stores
+   req.CompletedAt verbatim), while the reaper cutoff is the control
+   plane's time.Now(). A skewed agent clock or a late-landing callback
+   could make completed_at older than the cutoff at the instant the CP
+   wrote the terminal row, so the shield expired before it was installed
+   and the parent was reaped anyway (the original 409). The shield now
+   reads the LATER of completed_at and updated_at via a new
+   childTerminalRecencyExpr (GREATEST on postgres, MAX(julianday(...))
+   on sqlite): updated_at is the CP's own write clock, so either clock
+   being after the cutoff protects the parent. On the executions table a
+   terminal row's updated_at is frozen (terminal->terminal is rejected),
+   so this cannot shield indefinitely. Adds Abbas's deterministic
+   TestMarkStaleExecutions_LateChildCallbackStillShieldsParent.
+
+2. RetryStaleWorkflowExecutions runs before both reapers when
+   max_retries > 0 and carried the identical guard, so the same race
+   reset a live parent to pending mid-flight. Applied the same
+   recent-terminal-child shield to its SELECT and re-evaluating UPDATE,
+   backdated TestRetryStaleWorkflowExecutions_TerminalChildDoesNotShieldParent
+   to the long-finished case, and added
+   TestRetryStaleWorkflowExecutions_RecentlyFinishedChildShieldsParent.
+
+3. Rewrote the stale MarkStaleExecutions doc comment: it claimed there
+   was no child recency test and the chain unwound one sweep per level;
+   both are now wrong. It documents the recency shield, the timeout-child
+   exclusion, and that unwinding can take a stale window per level.
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (2f41660)
+
+## [0.1.140-rc.3] - 2026-09-21
+
+
+### Fixed
+
+- Fix(sdk/python): stop the structured log stdout write from blocking the event loop (#1066)
+
+* feat(sdk/python): add a bounded, non-blocking stdout writer for log lines
+
+A single daemon thread drains a bounded FIFO of (stream, line) pairs.
+Deferral only engages where it can help — the caller is on a running event
+loop and the destination has a real file descriptor — so synchronous callers
+and in-memory captures keep writing inline and stay immediately visible.
+
+Under back-pressure the queue discards its oldest pending lines instead of
+blocking the producer, and the writer emits one log.dropped record per
+destination naming the count, so loss is never silent. An atexit drain
+bounded by AGENTFIELD_LOG_QUEUE_FLUSH_SECONDS covers normal shutdown, and an
+at-fork hook gives the child fresh state.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/python): stop the structured log mirror from blocking the event loop
+
+_emit_structured_record printed inline on the calling thread, which in an
+agent node is the event loop, into the _TeeTextIO wrapper over a real pipe.
+A consumer that stops draining that pipe froze the whole loop for the
+duration — heartbeats, in-flight reasoners and the control-plane client
+alike. Size bounding did not help; the stall is the pipe, not the payload.
+
+Both stdout paths now go through the bounded writer, which also keeps their
+relative order. _DynamicStdoutHandler additionally drops its logging handler
+lock: Handler.handle() holds that lock across emit(), so a synchronous
+thread blocked inline on a stalled stdout would otherwise still stall an
+event-loop caller before it reached the queue. The writer serializes instead.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/python): reinitialize the stdio tee locks in a fork child
+
+_TeeTextIO holds its write lock across the blocking write to the original
+stream. A fork while another thread holds it leaves the child with a mutex
+that is locked and has no owner, so every later write in the child deadlocks
+and its stdout is gone for good.
+
+An after_in_child hook now gives each installed tee a fresh lock, clears the
+partial line inherited mid-write, re-creates the ring and follower locks and
+drops the parent's follower queues. There is deliberately no before= hook:
+acquiring those locks ahead of the fork would make fork() itself wait on a
+stalled pipe.
+
+The hazard predates this branch, but a dedicated writer thread that can hold
+the lock for the length of a consumer stall makes it easy to hit.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: document the Python SDK log writer queue knobs
+
+AGENTFIELD_LOG_QUEUE, AGENTFIELD_LOG_QUEUE_SIZE and
+AGENTFIELD_LOG_QUEUE_FLUSH_SECONDS, alongside the existing logging
+variables: when deferral engages, the drop-oldest policy and its log.dropped
+marker, that os._exit bypasses the exit flush, and that ordering against a
+caller's own print() is no longer guaranteed.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/python): keep the handler lock override working on Python 3.13
+
+Setting logging.Handler.lock to None relied on handle() calling
+self.acquire(), which skips a falsy lock. Python 3.13 changed handle() to
+`with self.lock:`, so None raises TypeError: 'NoneType' object does not
+support the context manager protocol — every plain log line on 3.13 died in
+the handler, and a test whose synchronous writer thread was killed that way
+hung CI rather than failing.
+
+Use a no-op lock object instead: it satisfies both the acquire/release and
+the context-manager protocols, and keeps the property we want, which is that
+nothing serializes on the handler while the bounded writer already does.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(sdk/python): make log-writer helper threads daemons
+
+These helpers block on a pipe read or a lock on purpose. As non-daemon
+threads, a failing assertion left them alive and the interpreter waited for
+them at exit, so a test failure presented as a hung CI job instead of a
+failure. As daemons the session reports the failure and exits.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (00c8844)
+
+
+
+### Other
+
+- Document running a Pydantic AI agent inside a reasoner with Logfire (#1065)
+
+* examples(python): Pydantic AI agent inside a reasoner, traced in Logfire
+
+A Pydantic AI Agent runs inside an AgentField reasoner with no adapter, but
+wiring the observability so one Logfire trace covers both the Pydantic AI run
+and the app.ai completion is not obvious. This example does it: logfire.configure()
+once per process, instrument_pydantic_ai() + instrument_litellm() on that provider,
+and instrument_fastapi() on the Agent itself (it is a FastAPI subclass) so the
+inbound reasoner request is the root span.
+
+The AgentField run identifiers ride along as OpenTelemetry baggage, which Logfire
+copies onto every descendant span, so a trace joins back to a run without threading
+anything through either library's API. Pydantic AI's own token usage and cost are
+folded into the per-execution cost tracker so they reach AgentField's usage
+accounting alongside app.ai's.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: Pydantic AI + Logfire inside an AgentField reasoner
+
+Issue #997 asked for Pydantic AI and Logfire integration. The Logfire half of
+it needs no AgentField code — what was missing is a written-down recipe for the
+combination, and the honest boundary around it.
+
+This documents running a Pydantic AI agent inside a reasoner with one Logfire
+trace per execution covering both the Pydantic AI spans and the app.ai
+completions, correlated to the AgentField run through OpenTelemetry baggage;
+how to fold Pydantic AI's tokens into AgentField's per-execution usage; how the
+recipe differs from AGENTFIELD_LITELLM_CALLBACKS=logfire; and what it does not
+give you — Pydantic AI's durable-execution adapters are not wired into
+AgentField's run DAG, pause/resume or replay.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (d310f75)
+
+## [0.1.140-rc.2] - 2026-09-21
+
+
+### Added
+
+- Feat(sdk): port the explicit OpenCode harness config overlay to Go and TypeScript (#1064)
+
+* feat(sdk/go): build an explicit OpenCode config overlay per harness run
+
+The Go OpenCode provider folded the harness system prompt into the positional
+`opencode run` prompt and passed no agent, so a run depended on whatever agent
+and permissions the ambient OpenCode config happened to define. Python moved off
+that in #1023; this brings Go to the same behaviour.
+
+Each run now selects the fixed `agentfield-harness` agent with `--agent` and
+supplies it through OPENCODE_CONFIG_CONTENT: system prompt, model,
+reasoningEffort, mode primary, a fixed steps budget, and a headless permission
+baseline that denies `question`, `task` and the `agentfield*` skills so an
+AgentField-launched worker cannot dispatch back into the control plane.
+
+The overlay is deep-merged into the caller's per-call value, or the ambient one
+when there is no per-call value, so a deployment's mcp servers, plugins,
+providers and other agents survive and the OpenRouter attribution overlay and
+the harness agent coexist. A caller value that is not a JSON object fails the
+run before the concurrency slot is taken and before the child is launched.
+
+AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT restores the inline prompt transport
+and strips the agent's configured prompt, keeping the agent selection and
+permissions, so a caller with a very long system prompt can roll back without
+pinning an older SDK. `tools` and `permission_mode` stay untranslated: with the
+wildcard allow in place a tool mapping would only write allow on top of allow.
+`steps` is a named constant with an AGENTFIELD_OPENCODE_STEPS override and is
+never fed from `max_turns`.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(sdk/typescript): build an explicit OpenCode config overlay per harness run
+
+Mirrors the Go and Python OpenCode providers: each run selects the fixed
+`agentfield-harness` agent with `--agent` and defines it through a per-run
+OPENCODE_CONFIG_CONTENT overlay (system prompt, model, reasoningEffort, mode
+primary, fixed steps, and the headless permission baseline that denies
+`question`, `task` and the `agentfield*` skills). The task is the only
+positional prompt.
+
+The overlay is deep-merged into the caller's per-call value or the ambient one,
+so deployment-owned mcp servers, plugins and agents survive and the OpenRouter
+attribution overlay is no longer the only thing that can occupy the variable.
+Object key order is preserved deliberately, with the wildcard first and
+AgentField's denials last, because OpenCode applies the last matching rule.
+A caller value that is not a JSON object throws before runCli is called.
+
+AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT restores the inline prompt transport,
+and `tools` / `permission_mode` remain accepted but untranslated.
+
+This also fixes a key-name bug the overlay would otherwise inherit: the
+provider read `options.system_prompt`, but HarnessRunner forwards HarnessOptions
+verbatim, so a system prompt set through the public TypeScript API arrived as
+`systemPrompt` and never reached opencode at all. It now accepts both spellings,
+as the aforge provider already does.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* refactor(sdk/python): make the OpenCode steps budget a named, overridable constant
+
+The OpenCode agent overlay hard-coded `steps: 500` as a bare literal. Give it a
+name and an AGENTFIELD_OPENCODE_STEPS override (per-call environment first, then
+ambient; non-numeric, zero and negative values fall back to the default), so all
+three SDKs expose the same knob. The default is unchanged and `max_turns` is
+still never serialized as `steps`.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: describe the OpenCode harness overlay as all-SDK behaviour
+
+The standalone-runs section was written when only Python had the per-run agent
+overlay, and the provider-parity table still said OpenCode receives only the
+model, directory and prompt. Both are now true of Go and TypeScript too.
+
+Also documents AGENTFIELD_OPENCODE_STEPS and states plainly that `tools` and
+`permission_mode` are accepted and ignored, rather than leaving readers to infer
+they are wired to OpenCode permissions.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/go): keep the agentfield* skill denial last in the OpenCode overlay
+
+OpenCode applies the last matching permission rule, so the Python and
+TypeScript providers deliberately emit AgentField's skill/question/task denials
+after any caller rules. Go relied on `encoding/json` sorting map keys, which is
+only accidentally correct: a caller supplying
+
+    {"agent":{"agentfield-harness":{"permission":{"skill":{"agentfield-*":"allow"}}}}}
+
+serialized as {"agentfield*":"deny","agentfield-*":"allow"} — `*` sorts before
+`-` — so the caller's allow was the last match and the recursion guard was off.
+
+Serialize the permission object through a small ordered JSON type instead, in
+the same order Python uses: wildcard, caller rules, then AgentField's denials,
+with `agentfield*` last inside `skill`. Both the merged and the generated-only
+paths now go through it, so one mechanism governs the order.
+
+Also sizes the deep-merge map from the base alone; summing both lengths is what
+CodeQL's allocation-size-overflow rule flags.
+
+The two new tests assert on the serialized JSON rather than a decoded map,
+because a decoded map cannot express order; both fail against the previous
+implementation.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(sdk/typescript): assert the camelCase harness option keys are ignored too
+
+HarnessRunner forwards HarnessOptions verbatim, so a caller sets
+`permissionMode` and `maxTurns`; the test only passed the snake_case aliases, so
+"tools and permission_mode add nothing to the overlay" was not actually checked
+against the keys the public API sends. Pass both spellings.
+
+Also scopes the Windows stdin sentence in the harness docs: Python and Go send
+the prompt over stdin there, the TypeScript adapter always uses the positional
+argument. That difference is pre-existing and stays out of this change.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (f7bae4b)
+
+## [0.1.140-rc.1] - 2026-09-19
+
+
+### Chores
+
+- Chore(deps): bump anyio (#1061)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [anyio](https://github.com/agronholm/anyio).
+
+
+Updates `anyio` from 4.13.0 to 4.14.2
+- [Release notes](https://github.com/agronholm/anyio/releases)
+- [Commits](https://github.com/agronholm/anyio/compare/4.13.0...4.14.2)
+
+---
+updated-dependencies:
+- dependency-name: anyio
+  dependency-version: 4.14.2
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (4fc037f)
+
+
+
+### Fixed
+
+- Fix(storage): mirror reaper parent/child and approval guards in stale retry (#1062)
+
+* issue/reaper-retry-child-guard: mirror reaper parent/child and approval guards in stale retry
+
+* chore(reaper-retry-child-guard): checkpoint uncommitted issue work (c5407ca)
+
+## [0.1.139] - 2026-09-18
+
+## [0.1.139-rc.6] - 2026-09-18
+
+
+### Chores
+
+- Chore(deps): bump the go_modules group across 1 directory with 2 updates (#1060)
+
+* chore(deps): bump the go_modules group across 1 directory with 2 updates
+
+Bumps the go_modules group with 2 updates in the /control-plane directory: [go.opentelemetry.io/otel/sdk](https://github.com/open-telemetry/opentelemetry-go) and [google.golang.org/grpc](https://github.com/grpc/grpc-go).
+
+
+Updates `go.opentelemetry.io/otel/sdk` from 1.44.0 to 1.46.0
+- [Release notes](https://github.com/open-telemetry/opentelemetry-go/releases)
+- [Changelog](https://github.com/open-telemetry/opentelemetry-go/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/open-telemetry/opentelemetry-go/compare/v1.44.0...v1.46.0)
+
+Updates `google.golang.org/grpc` from 1.83.1 to 1.83.2
+- [Release notes](https://github.com/grpc/grpc-go/releases)
+- [Commits](https://github.com/grpc/grpc-go/compare/v1.83.1...v1.83.2)
+
+---
+updated-dependencies:
+- dependency-name: go.opentelemetry.io/otel/sdk
+  dependency-version: 1.46.0
+  dependency-type: direct:production
+  dependency-group: go_modules
+- dependency-name: google.golang.org/grpc
+  dependency-version: 1.83.2
+  dependency-type: direct:production
+  dependency-group: go_modules
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+* fix(observability): keep /v1/traces on full-URL OTLP HTTP endpoints after otel 1.46 bump
+
+OpenTelemetry 1.46 stopped appending the default trace signal path for
+WithEndpointURL (open-telemetry/opentelemetry-go#8538). Normalize pathless
+and root full HTTP endpoints to /v1/traces before constructing the exporter
+while preserving explicit collector paths and leaving gRPC behavior unchanged.
+
+Cover the root, trailing-slash, and custom-path cases so future dependency
+updates cannot silently change the request target again.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (c7bcce9)
+
+## [0.1.139-rc.5] - 2026-09-18
+
+
+### CI
+
+- Ci(python-sdk): enforce mypy with module-by-module allowlist ratchet (#971) (#1052)
+
+* ci(python-sdk): enforce mypy with module-by-module allowlist ratchet
+
+Adopts the mypy half of #620 (the ruff half shipped in #812). mypy.ini
+existed but nothing ran it. This wires a required mypy step into the
+Python SDK CI without changing any behavior.
+
+Phase 1 of #971:
+- Pin mypy==1.18.2 in the dev extras (and uv.lock).
+- Add a per-module ignore_errors allowlist to mypy.ini for the 34
+  modules that currently have type errors, so the gate can be enforced
+  now and the allowlist shrunk module by module.
+- Add a 'Type check (mypy)' step to .github/workflows/sdk-python.yml
+  running 'mypy --config-file mypy.ini agentfield/'.
+
+The gate is green today (Success: no issues found). It fails if a
+non-allowlisted module gains a new error, or if a module is removed
+from the allowlist while it still has errors. No '# type: ignore'
+sprinkles were added.
+
+* ci(python-sdk): pin types-requests so mypy gate is reproducible
+
+Addresses review on #1052. The locked dev environment pins
+requests 2.33.1, which ships no type stubs, so 'uv sync --extra dev'
+followed by mypy failed with [import-untyped] in multimodal.py and
+agent_field_handler.py. CI was green only because 'pip install .[dev]'
+resolved a newer requests that bundles stubs, so it wasn't validating
+the reproducible environment.
+
+Pin types-requests==2.33.0.20260906 in the dev extras (and uv.lock) so
+mypy passes in both the locked (uv sync) and pip-resolved environments.
+Verified mypy clean against the locked requests 2.33.1 and a newer
+requests; ruff still clean; uv lock --check clean.
+
+* ci(python-sdk): allowlist session_turn_detection for mypy ratchet
+
+session_turn_detection.py landed on main (via #1056) after this PR
+opened and carries 3 mypy errors (loosely-typed dict value used in
+numeric comparisons at line 58). The mypy gate correctly failed on it
+because it was not allowlisted - the ratchet working as designed.
+
+Add it to the allowlist to keep this PR a pure CI-wiring change; the
+module's type errors can be cleaned in a follow-up (phase 2). (8c3e084)
+
+
+
+### Fixed
+
+- Fix(security): close open Dependabot vulnerability alerts (#1055)
+
+* fix(security): close open Dependabot vulnerability alerts
+
+Bump vulnerable dependencies across the monorepo to patched releases:
+
+- next 15.5.25 + sharp 0.35.4 (rag evaluation UI RCE / libheif)
+- js-yaml 4.3.2 (empty merge-source CPU DoS)
+- fast-uri 3.1.7 (host confusion / SSRF)
+- google.golang.org/grpc v1.83.2 (xDS authority DoS)
+- browserslist 4.28.9 + baseline-browser-mapping 2.11.23
+- hono 4.13.7 (toSSG path traversal)
+- qs 6.16.0 (arrayLimit / isBuffer DoS)
+- vitest / @vitest/mocker 4.1.11 (redirect mock path traversal)
+
+Regenerated affected npm/pnpm lockfiles and go.sum.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(security): regenerate npm lockfiles for npm ci sync
+
+Full npm install (not package-lock-only) so control-plane web client
+and desktop locks include all transitive deps required by npm ci.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(security): close remaining Dependabot alerts
+
+- @humanfs/node 0.16.8 (pnpm lock still had 0.16.7 symlink copy)
+- postcss-selector-parser 6.1.4 (pnpm lock still had 6.1.2 AST DoS)
+- @ai-sdk/provider-utils 4.0.51 including v5/v6 aliases (resource consumption)
+
+Vitest 4.1.11, hono 4.13.7, and esbuild 0.28.1 were already patched
+on this branch for the related alerts.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (44d1022)
+
+## [0.1.139-rc.4] - 2026-09-18
+
+
+### Fixed
+
+- Fix(storage): rebind postgres tx prepares and guard stale retries (#1051)
+
+* fix(storage): rebind transactional prepares and guard stale retries
+
+* test(storage): verify stale reapers against live PostgreSQL
+
+Adds connection-backed PostgreSQL coverage for the transactional prepare
+rebinding and the paired-execution staleness guard:
+
+- reproduce the pre-fix failure at the SQL level (SQLSTATE 42601)
+- assert the reaper UPDATE statements reach the driver rebound to $n
+- drive MarkStaleExecutions, MarkStaleWorkflowExecutions and
+  RetryStaleWorkflowExecutions end to end so a row stale on both clocks is
+  reaped while a workflow whose paired execution is still fresh survives
+- cover the guard's status filter (a terminal paired execution does not
+  shield a stale workflow)
+
+Live tests are gated on POSTGRES_TEST_URL, refuse non-loopback hosts, and
+create a throwaway database per test.
+
+* fix(storage): recheck execution staleness between retry statements
+
+RetryStaleWorkflowExecutions repeated the activity predicate in its
+workflow UPDATE, but the paired execution UPDATE still only rechecked
+status. A heartbeat committing between the two statements was
+overwritten, dragging a live execution back to pending.
+
+Repeat the execution staleness predicate on the second update so
+activity that lands after the workflow guard has been evaluated is
+respected. The workflow guard and RowsAffected semantics are unchanged.
+
+Reliability coverage:
+
+- SQLite regression simulates the heartbeat between statements with an
+  AFTER UPDATE trigger; it fails on the old execution UPDATE
+- live PostgreSQL regression parks the retry transaction on the paired
+  execution row lock while a heartbeat commits on another connection; it
+  fails on the old execution UPDATE and passes with the predicate
+
+* fix(storage): make stale retries atomic across the paired records
+
+RetryStaleWorkflowExecutions committed the workflow half of a candidate
+even when the paired execution update lost to a heartbeat that landed
+between the two statements. That left workflow=pending and
+execution=running with retry_count incremented, and the candidate was
+reported as retried, so a dispatcher could duplicate live work.
+
+Check the paired execution update's RowsAffected and wrap each candidate
+in a savepoint. When the execution does not move, roll the candidate's
+workflow half back so the pair is all-or-nothing and the id is not
+reported as retried.
+
+Savepoint rollback is used rather than locking both rows first because it
+behaves identically on SQLite and PostgreSQL (SQLite has no row locks, so
+a lock-first pair could not be exercised by the SQLite regression), keeps
+the existing lock ordering unchanged, and lets the pre-existing
+workflow-only paths keep their outcome: candidates with no paired
+execution row, a terminal row, or a waiting row are only rolled back when
+the paired execution is active but no longer stale, i.e. when it actually
+won the race.
+
+Both between-statements regressions now assert the all-or-nothing outcome
+on SQLite and live PostgreSQL, and a new SQLite test pins that unpaired
+workflows are still retried.
+
+* test(storage): cover batch all-or-nothing and reaper discrimination for stale retries
+
+Add executable regressions on top of the savepoint-based retry fix without
+changing the implementation:
+
+- strengthen the heartbeat-between-statements SQLite regression to assert the
+  whole all-or-nothing outcome: empty retried set, untouched workflow row
+  (status, retry_count, completed_at, error_message, updated_at), and the
+  execution half rolled back with its committed live state
+- add a mixed-batch SQLite regression where two of three candidates lose
+  their paired execution to a between-statements heartbeat and one moves; the
+  reported count and id list must match only the candidate whose pair moved
+- add the same mixed-batch regression against live PostgreSQL, parking the
+  retry on a locked execution row while an independently committed heartbeat
+  wins, so batch accounting is proven under real READ COMMITTED semantics
+- add a selection-to-update regression for workflow-side activity and a
+  terminal-paired-execution regression pinning the workflow-only recovery path
+- add a two-reaper discrimination matrix (MarkStaleWorkflowExecutions and
+  RetryStaleWorkflowExecutions) covering stale-on-both, fresh-on-either clock,
+  and unpaired workflows so the guard introduces no false negatives
+- document the full retry interleaving inventory in the test file, mapping each
+  window to a regression or a written justification (887a3b9)
+
+## [0.1.139-rc.3] - 2026-09-18
+
+
+### Added
+
+- Feat(examples): add optional Serply search backend to deep_research (#1058)
+
+Adds `SEARCH_PROVIDER=serply` alongside the existing Tavily default and
+the Parallel Search opt-in, following the same shape as the Parallel
+backend: one normalizer, one async executor, one dispatch branch, and no
+new entry in requirements.txt.
+
+Serply answers from Google's result pages and needs an API key, so the
+backend reads SERPLY_API_KEY and fails with the same message shape the
+Tavily path already uses when its key is missing.
+
+Two details specific to this API are handled explicitly:
+
+- `num` is an approximate upper bound with a ceiling of 10, so the client
+  requests the ceiling and trims to the example's own five-result budget
+  rather than trusting the count it gets back.
+- Errors arrive as a non-2xx with a JSON `detail` string, so the failure
+  message carries that text instead of a bare status code. (6d36643)
+
+
+
+### Fixed
+
+- Fix(sdk/go): return isolated session definitions (#1044)
+
+* fix(sdk/go): return isolated session definitions
+
+* fix(sdk/go): distinguish overlapping slice views (7a1714e)
+
 ## [0.1.139-rc.2] - 2026-09-15
 
 

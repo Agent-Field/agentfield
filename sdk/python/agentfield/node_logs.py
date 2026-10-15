@@ -211,6 +211,7 @@ class _TeeTextIO(io.TextIOBase):
 
 _global_ring: Optional[ProcessLogRing] = None
 _tee_installed = False
+_installed_tees: List[_TeeTextIO] = []
 
 
 def logs_enabled() -> bool:
@@ -243,14 +244,40 @@ def get_ring() -> ProcessLogRing:
 
 def install_stdio_tee() -> None:
     """Replace sys.stdout/sys.stderr with tees into the process log ring."""
-    global _tee_installed
+    global _installed_tees, _tee_installed
     if _tee_installed or not logs_enabled():
         return
     ring = get_ring()
     ml = max_line_bytes()
-    sys.stdout = _TeeTextIO("stdout", cast(TextIO, sys.__stdout__), ring, ml)
-    sys.stderr = _TeeTextIO("stderr", cast(TextIO, sys.__stderr__), ring, ml)
+    stdout_tee = _TeeTextIO("stdout", cast(TextIO, sys.__stdout__), ring, ml)
+    stderr_tee = _TeeTextIO("stderr", cast(TextIO, sys.__stderr__), ring, ml)
+    _installed_tees = [stdout_tee, stderr_tee]
+    sys.stdout = stdout_tee
+    sys.stderr = stderr_tee
     _tee_installed = True
+
+
+def _after_fork_child() -> None:
+    """Replace locks whose owning threads do not survive into a fork child."""
+    global _follow_lock, _follow_queues
+
+    rings: List[ProcessLogRing] = []
+    for tee in _installed_tees:
+        tee._write_lock = threading.Lock()
+        tee._buf = ""
+        if all(tee._ring is not ring for ring in rings):
+            rings.append(tee._ring)
+    if _global_ring is not None and all(_global_ring is not ring for ring in rings):
+        rings.append(_global_ring)
+    for ring in rings:
+        ring._lock = threading.Lock()
+
+    _follow_lock = threading.Lock()
+    _follow_queues = []
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork_child)
 
 
 def verify_internal_bearer(authorization_header: Optional[str]) -> bool:

@@ -2,7 +2,8 @@ import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createMetrics, createRawResult } from '../types.js';
-import { runCli } from '../cli.js';
+import { markProviderCommand, runCli } from '../cli.js';
+import { HarnessProviderUnavailable, providerUnavailable } from '../availability.js';
 import { resolveModelAndVariant } from '../modelVariant.js';
 
 const REASONING_VARIANTS = new Set(['off', 'low', 'medium', 'high']);
@@ -215,7 +216,7 @@ export class AforgeProvider implements HarnessProvider {
 
     const startApi = Date.now();
     try {
-      const { stdout, stderr, exitCode } = await runCli(cmd, {
+      const { stdout, stderr, exitCode } = await runCli(markProviderCommand('aforge', cmd), {
         env,
         cwd: undefined,
         timeout: outerTimeout * 1000,
@@ -270,14 +271,12 @@ export class AforgeProvider implements HarnessProvider {
         returnCode: exitCode,
       });
     } catch (error) {
+      if (error instanceof HarnessProviderUnavailable) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes('ENOENT')) {
-        return createRawResult({
-          isError: true,
-          errorMessage: `AForge binary not found at '${this.bin}'. Install it with \`af aforge ensure\`, or set AFORGE_BIN to its path.`,
-          failureType: 'crash',
-          metrics: createMetrics({ durationApiMs: Date.now() - startApi }),
-        });
+        throw providerUnavailable('aforge', this.bin);
       }
       const timedOut = /timed out|deadline exceeded|no progress/i.test(message);
       return createRawResult({

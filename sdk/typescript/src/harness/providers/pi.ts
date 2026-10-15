@@ -2,7 +2,8 @@ import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createMetrics, createRawResult } from '../types.js';
-import { parseJsonl, runCli } from '../cli.js';
+import { markProviderCommand, parseJsonl, runCli } from '../cli.js';
+import { HarnessProviderUnavailable, providerUnavailable } from '../availability.js';
 import { resolveModelAndVariant } from '../modelVariant.js';
 
 type PiFlavor = 'pi' | 'omp';
@@ -180,7 +181,7 @@ class PiFamilyProvider implements HarnessProvider {
     const env = { ...options.env as Record<string, string> | undefined };
     const startApi = Date.now();
     try {
-      const { stdout, stderr, exitCode } = await runCli(cmd, {
+      const { stdout, stderr, exitCode } = await runCli(markProviderCommand(this.flavor, cmd), {
         env,
         cwd: root,
         inputText: prompt,
@@ -219,17 +220,17 @@ class PiFamilyProvider implements HarnessProvider {
         returnCode: exitCode,
       });
     } catch (error) {
+      if (error instanceof HarnessProviderUnavailable) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       const binaryMissing = message.includes('ENOENT');
+      if (binaryMissing) {
+        throw providerUnavailable(this.flavor, this.bin);
+      }
       return createRawResult({
         isError: true,
-        errorMessage: binaryMissing
-          ? `${this.flavor === 'omp' ? 'OMP' : 'Pi'} binary not found at '${this.bin}'. ${
-              this.flavor === 'omp'
-                ? 'Install: curl -fsSL https://omp.sh/install | sh'
-                : 'Install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-            }`
-          : message,
+        errorMessage: message,
         failureType: /timed out|deadline exceeded|no progress/i.test(message)
           ? 'timeout'
           : 'crash',

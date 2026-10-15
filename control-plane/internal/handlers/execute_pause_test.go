@@ -72,6 +72,13 @@ func TestPauseExecutionHandler(t *testing.T) {
 			expectedReason:     "manual intervention",
 		},
 		{
+			name:               "pause queued execution",
+			executionID:        "exec-pause-queued",
+			initialStatus:      types.ExecutionStatusQueued,
+			expectedStatusCode: http.StatusOK,
+			expectedStatus:     types.ExecutionStatusPaused,
+		},
+		{
 			name:               "pause pending execution returns conflict",
 			executionID:        "exec-pause-pending",
 			initialStatus:      types.ExecutionStatusPending,
@@ -126,7 +133,7 @@ func TestPauseExecutionHandler(t *testing.T) {
 			var payload map[string]interface{}
 			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
 			require.Equal(t, tt.executionID, payload["execution_id"])
-			require.Equal(t, types.ExecutionStatusRunning, payload["previous_status"])
+			require.Equal(t, tt.initialStatus, payload["previous_status"])
 			require.Equal(t, tt.expectedStatus, payload["status"])
 			require.NotEmpty(t, payload["paused_at"])
 
@@ -156,6 +163,49 @@ func TestPauseExecutionHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQueuedPauseIsNotClobberedByWorkerTransitionAndCanResume(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := newTestExecutionStorage(&types.AgentNode{ID: "agent-node-1"})
+	const executionID = "exec-queued-pause-race"
+	seedExecutionForPauseResume(t, store, executionID, types.ExecutionStatusQueued)
+
+	router := gin.New()
+	router.POST("/api/v1/executions/:execution_id/pause", PauseExecutionHandler(store))
+	router.POST("/api/v1/executions/:execution_id/resume", ResumeExecutionHandler(store))
+
+	pauseResp := httptest.NewRecorder()
+	pauseReq := httptest.NewRequest(http.MethodPost, "/api/v1/executions/"+executionID+"/pause", strings.NewReader(`{}`))
+	pauseReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(pauseResp, pauseReq)
+	require.Equal(t, http.StatusOK, pauseResp.Code, pauseResp.Body.String())
+
+	planExec := &types.Execution{ExecutionID: executionID, Status: types.ExecutionStatusQueued}
+	job := asyncExecutionJob{
+		controller: newExecutionController(store, nil, nil, time.Second, ""),
+		plan:       preparedExecution{exec: planExec},
+	}
+	updated, transitioned, err := job.transitionQueuedExecutionToRunning(context.Background())
+	require.NoError(t, err)
+	require.False(t, transitioned)
+	require.NotNil(t, updated)
+	require.Equal(t, types.ExecutionStatusPaused, updated.Status)
+	persisted, err := store.GetExecutionRecord(context.Background(), executionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusPaused, persisted.Status)
+
+	resumeResp := httptest.NewRecorder()
+	resumeReq := httptest.NewRequest(http.MethodPost, "/api/v1/executions/"+executionID+"/resume", strings.NewReader(`{}`))
+	resumeReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(resumeResp, resumeReq)
+	require.Equal(t, http.StatusOK, resumeResp.Code, resumeResp.Body.String())
+	persisted, err = store.GetExecutionRecord(context.Background(), executionID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusRunning, persisted.Status)
+	workflow, err := store.GetWorkflowExecution(context.Background(), executionID)
+	require.NoError(t, err)
+	require.Equal(t, string(types.ExecutionStatusRunning), workflow.Status)
 }
 
 func TestResumeExecutionHandler(t *testing.T) {

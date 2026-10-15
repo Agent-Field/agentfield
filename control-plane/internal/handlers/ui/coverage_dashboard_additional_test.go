@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -94,6 +96,15 @@ func seedDashboardData(t *testing.T) (*DashboardHandler, *gin.Engine) {
 			Status:      string(types.ExecutionStatusWaiting),
 			StartedAt:   now.Add(-2 * time.Minute),
 		},
+		{
+			ExecutionID: "dash-queued",
+			RunID:       "run-queued",
+			AgentNodeID: "agent-alpha",
+			ReasonerID:  "planner",
+			NodeID:      "agent-alpha",
+			Status:      string(types.ExecutionStatusQueued),
+			StartedAt:   now.Add(-25 * time.Hour),
+		},
 	}
 	for _, record := range records {
 		require.NoError(t, ls.CreateExecutionRecord(ctx, record))
@@ -128,6 +139,14 @@ func TestEnhancedDashboardSummaryHandlerCoverage(t *testing.T) {
 	require.NotNil(t, body.Comparison)
 	require.NotEmpty(t, body.ExecutionTrends.Last7Days)
 	require.NotEmpty(t, body.Workflows.TopWorkflows)
+	queuedVisible := false
+	for _, run := range body.Workflows.ActiveRuns {
+		if run.ExecutionID == "dash-queued" {
+			queuedVisible = true
+			require.Equal(t, string(types.ExecutionStatusQueued), run.Status)
+		}
+	}
+	require.True(t, queuedVisible, "queued execution must remain visible in active dashboard runs")
 	require.NotEmpty(t, body.Incidents)
 	require.NotEmpty(t, body.Hotspots.TopFailingReasoners)
 	require.Len(t, body.ActivityPatterns.HourlyHeatmap, 7)
@@ -138,6 +157,27 @@ func TestEnhancedDashboardSummaryHandlerCoverage(t *testing.T) {
 	require.Equal(t, http.StatusOK, cachedResp.Code)
 
 	handler.agentService.(*MockAgentServiceForUI).AssertExpectations(t)
+}
+
+func TestEnhancedDashboardSummaryHandlerQueuedQueryFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := &dashboardOverrideStorage{overrideStorage: &overrideStorage{StorageProvider: setupTestStorage(t)}}
+	store.queryExecutionRecordsFn = func(_ context.Context, filter types.ExecutionFilter) ([]*types.Execution, error) {
+		if filter.Status != nil && *filter.Status == string(types.ExecutionStatusQueued) {
+			return nil, errors.New("queued query failed")
+		}
+		return nil, nil
+	}
+	handler := NewDashboardHandler(store, &mockLifecycleAgentService{})
+	router := gin.New()
+	router.GET("/api/ui/v1/dashboard/enhanced", handler.GetEnhancedDashboardSummaryHandler)
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/ui/v1/dashboard/enhanced", nil))
+
+	require.Equal(t, http.StatusInternalServerError, resp.Code)
+	require.Contains(t, resp.Body.String(), "failed to load active workflow data")
 }
 
 func TestDashboardPureHelpersCoverage(t *testing.T) {
@@ -185,7 +225,7 @@ func TestDashboardPureHelpersCoverage(t *testing.T) {
 		require.Equal(t, 300.0, computeMedian([]int64{100, 300, 500}))
 	})
 
-		t.Run("hotspots activity workflows and incidents", func(t *testing.T) {
+	t.Run("hotspots activity workflows and incidents", func(t *testing.T) {
 		hotspots := buildHotspotSummary(executions)
 		require.Len(t, hotspots.TopFailingReasoners, 2)
 		foundTopErrors := false

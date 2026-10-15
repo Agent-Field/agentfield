@@ -150,3 +150,14 @@ func (tx *sqlTx) QueryRowContext(ctx context.Context, query string, args ...inte
 func (tx *sqlTx) QueryRow(query string, args ...interface{}) *sql.Row {
 	return tx.Tx.QueryRow(tx.rebind(query), args...)
 }
+
+// Both preparation methods must rebind here: callers can use either the
+// context-aware or deprecated API, and the embedded *sql.Tx methods would
+// otherwise send ? placeholders directly to PostgreSQL.
+func (tx *sqlTx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	return tx.Tx.PrepareContext(ctx, tx.rebind(query))
+}
+
+func (tx *sqlTx) Prepare(query string) (*sql.Stmt, error) {
+	return tx.Tx.Prepare(tx.rebind(query))
+}

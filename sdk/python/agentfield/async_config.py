@@ -8,6 +8,55 @@ polling strategies, resource limits, and performance tuning parameters.
 from dataclasses import dataclass
 import os
 
+# The SDK-wide boolean env vocabulary: default-on flags opt out with a falsey
+# value, matching log_writer._queue_enabled, logger._stdout_mirror_enabled,
+# node_logs.logs_enabled and openrouter_attribution.attribution_enabled;
+# default-off flags opt in with a truthy one, matching
+# litellm_observability._TRUE_VALUES. The Go control plane parses the same way --
+# config.applyBoolEnv keeps the caller's existing value when strconv.ParseBool
+# rejects the string.
+_FALSE_VALUES = ("0", "false", "no", "off")
+_TRUE_VALUES = ("1", "true", "yes", "on")
+
+
+def _env_flag(value: str) -> bool:
+    """Parse a boolean env value, rejecting anything outside the vocabulary.
+
+    Raising is what lets get_env_var's existing fallback supply the caller's own
+    default, so an AsyncConfig subclass that changes a field default is honoured
+    instead of being overwritten by a polarity baked into the parser. The float
+    and int converters in from_environment() already behave this way.
+    """
+    normalized = value.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    raise ValueError(f"unrecognised boolean environment value: {value!r}")
+
+
+def _env_flag_default_on(value: str) -> bool:
+    """_env_flag for a caller whose flag defaults to True.
+
+    For call sites that know their default statically. AsyncConfig itself uses
+    _env_flag so the default comes from the class.
+    """
+    try:
+        return _env_flag(value)
+    except ValueError:
+        return True
+
+
+def _env_flag_default_off(value: str) -> bool:
+    """_env_flag for a caller whose flag defaults to False.
+
+    Imported by logger.py for the AGENTFIELD_LOG_* flags.
+    """
+    try:
+        return _env_flag(value)
+    except ValueError:
+        return False
+
 
 @dataclass
 class AsyncConfig:
@@ -97,6 +146,10 @@ class AsyncConfig:
         - AGENTFIELD_ASYNC_MAX_EXECUTION_TIMEOUT=1800
         - AGENTFIELD_ASYNC_BATCH_SIZE=50
 
+        Boolean flags take the usual shell vocabulary: a flag that defaults to
+        true is turned off with 0/false/no/off, and one that defaults to false is
+        turned on with 1/true/yes/on. Any other value leaves the default in place.
+
         Returns:
             AsyncConfig instance with values from environment variables
         """
@@ -159,29 +212,23 @@ class AsyncConfig:
         )
         config.batch_size = get_env_var("batch_size", config.batch_size, int)
 
-        # Feature Flags
+        # Feature Flags. All five use the polarity-free parser so an unrecognised
+        # value falls back to this class's own default rather than to a polarity
+        # assumed here (issue #1089).
         config.enable_async_execution = get_env_var(
-            "enable_async_execution",
-            config.enable_async_execution,
-            lambda x: x.lower() == "true",
+            "enable_async_execution", config.enable_async_execution, _env_flag
         )
         config.enable_batch_polling = get_env_var(
-            "enable_batch_polling",
-            config.enable_batch_polling,
-            lambda x: x.lower() == "true",
+            "enable_batch_polling", config.enable_batch_polling, _env_flag
         )
         config.enable_result_caching = get_env_var(
-            "enable_result_caching",
-            config.enable_result_caching,
-            lambda x: x.lower() == "true",
+            "enable_result_caching", config.enable_result_caching, _env_flag
         )
         config.fallback_to_sync = get_env_var(
-            "fallback_to_sync", config.fallback_to_sync, lambda x: x.lower() == "true"
+            "fallback_to_sync", config.fallback_to_sync, _env_flag
         )
         config.enable_event_stream = get_env_var(
-            "enable_event_stream",
-            config.enable_event_stream,
-            lambda x: x.lower() == "true",
+            "enable_event_stream", config.enable_event_stream, _env_flag
         )
         config.event_stream_path = get_env_var(
             "event_stream_path", config.event_stream_path

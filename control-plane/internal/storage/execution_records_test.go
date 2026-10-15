@@ -63,6 +63,62 @@ func TestQueryRunSummariesParsesTextTimestamps(t *testing.T) {
 	require.True(t, summary.LatestStarted.After(base), "latest started should be after the test base time")
 }
 
+func TestExecutionRestartedAsPersistsAcrossBothLocalReadModels(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+	now := time.Now().UTC()
+	require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
+		ExecutionID: "source-forward-pointer", RunID: "source-run", AgentNodeID: "node",
+		NodeID: "node", ReasonerID: "reasoner", Status: types.ExecutionStatusFailed,
+		StartedAt: now, CreatedAt: now, UpdatedAt: now,
+	}))
+	runID := "source-run"
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, &types.WorkflowExecution{
+		WorkflowID: "source-run", ExecutionID: "source-forward-pointer", AgentFieldRequestID: "request",
+		RunID: &runID, AgentNodeID: "node", ReasonerID: "reasoner", Status: string(types.ExecutionStatusFailed),
+		StartedAt: now, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	require.NoError(t, ls.SetExecutionRestartedAs(ctx, "source-forward-pointer", "successor-forward-pointer"))
+	execution, err := ls.GetExecutionRecord(ctx, "source-forward-pointer")
+	require.NoError(t, err)
+	require.NotNil(t, execution.RestartedAsExecutionID)
+	require.Equal(t, "successor-forward-pointer", *execution.RestartedAsExecutionID)
+	workflow, err := ls.GetWorkflowExecution(ctx, "source-forward-pointer")
+	require.NoError(t, err)
+	require.NotNil(t, workflow.RestartedAsExecutionID)
+	require.Equal(t, "successor-forward-pointer", *workflow.RestartedAsExecutionID)
+}
+
+func TestQueryExecutionRecordsFiltersInterruptedRoots(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+	now := time.Now().UTC()
+	orphan := "agent_restart_orphaned: old instance"
+	shutdown := "control_plane_shutdown"
+	other := "agent_error"
+	parent := "root-orphan"
+	restartedAs := "successor"
+	rows := []*types.Execution{
+		{ExecutionID: "root-orphan", RunID: "run-orphan", AgentNodeID: "node", NodeID: "node", ReasonerID: "reasoner", Status: types.ExecutionStatusFailed, StatusReason: &orphan, StartedAt: now},
+		{ExecutionID: "root-shutdown", RunID: "run-shutdown", AgentNodeID: "node", NodeID: "node", ReasonerID: "reasoner", Status: types.ExecutionStatusFailed, StatusReason: &shutdown, StartedAt: now},
+		{ExecutionID: "child-orphan", RunID: "run-orphan", ParentExecutionID: &parent, AgentNodeID: "node", NodeID: "node", ReasonerID: "reasoner", Status: types.ExecutionStatusFailed, StatusReason: &orphan, StartedAt: now},
+		{ExecutionID: "root-other", RunID: "run-other", AgentNodeID: "node", NodeID: "node", ReasonerID: "reasoner", Status: types.ExecutionStatusFailed, StatusReason: &other, StartedAt: now},
+		{ExecutionID: "root-already-restarted", RunID: "run-restarted", RestartedAsExecutionID: &restartedAs, AgentNodeID: "node", NodeID: "node", ReasonerID: "reasoner", Status: types.ExecutionStatusFailed, StatusReason: &orphan, StartedAt: now},
+	}
+	for _, row := range rows {
+		require.NoError(t, ls.CreateExecutionRecord(ctx, row))
+	}
+	cutoff := now.Add(-time.Minute)
+	got, err := ls.QueryExecutionRecords(ctx, types.ExecutionFilter{
+		UpdatedAfter: &cutoff, TerminalOnly: true, RootOnly: true, WithoutRestartedAs: true,
+		StatusReasons: []string{shutdown}, StatusReasonPrefixes: []string{"agent_restart_orphaned"},
+		SortBy: "updated_at", Limit: 25,
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	ids := []string{got[0].ExecutionID, got[1].ExecutionID}
+	require.ElementsMatch(t, []string{"root-orphan", "root-shutdown"}, ids)
+}
+
 func TestQueryRunSummariesSearchFilter(t *testing.T) {
 	ls, ctx := setupLocalStorage(t)
 

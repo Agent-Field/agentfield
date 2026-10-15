@@ -16,6 +16,7 @@ This directory contains example agents demonstrating AgentField's capabilities a
 | **Multi-Agent Simulation** | [simulation_engine](python_agent_nodes/simulation_engine/) | [simulation](ts-node-examples/simulation/) | - |
 | **Serverless Deployment** | [serverless_hello](python_agent_nodes/serverless_hello/) | [serverless-hello](ts-node-examples/serverless-hello/) | - |
 | **Verifiable Credentials** | - | [verifiable-credentials](ts-node-examples/verifiable-credentials/) | - |
+| **Pydantic AI + Logfire** | [pydantic_ai_logfire](python_agent_nodes/pydantic_ai_logfire/) | - | - |
 
 ## Examples by Language
 
@@ -32,6 +33,7 @@ This directory contains example agents demonstrating AgentField's capabilities a
 | [rag_evaluation](python_agent_nodes/rag_evaluation/) | Multi-metric QA assessment | Faithfulness, Relevance, Hallucination detection, Constitutional checks. [Docs →](https://agentfield.ai/docs/learn/examples) |
 | [simulation_engine](python_agent_nodes/simulation_engine/) | Domain-agnostic multi-agent simulation | 100+ parallel reasoners, Scenario analysis, Sentiment modeling |
 | [serverless_hello](python_agent_nodes/serverless_hello/) | Serverless deployment pattern | Lambda/Cloud Functions handler, Cross-agent calling |
+| [pydantic_ai_logfire](python_agent_nodes/pydantic_ai_logfire/) | Pydantic AI agent inside a reasoner | Logfire tracing, Run-id correlation, Usage accounting. [Docs →](../docs/pydantic-ai.md) |
 
 ### TypeScript Examples
 

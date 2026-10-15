@@ -816,6 +816,8 @@ class AgentAI:
             else getattr(self.agent.async_config, "llm_call_timeout", 120.0)
         )
         litellm_params.setdefault("timeout", effective_timeout)
+        if final_config.stream and final_config.model.startswith(("openrouter/", "openai/")):
+            litellm_params.setdefault("stream_options", {"include_usage": True})
 
         if schema:
             # Convert Pydantic model to JSON schema format for LiteLLM
@@ -1017,8 +1019,31 @@ class AgentAI:
                     log_debug(f"LiteLLM call failed: {e}")
                     raise
 
+            from .usage_routing import routing_provider
+            from agentfield.cost_tracker import derive_provider
+
+            request_provider = derive_provider(
+                litellm_params.get("model", final_config.model)
+            )
+            request_route = routing_provider(
+                request_provider, litellm_params.get("api_base")
+            )
+
             if final_config.stream:
-                return resp
+                from agentfield.cost_tracker import (
+                    derive_provider,
+                    get_current_cost_tracker,
+                )
+                from .usage_stream import UsageTrackingStream
+                tracker = get_current_cost_tracker() or getattr(
+                    self.agent, "cost_tracker", None
+                )
+                if tracker is None:
+                    return resp
+                requested_model = litellm_params.get("model", final_config.model)
+                return UsageTrackingStream(
+                    resp, tracker, requested_model, request_provider, request_route
+                )
 
             from .multimodal_response import detect_multimodal_response
 
@@ -1031,7 +1056,10 @@ class AgentAI:
             # discard tokens that were successfully extracted.
             usage = multimodal_response.usage
             if usage:
-                from agentfield.cost_tracker import get_current_cost_tracker
+                from agentfield.cost_tracker import (
+                    derive_provider,
+                    get_current_cost_tracker,
+                )
 
                 tracker = get_current_cost_tracker()
                 if tracker is None and hasattr(self.agent, "cost_tracker"):
@@ -1045,6 +1073,10 @@ class AgentAI:
                     ctx = get_current_context()
                     tracker.record(
                         model=model_name,
+                        provider=derive_provider(
+                            litellm_params.get("model", final_config.model)
+                        ),
+                        routing_provider=request_route,
                         prompt_tokens=usage.get("prompt_tokens", 0),
                         completion_tokens=usage.get("completion_tokens", 0),
                         total_tokens=usage.get("total_tokens", 0),
@@ -1054,6 +1086,23 @@ class AgentAI:
                         cache_read_tokens=usage.get("cache_read_tokens", 0),
                         cache_creation_tokens=usage.get("cache_creation_tokens", 0),
                         cost_source=multimodal_response.cost_source,
+                    )
+
+            else:
+                from agentfield.cost_tracker import (
+                    derive_provider,
+                    get_current_cost_tracker,
+                )
+                tracker = get_current_cost_tracker() or getattr(
+                    self.agent, "cost_tracker", None
+                )
+                if tracker is not None:
+                    route = derive_provider(litellm_params.get("model", final_config.model))
+                    tracker.record(
+                        model=final_config.model,
+                        provider=route,
+                        routing_provider=request_route,
+                        usage_status="missing",
                     )
 
             if schema:

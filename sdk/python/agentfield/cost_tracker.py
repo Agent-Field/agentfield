@@ -45,6 +45,8 @@ class CostEntry:
     cache_creation_tokens: int = 0
     # Where cost_usd came from: "provider" | "litellm" | None.
     cost_source: Optional[str] = None
+    usage_status: Optional[str] = None
+    routing_provider: Optional[str] = None
 
 
 def derive_provider(model: Optional[str]) -> Optional[str]:
@@ -84,6 +86,8 @@ class CostTracker:
         cache_read_tokens: int = 0,
         cache_creation_tokens: int = 0,
         cost_source: Optional[str] = None,
+        usage_status: Optional[str] = None,
+        routing_provider: Optional[str] = None,
     ) -> None:
         """Record a single call's usage.
 
@@ -96,6 +100,8 @@ class CostTracker:
             self._entries.append(
                 CostEntry(
                     model=model,
+                    usage_status=usage_status,
+                    routing_provider=routing_provider,
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
                     total_tokens=total_tokens or 0,
@@ -200,6 +206,10 @@ class CostTracker:
                         "cost_source": e.cost_source,
                     }
                 )
+                if e.routing_provider is not None:
+                    entries[-1]["routing_provider"] = e.routing_provider
+                if e.usage_status is not None:
+                    entries[-1]["usage_status"] = e.usage_status
                 total_input += input_tokens
                 total_output += output_tokens
                 total_tokens += entry_total

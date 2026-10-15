@@ -101,3 +101,31 @@ func (a *Agent) Harness(ctx context.Context, prompt string, schema map[string]an
 	}
 	return result, err
 }
+
+// HarnessDoctor reports whether the requested harness providers are usable:
+// their CLI on PATH and whether credentials are configured. Passing no
+// providers checks every provider the SDK knows about.
+//
+// Run it in a container entrypoint, a Dockerfile step or a CI job so a missing
+// coding agent fails the build instead of a real (paid) run:
+//
+//	reports, err := agent.HarnessDoctor(ctx, "codex", "opencode")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	if blocked := harness.Unusable(reports); len(blocked) > 0 {
+//	    for _, report := range blocked {
+//	        log.Printf("%s unusable: install with %s", report.Provider, report.InstallCommand)
+//	    }
+//	    os.Exit(1)
+//	}
+//
+// Static PATH and environment checks only. Use harness.Doctor directly with
+// DoctorOptions.Probe to additionally run each provider's version command,
+// which catches an installed but broken CLI at the cost of spawning processes.
+//
+// Mirrors the Python SDK's app.harness_doctor() and the TypeScript SDK's
+// agent.harnessDoctor().
+func (a *Agent) HarnessDoctor(ctx context.Context, providers ...string) ([]harness.ProviderHealth, error) {
+	return harness.Doctor(ctx, harness.DoctorOptions{Providers: providers})
+}

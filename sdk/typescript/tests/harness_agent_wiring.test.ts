@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Agent } from '../src/agent/Agent.js';
 import { HarnessRunner } from '../src/harness/runner.js';
+import * as availability from '../src/harness/availability.js';
 
 describe('Agent harness wiring', () => {
   const makeAgent = (harnessConfig?: Record<string, unknown>) =>
@@ -30,6 +31,15 @@ describe('Agent harness wiring', () => {
     const agent = makeAgent();
     const runner = await agent.getHarnessRunner();
     expect(runner).toBeInstanceOf(HarnessRunner);
+  });
+
+  it('harnessDoctor() delegates to the shared provider preflight', async () => {
+    const report = [{ provider: 'codex', usable: true }];
+    const doctorSpy = vi.spyOn(availability, 'harnessDoctor').mockResolvedValue(report as any);
+    const agent = makeAgent();
+
+    await expect(agent.harnessDoctor(['codex'])).resolves.toBe(report);
+    expect(doctorSpy).toHaveBeenCalledWith(['codex']);
   });
 
   it('harness() delegates to runner.run()', async () => {

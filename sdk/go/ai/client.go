@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -15,6 +16,20 @@ type Client struct {
 	config      *Config
 	httpClient  *http.Client
 	rateLimiter *RateLimiter
+}
+
+// RoutingProvider identifies the API route independently of the returned model vendor.
+func (c *Client) RoutingProvider() string {
+	endpoint, err := url.Parse(c.config.BaseURL)
+	if err == nil {
+		switch strings.ToLower(endpoint.Hostname()) {
+		case "openrouter.ai":
+			return "openrouter"
+		case "api.openai.com":
+			return "openai"
+		}
+	}
+	return "unknown"
 }
 
 // ClientOption configures an AI client during construction.

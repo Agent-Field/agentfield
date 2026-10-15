@@ -264,8 +264,7 @@ func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.
 	events.GlobalExecutionEventBus.Publish(event)
 }
 
-// publishExecutionStartedEvent emits the ExecutionStarted event with full reasoner context
-func (c *executionController) publishExecutionStartedEvent(plan *preparedExecution) {
+func (c *executionController) publishExecutionPlanStatusEvent(plan *preparedExecution, status string) {
 	if plan == nil || plan.exec == nil {
 		return
 	}
@@ -283,9 +282,20 @@ func (c *executionController) publishExecutionStartedEvent(plan *preparedExecuti
 
 	c.publishExecutionEventWithReasonerInfo(
 		plan.exec,
-		string(types.ExecutionStatusRunning),
+		status,
 		data,
 		plan.agent,
 		&plan.target.TargetName,
 	)
+}
+
+// publishExecutionStartedEvent emits the ExecutionStarted event with full reasoner context.
+func (c *executionController) publishExecutionStartedEvent(plan *preparedExecution) {
+	c.publishExecutionPlanStatusEvent(plan, string(types.ExecutionStatusRunning))
+}
+
+// publishExecutionQueuedEvent emits an ExecutionUpdated admission event with
+// the same reasoner context used by the dispatch-time started event.
+func (c *executionController) publishExecutionQueuedEvent(plan *preparedExecution) {
+	c.publishExecutionPlanStatusEvent(plan, string(types.ExecutionStatusQueued))
 }

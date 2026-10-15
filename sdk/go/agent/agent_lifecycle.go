@@ -342,6 +342,12 @@ func (a *Agent) shutdown(ctx context.Context) error {
 	return a.shutdownWithOptions(ctx, true, a.cfg.ShutdownTimeout)
 }
 
+func (a *Agent) isShuttingDown() bool {
+	a.shutdownMu.Lock()
+	defer a.shutdownMu.Unlock()
+	return a.shuttingDown
+}
+
 func resolveShutdownTimeout(value string, logger interface{ Printf(string, ...any) }) time.Duration {
 	const fallback = 30 * time.Second
 	value = strings.TrimSpace(value)

@@ -151,6 +151,73 @@ func TestNodeEventBusDuplicateStatusEvent(t *testing.T) {
 	})
 }
 
+func TestNodeEventBusDuplicateStatusEventFlipBack(t *testing.T) {
+	// A status that flips and flips back inside the window must not be
+	// compared against the first status, or the flip back is dropped and
+	// subscribers are left on the intermediate status.
+	for _, eventType := range []NodeEventType{NodeStatusUpdated, NodeHealthChanged} {
+		t.Run(string(eventType), func(t *testing.T) {
+			resetNodeEventTestState(t)
+			bus := GlobalNodeEventBus
+
+			for _, status := range []string{"active", "inactive", "active"} {
+				event := NodeEvent{Type: eventType, NodeID: "node-flip", Status: status, Timestamp: time.Now()}
+				require.False(t, bus.isDuplicateStatusEvent(event), "status %q was filtered", status)
+			}
+
+			repeat := NodeEvent{Type: eventType, NodeID: "node-flip", Status: "active", Timestamp: time.Now()}
+			require.True(t, bus.isDuplicateStatusEvent(repeat))
+		})
+	}
+
+	t.Run("online and offline", func(t *testing.T) {
+		resetNodeEventTestState(t)
+		bus := GlobalNodeEventBus
+
+		for _, eventType := range []NodeEventType{NodeOnline, NodeOffline, NodeOnline} {
+			event := NodeEvent{Type: eventType, NodeID: "node-flip", Timestamp: time.Now()}
+			require.False(t, bus.isDuplicateStatusEvent(event), "%s was filtered", eventType)
+		}
+
+		repeat := NodeEvent{Type: NodeOnline, NodeID: "node-flip", Timestamp: time.Now()}
+		require.True(t, bus.isDuplicateStatusEvent(repeat))
+	})
+
+	t.Run("other status events keep the one second window", func(t *testing.T) {
+		resetNodeEventTestState(t)
+		bus := GlobalNodeEventBus
+
+		first := NodeEvent{Type: NodeStateTransition, NodeID: "node-flip", Status: "running", Timestamp: time.Now()}
+		require.False(t, bus.isDuplicateStatusEvent(first))
+
+		second := first
+		second.Timestamp = time.Now()
+		require.True(t, bus.isDuplicateStatusEvent(second))
+	})
+}
+
+func TestPublishDeliversOnlineAfterQuickOfflineFlap(t *testing.T) {
+	resetNodeEventTestState(t)
+
+	ch := GlobalNodeEventBus.Subscribe("flap-test")
+	defer GlobalNodeEventBus.Unsubscribe("flap-test")
+
+	PublishNodeOnline("node-flap", nil)
+	PublishNodeHealthChanged("node-flap", "active", nil)
+	PublishNodeOffline("node-flap", nil)
+	PublishNodeHealthChanged("node-flap", "inactive", nil)
+	PublishNodeOnline("node-flap", nil)
+	PublishNodeHealthChanged("node-flap", "active", nil)
+
+	var got []string
+	for i := 0; i < 6; i++ {
+		event := receiveNodeEvent(t, ch)
+		got = append(got, string(event.Type)+":"+event.Status)
+	}
+	require.Equal(t, "node_online:online", got[4], got)
+	require.Equal(t, "node_health_changed:active", got[5], got)
+}
+
 func TestNodeEventBusCleanupEventCache(t *testing.T) {
 	resetNodeEventTestState(t)
 

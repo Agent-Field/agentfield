@@ -224,6 +224,13 @@ type NodeHealthConfig struct {
 	// pointer preserves the distinction between omitted (default true) and an
 	// explicit false across YAML, Viper, database overlays, and programmatic use.
 	AgentOrphanReapEnabled *bool `yaml:"agent_orphan_reap_enabled" mapstructure:"agent_orphan_reap_enabled"`
+	// ResumeInterruptedRuns enables bounded workflow-scope handoff for run roots
+	// interrupted by agent or control-plane shutdown. Default false.
+	ResumeInterruptedRuns        *bool         `yaml:"resume_interrupted_runs" mapstructure:"resume_interrupted_runs"`
+	ResumeInterruptedMaxAttempts int           `yaml:"resume_interrupted_max_attempts" mapstructure:"resume_interrupted_max_attempts"`
+	ResumeInterruptedWindow      time.Duration `yaml:"resume_interrupted_window" mapstructure:"resume_interrupted_window"`
+	ResumeInterruptedLimit       int           `yaml:"resume_interrupted_limit" mapstructure:"resume_interrupted_limit"`
+	ResumeInterruptedDelay       time.Duration `yaml:"resume_interrupted_delay" mapstructure:"resume_interrupted_delay"`
 }
 
 // EffectiveAgentOrphanReapEnabled applies the documented zero-value default
@@ -231,6 +238,41 @@ type NodeHealthConfig struct {
 // config loader.
 func (c NodeHealthConfig) EffectiveAgentOrphanReapEnabled() bool {
 	return c.AgentOrphanReapEnabled == nil || *c.AgentOrphanReapEnabled
+}
+
+func (c NodeHealthConfig) EffectiveResumeInterruptedRuns() bool {
+	return c.ResumeInterruptedRuns != nil && *c.ResumeInterruptedRuns
+}
+
+func (c NodeHealthConfig) EffectiveResumeInterruptedMaxAttempts() int {
+	if c.ResumeInterruptedMaxAttempts <= 0 {
+		return 1
+	}
+	return c.ResumeInterruptedMaxAttempts
+}
+
+func (c NodeHealthConfig) EffectiveResumeInterruptedWindow() time.Duration {
+	if c.ResumeInterruptedWindow <= 0 {
+		return time.Hour
+	}
+	return c.ResumeInterruptedWindow
+}
+
+func (c NodeHealthConfig) EffectiveResumeInterruptedLimit() int {
+	if c.ResumeInterruptedLimit <= 0 {
+		return 25
+	}
+	return c.ResumeInterruptedLimit
+}
+
+func (c NodeHealthConfig) EffectiveResumeInterruptedDelay() time.Duration {
+	if c.ResumeInterruptedDelay < 0 {
+		return 0
+	}
+	if c.ResumeInterruptedDelay == 0 {
+		return 15 * time.Second
+	}
+	return c.ResumeInterruptedDelay
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
@@ -802,6 +844,27 @@ func ApplyEnvOverrides(cfg *Config) {
 		}
 	}
 	applyOptionalBoolEnv("AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED", &cfg.AgentField.NodeHealth.AgentOrphanReapEnabled)
+	applyOptionalBoolEnv("AGENTFIELD_RESUME_INTERRUPTED_RUNS", &cfg.AgentField.NodeHealth.ResumeInterruptedRuns)
+	if val := os.Getenv("AGENTFIELD_RESUME_INTERRUPTED_MAX_ATTEMPTS"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.AgentField.NodeHealth.ResumeInterruptedMaxAttempts = i
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_RESUME_INTERRUPTED_WINDOW"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.ResumeInterruptedWindow = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_RESUME_INTERRUPTED_LIMIT"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.AgentField.NodeHealth.ResumeInterruptedLimit = i
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_RESUME_INTERRUPTED_DELAY"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.ResumeInterruptedDelay = d
+		}
+	}
 
 	// LLM health monitoring overrides
 	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_ENABLED"); val != "" {

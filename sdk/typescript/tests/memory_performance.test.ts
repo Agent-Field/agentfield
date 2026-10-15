@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Agent } from '../src/agent/Agent.js';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Memory Performance Tests for AgentField TypeScript SDK
@@ -231,35 +233,16 @@ describe('Memory Performance Tests', () => {
 
 describe('Memory Leak Prevention', () => {
   it('should not leak memory on repeated agent creation/destruction', () => {
-    const initialMemory = process.memoryUsage().heapUsed;
-
-    // Create and destroy many agents
-    for (let cycle = 0; cycle < 10; cycle++) {
-      const agents: Agent[] = [];
-      for (let i = 0; i < 50; i++) {
-        const agent = new Agent({
-          nodeId: `leak-test-${cycle}-${i}`,
-          devMode: true,
-        });
-        agent.reasoner('test', async () => ({ ok: true }));
-        agents.push(agent);
-      }
-      // Let agents go out of scope
-      agents.length = 0;
-    }
-
-    if (global.gc) {
-      global.gc();
-    }
-
-    const finalMemory = process.memoryUsage().heapUsed;
-    const leakMB = (finalMemory - initialMemory) / 1024 / 1024;
-
-    console.log(`\nMemory Leak Check: ${formatMemory(leakMB)} growth after 500 agent cycles`);
-
-    // Should not grow more than 25MB after creating/destroying 500 agents
-    // (allowing significant variance for CI environments with different GC timing
-    // and HTTP agent connection pool memory overhead)
-    expect(leakMB).toBeLessThan(25);
-  });
+    // A dedicated process guarantees GC is exposed and other test workers do
+    // not contaminate the retained-heap measurement. Preserve the leak budget.
+    const output = execFileSync(process.execPath, [
+      '--expose-gc', '--import', 'tsx',
+      fileURLToPath(new URL('./fixtures/memory-leak-check.ts', import.meta.url))
+    ], { encoding: 'utf8', timeout: 30000 });
+    const measurement = JSON.parse(output.trim());
+    expect(measurement.gcExposed).toBe(true);
+    expect(measurement.agentCount).toBe(500);
+    console.log(`\nMemory Leak Check: ${formatMemory(measurement.leakMB)} retained growth after 500 agent cycles`);
+    expect(measurement.leakMB).toBeLessThan(25);
+  }, 30000);
 });

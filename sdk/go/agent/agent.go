@@ -1683,8 +1683,14 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	}
 
 	if err != nil {
-		payload["status"] = "failed"
-		payload["error"] = err.Error()
+		status := "failed"
+		errorMessage := err.Error()
+		if errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled) && a.isShuttingDown() {
+			status = "cancelled"
+			errorMessage = "cancelled during graceful shutdown"
+		}
+		payload["status"] = status
+		payload["error"] = errorMessage
 		// A reasoner that ran, determined its own work failed, and wants its
 		// structured outcome preserved returns &ReasonerFailed{Result: ...}.
 		// Carry that result/details onto the failed-status payload so the single
@@ -1706,7 +1712,7 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 			"duration_ms": durationMS,
 			"error":       err.Error(),
 		})
-		a.maybeGenerateVC(execCtx, input, nil, "failed", err.Error(), durationMS, reasoner)
+		a.maybeGenerateVC(execCtx, input, nil, status, errorMessage, durationMS, reasoner)
 	} else {
 		payload["status"] = "succeeded"
 		payload["result"] = result
@@ -1795,6 +1801,13 @@ func (a *Agent) postExecutionStatus(ctx context.Context, callbackURL string, pay
 				return nil
 			}
 			lastErr = fmt.Errorf("status update returned %d", resp.StatusCode)
+			if !isTransientPollStatus(resp.StatusCode) {
+				// A client error such as 404 (unknown execution) or 409
+				// (terminal status conflict) will not change on a resend,
+				// so fail fast instead of backing off.
+				cancel()
+				return lastErr
+			}
 		}
 		cancel()
 		if attempt < 4 {
@@ -2810,9 +2823,7 @@ func (a *Agent) AIStream(ctx context.Context, prompt string, opts ...ai.Option) 
 				break forward
 			}
 		}
-		if usage != nil {
-			a.recordLLMUsage(ctx, model, usage)
-		}
+		a.recordLLMUsage(ctx, model, usage)
 	}()
 	return out, errs
 }

@@ -294,15 +294,18 @@ class HarnessRunner:
         # project_dir, or cwd when project_dir is unset. Besides keeping the file
         # inside the agent root, this prevents concurrent runs sharing one cwd
         # from overwriting or deleting each other's fixed output filename.
-        resolved_project_dir = options.get("project_dir")
-        if isinstance(resolved_project_dir, str) and resolved_project_dir:
-            base_dir = resolved_project_dir
-        else:
-            base_dir = resolved_cwd
-        os.makedirs(base_dir, exist_ok=True)
-        temp_output_dir: Optional[str] = tempfile.mkdtemp(
-            prefix=".agentfield-out-", dir=base_dir
-        )
+        # A schema-free run never writes or reads that file, so it must not need
+        # a writable root either: allocating one unconditionally aborted
+        # text-only permission_mode="plan" dispatches before the provider ran.
+        temp_output_dir: Optional[str] = None
+        if schema is not None:
+            resolved_project_dir = options.get("project_dir")
+            if isinstance(resolved_project_dir, str) and resolved_project_dir:
+                base_dir = resolved_project_dir
+            else:
+                base_dir = resolved_cwd
+            os.makedirs(base_dir, exist_ok=True)
+            temp_output_dir = tempfile.mkdtemp(prefix=".agentfield-out-", dir=base_dir)
         output_dir = temp_output_dir
 
         # schema_mode selects how the agent is asked to produce the output:

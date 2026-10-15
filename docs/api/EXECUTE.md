@@ -69,6 +69,8 @@ An accepted asynchronous request returns HTTP `202`:
 
 If webhook registration failed, the response may include `webhook_error`.
 
+For work admitted to the async pool, the `202` body and `GET /api/v1/executions/{execution_id}` both report `queued` until a pool worker dispatches the execution to the agent, at which point its status becomes `running`. `queued` is a non-terminal, in-flight status, so callers must continue polling through it. The queue is bounded: once admission capacity is exhausted, additional requests receive the `503` response documented below rather than joining an unbounded backlog.
+
 Poll `GET /api/v1/executions/{execution_id}`. Its response contains `execution_id`, `run_id`, `agent_node_id`, `status`, `started_at`, and `webhook_registered`, plus applicable `instance_id`, `status_reason`, `result`, `error`, `error_details`, `completed_at`, `duration_ms`, `webhook_events`, and approval fields. `instance_id` is present only when the agent reported one; today only the Python SDK does, so Go and TypeScript nodes omit it. It identifies the instance the execution was created against and is not re-stamped when dispatch is replayed across an agent restart. A restart-absorbed execution therefore names the departed process even though the replacement process ran the work; re-stamping is deliberately out of scope because this column is the reap scope key. Found entries returned by `POST /api/v1/executions/batch-status` expose the same identifiers, while synthetic `not_found` and `error` entries omit both `agent_node_id` and `instance_id`.
 
 This polling route is a thin status view. To retrieve the full stored execution, including input, result, status, notes, and timestamps, use `POST /api/v1/agentic/query`:

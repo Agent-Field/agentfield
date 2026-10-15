@@ -666,6 +666,76 @@ func TestAgentDrainGraceFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestResumeInterruptedSettingsFromEnvironment(t *testing.T) {
+	t.Setenv("AGENTFIELD_RESUME_INTERRUPTED_RUNS", "true")
+	t.Setenv("AGENTFIELD_RESUME_INTERRUPTED_MAX_ATTEMPTS", "3")
+	t.Setenv("AGENTFIELD_RESUME_INTERRUPTED_WINDOW", "2h")
+	t.Setenv("AGENTFIELD_RESUME_INTERRUPTED_LIMIT", "17")
+	t.Setenv("AGENTFIELD_RESUME_INTERRUPTED_DELAY", "4s")
+	cfg := Config{}
+	ApplyEnvOverrides(&cfg)
+	nodeHealth := cfg.AgentField.NodeHealth
+	if !nodeHealth.EffectiveResumeInterruptedRuns() || nodeHealth.ResumeInterruptedMaxAttempts != 3 || nodeHealth.ResumeInterruptedWindow != 2*time.Hour || nodeHealth.ResumeInterruptedLimit != 17 || nodeHealth.ResumeInterruptedDelay != 4*time.Second {
+		t.Fatalf("unexpected interrupted-resume settings: %+v", nodeHealth)
+	}
+}
+
+func TestResumeInterruptedSettingsFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentfield.yaml")
+	contents := []byte("agentfield:\n  node_health:\n    resume_interrupted_runs: true\n    resume_interrupted_max_attempts: 2\n    resume_interrupted_window: 90m\n    resume_interrupted_limit: 9\n    resume_interrupted_delay: 3s\n")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	nodeHealth := cfg.AgentField.NodeHealth
+	if !nodeHealth.EffectiveResumeInterruptedRuns() || nodeHealth.ResumeInterruptedMaxAttempts != 2 || nodeHealth.ResumeInterruptedWindow != 90*time.Minute || nodeHealth.ResumeInterruptedLimit != 9 || nodeHealth.ResumeInterruptedDelay != 3*time.Second {
+		t.Fatalf("unexpected interrupted-resume YAML settings: %+v", nodeHealth)
+	}
+}
+
+func TestResumeInterruptedEffectiveSettings(t *testing.T) {
+	defaults := NodeHealthConfig{}
+	if defaults.EffectiveResumeInterruptedRuns() {
+		t.Fatal("resume interrupted runs must be disabled by default")
+	}
+	if got := defaults.EffectiveResumeInterruptedMaxAttempts(); got != 1 {
+		t.Fatalf("expected one default resume attempt, got %d", got)
+	}
+	if got := defaults.EffectiveResumeInterruptedWindow(); got != time.Hour {
+		t.Fatalf("expected one-hour default resume window, got %s", got)
+	}
+	if got := defaults.EffectiveResumeInterruptedLimit(); got != 25 {
+		t.Fatalf("expected default resume limit 25, got %d", got)
+	}
+	if got := defaults.EffectiveResumeInterruptedDelay(); got != 15*time.Second {
+		t.Fatalf("expected 15-second default resume delay, got %s", got)
+	}
+
+	enabled := true
+	overrides := NodeHealthConfig{
+		ResumeInterruptedRuns:        &enabled,
+		ResumeInterruptedMaxAttempts: 3,
+		ResumeInterruptedWindow:      2 * time.Hour,
+		ResumeInterruptedLimit:       9,
+		ResumeInterruptedDelay:       4 * time.Second,
+	}
+	if !overrides.EffectiveResumeInterruptedRuns() ||
+		overrides.EffectiveResumeInterruptedMaxAttempts() != 3 ||
+		overrides.EffectiveResumeInterruptedWindow() != 2*time.Hour ||
+		overrides.EffectiveResumeInterruptedLimit() != 9 ||
+		overrides.EffectiveResumeInterruptedDelay() != 4*time.Second {
+		t.Fatalf("effective resume settings did not preserve overrides: %+v", overrides)
+	}
+
+	disabledDelay := NodeHealthConfig{ResumeInterruptedDelay: -time.Second}
+	if got := disabledDelay.EffectiveResumeInterruptedDelay(); got != 0 {
+		t.Fatalf("expected a negative resume delay to schedule immediately, got %s", got)
+	}
+}
+
 func TestOrphanReapEnabledParsing(t *testing.T) {
 	tests := []struct {
 		name  string

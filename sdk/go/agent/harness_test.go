@@ -175,3 +175,35 @@ func TestHarness_NilHarnessConfig(t *testing.T) {
 	// Default options should be zero
 	assert.Equal(t, harness.Options{}, runner.DefaultOptions)
 }
+
+func TestHarnessDoctor_ReportsRequestedProviders(t *testing.T) {
+	a := newTestAgentForHarness(t)
+
+	reports, err := a.HarnessDoctor(context.Background(), "codex", "gemini")
+	require.NoError(t, err)
+	require.Len(t, reports, 2)
+
+	// Ordered by provider name, and each report carries actionable install
+	// guidance regardless of what happens to be installed on this machine.
+	assert.Equal(t, "codex", reports[0].Provider)
+	assert.Equal(t, "gemini", reports[1].Provider)
+	for _, report := range reports {
+		assert.NotEmpty(t, report.InstallCommand)
+	}
+}
+
+func TestHarnessDoctor_NoArgsChecksEveryProvider(t *testing.T) {
+	a := newTestAgentForHarness(t)
+
+	reports, err := a.HarnessDoctor(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, reports, len(harness.SupportedProviderNames()))
+}
+
+func TestHarnessDoctor_UnknownProviderIsAnError(t *testing.T) {
+	a := newTestAgentForHarness(t)
+
+	_, err := a.HarnessDoctor(context.Background(), "not-a-provider")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not-a-provider")
+}

@@ -193,6 +193,54 @@ func TestMergeDBConfigAppliesNonZeroDBValues(t *testing.T) {
 	require.Equal(t, "file-api-key", cfg.API.Auth.APIKey)
 }
 
+func TestMergeDBNodeHealthConfigResumeInterruptedSettings(t *testing.T) {
+	t.Run("database values override existing settings", func(t *testing.T) {
+		disabled := false
+		enabled := true
+		target := config.NodeHealthConfig{
+			ResumeInterruptedRuns:        &disabled,
+			ResumeInterruptedMaxAttempts: 1,
+			ResumeInterruptedWindow:      time.Minute,
+			ResumeInterruptedLimit:       2,
+			ResumeInterruptedDelay:       time.Second,
+		}
+		database := config.NodeHealthConfig{
+			ResumeInterruptedRuns:        &enabled,
+			ResumeInterruptedMaxAttempts: 4,
+			ResumeInterruptedWindow:      3 * time.Hour,
+			ResumeInterruptedLimit:       40,
+			ResumeInterruptedDelay:       5 * time.Second,
+		}
+
+		mergeDBNodeHealthConfig(&target, database)
+
+		require.NotNil(t, target.ResumeInterruptedRuns)
+		require.True(t, *target.ResumeInterruptedRuns)
+		require.Equal(t, 4, target.ResumeInterruptedMaxAttempts)
+		require.Equal(t, 3*time.Hour, target.ResumeInterruptedWindow)
+		require.Equal(t, 40, target.ResumeInterruptedLimit)
+		require.Equal(t, 5*time.Second, target.ResumeInterruptedDelay)
+		enabled = false
+		require.True(t, *target.ResumeInterruptedRuns, "the merged pointer must not alias the database config")
+	})
+
+	t.Run("omitted database values preserve existing settings", func(t *testing.T) {
+		enabled := true
+		target := config.NodeHealthConfig{
+			ResumeInterruptedRuns:        &enabled,
+			ResumeInterruptedMaxAttempts: 3,
+			ResumeInterruptedWindow:      2 * time.Hour,
+			ResumeInterruptedLimit:       25,
+			ResumeInterruptedDelay:       4 * time.Second,
+		}
+		original := target
+
+		mergeDBNodeHealthConfig(&target, config.NodeHealthConfig{})
+
+		require.Equal(t, original, target)
+	})
+}
+
 func TestMergeDBConfigAppliesExplicitMCPDisable(t *testing.T) {
 	cfg := baseConfigForDBTests()
 	enabled := true

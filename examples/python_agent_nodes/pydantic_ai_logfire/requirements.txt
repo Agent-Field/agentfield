@@ -1,0 +1,3 @@
+agentfield
+pydantic-ai-slim[openai]>=2.0
+logfire[fastapi,litellm]>=5.0

@@ -27,9 +27,10 @@ type orphanReapStorageStub struct {
 }
 
 type orphanReapCall struct {
-	agentNodeID string
-	instanceID  string
-	reason      string
+	agentNodeID   string
+	instanceID    string
+	reason        string
+	createdBefore time.Time
 }
 
 func (s *orphanReapStorageStub) MarkAgentExecutionsOrphaned(_ context.Context, agentNodeID, reasonMessage string) (int, error) {
@@ -37,8 +38,8 @@ func (s *orphanReapStorageStub) MarkAgentExecutionsOrphaned(_ context.Context, a
 	return len(s.orphanCalls), nil // pretend we reaped one row per call
 }
 
-func (s *orphanReapStorageStub) MarkAgentInstanceExecutionsOrphaned(_ context.Context, agentNodeID, instanceID, reasonMessage string) (int, error) {
-	s.orphanCalls = append(s.orphanCalls, orphanReapCall{agentNodeID: agentNodeID, instanceID: instanceID, reason: reasonMessage})
+func (s *orphanReapStorageStub) MarkAgentInstanceExecutionsOrphaned(_ context.Context, agentNodeID, instanceID, reasonMessage string, createdBefore time.Time) (int, error) {
+	s.orphanCalls = append(s.orphanCalls, orphanReapCall{agentNodeID: agentNodeID, instanceID: instanceID, reason: reasonMessage, createdBefore: createdBefore})
 	return len(s.orphanCalls), nil
 }
 
@@ -97,7 +98,9 @@ func TestRegisterNodeHandler_ReapsOrphansOnInstanceChange(t *testing.T) {
 		"callback_discovery":{"mode":"manual","preferred":"http://10.0.0.5:8080"}
 	}`
 
+	beforeRegistration := time.Now().UTC()
 	rec := registerNodeWithBody(t, router, body)
+	afterRegistration := time.Now().UTC()
 	require.Equal(t, http.StatusCreated, rec.Code,
 		"re-registration with new instance must succeed; instance mismatch is signal, not error")
 
@@ -107,6 +110,9 @@ func TestRegisterNodeHandler_ReapsOrphansOnInstanceChange(t *testing.T) {
 	assert.Equal(t, "github-buddy", store.orphanCalls[0].agentNodeID,
 		"reap must target the re-registering agent only")
 	assert.Equal(t, "alpha", store.orphanCalls[0].instanceID)
+	assert.False(t, store.orphanCalls[0].createdBefore.IsZero())
+	assert.False(t, store.orphanCalls[0].createdBefore.Before(beforeRegistration))
+	assert.False(t, store.orphanCalls[0].createdBefore.After(afterRegistration))
 	assert.Contains(t, store.orphanCalls[0].reason, "agent_restart_orphaned",
 		"reason must lead with the audit token operators grep for")
 	assert.Contains(t, store.orphanCalls[0].reason, "alpha",
@@ -289,8 +295,8 @@ func (s *zeroReapStorageStub) MarkAgentExecutionsOrphaned(_ context.Context, age
 	return 0, nil
 }
 
-func (s *zeroReapStorageStub) MarkAgentInstanceExecutionsOrphaned(_ context.Context, agentNodeID, instanceID, reasonMessage string) (int, error) {
-	s.orphanCalls = append(s.orphanCalls, orphanReapCall{agentNodeID: agentNodeID, instanceID: instanceID, reason: reasonMessage})
+func (s *zeroReapStorageStub) MarkAgentInstanceExecutionsOrphaned(_ context.Context, agentNodeID, instanceID, reasonMessage string, createdBefore time.Time) (int, error) {
+	s.orphanCalls = append(s.orphanCalls, orphanReapCall{agentNodeID: agentNodeID, instanceID: instanceID, reason: reasonMessage, createdBefore: createdBefore})
 	return 0, nil
 }
 
@@ -344,7 +350,7 @@ func (s *reapFailingStorageStub) MarkAgentExecutionsOrphaned(ctx context.Context
 	return 0, assertErrFakeReapFailure
 }
 
-func (s *reapFailingStorageStub) MarkAgentInstanceExecutionsOrphaned(context.Context, string, string, string) (int, error) {
+func (s *reapFailingStorageStub) MarkAgentInstanceExecutionsOrphaned(context.Context, string, string, string, time.Time) (int, error) {
 	return 0, assertErrFakeReapFailure
 }
 

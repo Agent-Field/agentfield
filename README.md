@@ -391,8 +391,8 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Tool access control | `tools=["Read", "Write", "Bash"]` |
 | Environment injection | `env={"KEY": "value"}` |
 | System prompt override | `system_prompt="..."` |
-| OpenCode per-run configuration | Preserves caller `OPENCODE_CONFIG_CONTENT` while applying the harness overlay |
-| OpenCode prompt compatibility | `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` enables the opt-in inline rollback |
+| OpenCode per-run configuration | All SDKs preserve caller `OPENCODE_CONFIG_CONTENT`; `AGENTFIELD_OPENCODE_STEPS` overrides the default `500` steps |
+| OpenCode prompt compatibility | All SDKs support `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` for the opt-in inline rollback |
 | Provider-agnostic reasoning variants | `variant="high"` or a `#high` model suffix |
 | Multi-layer output recovery | Cosmetic repair → retry → full retry |
 

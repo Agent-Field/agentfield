@@ -21,16 +21,20 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 }
 
 func (c *executionController) prepareAsyncExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
-	return c.prepareExecutionWithAdmission(ctx, ginCtx, true)
+	return c.prepareExecutionWithAdmissionAndStatus(ctx, ginCtx, true, types.ExecutionStatusQueued)
 }
 
 func (c *executionController) prepareExecutionWithAdmission(ctx context.Context, ginCtx *gin.Context, acquireSlot bool) (*preparedExecution, error) {
+	return c.prepareExecutionWithAdmissionAndStatus(ctx, ginCtx, acquireSlot, types.ExecutionStatusRunning)
+}
+
+func (c *executionController) prepareExecutionWithAdmissionAndStatus(ctx context.Context, ginCtx *gin.Context, acquireSlot bool, initialStatus types.ExecutionStatus) (*preparedExecution, error) {
 	targetParam := ginCtx.Param("target")
 	var req ExecuteRequest
 	if err := ginCtx.ShouldBindJSON(&req); err != nil {
 		return nil, fmt.Errorf("invalid request body: %w", err)
 	}
-	return c.prepareExecutionForTargetWithAdmission(
+	return c.prepareExecutionForTargetWithAdmissionAndStatus(
 		ctx,
 		targetParam,
 		req,
@@ -38,10 +42,15 @@ func (c *executionController) prepareExecutionWithAdmission(ctx context.Context,
 		middleware.GetVerifiedCallerDID(ginCtx),
 		middleware.GetTargetDID(ginCtx),
 		acquireSlot,
+		initialStatus,
 	)
 }
 
 func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string, acquireSlot bool) (*preparedExecution, error) {
+	return c.prepareExecutionForTargetWithAdmissionAndStatus(ctx, targetParam, req, headers, callerDID, targetDID, acquireSlot, types.ExecutionStatusRunning)
+}
+
+func (c *executionController) prepareExecutionForTargetWithAdmissionAndStatus(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string, acquireSlot bool, initialStatus types.ExecutionStatus) (*preparedExecution, error) {
 	target, err := parseTarget(targetParam)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
@@ -158,6 +167,12 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 	if err != nil {
 		return nil, err
 	}
+	// Replay hits are completed inline and never wait for a pool worker. Keep
+	// their existing running -> succeeded lifecycle instead of manufacturing a
+	// queued state that cannot legitimately dispatch.
+	if hit != nil {
+		initialStatus = types.ExecutionStatusRunning
+	}
 
 	runID := headers.runID
 	if runID == "" {
@@ -197,7 +212,7 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 		InstanceID:        agent.InstanceID,
 		ReasonerID:        target.TargetName,
 		NodeID:            target.NodeID,
-		Status:            types.ExecutionStatusRunning,
+		Status:            initialStatus,
 		InputPayload:      json.RawMessage(storedPayload),
 		StartedAt:         now,
 		CreatedAt:         now,

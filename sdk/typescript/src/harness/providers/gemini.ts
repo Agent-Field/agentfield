@@ -2,7 +2,8 @@ import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
-import { runCli } from '../cli.js';
+import { markProviderCommand, runCli } from '../cli.js';
+import { HarnessProviderUnavailable, providerUnavailable } from '../availability.js';
 import { resolveModelAndVariant } from '../modelVariant.js';
 
 export class GeminiProvider implements HarnessProvider {
@@ -30,7 +31,7 @@ export class GeminiProvider implements HarnessProvider {
 
     const startApi = Date.now();
     try {
-      const { stdout, stderr, exitCode } = await runCli(cmd, {
+      const { stdout, stderr, exitCode } = await runCli(markProviderCommand('gemini', cmd), {
         env: options.env as Record<string, string> | undefined,
         cwd: resolveRoot(options),
       });
@@ -50,13 +51,12 @@ export class GeminiProvider implements HarnessProvider {
         errorMessage: isError ? stderr.trim() : undefined,
       });
     } catch (err) {
+      if (err instanceof HarnessProviderUnavailable) {
+        throw err;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('ENOENT')) {
-        return createRawResult({
-          isError: true,
-          errorMessage: `Gemini binary not found at '${this.bin}'. Install: https://github.com/google-gemini/gemini-cli`,
-          metrics: createMetrics({ durationApiMs: Date.now() - startApi }),
-        });
+        throw providerUnavailable('gemini', this.bin);
       }
       return createRawResult({
         isError: true,

@@ -276,6 +276,5 @@ func TestValidateExecutionStateTransition(t *testing.T) {
 	require.Equal(t, string(types.ExecutionStatusRunning), transitionErr.CurrentState)
 	require.Equal(t, string(types.ExecutionStatusPending), transitionErr.NewState)
 
-	err = validateExecutionStateTransition(string(types.ExecutionStatusQueued), string(types.ExecutionStatusWaiting))
-	require.Error(t, err)
+	require.NoError(t, validateExecutionStateTransition(string(types.ExecutionStatusQueued), string(types.ExecutionStatusWaiting)))
 }

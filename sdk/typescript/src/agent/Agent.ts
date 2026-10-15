@@ -42,6 +42,7 @@ import { AgentFieldClient } from '../client/AgentFieldClient.js';
 import type { HarnessRunner } from '../harness/runner.js';
 import { resolveProviderName } from '../harness/providers/factory.js';
 import type { HarnessOptions, HarnessResult } from '../harness/types.js';
+import type { ProviderHealth } from '../harness/availability.js';
 import { splitModelVariant } from '../harness/modelVariant.js';
 import { MemoryClient } from '../memory/MemoryClient.js';
 import { MemoryEventClient } from '../memory/MemoryEventClient.js';
@@ -390,6 +391,11 @@ export class Agent {
     // per-reasoner usage rollup.
     this.recordHarnessUsage(result, options);
     return result;
+  }
+
+  async harnessDoctor(providers?: readonly string[]): Promise<ProviderHealth[]> {
+    const { harnessDoctor } = await import('../harness/availability.js');
+    return harnessDoctor(providers);
   }
 
   /**

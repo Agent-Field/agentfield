@@ -116,6 +116,22 @@ agent_restart_orphaned: previous instance <instance-id> is gone and the executio
 
 A late callback against that row behaves as follows: a `succeeded` callback arriving after the reap is rejected with `409` (a terminal status may not be replaced by a different terminal status); a re-delivery of the *same* terminal status is an idempotent `200` no-op; a late **non-terminal** write currently surfaces as `500` rather than a `409` — that is a rough edge to be fixed, not intended behaviour.
 
+### Optional interrupted-run handoff
+
+The control plane can automatically create a new workflow run for an interrupted root. This is off by default. The orchestrator starts again at its first line—there is no process-stack snapshot—but successful child calls from the source run are replayed through `reuse: all-succeeded`. If the orchestrator calls the same target with the same input more than once in a run, all of those calls replay the first recorded result.
+
+| Control-plane setting | Default | Purpose |
+| --- | --- | --- |
+| `AGENTFIELD_RESUME_INTERRUPTED_RUNS` | `false` | Enable handoff for `agent_restart_orphaned...`, `agent_shutdown_cancelled`, and `control_plane_shutdown` roots. |
+| `AGENTFIELD_RESUME_INTERRUPTED_MAX_ATTEMPTS` | `1` | Stop a crash-looping lineage after this many automatic handoffs. |
+| `AGENTFIELD_RESUME_INTERRUPTED_WINDOW` | `1h` | Ignore older interruptions during the startup sweep. |
+| `AGENTFIELD_RESUME_INTERRUPTED_LIMIT` | `25` | Bound startup candidates. |
+| `AGENTFIELD_RESUME_INTERRUPTED_DELAY` | `15s` | Wait for a replacement agent instance to register before dispatching each successor, both at startup and for inline handoffs. Set this to at least the time an agent pod takes to become ready. |
+
+The equivalent YAML keys live under `agentfield.node_health`: `resume_interrupted_runs`, `resume_interrupted_max_attempts`, `resume_interrupted_window`, `resume_interrupted_limit`, and `resume_interrupted_delay`.
+
+Automatic handoff is best-effort rather than a durable job queue; read its exact [limitations](api/EXECUTION_RESTART.md#limitations) before relying on it for Kubernetes recovery.
+
 ## Cleanup and retention
 
 Execution cleanup is enabled by default, including when `AGENTFIELD_CONFIG_FILE=/dev/null` selects defaults plus environment variables. Defaults are:

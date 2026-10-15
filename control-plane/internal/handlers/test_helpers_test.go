@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -342,6 +343,20 @@ func (s *testExecutionStorage) UpdateExecutionRecord(ctx context.Context, execut
 	return &out, nil
 }
 
+func (s *testExecutionStorage) SetExecutionRestartedAs(_ context.Context, sourceExecutionID, newExecutionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	execution, ok := s.executionRecords[sourceExecutionID]
+	if !ok {
+		return fmt.Errorf("execution %s not found", sourceExecutionID)
+	}
+	execution.RestartedAsExecutionID = &newExecutionID
+	if workflow := s.workflowExecutions[sourceExecutionID]; workflow != nil {
+		workflow.RestartedAsExecutionID = &newExecutionID
+	}
+	return nil
+}
+
 func (s *testExecutionStorage) QueryWorkflowExecutions(ctx context.Context, filters types.WorkflowExecutionFilters) ([]*types.WorkflowExecution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -465,8 +480,53 @@ func (s *testExecutionStorage) QueryExecutionRecords(ctx context.Context, filter
 		if filter.RunID != nil && *filter.RunID != exec.RunID {
 			continue
 		}
+		if filter.AgentNodeID != nil && *filter.AgentNodeID != exec.AgentNodeID {
+			continue
+		}
+		if filter.Status != nil && *filter.Status != exec.Status {
+			continue
+		}
+		if filter.UpdatedAfter != nil && exec.UpdatedAt.Before(*filter.UpdatedAfter) {
+			continue
+		}
+		if filter.UpdatedBefore != nil && exec.UpdatedAt.After(*filter.UpdatedBefore) {
+			continue
+		}
+		if filter.TerminalOnly && !types.IsTerminalExecutionStatus(exec.Status) {
+			continue
+		}
+		if filter.RootOnly && exec.ParentExecutionID != nil && strings.TrimSpace(*exec.ParentExecutionID) != "" {
+			continue
+		}
+		if filter.WithoutRestartedAs && exec.RestartedAsExecutionID != nil && strings.TrimSpace(*exec.RestartedAsExecutionID) != "" {
+			continue
+		}
+		if len(filter.StatusReasons) > 0 || len(filter.StatusReasonPrefixes) > 0 {
+			if exec.StatusReason == nil {
+				continue
+			}
+			matched := false
+			for _, reason := range filter.StatusReasons {
+				matched = matched || *exec.StatusReason == reason
+			}
+			for _, prefix := range filter.StatusReasonPrefixes {
+				matched = matched || strings.HasPrefix(*exec.StatusReason, prefix)
+			}
+			if !matched {
+				continue
+			}
+		}
 		copy := *exec
 		results = append(results, &copy)
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		if filter.SortDescending {
+			return results[i].UpdatedAt.After(results[j].UpdatedAt)
+		}
+		return results[i].UpdatedAt.Before(results[j].UpdatedAt)
+	})
+	if filter.Limit > 0 && len(results) > filter.Limit {
+		results = results[:filter.Limit]
 	}
 	return results, nil
 }

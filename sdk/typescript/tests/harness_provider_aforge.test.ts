@@ -291,10 +291,11 @@ describe('aforge provider', () => {
 
   it('classifies missing binaries and timeouts', async () => {
     vi.spyOn(cli, 'runCli').mockRejectedValueOnce(new Error('spawn aforge ENOENT'));
-    const missing = await new AforgeProvider('aforge-missing').execute('hello', {});
-    expect(missing.isError).toBe(true);
-    expect(missing.failureType).toBe('crash');
-    expect(missing.errorMessage).toContain('aforge-missing');
+    await expect(new AforgeProvider('aforge-missing').execute('hello', {})).rejects.toMatchObject({
+      name: 'HarnessProviderUnavailable',
+      provider: 'aforge',
+      binary: 'aforge-missing',
+    });
 
     vi.spyOn(cli, 'runCli').mockRejectedValueOnce(new Error('CLI timed out after 1ms'));
     const timeout = await new AforgeProvider().execute('hello', {});

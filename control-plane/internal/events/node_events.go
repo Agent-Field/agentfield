@@ -263,6 +263,10 @@ func (bus *NodeEventBus) shouldFilterEvent(event NodeEvent) bool {
 	return false
 }
 
+// nodePresenceCacheKey is the deduplication cache key prefix shared by
+// NodeOnline and NodeOffline events.
+const nodePresenceCacheKey = "node_presence"
+
 // lastEventCache stores recent events for deduplication
 var lastEventCache = make(map[string]NodeEvent)
 var lastEventCacheMutex sync.RWMutex
@@ -283,8 +287,13 @@ func (bus *NodeEventBus) isDuplicateStatusEvent(event NodeEvent) bool {
 		return false
 	}
 
-	// Create cache key
+	// Create cache key. Online and offline share one key per node, so going
+	// offline and back online inside the window is compared against the
+	// offline event rather than the earlier online one.
 	cacheKey := fmt.Sprintf("%s:%s", event.Type, event.NodeID)
+	if event.Type == NodeOnline || event.Type == NodeOffline {
+		cacheKey = fmt.Sprintf("%s:%s", nodePresenceCacheKey, event.NodeID)
+	}
 
 	lastEventCacheMutex.Lock()
 	defer lastEventCacheMutex.Unlock()
@@ -293,15 +302,24 @@ func (bus *NodeEventBus) isDuplicateStatusEvent(event NodeEvent) bool {
 	if lastEvent, exists := lastEventCache[cacheKey]; exists {
 		// Check if events are too close in time (within 1 second)
 		if time.Since(lastEvent.Timestamp) < 1*time.Second {
-			// For status events, also check if the actual status changed
-			if event.Type == NodeUnifiedStatusChanged || event.Type == NodeStatusUpdated || event.Type == NodeHealthChanged {
-				return bus.compareStatusEventData(lastEvent, event)
+			switch event.Type {
+			case NodeUnifiedStatusChanged, NodeStatusUpdated, NodeHealthChanged:
+				// For status events, also check if the actual status changed
+				if bus.compareStatusEventData(lastEvent, event) {
+					return true
+				}
+			case NodeOnline, NodeOffline:
+				if lastEvent.Type == event.Type {
+					return true
+				}
+			default:
+				return true // Other events are considered duplicates if within 1 second
 			}
-			return true // Other events are considered duplicates if within 1 second
 		}
 	}
 
-	// Cache this event
+	// Cache this event, including a changed status inside the window, so the
+	// next event is compared against the status subscribers last received.
 	lastEventCache[cacheKey] = event
 
 	// Clean up old cache entries (keep only last 50 per event type)

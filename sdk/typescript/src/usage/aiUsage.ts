@@ -100,14 +100,15 @@ export function extractProviderCostUsd(source: AiSdkUsageSource): number | null 
  * Record an AI SDK call's usage into the current execution's cost tracker.
  *
  * No-op when there is no bound tracker (call made outside an execution), or
- * when the result carries neither token counts nor a cost figure (e.g. mocked
- * results without a usage object) so empty entries are never emitted. Never
+ * absent token receipts produce an explicit missing entry. Known zero receipts
+ * remain reported entries. Never
  * throws — usage capture must never fail the call it observes.
  */
 export function recordAiSdkUsage(params: {
   source: AiSdkUsageSource;
   model: string;
   provider?: string | null;
+  routingProvider?: string;
   tracker?: CostTracker;
   reasonerName?: string | null;
 }): void {
@@ -124,7 +125,16 @@ export function recordAiSdkUsage(params: {
       tokens.totalTokens > 0 ||
       tokens.cacheReadTokens > 0 ||
       tokens.cacheCreationTokens > 0;
-    if (!hasTokens && cost === null) return;
+    const receipt = params.source.totalUsage ?? params.source.usage;
+    const hasTokenReceipt = isRecord(receipt) &&
+      ['inputTokens', 'outputTokens', 'totalTokens'].some(
+        key => typeof receipt[key] === 'number' && Number.isFinite(receipt[key])
+      );
+    if (!hasTokens && cost === null && !hasTokenReceipt) {
+      tracker.record({ model: params.model, provider: params.provider ?? 'unknown',
+        routingProvider: params.routingProvider ?? params.provider ?? 'unknown', usageStatus: 'missing' });
+      return;
+    }
 
     tracker.record({
       model: params.model,
@@ -136,6 +146,7 @@ export function recordAiSdkUsage(params: {
           ? params.reasonerName
           : current?.metadata.reasonerId ?? null,
       source: 'llm',
+      routingProvider: params.routingProvider ?? params.provider ?? undefined,
       provider: params.provider ?? undefined
     });
   } catch {

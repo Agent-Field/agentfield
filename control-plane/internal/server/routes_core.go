@@ -49,8 +49,13 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	agentAPI.GET("/reasoners", handlers.ListReasonersHandler(s.storage))
 
 	// Node management endpoints
-	agentAPI.POST("/nodes/register", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.tagApprovalService))
-	agentAPI.POST("/nodes", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.tagApprovalService))
+	resumeDependencies := handlers.InterruptedRunResumeDependencies{
+		Payloads: s.payloadStore, Webhooks: s.webhookDispatcher,
+		Timeout:       s.config.AgentField.ExecutionQueue.AgentCallTimeout,
+		InternalToken: s.config.Features.DID.Authorization.InternalToken,
+	}
+	agentAPI.POST("/nodes/register", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.tagApprovalService, resumeDependencies))
+	agentAPI.POST("/nodes", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.tagApprovalService, resumeDependencies))
 	agentAPI.POST("/nodes/register-serverless", handlers.RegisterServerlessAgentHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.config.AgentField.Registration.ServerlessDiscoveryAllowedHosts))
 	agentAPI.GET("/nodes", handlers.ListNodesHandler(s.storage))
 	agentAPI.GET("/nodes/:node_id", handlers.GetNodeHandler(s.storage))
@@ -136,7 +141,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	agentAPI.GET("/executions/:execution_id", handlers.GetExecutionStatusHandler(s.storage))
 	agentAPI.GET("/executions/:execution_id/events", s.streamHandler(handlers.StreamExecutionEventsHandler(s.storage)))
 	agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
-	agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
+	agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
 	agentAPI.POST("/executions/:execution_id/logs", handlers.StructuredExecutionLogsHandler(s.storage, func() config.ExecutionLogsConfig {
 		return s.config.AgentField.ExecutionLogs
 	}))
@@ -173,7 +178,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// Execution notes endpoints for app.note() feature
 	agentAPI.POST("/executions/note", handlers.AddExecutionNoteHandler(s.storage, s.noteOwnershipEnforced()))
 	agentAPI.GET("/executions/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage, s.noteOwnershipEnforced()))
-	agentAPI.POST("/workflow/executions/events", handlers.WorkflowExecutionEventHandler(s.storage))
+	agentAPI.POST("/workflow/executions/events", handlers.WorkflowExecutionEventHandler(s.storage, resumeDependencies))
 
 	sessionTargetGroup := agentAPI.Group("/session-targets")
 	{

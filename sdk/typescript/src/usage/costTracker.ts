@@ -21,6 +21,8 @@ export const USAGE_ENVELOPE_KEY = '__agentfield_usage__';
 /** A single LLM (or harness) call usage record. */
 export interface CostEntry {
   model: string;
+  usageStatus?: 'missing';
+  routingProvider?: string;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
@@ -45,6 +47,8 @@ export interface CostEntry {
 /** Input accepted by {@link CostTracker.record}. */
 export interface CostEntryInit {
   model: string;
+  usageStatus?: 'missing';
+  routingProvider?: string;
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
@@ -60,6 +64,8 @@ export interface CostEntryInit {
 
 /** Wire form of a single usage entry (snake_case cross-language contract). */
 export interface UsageEntryWire {
+  usage_status?: 'missing';
+  routing_provider?: string;
   source: string;
   provider: string | null;
   model: string;
@@ -127,6 +133,8 @@ export class CostTracker {
   record(init: CostEntryInit): void {
     this.entries.push({
       model: init.model,
+      usageStatus: init.usageStatus,
+      routingProvider: init.routingProvider,
       inputTokens: toCount(init.inputTokens),
       outputTokens: toCount(init.outputTokens),
       totalTokens: toCount(init.totalTokens),
@@ -192,6 +200,8 @@ export class CostTracker {
         cost_usd: e.costUsd,
         cost_source: e.costSource
       });
+      if (e.routingProvider) entries[entries.length - 1].routing_provider = e.routingProvider;
+      if (e.usageStatus) entries[entries.length - 1].usage_status = e.usageStatus;
       totalInput += e.inputTokens;
       totalOutput += e.outputTokens;
       totalTokens += entryTotal;

@@ -90,6 +90,7 @@ type ExecutionStatusResponse struct {
 	InstanceID        string                         `json:"instance_id,omitempty"`
 	Status            string                         `json:"status"`
 	StatusReason      *string                        `json:"status_reason,omitempty"`
+	RestartedAs       *RestartedAsRef                `json:"restarted_as,omitempty"`
 	Result            interface{}                    `json:"result,omitempty"`
 	Error             *string                        `json:"error,omitempty"`
 	ErrorDetails      interface{}                    `json:"error_details,omitempty"`
@@ -102,6 +103,11 @@ type ExecutionStatusResponse struct {
 	ApprovalRequestID  *string `json:"approval_request_id,omitempty"`
 	ApprovalStatus     *string `json:"approval_status,omitempty"`
 	ApprovalRequestURL *string `json:"approval_request_url,omitempty"`
+}
+
+type RestartedAsRef struct {
+	ExecutionID string `json:"execution_id"`
+	RunID       string `json:"run_id,omitempty"`
 }
 
 // BatchStatusRequest allows the UI to fetch multiple execution statuses at once.
@@ -234,8 +240,12 @@ func BatchExecutionStatusHandler(store ExecutionStore) gin.HandlerFunc {
 }
 
 // UpdateExecutionStatusHandler ingests status callbacks from agent nodes.
-func UpdateExecutionStatusHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout, "", nil)
+func UpdateExecutionStatusHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalTokens ...string) gin.HandlerFunc {
+	internalToken := ""
+	if len(internalTokens) > 0 {
+		internalToken = internalTokens[0]
+	}
+	controller := newExecutionController(store, payloads, webhooks, timeout, internalToken, nil)
 	return controller.handleStatusUpdate
 }
 
@@ -494,9 +504,6 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 	// The slot was acquired before persistence. process releases it when the
 	// agent call returns (including an HTTP 202 acknowledgement).
 
-	// Emit execution started event with full reasoner context
-	c.publishExecutionStartedEvent(plan)
-
 	job := asyncExecutionJob{
 		controller: c,
 		plan:       *plan,
@@ -522,6 +529,7 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 	}
 	submitted = true
 	reserved = false
+	c.publishExecutionQueuedEvent(plan)
 
 	createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)
 	targetLabel := fmt.Sprintf("%s.%s", plan.target.NodeID, plan.target.TargetName)
@@ -626,6 +634,11 @@ func (c *executionController) handleBatchStatus(ctx *gin.Context) {
 // like a server fault.
 var errTerminalStatusConflict = errors.New("terminal status conflict")
 
+// errExecutionNotFound marks a callback for an execution the store does not
+// have. Storage hands the updater a nil execution rather than an error for an
+// unknown ID, so the handler relies on this to answer 404 instead of 500.
+var errExecutionNotFound = errors.New("execution not found")
+
 func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
 	executionID := ctx.Param("execution_id")
@@ -667,7 +680,7 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	updated, err := c.store.UpdateExecutionRecord(reqCtx, executionID, func(current *types.Execution) (*types.Execution, error) {
 		terminalNoop = false
 		if current == nil {
-			return nil, fmt.Errorf("execution %s not found", executionID)
+			return nil, fmt.Errorf("execution %s: %w", executionID, errExecutionNotFound)
 		}
 
 		// Guard: executions in "waiting" state can only transition to
@@ -729,6 +742,10 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 			reason := string(ErrorCategoryAgentError)
 			current.StatusReason = &reason
 		}
+		if normalizedStatus == string(types.ExecutionStatusCancelled) && req.Error == types.AgentShutdownCancellationError {
+			reason := types.ExecutionReasonAgentShutdownCancelled
+			current.StatusReason = &reason
+		}
 		if len(resultBytes) > 0 {
 			current.ResultPayload = json.RawMessage(resultBytes)
 			current.ResultURI = resultURI
@@ -780,6 +797,10 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 			ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("failed to update execution: %v", err)})
 			return
 		}
+		if errors.Is(err, errExecutionNotFound) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update execution: %v", err)})
 		return
 	}
@@ -799,13 +820,14 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	// Best-effort: failures are logged and never fail the status update.
 	c.ingestUsage(reqCtx, updated, req.Usage)
 
-	c.updateWorkflowExecutionStatus(reqCtx, executionID, normalizedStatus, req.StatusReason)
+	c.updateWorkflowExecutionStatus(reqCtx, executionID, normalizedStatus, updated.StatusReason)
 
 	if isTerminal {
 		c.updateWorkflowExecutionFinalState(reqCtx, executionID, types.ExecutionStatus(normalizedStatus), updated.ResultPayload, elapsed, errorMsg)
 		if hasWH, _ := c.store.HasExecutionWebhook(reqCtx, executionID); hasWH {
 			c.triggerWebhook(executionID)
 		}
+		c.scheduleInterruptedRunHandoff(updated)
 	}
 
 	eventData := map[string]interface{}{
@@ -813,8 +835,8 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 		"progress":          req.Progress,
 		"transition_source": "status_callback",
 	}
-	if req.StatusReason != nil && strings.TrimSpace(*req.StatusReason) != "" {
-		eventData["status_reason"] = strings.TrimSpace(*req.StatusReason)
+	if updated.StatusReason != nil && strings.TrimSpace(*updated.StatusReason) != "" {
+		eventData["status_reason"] = strings.TrimSpace(*updated.StatusReason)
 	}
 	if !c.redactPayloads {
 		eventData["result"] = req.Result
