@@ -39,6 +39,20 @@ func resolveIdleSeconds() int {
 	return v
 }
 
+// formatCommandPreview describes a command in error and log messages without
+// quoting its arguments. Providers pass the prompt as an argv element (opencode
+// on POSIX, gemini, cursor), and the runner's retry classifier reads error text,
+// so only the executable and the number of hidden arguments are named.
+func formatCommandPreview(cmd []string) string {
+	if len(cmd) == 0 {
+		return ""
+	}
+	if len(cmd) == 1 {
+		return cmd[0]
+	}
+	return fmt.Sprintf("%s [%d args omitted]", cmd[0], len(cmd)-1)
+}
+
 var ansiRe = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)
 
 // StripANSI removes ANSI escape sequences from text.
@@ -245,14 +259,14 @@ func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 	}
 
 	if idleTimedOut {
-		return result, fmt.Errorf("CLI command made no progress for %ds: %s", idleSeconds, strings.Join(cmd, " "))
+		return result, fmt.Errorf("CLI command made no progress for %ds: %s", idleSeconds, formatCommandPreview(cmd))
 	}
 
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			result.ReturnCode = exitErr.ExitCode()
 		} else if ctx.Err() != nil {
-			return result, fmt.Errorf("CLI command timed out after %ds: %s", timeout, strings.Join(cmd, " "))
+			return result, fmt.Errorf("CLI command timed out after %ds: %s", timeout, formatCommandPreview(cmd))
 		} else {
 			return nil, waitErr
 		}
