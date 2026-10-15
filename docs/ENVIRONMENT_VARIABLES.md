@@ -305,6 +305,12 @@ Attribution is sent as `HTTP-Referer` and `X-Title`:
 
 When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution values are used as fallbacks, so a deployment that already declares its identity keeps it after switching gateways: `AGENTFIELD_OPENROUTER_SITE_URL`, `OR_SITE_URL`, `AGENTFIELD_OPENROUTER_APP_NAME`, `OR_APP_NAME`. The opt-out travels with them: when `AGENTFIELD_OPENROUTER_ATTRIBUTION=false`, these values are not inherited and the Infron defaults apply instead. To control Infron attribution specifically, set the `AGENTFIELD_INFRON_*` vars explicitly or disable it with `AGENTFIELD_INFRON_ATTRIBUTION=false`.
 
+### IO Intelligence (io.net)
+
+- `IONET_API_KEY`: API key for IO Intelligence. When it is the only provider key set, the Go SDK's `ai.DefaultConfig()` points at `https://api.intelligence.io.solutions/api/v1`. `OPENAI_API_KEY`, `INFRON_API_KEY` and `OPENROUTER_API_KEY` all keep precedence over it, so adding this key never reroutes an existing deployment. When `AI_MODEL` is unset, the model defaults to `meta-llama/Llama-3.3-70B-Instruct` (io.net serves no `gpt-4o`, so the global fallback would 404; io.net rotates its catalog, so if that id is ever retired, set `AI_MODEL` to any current id from `GET /models`); routing through a custom `AI_BASE_URL` the SDK cannot recognize as io.net requires setting `AI_MODEL`.
+
+IO Intelligence is OpenAI-compatible (Chat Completions) and serves Hugging Face-style `org/name` model ids, so a model moves across by id alone (`meta-llama/Llama-3.3-70B-Instruct`; the exact list comes from `GET /models` on the configured base URL). An `ionet/` prefix is accepted as a routing marker for callers that select the gateway by model string, and is stripped before the request is sent, since the endpoint serves the bare id. The marker rewrites the model string only — it never reroutes a request on its own; the base URL still follows the provider-key precedence above.
+
 ### Harness (SDKs)
 
 - `AGENTFIELD_HARNESS_DEPTH`: Marks subprocesses running inside an AgentField
