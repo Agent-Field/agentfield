@@ -1104,7 +1104,6 @@ async def test_opencode_timeout_message_excludes_prompt_text(
     message = result.error_message or ""
     assert message.startswith("CLI command timed out after 1s: ")
     assert str(fake_bin) in message
-    assert "run --format json" in message
     assert "PROMPT-MARKER" not in message
     assert "500" not in message
     assert len(message) < 400

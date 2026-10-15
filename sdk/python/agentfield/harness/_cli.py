@@ -85,40 +85,15 @@ def resolve_cli_command(name: str) -> str:
     return shutil.which(name) or name
 
 
-# Cap on the argv text embedded in timeout/crash messages. Providers pass the
-# prompt as a single (often huge) argv element, so an unbounded command line
-# carries the entire prompt into the error message — and the runner's retry
-# classifier matches error text, where prompt prose like "its coded 500 would
-# fall through" used to make a wall-clock timeout look like a transient HTTP
-# failure and re-run the whole call. The preview keeps the binary and the
-# leading arguments an operator needs to tell what ran.
-_COMMAND_PREVIEW_CHARS = 200
-
-
 def format_command_preview(cmd: List[str]) -> str:
-    """Bound an argv for error messages without quoting prompt text.
+    """Describe a command for error messages without quoting its arguments.
 
-    Only whole arguments that fit inside ``_COMMAND_PREVIEW_CHARS`` are kept:
-    a too-long element — the prompt providers append positionally — is dropped
-    entirely rather than partially quoted into the message, so prompt text
-    cannot reach the retry classifier. Returns the untruncated command when it
-    already fits.
+    Providers pass the prompt as an argv element, and the runner's retry
+    classifier reads error text, so only the executable is named.
     """
-    kept: List[str] = []
-    used = 0
-    for arg in cmd:
-        cost = len(arg) + (1 if kept else 0)
-        if used + cost > _COMMAND_PREVIEW_CHARS:
-            break
-        kept.append(arg)
-        used += cost
-
-    if len(kept) == len(cmd):
-        return " ".join(kept)
-    if not kept:
-        # A single argv element (an absurdly long binary path) exceeds the cap.
-        return f"{cmd[0][:_COMMAND_PREVIEW_CHARS]}..."
-    return f"{' '.join(kept)}... [{len(' '.join(cmd))} chars total]"
+    if len(cmd) <= 1:
+        return cmd[0] if cmd else ""
+    return f"{cmd[0]} [{len(cmd) - 1} args omitted]"
 
 
 def _resolve_idle_seconds(idle_seconds: Optional[float]) -> Optional[float]:

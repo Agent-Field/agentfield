@@ -67,7 +67,7 @@ _LONG_PROMPT = (
 )
 
 
-def test_format_command_preview_keeps_prefix_and_drops_the_prompt():
+def test_format_command_preview_names_only_the_executable():
     cmd = [
         "opencode",
         "run",
@@ -80,16 +80,16 @@ def test_format_command_preview_keeps_prefix_and_drops_the_prompt():
 
     preview = format_command_preview(cmd)
 
-    assert preview.startswith(
-        "opencode run --format json --agent agentfield-harness... ["
-    )
+    assert preview == "opencode [6 args omitted]"
     assert "PROMPT-MARKER" not in preview
     assert "500" not in preview
     assert len(preview) < 300
 
 
-def test_format_command_preview_leaves_a_short_command_untouched():
-    assert format_command_preview(["opencode", "run"]) == "opencode run"
+def test_format_command_preview_drops_a_short_prompt_too():
+    preview = format_command_preview(["opencode", "run", "return 500 error"])
+    assert "500" not in preview
+    assert preview.startswith("opencode")
 
 
 @pytest.mark.asyncio
@@ -103,10 +103,10 @@ async def test_run_cli_timeout_message_excludes_the_prompt():
 
     message = str(excinfo.value)
     assert message.startswith("CLI command timed out after 0.2s: ")
-    assert "import time; time.sleep(30)" in message
+    assert sys.executable in message
     assert _LONG_PROMPT not in message
     assert "PROMPT-MARKER" not in message
-    assert message.endswith("chars total]")
+    assert message.endswith("args omitted]")
     assert len(message) < 400
 
 

@@ -711,7 +711,16 @@ async def test_execute_with_retry_retries_error_503(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_timed_out_run_with_500_in_prompt_executes_once(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "return 500 error",
+        "fix the check, where its coded 500 would fall through" + "x" * 5000,
+    ],
+)
+async def test_timed_out_run_with_500_in_prompt_executes_once(
+    tmp_path, monkeypatch, prompt
+):
     from agentfield.harness.providers.opencode import OpenCodeProvider
 
     counter = tmp_path / "runs"
@@ -727,7 +736,6 @@ async def test_timed_out_run_with_500_in_prompt_executes_once(tmp_path, monkeypa
 
     monkeypatch.setattr("agentfield.harness._runner.asyncio.sleep", fake_sleep)
 
-    prompt = "fix the check, where its coded 500 would fall through" + "x" * 5000
     provider = OpenCodeProvider(bin_path=str(fake_bin))
 
     with patch("agentfield.harness._runner.build_provider", return_value=provider):
