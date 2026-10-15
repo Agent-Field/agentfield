@@ -718,7 +718,7 @@ async def test_execute_with_retry_retries_error_503(tmp_path, monkeypatch):
         "fix the check, where its coded 500 would fall through" + "x" * 5000,
     ],
 )
-async def test_timed_out_run_with_500_in_prompt_executes_once(
+async def test_timed_out_run_with_status_like_prompt_runs_once(
     tmp_path, monkeypatch, prompt
 ):
     from agentfield.harness.providers.opencode import OpenCodeProvider
