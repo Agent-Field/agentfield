@@ -583,3 +583,320 @@ func TestExecuteReasonerHandler_ExecutionRowInsertFailureDoesNotFailCall(t *test
 	require.NotNil(t, wfExec)
 	require.Equal(t, string(types.ExecutionStatusSucceeded), string(wfExec.Status))
 }
+
+// newLegacyLocalStorage opens a real LocalStorage for the legacy lifecycle
+// tests, so the terminal-state guards and context handling of the real store
+// apply.
+func newLegacyLocalStorage(t *testing.T) *storage.LocalStorage {
+	t.Helper()
+	ctx := context.Background()
+	store := storage.NewLocalStorage(storage.LocalStorageConfig{})
+	err := store.Initialize(ctx, storage.StorageConfig{
+		Mode: "local",
+		Local: storage.LocalStorageConfig{
+			DatabasePath: filepath.Join(t.TempDir(), "agentfield.db"),
+			KVStorePath:  filepath.Join(t.TempDir(), "agentfield.bolt"),
+		},
+	})
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "fts5") {
+		t.Skip("sqlite3 compiled without FTS5")
+	}
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(ctx) })
+	return store
+}
+
+// legacyEndpoint is one of the two legacy execution routes.
+type legacyEndpoint struct {
+	name  string
+	path  string
+	agent func(baseURL string) *types.AgentNode
+	mount func(router *gin.Engine, store storage.StorageProvider)
+}
+
+var legacyEndpoints = []legacyEndpoint{
+	{
+		name:  "reasoner",
+		path:  "/api/v1/reasoners/node-1.ping",
+		agent: newReasonerAgent,
+		mount: func(router *gin.Engine, store storage.StorageProvider) {
+			router.POST("/api/v1/reasoners/:reasoner_id", ExecuteReasonerHandler(store))
+		},
+	},
+	{
+		name: "skill",
+		path: "/api/v1/skills/node-1.ping",
+		agent: func(baseURL string) *types.AgentNode {
+			agent := newReasonerAgent(baseURL)
+			agent.Skills = []types.SkillDefinition{{ID: "ping"}}
+			return agent
+		},
+		mount: func(router *gin.Engine, store storage.StorageProvider) {
+			router.POST("/api/v1/skills/:skill_id", ExecuteSkillHandler(store))
+		},
+	},
+}
+
+// asyncAckAgent answers like the Python and Go SDKs do for an async
+// execution: HTTP 202 with status "processing", while the work continues in
+// the background.
+func asyncAckAgent(t *testing.T, executionIDs chan<- string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		executionID := r.Header.Get("X-Execution-ID")
+		executionIDs <- executionID
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"processing","execution_id":"` + executionID + `"}`))
+	}))
+}
+
+// After a 202 acknowledgement the execution stays running, and the agent's
+// later status callback, successful or failed, is what completes it.
+func TestLegacyExecute_CallbackAfterAsyncAcknowledgement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	callbacks := []struct {
+		name       string
+		body       string
+		wantStatus types.ExecutionStatus
+		check      func(t *testing.T, exec *types.Execution, wf *types.WorkflowExecution)
+	}{
+		{
+			name:       "succeeded",
+			body:       `{"status":"succeeded","result":{"answer":42}}`,
+			wantStatus: types.ExecutionStatusSucceeded,
+			check: func(t *testing.T, exec *types.Execution, wf *types.WorkflowExecution) {
+				require.JSONEq(t, `{"answer":42}`, string(exec.ResultPayload))
+				require.JSONEq(t, `{"answer":42}`, string(wf.OutputData))
+			},
+		},
+		{
+			name:       "failed",
+			body:       `{"status":"failed","error":"reasoner raised"}`,
+			wantStatus: types.ExecutionStatusFailed,
+			check: func(t *testing.T, exec *types.Execution, wf *types.WorkflowExecution) {
+				require.NotNil(t, exec.ErrorMessage)
+				require.Equal(t, "reasoner raised", *exec.ErrorMessage)
+				require.NotNil(t, wf.ErrorMessage)
+				require.Equal(t, "reasoner raised", *wf.ErrorMessage)
+			},
+		},
+	}
+
+	for _, endpoint := range legacyEndpoints {
+		for _, callback := range callbacks {
+			t.Run(endpoint.name+"/"+callback.name, func(t *testing.T) {
+				ctx := context.Background()
+				store := newLegacyLocalStorage(t)
+
+				router := gin.New()
+				endpoint.mount(router, store)
+				router.POST("/api/v1/executions/:execution_id/status",
+					UpdateExecutionStatusHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, 90*time.Second))
+				controlPlane := httptest.NewServer(router)
+				defer controlPlane.Close()
+
+				executionIDs := make(chan string, 1)
+				agentServer := asyncAckAgent(t, executionIDs)
+				defer agentServer.Close()
+				require.NoError(t, store.RegisterAgent(ctx, endpoint.agent(agentServer.URL)))
+
+				resp, err := http.Post(controlPlane.URL+endpoint.path, "application/json", strings.NewReader(`{}`))
+				require.NoError(t, err)
+				_ = resp.Body.Close()
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+				executionID := <-executionIDs
+
+				acked, err := store.GetExecutionRecord(ctx, executionID)
+				require.NoError(t, err)
+				require.NotNil(t, acked)
+				require.Equal(t, string(types.ExecutionStatusRunning), acked.Status, "a 202 acknowledgement is not the result")
+				require.Nil(t, acked.CompletedAt)
+				ackedWF, err := store.GetWorkflowExecution(ctx, executionID)
+				require.NoError(t, err)
+				require.NotNil(t, ackedWF)
+				require.Equal(t, string(types.ExecutionStatusRunning), ackedWF.Status)
+				require.Nil(t, ackedWF.CompletedAt)
+
+				cbResp, err := http.Post(controlPlane.URL+"/api/v1/executions/"+executionID+"/status",
+					"application/json", strings.NewReader(callback.body))
+				require.NoError(t, err)
+				_ = cbResp.Body.Close()
+				require.Equal(t, http.StatusOK, cbResp.StatusCode)
+
+				final, err := store.GetExecutionRecord(ctx, executionID)
+				require.NoError(t, err)
+				require.NotNil(t, final)
+				require.Equal(t, string(callback.wantStatus), final.Status)
+				require.NotNil(t, final.CompletedAt)
+				finalWF, err := store.GetWorkflowExecution(ctx, executionID)
+				require.NoError(t, err)
+				require.NotNil(t, finalWF)
+				require.Equal(t, string(callback.wantStatus), finalWF.Status)
+				callback.check(t, final, finalWF)
+			})
+		}
+	}
+}
+
+// An agent whose background work finishes before its 202 reaches the control
+// plane posts the callback first. That callback finds no workflow row yet, so
+// the acknowledgement must copy the outcome over instead of leaving the
+// workflow row running, or storing the acknowledgement as its output.
+func TestLegacyExecute_CallbackBeforeAsyncAcknowledgement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	store := newLegacyLocalStorage(t)
+
+	router := gin.New()
+	router.POST("/api/v1/reasoners/:reasoner_id", ExecuteReasonerHandler(store))
+	router.POST("/api/v1/executions/:execution_id/status",
+		UpdateExecutionStatusHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, 90*time.Second))
+	controlPlane := httptest.NewServer(router)
+	defer controlPlane.Close()
+
+	executionIDs := make(chan string, 1)
+	callbackCodes := make(chan int, 1)
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		executionID := r.Header.Get("X-Execution-ID")
+		executionIDs <- executionID
+		code := 0
+		resp, err := http.Post(controlPlane.URL+"/api/v1/executions/"+executionID+"/status",
+			"application/json", strings.NewReader(`{"status":"succeeded","result":{"answer":42}}`))
+		if err == nil {
+			code = resp.StatusCode
+			_ = resp.Body.Close()
+		}
+		callbackCodes <- code
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"processing","execution_id":"` + executionID + `"}`))
+	}))
+	defer agentServer.Close()
+	require.NoError(t, store.RegisterAgent(ctx, newReasonerAgent(agentServer.URL)))
+
+	resp, err := http.Post(controlPlane.URL+"/api/v1/reasoners/node-1.ping", "application/json", strings.NewReader(`{}`))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	executionID := <-executionIDs
+	require.Equal(t, http.StatusOK, <-callbackCodes)
+
+	final, err := store.GetExecutionRecord(ctx, executionID)
+	require.NoError(t, err)
+	require.NotNil(t, final)
+	require.Equal(t, string(types.ExecutionStatusSucceeded), final.Status)
+	require.JSONEq(t, `{"answer":42}`, string(final.ResultPayload))
+
+	wf, err := store.GetWorkflowExecution(ctx, executionID)
+	require.NoError(t, err)
+	require.NotNil(t, wf)
+	require.Equal(t, string(types.ExecutionStatusSucceeded), wf.Status)
+	require.JSONEq(t, `{"answer":42}`, string(wf.OutputData))
+	require.NotNil(t, wf.CompletedAt)
+}
+
+// A failed workflow event that arrives after a 202 acknowledgement still
+// fails the execution, as it did before the executions row existed.
+func TestLegacyExecute_FailedWorkflowEventAfterAsyncAcknowledgement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	store := newLegacyLocalStorage(t)
+
+	router := gin.New()
+	router.POST("/api/v1/reasoners/:reasoner_id", ExecuteReasonerHandler(store))
+	router.POST("/api/v1/workflow/executions/events", WorkflowExecutionEventHandler(store))
+	controlPlane := httptest.NewServer(router)
+	defer controlPlane.Close()
+
+	executionIDs := make(chan string, 1)
+	agentServer := asyncAckAgent(t, executionIDs)
+	defer agentServer.Close()
+	require.NoError(t, store.RegisterAgent(ctx, newReasonerAgent(agentServer.URL)))
+
+	resp, err := http.Post(controlPlane.URL+"/api/v1/reasoners/node-1.ping", "application/json", strings.NewReader(`{}`))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	executionID := <-executionIDs
+
+	event := `{"execution_id":"` + executionID + `","workflow_id":"` + executionID + `","agent_node_id":"node-1","reasoner_id":"ping","status":"failed","error":"reasoner raised"}`
+	evResp, err := http.Post(controlPlane.URL+"/api/v1/workflow/executions/events", "application/json", strings.NewReader(event))
+	require.NoError(t, err)
+	_ = evResp.Body.Close()
+	require.Equal(t, http.StatusOK, evResp.StatusCode)
+
+	final, err := store.GetExecutionRecord(ctx, executionID)
+	require.NoError(t, err)
+	require.NotNil(t, final)
+	require.Equal(t, string(types.ExecutionStatusFailed), final.Status)
+	require.NotNil(t, final.ErrorMessage)
+	require.Equal(t, "reasoner raised", *final.ErrorMessage)
+	require.NotNil(t, final.CompletedAt)
+}
+
+// A caller that cancels its request after dispatch makes the dispatch fail;
+// the execution must still end failed with a completion time instead of
+// staying running until stale cleanup.
+func TestLegacyExecute_CancelledRequestFinalizesExecution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, endpoint := range legacyEndpoints {
+		t.Run(endpoint.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := newLegacyLocalStorage(t)
+
+			router := gin.New()
+			endpoint.mount(router, store)
+
+			executionIDs := make(chan string, 1)
+			release := make(chan struct{})
+			agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Drain the body so the server notices the client hanging up.
+				_, _ = io.Copy(io.Discard, r.Body)
+				executionIDs <- r.Header.Get("X-Execution-ID")
+				select {
+				case <-r.Context().Done():
+				case <-release:
+				}
+			}))
+			defer agentServer.Close()
+			defer close(release)
+			require.NoError(t, store.RegisterAgent(ctx, endpoint.agent(agentServer.URL)))
+
+			reqCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			req := httptest.NewRequest(http.MethodPost, endpoint.path, strings.NewReader(`{}`)).WithContext(reqCtx)
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				router.ServeHTTP(rec, req)
+			}()
+
+			executionID := <-executionIDs
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("legacy handler did not return after the request was cancelled")
+			}
+			require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+			final, err := store.GetExecutionRecord(ctx, executionID)
+			require.NoError(t, err)
+			require.NotNil(t, final)
+			require.Equal(t, string(types.ExecutionStatusFailed), final.Status)
+			require.NotNil(t, final.CompletedAt)
+			require.NotNil(t, final.ErrorMessage)
+
+			wf, err := store.GetWorkflowExecution(ctx, executionID)
+			require.NoError(t, err)
+			require.NotNil(t, wf)
+			require.Equal(t, string(types.ExecutionStatusFailed), wf.Status)
+			require.NotNil(t, wf.CompletedAt)
+		})
+	}
+}
