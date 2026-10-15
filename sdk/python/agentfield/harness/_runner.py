@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import random
-import re
 import shutil
 import tempfile
 import time
@@ -32,18 +31,6 @@ from agentfield.harness.providers._factory import build_provider
 
 logger = logging.getLogger(__name__)
 
-# HTTP status codes that can indicate a retryable transport failure. They are
-# matched only WITH context (see TRANSIENT_PATTERNS): error messages can quote
-# the command line, and therefore the prompt, so a bare "500" anywhere in a task
-# description used to make a wall-clock timeout look like a transient server
-# error and re-run the entire call from scratch.
-_TRANSIENT_STATUS_CODES = ("408", "429", "500", "502", "503", "504")
-
-# Context prefixes accepted for those codes: "http 500", "status: 502",
-# "error code 429". `_is_transient` normalizes whitespace and the `:`/`=`
-# separators people actually write, so those variants collapse onto these forms.
-_STATUS_CONTEXT_PREFIXES = ("http", "status", "code", "error code")
-
 TRANSIENT_PATTERNS = {
     "rate limit",
     "rate_limit",
@@ -52,29 +39,17 @@ TRANSIENT_PATTERNS = {
     # provider's wall-clock timeout (default 30 min) is the cap on a *single*
     # subprocess; if that hits, the prompt or model is wrong and re-running
     # the entire 30-min subprocess won't fix it. Real network blips that
-    # surface as "connection reset" / "HTTP 503" still trigger retry — and
-    # `_is_transient` additionally rejects any FailureType.TIMEOUT outright,
-    # so prompt text quoted into a timeout message can never turn it back
-    # into a retry.
+    # surface as "connection reset" / "503" still trigger retry.
     "connection reset",
     "connection refused",
     "temporarily unavailable",
-    # Textual HTTP failure phrases (no bare digits).
     "service unavailable",
-    "bad gateway",
-    "gateway timeout",
+    "503",
+    "502",
+    "504",
     "internal server error",
-    "too many requests",
-} | {
-    f"{prefix} {code}"
-    for code in _TRANSIENT_STATUS_CODES
-    for prefix in _STATUS_CONTEXT_PREFIXES
+    "500",
 }
-
-# Whitespace and the `:`/`=` separators are collapsed to single spaces before
-# matching, so "status: 503", "http=500" and "error code:  429" all land on
-# the literal patterns above.
-_STATUS_SEPARATOR_RE = re.compile(r"[\s:=]+")
 
 DEFAULT_SCHEMA_RETRIES = 2
 
@@ -84,19 +59,9 @@ DEFAULT_SCHEMA_RETRIES = 2
 _SCHEMA_REPAIR_TIMEOUT_SECONDS = 90
 
 
-def _is_transient(error_str: str, failure_type: Optional[FailureType] = None) -> bool:
-    """Whether an error is worth retrying.
-
-    A declared timeout is never transient: the wall-clock/idle cap means the
-    prompt or model is wrong and re-running the same call from scratch won't
-    help. Keying that off the failure type rather than the message text is what
-    makes the guarantee independent of prompt text that may be quoted into the
-    message.
-    """
-    if failure_type == FailureType.TIMEOUT:
-        return False
-    normalized = _STATUS_SEPARATOR_RE.sub(" ", error_str.lower())
-    return any(pattern in normalized for pattern in TRANSIENT_PATTERNS)
+def _is_transient(error_str: str) -> bool:
+    lower = error_str.lower()
+    return any(pattern in lower for pattern in TRANSIENT_PATTERNS)
 
 
 async def _ai_schema_repair(
@@ -445,10 +410,7 @@ class HarnessRunner:
                     return result
 
                 error_msg = result.error_message or ""
-                if (
-                    _is_transient(error_msg, result.failure_type)
-                    and attempt < max_retries
-                ):
+                if _is_transient(error_msg) and attempt < max_retries:
                     delay = min(initial_delay * (backoff_factor**attempt), max_delay)
                     delay += random.uniform(-delay * 0.25, delay * 0.25)
                     await asyncio.sleep(delay)
@@ -456,15 +418,7 @@ class HarnessRunner:
                 return result
             except Exception as exc:
                 last_error = exc
-                # An escaping TimeoutError (a provider that did not convert it
-                # to a TIMEOUT RawResult) is still a wall-clock cap, not a
-                # transport blip: never retry it.
-                failure_type = (
-                    FailureType.TIMEOUT
-                    if isinstance(exc, (TimeoutError, asyncio.TimeoutError))
-                    else None
-                )
-                if _is_transient(str(exc), failure_type) and attempt < max_retries:
+                if _is_transient(str(exc)) and attempt < max_retries:
                     delay = min(initial_delay * (backoff_factor**attempt), max_delay)
                     delay += random.uniform(-delay * 0.25, delay * 0.25)
                     await asyncio.sleep(delay)

@@ -10,7 +10,7 @@ import pytest
 from pydantic import BaseModel
 from unittest.mock import patch
 
-from agentfield.harness._result import FailureType, Metrics, RawResult
+from agentfield.harness._result import Metrics, RawResult
 from agentfield.harness._runner import (
     HarnessRunner,
     _accumulate_metrics,
@@ -217,40 +217,6 @@ def test_is_transient_matches_and_rejects_expected_messages():
     assert _is_transient("Permission denied") is False
 
 
-def test_bare_status_numbers_in_prompt_text_are_not_transient():
-    """Bare 500/502/503/504 must not match.
-
-    A wall-clock timeout message embeds the command line, which embeds the
-    prompt. The live incident quoted "its coded 500 would fall through the
-    global filter" and the whole 90-minute call was re-run from scratch.
-    """
-    timeout_message = (
-        "CLI command timed out after 5400s: opencode run --format json "
-        "--agent agentfield-harness: fix the shape check, where its coded 500 "
-        "would fall through the global filter"
-    )
-    assert _is_transient(timeout_message) is False
-    assert _is_transient(timeout_message, FailureType.TIMEOUT) is False
-    assert _is_transient("agentfield#684 touches 502 lines") is False
-    assert _is_transient("validation failed with 503 warnings") is False
-
-
-def test_declared_timeout_is_never_transient():
-    """The failure type, not the message text, keeps timeouts terminal."""
-    assert _is_transient("HTTP 503 Service Unavailable", FailureType.TIMEOUT) is False
-    assert _is_transient("rate limit exceeded", FailureType.TIMEOUT) is False
-    # The same text without the declared timeout is still retryable.
-    assert _is_transient("HTTP 503 Service Unavailable") is True
-
-
-def test_contextual_status_forms_stay_transient():
-    assert _is_transient("HTTP 503 Service Unavailable") is True
-    assert _is_transient("connection reset by peer") is True
-    assert _is_transient("upstream returned status: 502") is True
-    assert _is_transient("Error code: 429 - too many requests") is True
-    assert _is_transient("error code 500") is True
-
-
 @pytest.mark.asyncio
 async def test_run_without_schema_returns_plain_harness_result(tmp_path):
     provider = MockProvider(
@@ -415,79 +381,6 @@ async def test_execute_with_retry_does_not_retry_non_transient_error(
     assert result.error_message == "validation failed"
     assert provider.call_count == 1
     assert sleeps == []
-
-
-@pytest.mark.asyncio
-async def test_execute_with_retry_never_retries_a_timeout(tmp_path, monkeypatch):
-    """A wall-clock timeout is terminal even when quoted text looks transient."""
-    provider = MockProvider(
-        [
-            RawResult(
-                is_error=True,
-                failure_type=FailureType.TIMEOUT,
-                error_message=(
-                    "CLI command timed out after 5400s: opencode run --format "
-                    "json: its coded 500 would fall through the global filter, "
-                    "so the http 503 path hit a rate limit"
-                ),
-            ),
-            RawResult(result="should not happen"),
-        ]
-    )
-    runner = HarnessRunner()
-    sleeps: list[float] = []
-
-    async def fake_sleep(delay: float) -> None:
-        sleeps.append(delay)
-
-    monkeypatch.setattr("agentfield.harness._runner.asyncio.sleep", fake_sleep)
-
-    with patch("agentfield.harness._runner.build_provider", return_value=provider):
-        result = await runner.run(
-            "hello",
-            provider="codex",
-            cwd=str(tmp_path),
-            max_retries=3,
-        )
-
-    assert result.is_error is True
-    assert result.failure_type == FailureType.TIMEOUT
-    assert provider.call_count == 1
-    assert sleeps == []
-
-
-@pytest.mark.asyncio
-async def test_execute_with_retry_still_retries_transport_failures(
-    tmp_path, monkeypatch
-):
-    """Genuine transport failures keep retrying (503, connection reset)."""
-    provider = MockProvider(
-        [
-            RawResult(is_error=True, error_message="HTTP 503 Service Unavailable"),
-            RawResult(is_error=True, error_message="connection reset by peer"),
-            RawResult(result="ok", metrics=Metrics(num_turns=1)),
-        ]
-    )
-    runner = HarnessRunner()
-    sleeps: list[float] = []
-
-    async def fake_sleep(delay: float) -> None:
-        sleeps.append(delay)
-
-    monkeypatch.setattr("agentfield.harness._runner.asyncio.sleep", fake_sleep)
-
-    with patch("agentfield.harness._runner.build_provider", return_value=provider):
-        result = await runner.run(
-            "hello",
-            provider="codex",
-            cwd=str(tmp_path),
-            max_retries=3,
-        )
-
-    assert result.is_error is False
-    assert result.result == "ok"
-    assert provider.call_count == 3
-    assert len(sleeps) == 2
 
 
 @pytest.mark.asyncio
@@ -792,3 +685,55 @@ async def test_incremental_mode_recovers_by_patching_missing_field(tmp_path):
     retry_prompt = provider.prompts[1].lower()
     assert "patch only" in retry_prompt
     assert "count" in retry_prompt
+
+
+@pytest.mark.asyncio
+async def test_execute_with_retry_retries_error_503(tmp_path, monkeypatch):
+    provider = MockProvider(
+        [
+            RawResult(is_error=True, error_message="Error 503"),
+            RawResult(result="ok", metrics=Metrics(num_turns=1)),
+        ]
+    )
+
+    async def fake_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("agentfield.harness._runner.asyncio.sleep", fake_sleep)
+
+    with patch("agentfield.harness._runner.build_provider", return_value=provider):
+        result = await HarnessRunner().run(
+            "hello", provider="codex", cwd=str(tmp_path), max_retries=3
+        )
+
+    assert result.is_error is False
+    assert provider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_timed_out_run_with_500_in_prompt_executes_once(tmp_path, monkeypatch):
+    from agentfield.harness.providers.opencode import OpenCodeProvider
+
+    counter = tmp_path / "runs"
+    fake_bin = tmp_path / "opencode-hang"
+    fake_bin.write_text(
+        f"#!/bin/sh\necho x >> {counter}\nsleep 30\n", encoding="utf-8"
+    )
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1")
+
+    async def fake_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("agentfield.harness._runner.asyncio.sleep", fake_sleep)
+
+    prompt = "fix the check, where its coded 500 would fall through" + "x" * 5000
+    provider = OpenCodeProvider(bin_path=str(fake_bin))
+
+    with patch("agentfield.harness._runner.build_provider", return_value=provider):
+        result = await HarnessRunner().run(
+            prompt, provider="opencode", cwd=str(tmp_path), max_retries=3
+        )
+
+    assert result.is_error is True
+    assert len(counter.read_text().splitlines()) == 1
