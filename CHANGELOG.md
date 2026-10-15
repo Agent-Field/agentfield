@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.10] - 2026-10-14
+
+
+### Fixed
+
+- Fix(sdk/python): let AsyncConfig env flags fall back to the class default (#1100)
+
+The two boolean parsers added in #1082 each bake in a polarity: _env_flag_default_on
+returns True for anything outside the falsey vocabulary and _env_flag_default_off
+returns False for anything outside the truthy one. That is correct for AsyncConfig's
+own field defaults, but it makes the fallback independent of the class -- a subclass
+that changes a default gets the parser's answer for an unrecognised string instead of
+its own:
+
+    @dataclass
+    class CachingOff(AsyncConfig):
+        enable_result_caching: bool = False
+
+    # AGENTFIELD_ASYNC_ENABLE_RESULT_CACHING=maybe
+    CachingOff.from_environment().enable_result_caching   # True, should be False
+
+Add one polarity-free parser, _env_flag, that raises ValueError outside the
+vocabulary, and use it for all five flags. get_env_var already catches
+(ValueError, TypeError) and returns the default_value it was handed, which
+from_environment() passes as config.<field> -- so the fallback now comes from the
+class, exactly as the float and int converters in the same function already do.
+
+This is the second half of #1089; the remaining strict parsers in logger.py,
+agent.py and agent_server.py are handled separately in #1090.
+
+It also matches the Go control plane, which has always parsed this way:
+config.applyBoolEnv leaves *target untouched and logs a warning when
+strconv.ParseBool rejects the string, and the handler tests pin parseBool(" YeS ")
+-> true, parseBool("0") -> false, parseBool("maybe") -> error.
+
+_env_flag_default_on and _env_flag_default_off are kept, now expressed in terms of
+_env_flag, for call sites that know their default statically -- #1090 imports
+_env_flag_default_off into logger.py for the default-off AGENTFIELD_LOG_* flags, so
+removing them would break an open PR. A test pins both wrappers' contract.
+
+AsyncConfig's own observable behaviour is unchanged: with no AGENTFIELD_ASYNC_*
+variable set the converters are never reached, and digesting every field of
+from_environment() on both trees gives the same SHA-256
+(5960894a0c0bd6c817a09800eee26998e09625f7dfb23cd3d75ce1ee9088eb90). For a set
+variable, every value in the vocabulary parses as before and every value outside it
+still yields the field default -- the default just now comes from the class.
+
+Fixes the AsyncConfig half of #1089. (88a5f73)
+
 ## [0.1.142-rc.9] - 2026-10-05
 
 
