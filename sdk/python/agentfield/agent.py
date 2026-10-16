@@ -642,6 +642,20 @@ class _NotificationDispatcher:
             self._dispatcher_task = None
 
 
+def _is_transient_status_callback(status_code: int) -> bool:
+    """Return whether an execution status-callback HTTP status is retryable.
+
+    Mirrors the Go SDK's ``isTransientPollStatus`` (``sdk/go/agent/agent.go``),
+    which ``postExecutionStatus`` uses to decide whether to resend a callback.
+    408 (request timeout), 429 (too many requests), and any 5xx are transient.
+    Every other status is permanent: resending a 400, 401, 403, 404, or 409
+    cannot succeed, so the caller must fail fast.
+    """
+    if status_code in (408, 429):
+        return True
+    return status_code >= 500
+
+
 class Agent(FastAPI):
     """
     AgentField Agent - FastAPI subclass for creating AI agent nodes.
@@ -2957,7 +2971,11 @@ class Agent(FastAPI):
         safe_payload = jsonable_encoder(payload)
         shutting_down = getattr(self, "_shutdown_cancelling", False)
         attempts = 1 if shutting_down else max_retries
+        # Match the Go SDK: 30s per attempt, five attempts, backoff of
+        # 1s, 2s, 4s, 8s (``time.Second << attempt``). Shutdown still sends
+        # a single 5s attempt so a stuck callback cannot hold process exit.
         request_timeout = 5.0 if shutting_down else 30.0
+        permanent_status: Optional[int] = None
         for attempt in range(attempts):
             try:
                 response = await self.client._async_request(
@@ -2976,6 +2994,12 @@ class Agent(FastAPI):
                 log_warn(
                     f"Async status update failed with {response.status_code} for execution {execution_id}"
                 )
+                if not _is_transient_status_callback(response.status_code):
+                    # A client error such as 404 (unknown execution) or 409
+                    # (terminal status conflict) will not change on a resend,
+                    # so fail fast instead of backing off.
+                    permanent_status = response.status_code
+                    break
             except Exception as exc:  # pragma: no cover - network errors
                 log_warn(
                     f"Async status update attempt {attempt + 1} failed for {execution_id}: {exc}"
@@ -2987,8 +3011,15 @@ class Agent(FastAPI):
                 f"Abandoning async status for {execution_id} during shutdown "
                 f"after {request_timeout:g}s attempt"
             )
+        elif permanent_status is not None:
+            log_error(
+                f"Async status update for {execution_id} failed with "
+                f"{permanent_status}; not retrying"
+            )
         else:
-            log_error(f"Failed to deliver async status for {execution_id} after retries")
+            log_error(
+                f"Failed to deliver async status for {execution_id} after retries"
+            )
 
     def _build_execution_callback_url(self, execution_id: str) -> Optional[str]:
         if not self.agentfield_server or not execution_id:
