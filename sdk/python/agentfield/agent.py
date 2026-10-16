@@ -656,6 +656,39 @@ def _is_transient_status_callback(status_code: int) -> bool:
     return status_code >= 500
 
 
+def _is_retryable_status_callback_error(exc: BaseException) -> bool:
+    """Return whether a status-callback exception is worth resending.
+
+    Go retries errors from ``http.Client.Do`` and returns immediately when
+    ``http.NewRequest`` fails. ``httpx.TransportError`` is that Do bucket:
+    connect/read/write/pool timeouts, network errors, and protocol errors.
+    ``httpx.TimeoutException`` is a ``TransportError``. The sync fallback in
+    ``AgentFieldClient._async_request`` raises the requests equivalents
+    (``ConnectionError`` and ``Timeout``). Bare ``TimeoutError`` and
+    ``ConnectionError`` cover the same failures if they surface unwrapped.
+
+    Request-construction and programming errors are permanent. That includes
+    ``httpx.InvalidURL``, ``requests.exceptions.InvalidURL``, and ``TypeError``.
+    """
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+
+    import httpx
+
+    if isinstance(exc, httpx.TransportError):
+        return True
+
+    import requests
+
+    return isinstance(
+        exc,
+        (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+        ),
+    )
+
+
 class Agent(FastAPI):
     """
     AgentField Agent - FastAPI subclass for creating AI agent nodes.
@@ -2991,16 +3024,26 @@ class Agent(FastAPI):
                             f"Sent async status update for {execution_id} (attempt {attempt + 1})"
                         )
                     return
-                log_warn(
-                    f"Async status update failed with {response.status_code} for execution {execution_id}"
-                )
                 if not _is_transient_status_callback(response.status_code):
                     # A client error such as 404 (unknown execution) or 409
                     # (terminal status conflict) will not change on a resend,
-                    # so fail fast instead of backing off.
+                    # so fail fast instead of backing off. The single error
+                    # log is below; a warning here would report the same failure twice.
                     permanent_status = response.status_code
                     break
-            except Exception as exc:  # pragma: no cover - network errors
+                log_warn(
+                    f"Async status update failed with {response.status_code} for execution {execution_id}"
+                )
+            except Exception as exc:
+                if not _is_retryable_status_callback_error(exc):
+                    # Bad URLs and programming errors (TypeError) will not
+                    # succeed on a resend. Log once and return so the
+                    # exhaustion message below does not fire as well.
+                    log_error(
+                        f"Async status update for {execution_id} failed: "
+                        f"{exc}; not retrying"
+                    )
+                    return
                 log_warn(
                     f"Async status update attempt {attempt + 1} failed for {execution_id}: {exc}"
                 )
