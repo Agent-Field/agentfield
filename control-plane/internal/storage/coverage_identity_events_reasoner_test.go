@@ -490,6 +490,8 @@ func TestDIDAndVCCoverage(t *testing.T) {
 		require.Len(t, records, 1)
 		_, err = ls.GetDIDDocumentByAgentID(ctx, "agent-1")
 		require.EqualError(t, err, "DID document not found for agent: agent-1")
+		_, err = ls.GetDIDDocument(ctx, "missing")
+		require.ErrorIs(t, err, ErrDIDDocumentNotFound)
 		require.EqualError(t, ls.RevokeDIDDocument(ctx, "missing"), "DID document not found: missing")
 	})
 

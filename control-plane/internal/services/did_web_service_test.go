@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +33,7 @@ func (s *didWebStorageStub) GetDIDDocument(_ context.Context, did string) (*type
 	if record, ok := s.docsByDID[did]; ok {
 		return record, nil
 	}
-	return nil, errors.New("not found")
+	return nil, storage.ErrDIDDocumentNotFound
 }
 
 func (s *didWebStorageStub) GetDIDDocumentByAgentID(_ context.Context, agentID string) (*types.DIDDocumentRecord, error) {
@@ -69,6 +70,22 @@ func TestDIDWebServiceGenerateDIDWebAndParseRoundTrip(t *testing.T) {
 	t.Run("empty agent ID rejection", func(t *testing.T) {
 		t.Skip("source bug: GenerateDIDWeb has no validation/error path for empty agent IDs")
 	})
+}
+
+func TestDIDWebServiceResolveDIDPropagatesStorageFailure(t *testing.T) {
+	did := "did:web:example.com:agents:agent-1"
+	service := NewDIDWebService("example.com", nil, &didWebStorageStub{
+		errByDID: map[string]error{did: errors.New("database unavailable")},
+	})
+
+	result, err := service.ResolveDID(context.Background(), did)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrDIDDocumentStorage)
+	require.ErrorContains(t, err, "database unavailable")
+
+	valid, err := service.VerifyDIDOwnership(context.Background(), did, []byte("message"), []byte("signature"))
+	require.False(t, valid)
+	require.ErrorIs(t, err, ErrDIDDocumentStorage)
 }
 
 func TestDIDWebServiceParseDIDWebRejectsMalformedInputs(t *testing.T) {

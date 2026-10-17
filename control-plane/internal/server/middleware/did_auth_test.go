@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
@@ -200,6 +201,27 @@ func TestDIDAuth_VerificationError(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), "verification_error")
+}
+
+func TestDIDAuth_StorageFailureIsRetryable(t *testing.T) {
+	resetReplayCache()
+	svc := &mockDIDService{
+		verifyFunc: func(_ context.Context, _ string, _ []byte, _ []byte) (bool, error) {
+			return false, fmt.Errorf("failed to resolve DID: %w", services.ErrDIDDocumentStorage)
+		},
+	}
+	router := newDIDAuthRouter(svc, DIDAuthConfig{Enabled: true})
+
+	req := httptest.NewRequest(http.MethodPost, "/execute/agent.func", strings.NewReader("{}"))
+	req.Header.Set("X-Caller-DID", "did:web:example.com:agents:test")
+	req.Header.Set("X-DID-Signature", uniqueSig())
+	req.Header.Set("X-DID-Timestamp", fmt.Sprintf("%d", time.Now().Unix()))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), "verification_unavailable")
+	assert.NotContains(t, w.Body.String(), "failed to resolve DID")
 }
 
 func TestDIDAuth_InvalidSignature(t *testing.T) {

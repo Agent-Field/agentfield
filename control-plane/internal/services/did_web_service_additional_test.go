@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -95,7 +96,7 @@ func TestDIDWebServiceDocumentLifecycleAndResolution(t *testing.T) {
 					},
 				},
 				errByDID: map[string]error{
-					"did:web:example.com:agents:missing": errors.New("not found"),
+					"did:web:example.com:agents:missing": storage.ErrDIDDocumentNotFound,
 				},
 			},
 		})
@@ -184,7 +185,7 @@ func TestDIDWebServiceGetOrCreateAndRevocationPaths(t *testing.T) {
 					},
 				},
 				errByDID: map[string]error{
-					"did:web:example.com:agents:missing": errors.New("not found"),
+					"did:web:example.com:agents:missing": storage.ErrDIDDocumentNotFound,
 					"did:web:example.com:agents:error":   errors.New("database unavailable"),
 				},
 			},
