@@ -1144,6 +1144,64 @@ class MiniMaxProvider(MediaProvider):
             raw_response={"upload": upload_data, "clone": clone_data},
         )
 
+    async def design_voice(
+        self,
+        prompt: str,
+        voice_id: str,
+        model: Optional[str] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """Create a voice from a natural-language description."""
+        import os
+
+        import aiohttp
+
+        api_key = self._api_key or os.environ.get("MINIMAX_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "MiniMax API key required. Set MINIMAX_API_KEY or pass api_key "
+                "to MiniMaxProvider."
+            )
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("MiniMax voice design requires a prompt")
+        if not isinstance(voice_id, str) or not voice_id.strip():
+            raise ValueError("MiniMax voice design requires a voice_id")
+
+        body: Dict[str, Any] = {"prompt": prompt, "voice_id": voice_id}
+        if model is not None:
+            send_model = self._strip_prefix(model).strip()
+            if not send_model:
+                raise ValueError("MiniMax voice design requires a model")
+            body["model"] = send_model
+        body.update(kwargs)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        timeout = aiohttp.ClientTimeout(total=120.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{self._base_url}/voice_design",
+                headers=headers,
+                json=body,
+            ) as response:
+                data = await self._read_response(
+                    response, "design", service="voice design"
+                )
+
+        designed_voice_id = data.get("voice_id")
+        if not designed_voice_id and isinstance(data.get("data"), dict):
+            designed_voice_id = data["data"].get("voice_id")
+        if not isinstance(designed_voice_id, str) or not designed_voice_id:
+            raise RuntimeError("MiniMax voice design returned no voice_id")
+        return MultimodalResponse(
+            text=designed_voice_id,
+            audio=None,
+            images=[],
+            files=[],
+            raw_response=data,
+        )
+
     async def generate_music(
         self,
         prompt: str,
