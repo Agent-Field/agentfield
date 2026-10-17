@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.13] - 2026-10-17
+
+
+### Fixed
+
+- Fix(sdk/python): report a provider-confirmed zero cost instead of unknown (#1105)
+
+_resolve_cost() accepted a provider-native cost figure only when it was
+strictly positive, so a provider-reported 0.0 -- what a zero-priced or
+free-tier model returns -- was discarded and resolution fell through to the
+LiteLLM branches, ending at (None, None). detect_multimodal_response() then
+reported cost_usd=None/cost_source=None, agent_ai.py recorded that into the
+execution CostTracker, and serialize() emitted total_cost_usd: null for a run
+whose calls were all free.
+
+Accept cost >= 0 in the provider-native branch only. The two LiteLLM branches
+keep > 0 because litellm.completion_cost() returns 0.0 for models absent from
+its pricing database, so a zero there means "unpriced" rather than "free".
+This also matches the TypeScript SDK, which accepts a real zero for the same
+provider figure (costFromUsageRaw: cost >= 0, "known zero receipts remain
+reported entries"). (07e148d)
+
 ## [0.1.142-rc.12] - 2026-10-15
 
 
