@@ -8,6 +8,7 @@ export * from './context/SkillContext.js';
 export * from './observability/ExecutionLogger.js';
 export * from './ai/AIClient.js';
 export * from './ai/ToolCalling.js';
+export * from './ai/PromptTemplates.js';
 export * from './memory/MemoryInterface.js';
 export * from './memory/MemoryClient.js';
 export * from './memory/MemoryEventClient.js';

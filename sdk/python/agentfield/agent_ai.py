@@ -13,6 +13,12 @@ if TYPE_CHECKING:
 import requests
 from agentfield.agent_utils import AgentUtils
 from agentfield.logger import log_debug, log_error, log_warn
+from agentfield.prompt_templates import (
+    TRACE_SOURCE_SCHEMA_INSTRUCTION,
+    TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
+    TRACE_SOURCE_USER,
+    PromptTemplates,
+)
 from agentfield.rate_limiter import StatelessRateLimiter
 from httpx import HTTPStatusError
 from pydantic import BaseModel, ValidationError
@@ -601,6 +607,13 @@ class AgentAI:
         # Apply hierarchical configuration: Agent defaults < Method overrides < Runtime overrides
         final_config = self.agent.ai_config.copy(deep=True)
 
+        # Resolve prompt templates with a default fallback. The real AIConfig
+        # always has this field, but test doubles and partial custom configs
+        # may not, so never assume it is present.
+        prompt_templates = getattr(final_config, "prompt_templates", None)
+        if prompt_templates is None:
+            prompt_templates = PromptTemplates()
+
         # Default enable rate limit retry unless explicitly set to False
         if (
             not hasattr(final_config, "enable_rate_limit_retry")
@@ -629,6 +642,10 @@ class AgentAI:
 
         # Prepare messages for LiteLLM
         messages = []
+        # Parallel per-message provenance for trace tagging (#229 review): a
+        # system message may carry the schema instruction, the caller's own
+        # system text, or both, and cannot be told apart by role later.
+        message_sources = []
 
         # If a schema is provided, augment the system prompt with strict schema adherence instructions and schema context
         if schema:
@@ -638,24 +655,29 @@ class AgentAI:
                 schema_json = json.dumps(schema_dict, indent=2)
             except Exception:
                 schema_json = str(schema)
-            schema_instruction = (
-                "IMPORTANT: You must exactly adhere to the output schema provided below. "
-                "Do not add or omit any fields. Output must be valid JSON matching the schema. "
-                "If a field is required in the schema, it must be present in the output. "
-                "If a field is not in the schema, do NOT include it in the output. "
-                "Here is the output schema you must follow:\n"
-                f"{schema_json}\n"
-                "Repeat: Output ONLY valid JSON matching the schema above. Do not include any extra text or explanation."
+            # The schema instruction is overridable via prompt_templates. A
+            # None template drops the instruction entirely; the native
+            # response_format (set further down) is still sent.
+            schema_instruction = prompt_templates.render_schema_instruction(
+                schema_json
             )
             # Merge with any user-provided system prompt
-            if system:
+            if schema_instruction is None:
+                system_prompt = system
+                system_source = TRACE_SOURCE_USER
+            elif system:
                 system_prompt = f"{system}\n\n{schema_instruction}"
+                system_source = TRACE_SOURCE_SCHEMA_INSTRUCTION
             else:
                 system_prompt = schema_instruction
-            messages.append({"role": "system", "content": system_prompt})
+                system_source = TRACE_SOURCE_SCHEMA_INSTRUCTION
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+                message_sources.append(system_source)
         else:
             if system:
                 messages.append({"role": "system", "content": system})
+                message_sources.append(TRACE_SOURCE_USER)
 
         # Handle flexible user input with intelligent processing. When both
         # input styles are used, keep the positional multimodal content and
@@ -685,6 +707,7 @@ class AgentAI:
             processed_content.append({"role": "user", "content": user})
 
         messages.extend(processed_content)
+        message_sources.extend(TRACE_SOURCE_USER for _ in processed_content)
 
         litellm_module = litellm if hasattr(litellm, "acompletion") else None
 
@@ -854,6 +877,39 @@ class AgentAI:
                 tools, self.agent
             )
 
+            # Carry the agent's prompt templates into the loop so overrides to
+            # tool-message framing (and the opt-in tool system prompt) apply.
+            tool_config.prompt_templates = prompt_templates
+
+            # tool_system_prompt defaults to None (nothing injected), so
+            # existing tools= calls are unchanged. When set, append it after
+            # the user's system prompt, the same way schema_instruction is.
+            tool_system_prompt = prompt_templates.tool_system_prompt
+            if tool_system_prompt:
+                system_index = next(
+                    (
+                        i
+                        for i, m in enumerate(messages)
+                        if m.get("role") == "system"
+                    ),
+                    None,
+                )
+                if system_index is not None:
+                    messages[system_index]["content"] = (
+                        f"{messages[system_index]['content']}\n\n{tool_system_prompt}"
+                    )
+                    # The system message now also carries the tool system
+                    # prompt. Keep schema-instruction provenance when present
+                    # (schema dominates), otherwise mark it as the tool prompt.
+                    if system_index < len(message_sources):
+                        if message_sources[system_index] != TRACE_SOURCE_SCHEMA_INSTRUCTION:
+                            message_sources[system_index] = TRACE_SOURCE_TOOL_SYSTEM_PROMPT
+                else:
+                    messages.insert(
+                        0, {"role": "system", "content": tool_system_prompt}
+                    )
+                    message_sources.insert(0, TRACE_SOURCE_TOOL_SYSTEM_PROMPT)
+
             # Apply per-call overrides
             if max_turns is not None:
                 tool_config.max_turns = max_turns
@@ -919,6 +975,7 @@ class AgentAI:
                 needs_lazy_hydration=needs_lazy,
                 litellm_params=litellm_params,
                 make_completion=_tool_loop_completion,
+                message_sources=message_sources,
             )
 
             if schema:

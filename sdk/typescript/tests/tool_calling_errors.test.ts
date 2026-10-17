@@ -74,7 +74,8 @@ describe('ToolCalling branch behavior', () => {
   it('returns the first-pass text immediately when lazy hydration selects no tools', async () => {
     generateTextMock.mockResolvedValueOnce({
       text: 'final without tools',
-      steps: []
+      steps: [],
+      response: { messages: [{ role: 'assistant', content: 'final without tools' }] }
     });
 
     const result = await executeToolCallLoop(
@@ -98,7 +99,14 @@ describe('ToolCalling branch behavior', () => {
         calls: [],
         totalTurns: 0,
         totalToolCalls: 0,
-        finalResponse: 'final without tools'
+        finalResponse: 'final without tools',
+        messages: [
+          { message: { role: 'user', content: 'prompt' }, source: 'user' },
+          {
+            message: { role: 'assistant', content: 'final without tools' },
+            source: 'assistant'
+          }
+        ]
       }
     });
   });

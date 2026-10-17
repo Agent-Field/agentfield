@@ -2,6 +2,7 @@ from .agent import Agent
 from .mesh import AgentMesh
 from .cost_tracker import CostTracker
 from .router import AgentRouter
+from .prompt_templates import PromptTemplates, TracedMessage
 from .types import (
     AIConfig,
     HarnessConfig,
@@ -104,6 +105,8 @@ __all__ = [
     "HarnessConfig",
     "HarnessResult",
     "HarnessProviderUnavailable",
+    "PromptTemplates",
+    "TracedMessage",
     "MemoryConfig",
     "ReasonerDefinition",
     "SkillDefinition",
