@@ -283,6 +283,32 @@ def test_logger_short_message_handling(base_logger):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", " true "])
+def test_log_flags_accept_sdk_truthy_vocabulary(monkeypatch, value):
+    """AGENTFIELD_LOG_* flags accept the same truthy vocabulary as the rest of the SDK (#1089)."""
+    monkeypatch.setenv("AGENTFIELD_LOG_PAYLOADS", value)
+    monkeypatch.setenv("AGENTFIELD_LOG_TRACKING", value)
+    monkeypatch.setenv("AGENTFIELD_LOG_FIRE", value)
+    logger = AgentFieldLogger(name="vocab-test")
+    assert logger.show_payloads is True
+    assert logger.show_tracking is True
+    assert logger.show_fire is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "", "bogus"])
+def test_log_flags_keep_default_off_for_unknown_values(monkeypatch, value):
+    """Unknown/falsey values leave the AGENTFIELD_LOG_* flags off (#1089)."""
+    monkeypatch.setenv("AGENTFIELD_LOG_PAYLOADS", value)
+    monkeypatch.setenv("AGENTFIELD_LOG_TRACKING", value)
+    monkeypatch.setenv("AGENTFIELD_LOG_FIRE", value)
+    logger = AgentFieldLogger(name="vocab-off-test")
+    assert logger.show_payloads is False
+    assert logger.show_tracking is False
+    assert logger.show_fire is False
+
+
+@pytest.mark.unit
 def test_format_payload_hides_by_default(monkeypatch):
     """Verifies dict -> '[payload hidden]' when flag is false"""
     monkeypatch.setenv("AGENTFIELD_LOG_PAYLOADS", "false")

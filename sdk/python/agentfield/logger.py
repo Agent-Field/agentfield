@@ -17,6 +17,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from . import log_writer
+from .async_config import _env_flag_default_off
 from .execution_context import ExecutionContext, get_current_context
 
 if TYPE_CHECKING:
@@ -108,13 +109,13 @@ class AgentFieldLogger:
         # Configuration from environment variables - default to WARNING (only important events)
         self.log_level = os.getenv("AGENTFIELD_LOG_LEVEL", "WARNING").upper()
         self.truncate_length = int(os.getenv("AGENTFIELD_LOG_TRUNCATE", "200"))
-        self.show_payloads = (
-            os.getenv("AGENTFIELD_LOG_PAYLOADS", "false").lower() == "true"
+        self.show_payloads = _env_flag_default_off(
+            os.getenv("AGENTFIELD_LOG_PAYLOADS", "false")
         )
-        self.show_tracking = (
-            os.getenv("AGENTFIELD_LOG_TRACKING", "false").lower() == "true"
+        self.show_tracking = _env_flag_default_off(
+            os.getenv("AGENTFIELD_LOG_TRACKING", "false")
         )
-        self.show_fire = os.getenv("AGENTFIELD_LOG_FIRE", "false").lower() == "true"
+        self.show_fire = _env_flag_default_off(os.getenv("AGENTFIELD_LOG_FIRE", "false"))
         # Set logger level based on configuration
         self.logger.setLevel(_LEVEL_TO_LOGGING.get(self.log_level, logging.WARNING))
 
