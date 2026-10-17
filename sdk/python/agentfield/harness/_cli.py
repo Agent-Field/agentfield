@@ -85,6 +85,17 @@ def resolve_cli_command(name: str) -> str:
     return shutil.which(name) or name
 
 
+def format_command_preview(cmd: List[str]) -> str:
+    """Describe a command for error messages without quoting its arguments.
+
+    Providers pass the prompt as an argv element, and the runner's retry
+    classifier reads error text, so only the executable is named.
+    """
+    if len(cmd) <= 1:
+        return cmd[0] if cmd else ""
+    return f"{cmd[0]} [{len(cmd) - 1} args omitted]"
+
+
 def _resolve_idle_seconds(idle_seconds: Optional[float]) -> Optional[float]:
     """Resolve the no-progress watchdog window.
 
@@ -402,9 +413,13 @@ async def run_cli(
         fallback_returncode = await _wait_process_exit(proc, _kill_group)
 
     if idle_timed_out:
-        raise TimeoutError(f"CLI command made no progress for {idle}s: {' '.join(cmd)}")
+        raise TimeoutError(
+            f"CLI command made no progress for {idle}s: {format_command_preview(cmd)}"
+        )
     if timed_out:
-        raise TimeoutError(f"CLI command timed out after {timeout}s: {' '.join(cmd)}")
+        raise TimeoutError(
+            f"CLI command timed out after {timeout}s: {format_command_preview(cmd)}"
+        )
 
     returncode = proc.returncode
     if returncode is None:
@@ -417,7 +432,7 @@ async def run_cli(
                 name,
                 max_output_bytes,
                 buf.dropped_bytes,
-                " ".join(cmd[:3]),
+                format_command_preview(cmd),
             )
     return (
         stdout_chunks.joined().decode("utf-8", errors="replace"),
