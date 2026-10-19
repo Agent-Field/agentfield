@@ -223,6 +223,48 @@ func (r *DIDRegistry) updateAgents(ctx context.Context, agentfieldServerID strin
 	return nil
 }
 
+// removeRetiredComponentsFromMemory publishes durable retirements when saving
+// the remaining components failed. It never writes to storage.
+func (r *DIDRegistry) removeRetiredComponentsFromMemory(agentfieldServerID, agentNodeID string, retiredDIDs map[string]bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	current := r.registries[agentfieldServerID]
+	if current == nil {
+		return
+	}
+	agent, exists := current.AgentNodes[agentNodeID]
+	if !exists {
+		return
+	}
+	agent = cloneAgentInfo(agent)
+	removedCount := 0
+	for name, reasoner := range agent.Reasoners {
+		if retiredDIDs[reasoner.DID] {
+			delete(agent.Reasoners, name)
+			removedCount++
+		}
+	}
+	for name, skill := range agent.Skills {
+		if retiredDIDs[skill.DID] {
+			delete(agent.Skills, name)
+			removedCount++
+		}
+	}
+	if removedCount == 0 {
+		return
+	}
+
+	next := *current
+	next.AgentNodes = make(map[string]types.AgentDIDInfo, len(current.AgentNodes))
+	for nodeID, info := range current.AgentNodes {
+		next.AgentNodes[nodeID] = info
+	}
+	next.AgentNodes[agentNodeID] = agent
+	next.TotalDIDs -= removedCount
+	r.registries[agentfieldServerID] = &next
+}
+
 // cloneAgentInfo returns a copy of agent whose component maps can be modified
 // without affecting published registry snapshots.
 func cloneAgentInfo(agent types.AgentDIDInfo) types.AgentDIDInfo {

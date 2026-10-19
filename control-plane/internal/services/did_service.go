@@ -1910,13 +1910,15 @@ func (s *DIDService) deregisterComponents(ctx context.Context, req *types.Compon
 	}
 
 	// Persist and publish the remaining components using the same context.
-	// If this fails, retirement remains durable and retries can converge.
+	// If persistence fails, still remove the durably retired DIDs from memory
+	// so this service cannot resolve their private keys or sign with them.
 	err = s.registry.updateAgents(ctx, agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
 		live.AgentNodes[req.AgentNodeID] = existingAgent
 		live.TotalDIDs -= memoryRemovedCount
 		return []string{req.AgentNodeID}, nil
 	})
 	if err != nil {
+		s.registry.removeRetiredComponentsFromMemory(agentfieldServerID, req.AgentNodeID, seenDIDs)
 		logger.Logger.Error().Err(err).Str("agent_node_id", req.AgentNodeID).
 			Msg("Failed to publish component removal after durable retirement")
 		return &types.ComponentDeregistrationResponse{

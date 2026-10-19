@@ -186,6 +186,8 @@ func TestH1DIDRetirementSurvivesPublicationFailure(t *testing.T) {
 			keyDir := filepath.Join(t.TempDir(), "keys")
 			svc, registry := openReproService(t, wrapped, "server-a", keyDir)
 			pkg := register(t, svc, "node", []string{"r"}, nil).IdentityPackage
+			before, err := svc.GetRegistry("server-a")
+			require.NoError(t, err)
 			wrapped.failPublication = true
 			response, err := svc.RegisterAgent(&types.DIDRegistrationRequest{AgentNodeID: "node"})
 			require.NoError(t, err)
@@ -197,7 +199,8 @@ func TestH1DIDRetirementSurvivesPublicationFailure(t *testing.T) {
 			require.True(t, hasDeadline)
 			live, err := svc.GetRegistry("server-a")
 			require.NoError(t, err)
-			require.Equal(t, pkg.ReasonerDIDs["r"].DID, live.AgentNodes["node"].Reasoners["r"].DID)
+			require.NotContains(t, live.AgentNodes["node"].Reasoners, "r")
+			require.Equal(t, before.TotalDIDs-1, live.TotalDIDs)
 			rows, err := provider.ListAllComponentDIDs(context.Background(), pkg.AgentDID.DID)
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
@@ -205,7 +208,9 @@ func TestH1DIDRetirementSurvivesPublicationFailure(t *testing.T) {
 
 			// A stale writer must not reactivate the retired DID (the R6 guard).
 			wrapped.failPublication = false
-			require.NoError(t, registry.UpdateAgents("server-a", func(*types.DIDRegistry) ([]string, error) {
+			require.NoError(t, registry.UpdateAgents("server-a", func(live *types.DIDRegistry) ([]string, error) {
+				live.AgentNodes["node"] = before.AgentNodes["node"]
+				live.TotalDIDs = before.TotalDIDs
 				return []string{"node"}, nil
 			}))
 			rows, err = provider.ListComponentDIDs(context.Background(), pkg.AgentDID.DID)
