@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services"
@@ -469,6 +470,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	// Configure SSRF-safe webhook client allowlist. Hosts/CIDRs listed here
 	// bypass the private-IP check (e.g. for internal Docker/K8s service names).
 	services.SetWebhookAllowedHosts(cfg.AgentField.Registration.WebhookAllowedHosts)
+	agenturl.Configure(cfg.AgentField.Registration.AgentEndpointStrict, cfg.AgentField.Registration.AgentEndpointAllowedHosts)
 
 	webhookDispatcher := services.NewWebhookDispatcher(storageProvider, services.WebhookDispatcherConfig{
 		Timeout:         cfg.AgentField.ExecutionQueue.WebhookTimeout,

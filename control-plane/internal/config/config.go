@@ -133,6 +133,10 @@ type RegistrationConfig struct {
 	// deployments where webhooks legitimately target internal RFC-1918 hosts
 	// (e.g. Docker service names, Kubernetes cluster DNS).
 	WebhookAllowedHosts []string `yaml:"webhook_allowed_hosts" mapstructure:"webhook_allowed_hosts"`
+	// AgentEndpointStrict additionally denies private/internal destinations.
+	AgentEndpointStrict bool `yaml:"agent_endpoint_strict" mapstructure:"agent_endpoint_strict"`
+	// AgentEndpointAllowedHosts exempts hosts/wildcards/CIDRs from strict checks only.
+	AgentEndpointAllowedHosts []string `yaml:"agent_endpoint_allowed_hosts" mapstructure:"agent_endpoint_allowed_hosts"`
 }
 
 // NodeLogProxyConfig limits the control plane proxy to agent process logs (NDJSON).
@@ -776,6 +780,13 @@ func ApplyEnvOverrides(cfg *Config) {
 				cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts = append(cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts, trimmed)
 			}
 		}
+	}
+
+	if val := os.Getenv("AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_STRICT"); val != "" {
+		cfg.AgentField.Registration.AgentEndpointStrict = parseEnvBool(val)
+	}
+	if val, exists := os.LookupEnv("AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_ALLOWED_HOSTS"); exists {
+		cfg.AgentField.Registration.AgentEndpointAllowedHosts = splitEnvCSV(val)
 	}
 
 	if val := os.Getenv("AGENTFIELD_WEBHOOK_ALLOWED_HOSTS"); val != "" {
