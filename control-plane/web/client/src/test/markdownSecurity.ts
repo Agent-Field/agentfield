@@ -41,15 +41,20 @@ const value = "<img>";
 [Docs](https://example.com/docs) [Email](mailto:operator@example.com)`;
 
 export function expectSafeMarkdown(container: Element) {
-  expect(container.querySelector("script,iframe,object,embed,style,form,img,svg")).toBeNull();
+  expect(container.querySelector("script,iframe,object,embed,style,form,img,svg,base,math,meta,link")).toBeNull();
   for (const element of container.querySelectorAll("*")) {
     expect(element.getAttributeNames().some((name) => /^on/i.test(name))).toBe(false);
+    for (const attribute of ["href", "src", "action", "formaction", "poster", "cite", "xlink:href", "background"]) {
+      const value = element.getAttribute(attribute);
+      if (value !== null) {
+        const url = new URL(value);
+        expect(["http:", "https:", "mailto:"]).toContain(url.protocol);
+        expect(url.username).toBe("");
+        expect(url.password).toBe("");
+      }
+    }
   }
   for (const anchor of container.querySelectorAll("a[href]")) {
-    const url = new URL(anchor.getAttribute("href")!);
-    expect(["http:", "https:", "mailto:"]).toContain(url.protocol);
-    expect(url.username).toBe("");
-    expect(url.password).toBe("");
     expect(anchor).toHaveAttribute("target", "_blank");
     expect(anchor).toHaveAttribute("rel", "noopener noreferrer");
   }
