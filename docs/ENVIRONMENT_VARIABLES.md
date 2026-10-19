@@ -164,16 +164,43 @@ These map to `api.cors.*` in config. When set via env, use comma-separated value
 
 The control plane's DID identity (master seed, root DID, and every agent and component DID) is stored in the database. By default, a new registry's public ID is derived deterministically from the absolute `AGENTFIELD_HOME` path, so replicas that share a home path and database converge on one identity; if two start at once, the second adopts the identity the first stored. On later boots the control plane adopts the stored registry, so moving `AGENTFIELD_HOME` keeps the same identity.
 
-- `AGENTFIELD_DID_SERVER_ID` (default: unset): Leave it unset unless several registries share one database; in that case an unpinned startup refuses, lists the stored IDs, and asks you to set this variable. On an empty database, a set value names the first registry; otherwise the new registry's public ID is derived from the absolute `AGENTFIELD_HOME` path. On later boots it pins which stored registry this control plane owns. Once registries exist, a pinned ID that matches none of them stops startup. Replicas with different home paths should pin the same stored ID. Equivalent YAML: `features.did.server_id`.
+- `AGENTFIELD_DID_SERVER_ID` (default: unset): An unpinned startup first selects a registry matching the current home path; otherwise it adopts the sole stored registry. If several registries remain and none matches the current home, startup refuses, lists the stored IDs, and asks you to pin one. On an empty database, a set value names the first registry; otherwise the new registry's public ID is derived from the absolute `AGENTFIELD_HOME` path. On later boots it pins which stored registry this control plane owns. Once registries exist, a pinned ID that matches none of them stops startup. Replicas with different home paths should pin the same stored ID. Equivalent YAML: `features.did.server_id`.
 - If agent DIDs remain but their server's `did_registry` row is missing, startup refuses to create a new identity. Restore the row or database from a backup; the master seed exists only there. If permanently lost, revoke its agents with `UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = '<server ID>';` and restart.
 - DIDs from other registries in the same database stay resolvable so their credentials still verify, but only the active registry's identities can sign.
-- At startup every stored identity is checked against the master seed. A component whose DID cannot be re-derived is retired and gets a new DID when its agent registers again. An agent whose DID cannot be re-derived is refused keys. If it cannot be recovered, revoke it so the node gets a new identity on its next registration (credentials signed by the old DID will no longer verify):
+- At startup every stored identity is checked against the master seed. A component whose DID cannot be re-derived is retired and gets a new DID when its agent registers again. An agent whose DID cannot be re-derived is refused keys. If it cannot be recovered, revoke it so the node gets a new identity on its next registration (the old identity cannot sign new credentials; historical signatures can still verify with retained public keys or a self-contained `did:key`):
 
   ```sql
   UPDATE agent_dids SET status = 'revoked' WHERE did = '<agent DID from the startup log>';
   ```
 
   Then restart the control plane. Revoked rows are kept so their keys are never issued again.
+
+#### Component retirement recovery
+
+Startup quarantines a component whose DID cannot be re-derived, and attempts to retire it without issuing its key. If that write fails transiently, the next registration retries retirement. If it continues to fail, fix database write access or stop the control plane, back up the database, and run the exact statement from the error (substitute the named component DID):
+
+```sql
+UPDATE component_dids SET status = 'retired' WHERE did = '<component DID from the error>';
+```
+
+Restart and register the agent again to allocate a fresh component DID. Retired rows remain reserved and cannot be reused. Normal component deregistration also retires every duplicate row with the same agent DID, component type, and function name.
+
+#### Lost-root recovery
+
+If startup reports that the root DID does not match its master seed, stop the control plane and back up the database before changing identity state. Restore the original encryption passphrase (`features.did.keystore.encryption_passphrase` in the configuration) if it changed; use the original database backup if the seed is corrupted. Restart with that passphrase and database to preserve the root and agent identities. Changing the home directory or revoking agents alone cannot repair an inconsistent root.
+
+If the original seed/passphrase is permanently lost, an explicit destructive identity reset is required. Stop every replica using this registry, back up the database, replace `<server ID>` below with the affected `did_registry.agentfield_server_id` (escape any SQL quotes), and run both statements in one transaction:
+
+```sql
+BEGIN;
+UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = '<server ID>';
+DELETE FROM did_registry WHERE agentfield_server_id = '<server ID>';
+COMMIT;
+```
+
+Keep the revoked agent and component rows so their identities remain reserved. Restart with the same `features.did.server_id` / `AGENTFIELD_DID_SERVER_ID` if this was the only registry; on an empty registry table that ID names the new registry. If other registries remain, remove the pin to the deleted ID and select an existing healthy registry explicitly. The next agent registration creates new identities. Old signatures retain their original issuers and can still be checked with retained public keys or a self-contained `did:key`, but the lost identities cannot sign new credentials.
+
+To restore server availability while arranging recovery, set `features.did.enabled: false` in `config/agentfield.yaml` (or the file selected by `AGENTFIELD_CONFIG_FILE`), or set `AGENTFIELD_FEATURES_DID_ENABLED=false`, and restart. This bypasses DID initialization and disables DID/VC operations without resetting identity data. Restore the setting after recovery.
 
 ### Authorization (VC-Based Permissions)
 
