@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
 )
@@ -58,6 +59,9 @@ func SetVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 		}
 
 		scope, scopeID := resolveScope(c, req.Scope)
+		if !middleware.RequireMemoryScope(c, scope, scopeID) {
+			return
+		}
 		record := &types.VectorRecord{
 			Scope:     scope,
 			ScopeID:   scopeID,
@@ -105,6 +109,9 @@ func GetVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 		}
 
 		scope, scopeID := resolveScope(c, scopePtr)
+		if !middleware.RequireMemoryScope(c, scope, scopeID) {
+			return
+		}
 		record, err := storage.GetVector(c.Request.Context(), scope, scopeID, key)
 		if err != nil {
 			logger.Logger.Error().Err(err).Msg("failed to get vector")
@@ -155,6 +162,9 @@ func DeleteVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 		}
 
 		scope, scopeID := resolveScope(c, scopePtr)
+		if !middleware.RequireMemoryScope(c, scope, scopeID) {
+			return
+		}
 		if err := storage.DeleteVector(c.Request.Context(), scope, scopeID, key); err != nil {
 			logger.Logger.Error().Err(err).Msg("failed to delete vector")
 			c.JSON(http.StatusInternalServerError, ErrorResponse{
@@ -191,6 +201,9 @@ func DeleteNamespaceVectorsHandler(storage MemoryStorage) gin.HandlerFunc {
 		}
 
 		scope, scopeID := resolveScope(c, req.Scope)
+		if !middleware.RequireMemoryScope(c, scope, scopeID) {
+			return
+		}
 		deleted, err := storage.DeleteVectorsByPrefix(c.Request.Context(), scope, scopeID, req.Namespace)
 		if err != nil {
 			logger.Logger.Error().Err(err).Msg("failed to delete namespace vectors")
@@ -239,6 +252,9 @@ func SimilaritySearchHandler(storage MemoryStorage) gin.HandlerFunc {
 		}
 
 		scope, scopeID := resolveScope(c, req.Scope)
+		if !middleware.RequireMemoryScope(c, scope, scopeID) {
+			return
+		}
 		results, err := storage.SimilaritySearch(
 			c.Request.Context(),
 			scope,

@@ -207,7 +207,7 @@ func TestCrossAgentIsolation_GlobalScopeSharedAcrossAgents(t *testing.T) {
 	assert.Equal(t, http.StatusOK, getResp.Code)
 }
 
-func TestCrossAgentIsolation_SessionScopeRequiresSessionID(t *testing.T) {
+func TestCrossAgentIsolation_IdentifiedCallersShareEmptySessionScope(t *testing.T) {
 	storage := newMemoryStorageStub()
 	config := middleware.MemoryPermissionConfig{
 		Enabled:               true,
@@ -215,8 +215,9 @@ func TestCrossAgentIsolation_SessionScopeRequiresSessionID(t *testing.T) {
 	}
 	router := setupIsolationRouter(storage, config)
 
-	// Agent tries session scope without providing session ID
-	setBody := `{"key":"test","data":"value"}`
+	// Released SDKs may omit the session ID; identified callers share that bucket.
+	// C5: the body selects session scope; X-Memory-Scope is ignored.
+	setBody := `{"key":"test","data":"value","scope":"session"}`
 	setReq := httptest.NewRequest(http.MethodPost, "/api/v1/memory/set", strings.NewReader(setBody))
 	setReq.Header.Set("Content-Type", "application/json")
 	setReq.Header.Set("X-Agent-Node-ID", "agent-alpha")
@@ -225,8 +226,19 @@ func TestCrossAgentIsolation_SessionScopeRequiresSessionID(t *testing.T) {
 	setResp := httptest.NewRecorder()
 	router.ServeHTTP(setResp, setReq)
 
-	// Should be denied - no session ID provided
-	assert.Equal(t, http.StatusForbidden, setResp.Code)
+	require.Equal(t, http.StatusOK, setResp.Code)
+	getReq := httptest.NewRequest(http.MethodPost, "/api/v1/memory/get", strings.NewReader(`{"key":"test","scope":"session"}`))
+	getReq.Header.Set("Content-Type", "application/json")
+	getReq.Header.Set("X-Agent-Node-ID", "agent-beta")
+	getResp := httptest.NewRecorder()
+	router.ServeHTTP(getResp, getReq)
+	require.Equal(t, http.StatusOK, getResp.Code)
+	var memory types.Memory
+	require.NoError(t, json.Unmarshal(getResp.Body.Bytes(), &memory))
+	assert.Equal(t, "test", memory.Key)
+	assert.JSONEq(t, `"value"`, string(memory.Data))
+	assert.Equal(t, "session", memory.Scope)
+	assert.Empty(t, memory.ScopeID)
 }
 
 func TestCrossAgentIsolation_WorkflowScopeSharedAmongParticipants(t *testing.T) {
@@ -437,4 +449,12 @@ func TestAccessControl_NilMetadata(t *testing.T) {
 
 	allowed := checkAccessControl(c, memory, "agent-a", config)
 	assert.True(t, allowed)
+}
+
+func (r *isolationTestAgentResolver) ListAgents(context.Context, types.AgentFilters) ([]*types.AgentNode, error) {
+	var nodes []*types.AgentNode
+	for _, node := range r.agents {
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
 }
