@@ -1,11 +1,28 @@
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { DataModal } from "./EnhancedModal";
 import { attackMarkdown, expectLegitimateMarkdown, expectSafeMarkdown, legitimateMarkdown } from "@/test/markdownSecurity";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+it("C7: DataModal's deeply nested markdown tab falls back to text and keeps the dialog mounted", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const content = "- ".repeat(1250) + '**x** <img src=x onerror="window.__pwned=1">';
+  const user = userEvent.setup();
+  render(<DataModal isOpen onClose={() => {}} title="Output" data={content} />, { wrapper: TooltipProvider });
+  await user.click(screen.getByRole("tab", { name: "Markdown Preview" }));
+  const dialog = screen.getByRole("dialog");
+  const preview = dialog.querySelector(".prose")!;
+  expect(preview.querySelector("pre")?.textContent).toBe(content);
+  expectSafeMarkdown(preview);
+  expect(screen.getByRole("tab", { name: "Markdown Preview" })).toHaveAttribute("data-state", "active");
+
+  await user.click(screen.getByRole("tab", { name: "Raw JSON" }));
+  expect(screen.getByRole("dialog")).toBe(dialog);
+  expect(screen.getByRole("tab", { name: "Raw JSON" })).toHaveAttribute("data-state", "active");
+}, 30000);
 
 it("C1 C2 C3 C5: DataModal's Markdown Preview tab safely renders an attacker string", async () => {
   const user = userEvent.setup();

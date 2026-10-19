@@ -7,6 +7,26 @@ import { attackMarkdown, expectLegitimateMarkdown, expectSafeMarkdown, legitimat
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+it("C7: a deeply nested markdown preview falls back to text and keeps the JSON viewer mounted", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const content = "- ".repeat(1250) + '**x** <img src=x onerror="window.__pwned=1">';
+  const user = userEvent.setup();
+  const { container } = render(
+    <UnifiedJsonViewer data={{ nested: { output: content, sibling: "Still mounted" } }} />,
+    { wrapper: TooltipProvider },
+  );
+  await user.click(screen.getByRole("button", { name: "Show preview" }));
+  const preview = container.querySelector(".prose")!;
+  expect(preview.querySelector("pre")?.textContent).toBe(content);
+  expect(screen.getByRole("button", { name: "Hide preview" })).toBeInTheDocument();
+  expect(screen.getByText('"Still mounted"')).toBeInTheDocument();
+  expectSafeMarkdown(preview);
+
+  await user.click(screen.getByRole("button", { name: "Hide preview" }));
+  expect(container.querySelector(".prose")).toBeNull();
+  expect(screen.getByRole("button", { name: "Show preview" })).toBeInTheDocument();
+}, 30000);
+
 it("C1 C2 C3 C5: nested attacker string is safe through the actual Markdown Preview control", async () => {
   const user = userEvent.setup();
   const { container } = render(<UnifiedJsonViewer data={{ nested: { output: attackMarkdown } }} />, { wrapper: TooltipProvider });
