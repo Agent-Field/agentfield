@@ -672,7 +672,7 @@ func TestNodeHelpers_AdditionalCoverage(t *testing.T) {
 		}{
 			{rawURL: "ftp://example.com", wantErr: "must use http or https"},
 			{rawURL: "https://user@example.com", wantErr: "must not include user info"},
-			{rawURL: "https://example.com/path?q=1", wantErr: "must not include query parameters or fragments"},
+			{rawURL: "https://example.com/path?q=1", wantErr: "must not include a query"},
 		}
 
 		for _, tt := range tests {

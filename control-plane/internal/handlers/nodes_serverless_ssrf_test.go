@@ -36,7 +36,8 @@ func TestParseServerlessDiscoveryURL_RebuildsFromValidatedComponents(t *testing.
 	assert.Equal(t, "", safe.Opaque)
 }
 
-func TestNormalizeServerlessDiscoveryURL_CleansPathTraversal(t *testing.T) {
+// C1/C8: traversal-shaped invocation URLs are rejected rather than repaired.
+func TestNormalizeServerlessDiscoveryURL_RejectsPathTraversal(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -44,18 +45,19 @@ func TestNormalizeServerlessDiscoveryURL_CleansPathTraversal(t *testing.T) {
 		rawURL  string
 		allowed []string
 		want    string
+		reject  bool
 	}{
 		{
 			name:    "dot segments collapsed",
 			rawURL:  "http://localhost:9000/a/./b/../invoke",
 			allowed: nil,
-			want:    "http://localhost:9000/a/invoke",
+			reject:  true,
 		},
 		{
 			name:    "parent traversal clamped to root",
 			rawURL:  "http://localhost:9000/../../../etc/passwd",
 			allowed: nil,
-			want:    "http://localhost:9000/etc/passwd",
+			reject:  true,
 		},
 		{
 			name:    "trailing slash stripped after cleaning",
@@ -68,6 +70,10 @@ func TestNormalizeServerlessDiscoveryURL_CleansPathTraversal(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := normalizeServerlessDiscoveryURL(tc.rawURL, tc.allowed)
+			if tc.reject {
+				require.ErrorContains(t, err, "dot-segments")
+				return
+			}
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 		})
@@ -103,8 +109,7 @@ func TestNormalizeServerlessDiscoveryURL_IgnoresQueryAndFragmentInPath(t *testin
 // TestRegisterServerlessAgentHandler_DiscoverySanitizedFunctional is the SSRF
 // functional test: it verifies that (1) URLs whose host is not loopback and
 // not on the allowlist are rejected before any HTTP request goes out, and
-// (2) when a valid-but-path-traversal-shaped URL is submitted the handler's
-// outbound request lands on the allowlisted server at a sanitized path —
+// (2) traversal-shaped URLs are rejected before contacting even an allowlisted server —
 // both of which are the properties CodeQL rule go/request-forgery asks the
 // code to uphold.
 func TestRegisterServerlessAgentHandler_DiscoverySanitizedFunctional(t *testing.T) {
@@ -160,13 +165,11 @@ func TestRegisterServerlessAgentHandler_DiscoverySanitizedFunctional(t *testing.
 		assert.Contains(t, resp.Body.String(), "not allowlisted")
 	})
 
-	t.Run("outbound request uses only validated components", func(t *testing.T) {
+	t.Run("traversal rejected before discovery", func(t *testing.T) {
 		atomic.StoreInt32(&allowedHits, 0)
 
-		// The attacker-shaped path contains ".." traversal segments. After
-		// normalization the handler must contact the allowlisted server at
-		// the collapsed path — specifically, "/discover" (since "/a/./b/../.."
-		// collapses to "/" and "/" + "/discover" cleans to "/discover").
+		// C8: D2 refuses traversal rather than silently changing the supplied endpoint.
+
 		body := fmt.Sprintf(`{"invocation_url":"http://%s/a/./b/../.."}`, allowedURL.Host)
 		router := gin.New()
 		router.POST("/serverless/register",
@@ -177,19 +180,15 @@ func TestRegisterServerlessAgentHandler_DiscoverySanitizedFunctional(t *testing.
 		resp := httptest.NewRecorder()
 		router.ServeHTTP(resp, req)
 
-		assert.GreaterOrEqual(t, atomic.LoadInt32(&allowedHits), int32(1),
-			"allowed host should receive the discovery request; response was: %s", resp.Body.String())
-
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "dot-segments")
+		assert.Zero(t, atomic.LoadInt32(&allowedHits))
 		select {
-		case got := <-sawSanitizedPath:
-			// The path seen by the allowlisted server must be a literal,
-			// sanitized "/discover" — never "/a/./b/../../discover" and never
-			// anything outside the "/discover" endpoint.
-			assert.Equal(t, "/discover", got,
-				"discovery request must target the sanitized /discover path")
+		case path := <-sawSanitizedPath:
+			t.Fatalf("unexpected request: %s", path)
 		default:
-			t.Fatalf("expected an inbound request on the allowlisted discovery server")
 		}
+
 	})
 
 	t.Run("rejects opaque URL before any network call", func(t *testing.T) {
