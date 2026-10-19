@@ -72,9 +72,28 @@ func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC,
 
 	// Collect unique DIDs from execution VCs
 	uniqueDIDs := make(map[string]bool)
+	unresolvedDIDs := make(map[string]bool)
 
 	for _, vc := range executionVCs {
 		uniqueDIDs[vc.IssuerDID] = true
+		var document struct {
+			Issuer string `json:"issuer"`
+		}
+		if err := json.Unmarshal(vc.VCDocument, &document); err != nil || document.Issuer == "" {
+			// A VC-qualified marker identifies a missing/unreadable document issuer
+			// when metadata supplies a signer. If both issuers are empty, the
+			// existing empty required-DID entry already accounts for both.
+			if vc.IssuerDID != "" {
+				unresolvedDIDs[fmt.Sprintf("execution-vc:%s:document-issuer:empty-or-invalid", vc.VCID)] = true
+			}
+		} else {
+			uniqueDIDs[document.Issuer] = true
+			// Even a resolvable document issuer cannot stand in for a different
+			// metadata signer. Keep the inconsistency visible in unresolved_dids.
+			if document.Issuer != vc.IssuerDID {
+				unresolvedDIDs[document.Issuer] = true
+			}
+		}
 		if vc.CallerDID != "" {
 			uniqueDIDs[vc.CallerDID] = true
 		}
@@ -84,13 +103,11 @@ func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC,
 	}
 	uniqueDIDs[workflowVC.IssuerDID] = true
 
-	var unresolved []string
-
 	// Resolve each unique DID and collect public keys
 	for did := range uniqueDIDs {
 		parts := strings.SplitN(did, ":", 3)
 		if strings.TrimSpace(did) != did || len(parts) != 3 || parts[0] != "did" || parts[1] == "" || strings.TrimSpace(parts[2]) == "" || strings.ContainsAny(did, " \t\r\n") {
-			unresolved = append(unresolved, did)
+			unresolvedDIDs[did] = true
 			continue
 		}
 
@@ -116,14 +133,14 @@ func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC,
 				}
 				continue
 			}
-			unresolved = append(unresolved, did)
+			unresolvedDIDs[did] = true
 			continue
 		}
 
 		// Parse the public key JWK string into a JSON object
 		var publicKeyJWK map[string]interface{}
 		if err := json.Unmarshal([]byte(identity.PublicKeyJWK), &publicKeyJWK); err != nil {
-			unresolved = append(unresolved, did)
+			unresolvedDIDs[did] = true
 			continue
 		}
 
@@ -135,6 +152,10 @@ func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC,
 			ResolvedAt:   resolvedAt,
 		}
 
+	}
+	unresolved := make([]string, 0, len(unresolvedDIDs))
+	for did := range unresolvedDIDs {
+		unresolved = append(unresolved, did)
 	}
 	sort.Strings(unresolved)
 	return bundle, unresolved

@@ -739,9 +739,10 @@ func TestVCChainBundleReportsUnresolvedDIDs(t *testing.T) {
 
 	vcService := NewVCService(svc.config, svc, env.provider)
 	bundle, unresolved := vcService.collectDIDResolutionBundle([]types.ExecutionVC{{
-		IssuerDID: resp.IdentityPackage.AgentDID.DID,
-		CallerDID: orphanDID,
-		TargetDID: "did:web:example.com:agents:unknown",
+		IssuerDID:  resp.IdentityPackage.AgentDID.DID,
+		VCDocument: json.RawMessage(`{"issuer":"` + resp.IdentityPackage.AgentDID.DID + `"}`),
+		CallerDID:  orphanDID,
+		TargetDID:  "did:web:example.com:agents:unknown",
 	}}, &types.WorkflowVC{IssuerDID: resp.IdentityPackage.AgentDID.DID})
 
 	require.Equal(t, "bundled", bundle[resp.IdentityPackage.AgentDID.DID].ResolvedFrom)

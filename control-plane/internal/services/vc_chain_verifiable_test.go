@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -41,7 +42,7 @@ func TestVCChainVerifiableFlag(t *testing.T) {
 		"vc-unverifiable", "exec-unverifiable", "workflow-unverifiable", "session-unverifiable",
 		agentDID, unknownDID, callerDID,
 		"hash-in", "hash-out", "succeeded",
-		[]byte(`{"id":"vc-unverifiable"}`), "sig", "", 24,
+		[]byte(`{"id":"vc-unverifiable","issuer":"`+agentDID+`"}`), "sig", "", 24,
 	))
 
 	chain, err = vcService.GetWorkflowVCChain("workflow-unverifiable")
@@ -56,25 +57,30 @@ func TestC8F8RequiredIssuersAndOptionalParticipants(t *testing.T) {
 	svc := env.service(env.registry(), "server-a")
 	valid := register(t, svc, "node", nil, nil).IdentityPackage.AgentDID.DID
 	vc := NewVCService(svc.config, svc, env.provider)
+	documentFor := func(issuer string) json.RawMessage {
+		raw, err := json.Marshal(map[string]string{"issuer": issuer})
+		require.NoError(t, err)
+		return raw
+	}
 	for _, bad := range []string{"", " ", "did:key:", "did:", "garbage", "did::missing", "did:web:invalid host"} {
 		t.Run("execution/"+bad, func(t *testing.T) {
-			bundle, unresolved := vc.collectDIDResolutionBundle([]types.ExecutionVC{{IssuerDID: bad}}, &types.WorkflowVC{IssuerDID: valid})
+			bundle, unresolved := vc.collectDIDResolutionBundle([]types.ExecutionVC{{IssuerDID: bad, VCDocument: documentFor(bad)}}, &types.WorkflowVC{IssuerDID: valid})
 			require.Equal(t, []string{bad}, unresolved)
 			require.Contains(t, bundle, valid)
 		})
 		t.Run("workflow/"+bad, func(t *testing.T) {
-			_, unresolved := vc.collectDIDResolutionBundle([]types.ExecutionVC{{IssuerDID: valid}}, &types.WorkflowVC{IssuerDID: bad})
+			_, unresolved := vc.collectDIDResolutionBundle([]types.ExecutionVC{{IssuerDID: valid, VCDocument: documentFor(valid)}}, &types.WorkflowVC{IssuerDID: bad})
 			require.Equal(t, []string{bad}, unresolved)
 		})
 		// Even an invalid first execution issuer must not prevent exporting
 		// a wrapper; its required unresolved DID marks the chain false.
 		workflowID := "wf-" + bad
-		require.NoError(t, env.provider.StoreExecutionVC(context.Background(), "vc-"+bad, "exec-"+bad, workflowID, "session", bad, "", "", "in", "out", "succeeded", []byte(`{}`), "signature", "", 0))
+		require.NoError(t, env.provider.StoreExecutionVC(context.Background(), "vc-"+bad, "exec-"+bad, workflowID, "session", bad, "", "", "in", "out", "succeeded", documentFor(bad), "signature", "", 0))
 		chain, err := vc.GetWorkflowVCChain(workflowID)
 		require.NoError(t, err)
 		require.False(t, chain.Verifiable)
 		require.Equal(t, []string{bad}, chain.UnresolvedDIDs)
 	}
-	_, unresolved := vc.collectDIDResolutionBundle([]types.ExecutionVC{{IssuerDID: valid}}, &types.WorkflowVC{IssuerDID: valid})
+	_, unresolved := vc.collectDIDResolutionBundle([]types.ExecutionVC{{IssuerDID: valid, VCDocument: documentFor(valid)}}, &types.WorkflowVC{IssuerDID: valid})
 	require.Empty(t, unresolved, "absent optional caller and target are not required DIDs")
 }

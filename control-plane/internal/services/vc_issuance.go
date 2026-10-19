@@ -230,7 +230,7 @@ func (s *VCService) createVCDocument(ctx *types.ExecutionContext, callerIdentity
 			"AgentFieldExecutionCredential",
 		},
 		ID:                fmt.Sprintf("urn:agentfield:vc:%s", vcID),
-		Issuer:            ctx.CallerDID,
+		Issuer:            callerIdentity.DID,
 		IssuanceDate:      formatVCDateTime(time.Now()),
 		CredentialSubject: credentialSubject,
 	}
