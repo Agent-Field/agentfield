@@ -77,7 +77,7 @@ func (r *DIDRegistry) StoreRegistry(registry *types.DIDRegistry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if err := r.saveRegistryToDatabase(registry, nil); err != nil {
+	if err := r.saveRegistryToDatabase(context.Background(), registry, nil); err != nil {
 		return err
 	}
 	r.registries[registry.AgentFieldServerID] = registry
@@ -100,7 +100,7 @@ func (r *DIDRegistry) CreateRegistry(registry *types.DIDRegistry) (*types.DIDReg
 	if err := r.refuseNewRegistryWithOrphanedAgents(serverID); err != nil {
 		return nil, err
 	}
-	if err := r.storeServerRow(registry); err != nil {
+	if err := r.storeServerRow(context.Background(), registry); err != nil {
 		return nil, err
 	}
 
@@ -188,6 +188,10 @@ func (r *DIDRegistry) refuseNewRegistryWithOrphanedAgents(serverID string) error
 // written, and the change is published in memory only when every write
 // succeeded, so a failed save leaves the registry exactly as it was.
 func (r *DIDRegistry) UpdateAgents(agentfieldServerID string, fn func(registry *types.DIDRegistry) ([]string, error)) error {
+	return r.updateAgents(context.Background(), agentfieldServerID, fn)
+}
+
+func (r *DIDRegistry) updateAgents(ctx context.Context, agentfieldServerID string, fn func(registry *types.DIDRegistry) ([]string, error)) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -212,7 +216,7 @@ func (r *DIDRegistry) UpdateAgents(agentfieldServerID string, fn func(registry *
 	if len(changed) == 0 {
 		return nil
 	}
-	if err := r.saveRegistryToDatabase(&next, changed); err != nil {
+	if err := r.saveRegistryToDatabase(ctx, &next, changed); err != nil {
 		return err
 	}
 	r.registries[agentfieldServerID] = &next
@@ -265,14 +269,13 @@ func (e *unverifiableStoredIdentityError) Error() string {
 // readThroughAgent adds only verified identities absent from this replica's
 // memory (D1.1-D1.3). It retries retirement of startup-quarantined components,
 // but never repairs derivation paths or replaces a local identity.
-func (r *DIDRegistry) readThroughAgent(serverID, nodeID string) (*types.AgentDIDInfo, error) {
+func (r *DIDRegistry) readThroughAgent(ctx context.Context, serverID, nodeID string) (*types.AgentDIDInfo, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	current := r.registries[serverID]
 	if current == nil {
 		return nil, fmt.Errorf("registry not found for af server: %s", serverID)
 	}
-	ctx := context.Background()
 	agent, inMemory := current.AgentNodes[nodeID]
 	if !inMemory {
 		// D1.2: use the same earliest active row selected by startup loading.
@@ -303,10 +306,7 @@ func (r *DIDRegistry) readThroughAgent(serverID, nodeID string) (*types.AgentDID
 	if err != nil {
 		return nil, fmt.Errorf("failed to load components for agent %s: %w", nodeID, err)
 	}
-	// Retirement also covers duplicate names. Complete it before importing
-	// anything, then discard those names from this pre-retirement snapshot.
-	type componentName struct{ kind, name string }
-	retiredNames := make(map[componentName]bool)
+	// Retire only quarantined DIDs before importing surviving same-name rows.
 	for _, component := range components {
 		if r.quarantined[component.ComponentDID] == "" {
 			continue
@@ -314,7 +314,6 @@ func (r *DIDRegistry) readThroughAgent(serverID, nodeID string) (*types.AgentDID
 		if err := r.storageProvider.RetireComponentDIDs(ctx, agent.DID, []string{component.ComponentDID}); err != nil {
 			return nil, fmt.Errorf("cannot retire unverifiable component DID %s: %w; stop the control plane and run: UPDATE component_dids SET status = 'retired' WHERE did = '%s'; (see docs/ENVIRONMENT_VARIABLES.md, Component retirement recovery)", component.ComponentDID, err, strings.ReplaceAll(component.ComponentDID, "'", "''"))
 		}
-		retiredNames[componentName{component.ComponentType, component.ComponentName}] = true
 	}
 	var additions []string
 	changed := !inMemory
@@ -322,7 +321,7 @@ func (r *DIDRegistry) readThroughAgent(serverID, nodeID string) (*types.AgentDID
 	// earliest active component when old databases contain duplicate names.
 	for i := len(components) - 1; i >= 0; i-- {
 		component := components[i]
-		if retiredNames[componentName{component.ComponentType, component.ComponentName}] {
+		if r.quarantined[component.ComponentDID] != "" {
 			continue
 		}
 		switch component.ComponentType {
@@ -562,6 +561,7 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 			return rows[i].DID < rows[j].DID
 		})
 
+		componentSnapshots := make(map[string][]*types.ComponentDIDInfo)
 		for _, agentDIDInfo := range rows {
 			if agentDIDInfo.Status == types.AgentDIDStatusRevoked {
 				// An operator revoked this identity. It stays in storage so its
@@ -597,59 +597,55 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 				return fmt.Errorf("failed to list component DIDs for agent %s: %w", agentDIDInfo.AgentNodeID, err)
 			}
 
-			for _, componentDID := range componentDIDs {
-				var publicKeyJWK json.RawMessage
-				if componentDID.PublicKeyJWK != "" {
-					publicKeyJWK = json.RawMessage(componentDID.PublicKeyJWK)
-				}
-				switch componentDID.ComponentType {
-				case "reasoner":
-					agentInfo.Reasoners[componentDID.ComponentName] = types.ReasonerDIDInfo{
-						DID:            componentDID.ComponentDID,
-						FunctionName:   componentDID.ComponentName,
-						PublicKeyJWK:   publicKeyJWK,
-						DerivationPath: componentDID.DerivationPath,
-						Capabilities:   []string{},
-						ExposureLevel:  "private",
-						CreatedAt:      componentDID.CreatedAt,
-					}
-				case "skill":
-					agentInfo.Skills[componentDID.ComponentName] = types.SkillDIDInfo{
-						DID:            componentDID.ComponentDID,
-						FunctionName:   componentDID.ComponentName,
-						PublicKeyJWK:   publicKeyJWK,
-						DerivationPath: componentDID.DerivationPath,
-						Tags:           []string{},
-						ExposureLevel:  "private",
-						CreatedAt:      componentDID.CreatedAt,
-					}
-				}
+			componentSnapshots[agentDIDInfo.DID] = componentDIDs
+			for i := len(componentDIDs) - 1; i >= 0; i-- {
+				adoptStoredComponent(&agentInfo, componentDIDs[i])
 			}
 
 			registry.AgentNodes[agentInfo.AgentNodeID] = agentInfo
 			registry.TotalDIDs++
 		}
 
-		repaired, registryQuarantine, retire, rootErr := verifyRegistryIdentities(registry, len(agentDIDs))
-		for did, reason := range registryQuarantine {
-			quarantined[did] = reason
-		}
-		if rootErr != nil {
-			log.Printf("Error: %v", rootErr)
-			brokenServers[serverID] = rootErr
-		} else {
-			if repaired > 0 {
-				log.Printf("Recovered %d DID derivation paths or public keys for af server %s; persisting corrections", repaired, serverID)
-				toRepair = append(toRepair, registry)
+		repairedTotal := 0
+		for {
+			repaired, registryQuarantine, retire, rootErr := verifyRegistryIdentities(registry, len(agentDIDs))
+			repairedTotal += repaired
+			for did, reason := range registryQuarantine {
+				quarantined[did] = reason
+			}
+			if rootErr != nil {
+				log.Printf("Error: %v", rootErr)
+				brokenServers[serverID] = rootErr
+				break
 			}
 			for agentDID, componentDIDs := range retire {
-				// The component was already dropped from the registry. Retiring the
-				// row keeps it from being loaded again. Read-through retries failed
-				// retirements using registryQuarantine before issuing any keys.
+				// Failed retirement is retried by read-through before issuing keys.
 				if err := r.storageProvider.RetireComponentDIDs(ctx, agentDID, componentDIDs); err != nil {
 					log.Printf("Warning: failed to retire unverifiable component DIDs of agent %s: %v", agentDID, err)
 				}
 			}
+			// Quarantine applies to a DID, not its name. Verify the next stored
+			// candidate before adopting it, including recovery of legacy paths.
+			added := false
+			for nodeID, agent := range registry.AgentNodes {
+				if quarantined[agent.DID] != "" {
+					continue
+				}
+				rows := componentSnapshots[agent.DID]
+				for i := len(rows) - 1; i >= 0; i-- {
+					if quarantined[rows[i].ComponentDID] == "" && adoptStoredComponent(&agent, rows[i]) {
+						added = true
+					}
+				}
+				registry.AgentNodes[nodeID] = agent
+			}
+			if !added {
+				break
+			}
+		}
+		if repairedTotal > 0 && brokenServers[serverID] == nil {
+			log.Printf("Recovered %d DID derivation paths or public keys for af server %s; persisting corrections", repairedTotal, serverID)
+			toRepair = append(toRepair, registry)
 		}
 
 		registries[serverID] = registry
@@ -666,13 +662,57 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 	for _, registry := range toRepair {
 		// The recovered paths are already correct in memory; a failed write is
 		// retried on the next registry save, so it must not block startup.
-		if err := r.saveRegistryToDatabase(registry, nil); err != nil {
+		if err := r.saveRegistryToDatabase(context.Background(), registry, nil); err != nil {
 			log.Printf("Warning: failed to persist recovered DID paths for af server %s: %v", registry.AgentFieldServerID, err)
 		}
 	}
 	r.mu.Unlock()
 
 	return nil
+}
+
+// adoptStoredComponent fills an absent name; callers visit oldest candidates first.
+func adoptStoredComponent(agentInfo *types.AgentDIDInfo, componentDID *types.ComponentDIDInfo) bool {
+	switch componentDID.ComponentType {
+	case "reasoner":
+		if _, exists := agentInfo.Reasoners[componentDID.ComponentName]; exists {
+			return false
+		}
+	case "skill":
+		if _, exists := agentInfo.Skills[componentDID.ComponentName]; exists {
+			return false
+		}
+	default:
+		return false
+	}
+
+	var publicKeyJWK json.RawMessage
+	if componentDID.PublicKeyJWK != "" {
+		publicKeyJWK = json.RawMessage(componentDID.PublicKeyJWK)
+	}
+	switch componentDID.ComponentType {
+	case "reasoner":
+		agentInfo.Reasoners[componentDID.ComponentName] = types.ReasonerDIDInfo{
+			DID:            componentDID.ComponentDID,
+			FunctionName:   componentDID.ComponentName,
+			PublicKeyJWK:   publicKeyJWK,
+			DerivationPath: componentDID.DerivationPath,
+			Capabilities:   []string{},
+			ExposureLevel:  "private",
+			CreatedAt:      componentDID.CreatedAt,
+		}
+	case "skill":
+		agentInfo.Skills[componentDID.ComponentName] = types.SkillDIDInfo{
+			DID:            componentDID.ComponentDID,
+			FunctionName:   componentDID.ComponentName,
+			PublicKeyJWK:   publicKeyJWK,
+			DerivationPath: componentDID.DerivationPath,
+			Tags:           []string{},
+			ExposureLevel:  "private",
+			CreatedAt:      componentDID.CreatedAt,
+		}
+	}
+	return true
 }
 
 // decryptSeed decrypts a stored master seed when encryption is configured.
@@ -694,7 +734,7 @@ func (r *DIDRegistry) decryptSeed(serverID string, stored []byte) []byte {
 
 // storeServerRow writes the af server DID row. Storage never replaces an
 // existing row's key material with a different identity.
-func (r *DIDRegistry) storeServerRow(registry *types.DIDRegistry) error {
+func (r *DIDRegistry) storeServerRow(ctx context.Context, registry *types.DIDRegistry) error {
 	if r.storageProvider == nil {
 		return fmt.Errorf("storage provider not available")
 	}
@@ -710,7 +750,7 @@ func (r *DIDRegistry) storeServerRow(registry *types.DIDRegistry) error {
 	}
 
 	err := r.storageProvider.StoreAgentFieldServerDID(
-		context.Background(),
+		ctx,
 		registry.AgentFieldServerID,
 		registry.RootDID,
 		seedToStore,
@@ -729,7 +769,7 @@ func (r *DIDRegistry) storeServerRow(registry *types.DIDRegistry) error {
 // key. Quarantined identities are left untouched in storage. A failure for one
 // agent does not stop the others from being written; all failures are
 // returned together.
-func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry, nodeIDs []string) error {
+func (r *DIDRegistry) saveRegistryToDatabase(ctx context.Context, registry *types.DIDRegistry, nodeIDs []string) error {
 	if r.storageProvider == nil {
 		return fmt.Errorf("storage provider not available")
 	}
@@ -737,9 +777,7 @@ func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry, nodeID
 		return fmt.Errorf("refusing to write DID registry for af server %s: %w", registry.AgentFieldServerID, err)
 	}
 
-	ctx := context.Background()
-
-	if err := r.storeServerRow(registry); err != nil {
+	if err := r.storeServerRow(ctx, registry); err != nil {
 		return err
 	}
 
@@ -826,6 +864,10 @@ func (r *DIDRegistry) IntegrityError(agentfieldServerID string) error {
 // so they are not loaded back into the registry on the next start. The rows are
 // kept so their derivation paths are never allocated again.
 func (r *DIDRegistry) RetireComponents(agentfieldServerID, agentNodeID string, componentDIDs []string) error {
+	return r.retireComponents(context.Background(), agentfieldServerID, agentNodeID, componentDIDs)
+}
+
+func (r *DIDRegistry) retireComponents(ctx context.Context, agentfieldServerID, agentNodeID string, componentDIDs []string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -843,7 +885,7 @@ func (r *DIDRegistry) RetireComponents(agentfieldServerID, agentNodeID string, c
 	if !exists {
 		return fmt.Errorf("agent not found: %s", agentNodeID)
 	}
-	if err := r.storageProvider.RetireComponentDIDs(context.Background(), agentInfo.DID, componentDIDs); err != nil {
+	if err := r.storageProvider.RetireComponentDIDs(ctx, agentInfo.DID, componentDIDs); err != nil {
 		return fmt.Errorf("failed to retire component DIDs for agent %s: %w", agentNodeID, err)
 	}
 	return nil

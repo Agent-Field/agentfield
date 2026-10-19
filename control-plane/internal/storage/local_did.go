@@ -1090,8 +1090,7 @@ func (ls *LocalStorage) listComponentDIDs(ctx context.Context, agentDID string, 
 	return infos, nil
 }
 
-// RetireComponentDIDs retires every row sharing the agent, type and name of
-// the given component DIDs, including duplicates from older writers.
+// RetireComponentDIDs retires only the given component DIDs of this agent.
 // Retired rows stay in storage so their derivation paths are never reused, but
 // they are no longer listed as registered components. An empty list is a no-op.
 func (ls *LocalStorage) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
@@ -1112,15 +1111,17 @@ func (ls *LocalStorage) RetireComponentDIDs(ctx context.Context, agentDID string
 		placeholders[i] = "?"
 		args = append(args, did)
 	}
-	args = append(args, agentDID)
 	query := `UPDATE component_dids SET status = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE agent_did = ? AND (component_type, function_name) IN (
-			SELECT component_type, function_name FROM component_dids WHERE did IN (` + strings.Join(placeholders, ", ") + `) AND agent_did = ?
-		)`
-	if _, err := ls.db.ExecContext(ctx, query, args...); err != nil {
+  WHERE agent_did = ? AND did IN (` + strings.Join(placeholders, ", ") + `)`
+	tx, err := ls.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin component retirement: %w", err)
+	}
+	defer rollbackTx(tx, "RetireComponentDIDs")
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to retire component DIDs for agent %s: %w", agentDID, err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // lockDIDServerTransaction shares identity-write serialization with rotations.

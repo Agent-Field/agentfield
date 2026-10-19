@@ -20,6 +20,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -167,12 +168,14 @@ func (s *DIDService) GetRegistry(agentfieldServerID string) (*types.DIDRegistry,
 func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return retryDIDAllocation(func() (*types.DIDRegistrationResponse, error) {
-		return s.registerAgentOnce(req)
+	ctx, cancel := context.WithTimeout(context.Background(), didRegistrationTimeout)
+	defer cancel()
+	return retryDIDAllocation(ctx, func() (*types.DIDRegistrationResponse, error) {
+		return s.registerAgentOnce(ctx, req)
 	})
 }
 
-func (s *DIDService) registerAgentOnce(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
+func (s *DIDService) registerAgentOnce(ctx context.Context, req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 
 	if !s.config.Enabled {
 		return &types.DIDRegistrationResponse{
@@ -190,7 +193,7 @@ func (s *DIDService) registerAgentOnce(req *types.DIDRegistrationRequest) (*type
 	}
 
 	// Check if agent already exists
-	existingAgent, err := s.GetExistingAgentDID(req.AgentNodeID)
+	existingAgent, err := s.getExistingAgentDID(ctx, req.AgentNodeID)
 	if err != nil && err.Error() != fmt.Sprintf("agent not found: %s", req.AgentNodeID) {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -210,7 +213,7 @@ func (s *DIDService) registerAgentOnce(req *types.DIDRegistrationRequest) (*type
 		newReasonerIDs := extractReasonerIDs(req.Reasoners)
 		newSkillIDs := extractSkillIDs(req.Skills)
 
-		diffResult, err := s.PerformDifferentialAnalysis(req.AgentNodeID, newReasonerIDs, newSkillIDs)
+		diffResult, err := s.performDifferentialAnalysis(ctx, req.AgentNodeID, newReasonerIDs, newSkillIDs)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
 				Success: false,
@@ -229,57 +232,95 @@ func (s *DIDService) registerAgentOnce(req *types.DIDRegistrationRequest) (*type
 		}
 
 		// Handle partial registration
-		return s.handlePartialRegistration(req, diffResult)
+		return s.handlePartialRegistrationContext(ctx, req, diffResult)
 	}
 
 	// Handle new registration (existing logic)
-	return s.handleNewRegistration(req)
+	return s.handleNewRegistration(ctx, req)
 }
 
 // handleNewRegistration handles registration for new agents (original logic).
-func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
-	return s.handleNewRegistrationOnce(req)
+func (s *DIDService) handleNewRegistration(ctx context.Context, req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
+	return s.handleNewRegistrationOnce(ctx, req)
 }
 
 // Each attempt reads the issued identities again before deriving a path. The
 // per-service mutex does not serialize other control-plane replicas.
 const maxDIDAllocationAttempts = 64
 
-// SQLite already waits up to 60 seconds per attempt. Allow only one additional
-// contention attempt, independently of the budget for fast ownership conflicts.
+// Lock/busy failures have already waited in the database; retry those only once.
 const maxDIDContentionRetries = 1
 
-func retryDIDAllocation(attempt func() (*types.DIDRegistrationResponse, error)) (*types.DIDRegistrationResponse, error) {
+// Bound this registration's work after acquiring mu, excluding time in the queue.
+// Tests may shorten the deadline without waiting 30 seconds per queued request.
+var didRegistrationTimeout = 30 * time.Second
+
+func retryDIDAllocation(ctx context.Context, attempt func() (*types.DIDRegistrationResponse, error)) (*types.DIDRegistrationResponse, error) {
 	var lastErr error
-	contentionErrors := 0
-	attempts := 0
-	for i := 0; i < maxDIDAllocationAttempts; i++ {
+	contentionErrors, attempts := 0, 0
+	backoff := 5 * time.Millisecond
+	for i := 0; i < maxDIDAllocationAttempts && ctx.Err() == nil; i++ {
 		response, err := attempt()
+		attempts++
+		if err == nil && response != nil && response.Success {
+			return response, nil
+		}
+		if ctx.Err() != nil {
+			// Keep the previous database failure if cancellation interrupted a retry.
+			if lastErr == nil {
+				lastErr = err
+				if lastErr == nil && response != nil {
+					lastErr = errors.New(response.Error)
+				}
+			}
+			break
+		}
 		if !errors.Is(err, storage.ErrDIDAllocationConflict) && !errors.Is(err, storage.ErrDIDNodeAlreadyRegistered) && !storage.IsTransientDIDTransactionError(err) {
 			return response, err
 		}
 		lastErr = err
-		attempts++
+		var jitter [1]byte
+		_, _ = rand.Read(jitter[:])
+		delay := time.Duration(1+int(jitter[0])%3) * time.Millisecond
 		if storage.IsTransientDIDTransactionError(err) {
-			contentionErrors++
-			if contentionErrors > maxDIDContentionRetries {
-				break
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && (pgErr.Code == "40001" || pgErr.Code == "40P01") {
+				// Equal jitter spreads replicas across [backoff/2, backoff], capped at 250ms.
+				delay = backoff/2 + time.Duration(jitter[0])*backoff/512
+				backoff = min(2*backoff, 250*time.Millisecond)
+			} else {
+				contentionErrors++
+				if contentionErrors > maxDIDContentionRetries {
+					break
+				}
 			}
 		}
-		if i+1 < maxDIDAllocationAttempts {
-			var jitter [1]byte
-			_, _ = rand.Read(jitter[:])
-			time.Sleep(time.Duration(1+int(jitter[0])%3) * time.Millisecond)
+		if ctx.Err() != nil {
+			break
 		}
+		if i+1 < maxDIDAllocationAttempts {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+			case <-timer.C:
+			}
+			timer.Stop()
+		}
+	}
+	if lastErr == nil {
+		lastErr = ctx.Err()
 	}
 	message := fmt.Sprintf("DID allocation failed after %d attempts: %v", attempts, lastErr)
 	if errors.Is(lastErr, storage.ErrDIDAllocationConflict) || errors.Is(lastErr, storage.ErrDIDNodeAlreadyRegistered) {
 		message = fmt.Sprintf("DID allocation kept colliding after %d attempts: %v", attempts, lastErr)
 	}
+	if ctx.Err() != nil {
+		message += fmt.Sprintf(" (registration deadline: %v)", ctx.Err())
+	}
 	return &types.DIDRegistrationResponse{Success: false, Error: message}, nil
 }
 
-func (s *DIDService) handleNewRegistrationOnce(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
+func (s *DIDService) handleNewRegistrationOnce(ctx context.Context, req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 	// Get af server ID dynamically
 	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
@@ -300,7 +341,7 @@ func (s *DIDService) handleNewRegistrationOnce(req *types.DIDRegistrationRequest
 
 	// Allocate paths that were never issued from this database, by any agent
 	// of any server, so a new identity can never be handed an existing key.
-	used, err := s.registry.usedIdentities(context.Background())
+	used, err := s.registry.usedIdentities(ctx)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -452,7 +493,7 @@ func (s *DIDService) handleNewRegistrationOnce(req *types.DIDRegistrationRequest
 	}
 
 	// Update registry
-	err = s.registry.UpdateAgents(agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
+	err = s.registry.updateAgents(ctx, agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
 		if _, exists := live.AgentNodes[req.AgentNodeID]; exists {
 			return nil, fmt.Errorf("agent %s was registered concurrently: %w", req.AgentNodeID, storage.ErrDIDNodeAlreadyRegistered)
 		}
@@ -1137,6 +1178,10 @@ func (s *DIDService) BackfillExistingNodes(ctx context.Context, storageProvider 
 
 // GetExistingAgentDID retrieves existing DID information for an agent node.
 func (s *DIDService) GetExistingAgentDID(agentNodeID string) (*types.AgentDIDInfo, error) {
+	return s.getExistingAgentDID(context.Background(), agentNodeID)
+}
+
+func (s *DIDService) getExistingAgentDID(ctx context.Context, agentNodeID string) (*types.AgentDIDInfo, error) {
 	if !s.config.Enabled {
 		return nil, fmt.Errorf("DID system is disabled")
 	}
@@ -1152,7 +1197,7 @@ func (s *DIDService) GetExistingAgentDID(agentNodeID string) (*types.AgentDIDInf
 		return nil, fmt.Errorf("failed to get af server ID: %w", err)
 	}
 
-	stored, err := s.registry.readThroughAgent(agentfieldServerID, agentNodeID)
+	stored, err := s.registry.readThroughAgent(ctx, agentfieldServerID, agentNodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -1164,7 +1209,11 @@ func (s *DIDService) GetExistingAgentDID(agentNodeID string) (*types.AgentDIDInf
 
 // PerformDifferentialAnalysis compares existing vs new reasoners/skills to determine what needs to be updated.
 func (s *DIDService) PerformDifferentialAnalysis(agentNodeID string, newReasonerIDs, newSkillIDs []string) (*types.DifferentialAnalysisResult, error) {
-	existingAgent, err := s.GetExistingAgentDID(agentNodeID)
+	return s.performDifferentialAnalysis(context.Background(), agentNodeID, newReasonerIDs, newSkillIDs)
+}
+
+func (s *DIDService) performDifferentialAnalysis(ctx context.Context, agentNodeID string, newReasonerIDs, newSkillIDs []string) (*types.DifferentialAnalysisResult, error) {
+	existingAgent, err := s.getExistingAgentDID(ctx, agentNodeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get existing agent: %w", err)
 	}
@@ -1397,6 +1446,10 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 
 // handlePartialRegistration handles partial registration for existing agents.
 func (s *DIDService) handlePartialRegistration(req *types.DIDRegistrationRequest, diffResult *types.DifferentialAnalysisResult) (*types.DIDRegistrationResponse, error) {
+	return s.handlePartialRegistrationContext(context.Background(), req, diffResult)
+}
+
+func (s *DIDService) handlePartialRegistrationContext(ctx context.Context, req *types.DIDRegistrationRequest, diffResult *types.DifferentialAnalysisResult) (*types.DIDRegistrationResponse, error) {
 	// Handle deregistration of removed components first
 	if len(diffResult.RemovedReasonerIDs) > 0 || len(diffResult.RemovedSkillIDs) > 0 {
 		deregReq := &types.ComponentDeregistrationRequest{
@@ -1405,7 +1458,7 @@ func (s *DIDService) handlePartialRegistration(req *types.DIDRegistrationRequest
 			SkillIDsToRemove:    diffResult.RemovedSkillIDs,
 		}
 
-		deregResponse, err := s.deregisterComponents(deregReq)
+		deregResponse, err := s.deregisterComponents(ctx, deregReq)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
 				Success: false,
@@ -1435,11 +1488,11 @@ func (s *DIDService) handlePartialRegistration(req *types.DIDRegistrationRequest
 			AllSkills:          req.Skills,
 		}
 
-		return s.partialRegisterAgentOnce(partialReq)
+		return s.partialRegisterAgentOnce(ctx, partialReq)
 	}
 
 	// If we reach here, only removals were needed
-	existingAgent, err := s.GetExistingAgentDID(req.AgentNodeID)
+	existingAgent, err := s.getExistingAgentDID(ctx, req.AgentNodeID)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -1459,17 +1512,14 @@ func (s *DIDService) handlePartialRegistration(req *types.DIDRegistrationRequest
 func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.partialRegisterAgent(req)
-}
-
-// partialRegisterAgent is PartialRegisterAgent for callers holding s.mu.
-func (s *DIDService) partialRegisterAgent(req *types.PartialDIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
-	return retryDIDAllocation(func() (*types.DIDRegistrationResponse, error) {
-		return s.partialRegisterAgentOnce(req)
+	ctx, cancel := context.WithTimeout(context.Background(), didRegistrationTimeout)
+	defer cancel()
+	return retryDIDAllocation(ctx, func() (*types.DIDRegistrationResponse, error) {
+		return s.partialRegisterAgentOnce(ctx, req)
 	})
 }
 
-func (s *DIDService) partialRegisterAgentOnce(req *types.PartialDIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
+func (s *DIDService) partialRegisterAgentOnce(ctx context.Context, req *types.PartialDIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
 	if !s.config.Enabled {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -1494,7 +1544,7 @@ func (s *DIDService) partialRegisterAgentOnce(req *types.PartialDIDRegistrationR
 		}, nil
 	}
 	// Refresh before allocating so direct partial registrations see other replicas.
-	if _, err := s.registry.readThroughAgent(agentfieldServerID, req.AgentNodeID); err != nil {
+	if _, err := s.registry.readThroughAgent(ctx, agentfieldServerID, req.AgentNodeID); err != nil {
 		return &types.DIDRegistrationResponse{Success: false, Error: fmt.Sprintf("failed to refresh agent: %v", err)}, nil
 	}
 
@@ -1560,7 +1610,7 @@ func (s *DIDService) partialRegisterAgentOnce(req *types.PartialDIDRegistrationR
 		}, nil
 	}
 	existingAgent = cloneAgentInfo(existingAgent)
-	used, err := s.registry.usedIdentities(context.Background())
+	used, err := s.registry.usedIdentities(ctx)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -1698,7 +1748,7 @@ func (s *DIDService) partialRegisterAgentOnce(req *types.PartialDIDRegistrationR
 	}
 
 	// Update registry
-	err = s.registry.UpdateAgents(agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
+	err = s.registry.updateAgents(ctx, agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
 		live.AgentNodes[req.AgentNodeID] = existingAgent
 		live.TotalDIDs += len(newReasonerDIDs) + len(newSkillDIDs)
 		return []string{req.AgentNodeID}, nil
@@ -1744,11 +1794,11 @@ func (s *DIDService) partialRegisterAgentOnce(req *types.PartialDIDRegistrationR
 func (s *DIDService) DeregisterComponents(req *types.ComponentDeregistrationRequest) (*types.ComponentDeregistrationResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.deregisterComponents(req)
+	return s.deregisterComponents(context.Background(), req)
 }
 
 // deregisterComponents is DeregisterComponents for callers holding s.mu.
-func (s *DIDService) deregisterComponents(req *types.ComponentDeregistrationRequest) (*types.ComponentDeregistrationResponse, error) {
+func (s *DIDService) deregisterComponents(ctx context.Context, req *types.ComponentDeregistrationRequest) (*types.ComponentDeregistrationResponse, error) {
 	if !s.config.Enabled {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
@@ -1818,8 +1868,31 @@ func (s *DIDService) deregisterComponents(req *types.ComponentDeregistrationRequ
 		}
 	}
 
+	// Older writers allowed multiple active rows per name. Explicit removal
+	// retires every such row; quarantine retirement remains strictly DID-scoped.
+	if len(removedDIDs) > 0 {
+		rows, err := s.registry.storageProvider.ListComponentDIDs(ctx, existingAgent.DID)
+		if err != nil {
+			return &types.ComponentDeregistrationResponse{Error: fmt.Sprintf("failed to list removed component DIDs: %v", err)}, nil
+		}
+		removedNames := make(map[string]map[string]bool)
+		removedNames["reasoner"] = make(map[string]bool)
+		removedNames["skill"] = make(map[string]bool)
+		for _, name := range req.ReasonerIDsToRemove {
+			removedNames["reasoner"][name] = true
+		}
+		for _, name := range req.SkillIDsToRemove {
+			removedNames["skill"][name] = true
+		}
+		for _, row := range rows {
+			if removedNames[row.ComponentType][row.ComponentName] {
+				removedDIDs = append(removedDIDs, row.ComponentDID)
+			}
+		}
+	}
+
 	// Update registry
-	err = s.registry.UpdateAgents(agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
+	err = s.registry.updateAgents(ctx, agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
 		live.AgentNodes[req.AgentNodeID] = existingAgent
 		live.TotalDIDs -= removedCount
 		return []string{req.AgentNodeID}, nil
@@ -1833,7 +1906,7 @@ func (s *DIDService) deregisterComponents(req *types.ComponentDeregistrationRequ
 
 	// Saving the registry only upserts the remaining components; the removed
 	// rows must be retired explicitly or they are reloaded on the next start.
-	if err := s.registry.RetireComponents(agentfieldServerID, req.AgentNodeID, removedDIDs); err != nil {
+	if err := s.registry.retireComponents(ctx, agentfieldServerID, req.AgentNodeID, removedDIDs); err != nil {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to retire removed component DIDs: %v", err),

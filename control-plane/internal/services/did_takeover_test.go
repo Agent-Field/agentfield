@@ -141,7 +141,7 @@ func postgresTakeoverStores(t *testing.T) (storage.StorageProvider, storage.Stor
 	admin, err := sql.Open("pgx", raw)
 	require.NoError(t, err)
 	defer admin.Close()
-	name := fmt.Sprintf("fix_did_takeover_%d", time.Now().UnixNano())
+	name := fmt.Sprintf("fix2_did_takeover_%d", time.Now().UnixNano())
 	_, err = admin.Exec("CREATE DATABASE " + name)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1296,16 +1296,21 @@ func TestC5F5DIDQuarantineRetiresSnapshotDuplicates(t *testing.T) {
 	svc = env.service(reg, "server-a")
 	again := register(t, svc, "node", []string{"r"}, nil)
 	require.NotEqual(t, foreign, again.IdentityPackage.ReasonerDIDs["r"].DID)
-	require.NotEqual(t, first.IdentityPackage.ReasonerDIDs["r"].DID, again.IdentityPackage.ReasonerDIDs["r"].DID)
+	require.Equal(t, first.IdentityPackage.ReasonerDIDs["r"].DID, again.IdentityPackage.ReasonerDIDs["r"].DID)
 	rows, err := env.provider.ListAllComponentDIDs(context.Background(), first.IdentityPackage.AgentDID.DID)
 	require.NoError(t, err)
-	require.Len(t, rows, 3)
+	require.Len(t, rows, 2)
 	for _, row := range rows {
 		if row.ComponentDID != again.IdentityPackage.ReasonerDIDs["r"].DID {
 			require.Equal(t, storage.ComponentDIDStatusRetired, row.Status)
 			identity, err := svc.ResolveDID(row.ComponentDID)
 			require.Error(t, err)
 			require.Nil(t, identity)
+		} else {
+			require.Equal(t, storage.ComponentDIDStatusActive, row.Status)
+			identity, err := svc.ResolveDID(row.ComponentDID)
+			require.NoError(t, err)
+			require.NotEmpty(t, identity.PrivateKeyJWK)
 		}
 	}
 }
