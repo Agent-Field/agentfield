@@ -30,6 +30,7 @@ func isSQLiteContention(err error) bool {
 	message := err.Error()
 	return strings.Contains(message, "database is locked") ||
 		strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "database schema is locked") ||
 		strings.Contains(message, "SQLITE_BUSY") ||
 		strings.Contains(message, "SQLITE_LOCKED")
 }
@@ -38,7 +39,7 @@ func isSQLiteContention(err error) bool {
 func IsTransientDIDTransactionError(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		return pgErr.Code == "40001" || pgErr.Code == "40P01"
+		return pgErr.Code == "40001" || pgErr.Code == "40P01" || pgErr.Code == "55P03"
 	}
 	return err != nil && isSQLiteContention(err)
 }
@@ -280,16 +281,8 @@ func (ls *LocalStorage) UpsertAgentDIDWithComponents(ctx context.Context, record
 	}
 	// Every early return, including a typed conflict, releases the transaction.
 	defer rollbackTx(tx, "UpsertAgentDIDWithComponents")
-	if ls.mode == "postgres" {
-		// Bound the wait before serializing identity decisions across replicas.
-		if _, err = tx.ExecContext(ctx, "SET LOCAL lock_timeout = '"+didPostgresLockTimeout+"'"); err != nil {
-			return fmt.Errorf("failed to set DID transaction lock timeout: %w", err)
-		}
-		hash := fnv.New64a()
-		_, _ = hash.Write([]byte("agentfield:did-server:" + record.AgentFieldServerID))
-		if _, err = tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(?)", int64(hash.Sum64())); err != nil {
-			return fmt.Errorf("failed to lock DID server transaction: %w", err)
-		}
+	if err := ls.lockDIDServerTransaction(ctx, tx, record.AgentFieldServerID); err != nil {
+		return err
 	}
 	var storedDID string
 	err = tx.QueryRowContext(ctx, "SELECT did FROM agent_dids WHERE did = ?", record.DID).Scan(&storedDID)
@@ -1097,7 +1090,8 @@ func (ls *LocalStorage) listComponentDIDs(ctx context.Context, agentDID string, 
 	return infos, nil
 }
 
-// RetireComponentDIDs marks the given component DIDs of an agent as retired.
+// RetireComponentDIDs retires every row sharing the agent, type and name of
+// the given component DIDs, including duplicates from older writers.
 // Retired rows stay in storage so their derivation paths are never reused, but
 // they are no longer listed as registered components. An empty list is a no-op.
 func (ls *LocalStorage) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
@@ -1118,10 +1112,64 @@ func (ls *LocalStorage) RetireComponentDIDs(ctx context.Context, agentDID string
 		placeholders[i] = "?"
 		args = append(args, did)
 	}
+	args = append(args, agentDID)
 	query := `UPDATE component_dids SET status = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE agent_did = ? AND did IN (` + strings.Join(placeholders, ", ") + `)`
+		WHERE agent_did = ? AND (component_type, function_name) IN (
+			SELECT component_type, function_name FROM component_dids WHERE did IN (` + strings.Join(placeholders, ", ") + `) AND agent_did = ?
+		)`
 	if _, err := ls.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to retire component DIDs for agent %s: %w", agentDID, err)
 	}
 	return nil
+}
+
+// lockDIDServerTransaction shares identity-write serialization with rotations.
+// SQLite connections use BEGIN IMMEDIATE; Postgres uses a server advisory lock.
+func (ls *LocalStorage) lockDIDServerTransaction(ctx context.Context, tx *sqlTx, serverID string) error {
+	if ls.mode == "postgres" {
+		// Bound the wait before serializing identity decisions across replicas.
+		if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '"+didPostgresLockTimeout+"'"); err != nil {
+			return fmt.Errorf("failed to set DID transaction lock timeout: %w", err)
+		}
+		hash := fnv.New64a()
+		_, _ = hash.Write([]byte("agentfield:did-server:" + serverID))
+		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(?)", int64(hash.Sum64())); err != nil {
+			return fmt.Errorf("failed to lock DID server transaction: %w", err)
+		}
+	}
+	return nil
+}
+
+// AdvanceAgentX25519Epoch allocates the next epoch from durable state. The
+// returned epoch is committed before callers derive or publish its keypair.
+func (ls *LocalStorage) AdvanceAgentX25519Epoch(ctx context.Context, serverID, did string, memoryEpoch int) (int, error) {
+	tx, err := ls.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin X25519 rotation: %w", err)
+	}
+	defer rollbackTx(tx, "AdvanceAgentX25519Epoch")
+	if err := ls.lockDIDServerTransaction(ctx, tx, serverID); err != nil {
+		return 0, err
+	}
+	var epoch int
+	if err := tx.QueryRowContext(ctx, "SELECT x25519_epoch FROM agent_dids WHERE did = ? AND agentfield_server_id = ?", did, serverID).Scan(&epoch); err != nil {
+		return 0, fmt.Errorf("failed to read stored X25519 epoch: %w", err)
+	}
+	if memoryEpoch > epoch {
+		epoch = memoryEpoch
+	}
+	if epoch == int(^uint(0)>>1) {
+		return 0, fmt.Errorf("X25519 epoch exhausted for DID %s", did)
+	}
+	epoch++
+	if _, err := tx.ExecContext(ctx, "UPDATE agent_dids SET x25519_epoch = ?, updated_at = CURRENT_TIMESTAMP WHERE did = ? AND agentfield_server_id = ?", epoch, did, serverID); err != nil {
+		return 0, fmt.Errorf("failed to persist X25519 epoch: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE did_registry SET last_key_rotation = ? WHERE agentfield_server_id = ?", time.Now(), serverID); err != nil {
+		return 0, fmt.Errorf("failed to persist X25519 rotation time: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit X25519 rotation: %w", err)
+	}
+	return epoch, nil
 }

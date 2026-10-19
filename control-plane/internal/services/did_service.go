@@ -245,11 +245,26 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 // per-service mutex does not serialize other control-plane replicas.
 const maxDIDAllocationAttempts = 64
 
+// SQLite already waits up to 60 seconds per attempt. Allow only one additional
+// contention attempt, independently of the budget for fast ownership conflicts.
+const maxDIDContentionRetries = 1
+
 func retryDIDAllocation(attempt func() (*types.DIDRegistrationResponse, error)) (*types.DIDRegistrationResponse, error) {
+	var lastErr error
+	contentionErrors := 0
+	attempts := 0
 	for i := 0; i < maxDIDAllocationAttempts; i++ {
 		response, err := attempt()
 		if !errors.Is(err, storage.ErrDIDAllocationConflict) && !errors.Is(err, storage.ErrDIDNodeAlreadyRegistered) && !storage.IsTransientDIDTransactionError(err) {
 			return response, err
+		}
+		lastErr = err
+		attempts++
+		if storage.IsTransientDIDTransactionError(err) {
+			contentionErrors++
+			if contentionErrors > maxDIDContentionRetries {
+				break
+			}
 		}
 		if i+1 < maxDIDAllocationAttempts {
 			var jitter [1]byte
@@ -257,10 +272,11 @@ func retryDIDAllocation(attempt func() (*types.DIDRegistrationResponse, error)) 
 			time.Sleep(time.Duration(1+int(jitter[0])%3) * time.Millisecond)
 		}
 	}
-	return &types.DIDRegistrationResponse{
-		Success: false,
-		Error:   fmt.Sprintf("DID allocation kept colliding after %d attempts", maxDIDAllocationAttempts),
-	}, nil
+	message := fmt.Sprintf("DID allocation failed after %d attempts: %v", attempts, lastErr)
+	if errors.Is(lastErr, storage.ErrDIDAllocationConflict) || errors.Is(lastErr, storage.ErrDIDNodeAlreadyRegistered) {
+		message = fmt.Sprintf("DID allocation kept colliding after %d attempts: %v", attempts, lastErr)
+	}
+	return &types.DIDRegistrationResponse{Success: false, Error: message}, nil
 }
 
 func (s *DIDService) handleNewRegistrationOnce(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
@@ -438,7 +454,7 @@ func (s *DIDService) handleNewRegistrationOnce(req *types.DIDRegistrationRequest
 	// Update registry
 	err = s.registry.UpdateAgents(agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
 		if _, exists := live.AgentNodes[req.AgentNodeID]; exists {
-			return nil, fmt.Errorf("agent %s was registered concurrently", req.AgentNodeID)
+			return nil, fmt.Errorf("agent %s was registered concurrently: %w", req.AgentNodeID, storage.ErrDIDNodeAlreadyRegistered)
 		}
 		live.AgentNodes[req.AgentNodeID] = agentDIDInfo
 		live.TotalDIDs += 1 + len(reasonerInfos) + len(skillInfos)
@@ -953,8 +969,22 @@ func (s *DIDService) RotateAgentX25519Key(did string) (newPubJWK string, newEpoc
 		return "", 0, fmt.Errorf("cannot rotate keyAgreement key for DID %s: %s", did, reason)
 	}
 
-	// Increment the rotation epoch and re-derive the keyAgreement keypair.
-	newEpoch = agentInfo.X25519Epoch + 1
+	// Hold the registry mutex through commit and publication so instances
+	// sharing this registry cannot publish a smaller epoch over a newer one.
+	s.registry.mu.Lock()
+	defer s.registry.mu.Unlock()
+	live := s.registry.registries[agentfieldServerID]
+	agentInfo = live.AgentNodes[agentNodeID]
+	rotator, ok := s.registry.storageProvider.(interface {
+		AdvanceAgentX25519Epoch(context.Context, string, string, int) (int, error)
+	})
+	if !ok {
+		return "", 0, fmt.Errorf("storage does not support durable X25519 rotation")
+	}
+	newEpoch, err = rotator.AdvanceAgentX25519Epoch(context.Background(), agentfieldServerID, did, agentInfo.X25519Epoch)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to commit X25519 rotation: %w", err)
+	}
 	pubJWK, _, err := s.regenerateX25519KeyPairJWKAtEpoch(registry.MasterSeed, agentInfo.DerivationPath, newEpoch)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to re-derive X25519 keyAgreement key at epoch %d for agent DID %s: %w", newEpoch, did, err)
@@ -963,14 +993,14 @@ func (s *DIDService) RotateAgentX25519Key(did string) (newPubJWK string, newEpoc
 	// Persist the new epoch + public key.
 	agentInfo.X25519Epoch = newEpoch
 	agentInfo.X25519PublicKeyJWK = json.RawMessage(pubJWK)
-	err = s.registry.UpdateAgents(agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
-		live.AgentNodes[agentNodeID] = agentInfo
-		live.LastKeyRotation = time.Now()
-		return []string{agentNodeID}, nil
-	})
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to persist registry after keyAgreement rotation: %w", err)
+	next := *live
+	next.AgentNodes = make(map[string]types.AgentDIDInfo, len(live.AgentNodes))
+	for nodeID, info := range live.AgentNodes {
+		next.AgentNodes[nodeID] = info
 	}
+	next.AgentNodes[agentNodeID] = agentInfo
+	next.LastKeyRotation = time.Now()
+	s.registry.registries[agentfieldServerID] = &next
 
 	logger.Logger.Info().
 		Str("did", did).

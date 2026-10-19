@@ -272,7 +272,10 @@ type legacyPathIndex struct {
 	maxAgentIndex  int
 	maxComponentIx int
 	agents         map[string]string
+	nextAgentIndex int
 	componentsByIx map[int]map[string]string
+	nextComponent  map[int]int
+	derivations    int // Candidate derivations, excluding direct integrity checks.
 }
 
 // newLegacyPathIndex bounds the agent-index search by every agent row stored
@@ -294,6 +297,7 @@ func newLegacyPathIndex(registry *types.DIDRegistry, storedAgentRows int) *legac
 		maxAgentIndex:  maxInt(64, 2*maxInt(storedAgentRows, len(registry.AgentNodes))+16),
 		maxComponentIx: maxInt(32, 2*maxComponents+8),
 		componentsByIx: make(map[int]map[string]string),
+		nextComponent:  make(map[int]int),
 	}
 }
 
@@ -304,36 +308,53 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func (ix *legacyPathIndex) agentPath(did string) (string, bool) {
-	if ix.agents == nil {
-		ix.agents = make(map[string]string, ix.maxAgentIndex+1)
-		for i := 0; i <= ix.maxAgentIndex; i++ {
-			path := agentDerivationPath(ix.serverSegment, i)
-			if derived, err := didForPath(ix.masterSeed, path); err == nil {
-				ix.agents[derived] = path
-			}
-		}
+func (ix *legacyPathIndex) derive(path string, table map[string]string) {
+	ix.derivations++
+	if did, err := didForPath(ix.masterSeed, path); err == nil {
+		table[did] = path
 	}
-	path, ok := ix.agents[did]
-	return path, ok
 }
 
-func (ix *legacyPathIndex) componentsUnderAgent(agentIndex int) map[string]string {
-	if table, ok := ix.componentsByIx[agentIndex]; ok {
-		return table
+func (ix *legacyPathIndex) agentPath(did string) (string, bool) {
+	if ix.agents == nil {
+		ix.agents = make(map[string]string)
 	}
-	agentPath := agentDerivationPath(ix.serverSegment, agentIndex)
-	table := make(map[string]string, 2*(ix.maxComponentIx+1))
-	for branch := 0; branch <= 1; branch++ {
-		for j := 0; j <= ix.maxComponentIx; j++ {
-			path := componentDerivationPath(agentPath, branch, j)
-			if derived, err := didForPath(ix.masterSeed, path); err == nil {
-				table[derived] = path
-			}
+	if path, ok := ix.agents[did]; ok {
+		return path, true
+	}
+	for ix.nextAgentIndex <= ix.maxAgentIndex {
+		path := agentDerivationPath(ix.serverSegment, ix.nextAgentIndex)
+		ix.nextAgentIndex++
+		ix.derive(path, ix.agents)
+		if path, ok := ix.agents[did]; ok {
+			return path, true
 		}
 	}
-	ix.componentsByIx[agentIndex] = table
-	return table
+	return "", false
+}
+
+// componentUnderAgent expands one candidate at a time and caches all work.
+// Interleave branches so a low-index skill does not require deriving the
+// entire reasoner branch first. The inclusive bounds are unchanged.
+func (ix *legacyPathIndex) componentUnderAgent(did string, agentIndex int) (string, bool) {
+	table, ok := ix.componentsByIx[agentIndex]
+	if !ok {
+		table = make(map[string]string)
+		ix.componentsByIx[agentIndex] = table
+	}
+	if path, ok := table[did]; ok {
+		return path, true
+	}
+	agentPath := agentDerivationPath(ix.serverSegment, agentIndex)
+	for ix.nextComponent[agentIndex] < 2*(ix.maxComponentIx+1) {
+		n := ix.nextComponent[agentIndex]
+		ix.nextComponent[agentIndex]++
+		ix.derive(componentDerivationPath(agentPath, n%2, n/2), table)
+		if path, ok := table[did]; ok {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // componentPath looks under the owning agent first, then under every other
@@ -341,7 +362,7 @@ func (ix *legacyPathIndex) componentsUnderAgent(agentIndex int) map[string]strin
 // unordered map iteration.
 func (ix *legacyPathIndex) componentPath(did string, preferredAgentIndex int, hasPreferred bool) (string, bool) {
 	if hasPreferred {
-		if path, ok := ix.componentsUnderAgent(preferredAgentIndex)[did]; ok {
+		if path, ok := ix.componentUnderAgent(did, preferredAgentIndex); ok {
 			return path, true
 		}
 	}
@@ -349,7 +370,7 @@ func (ix *legacyPathIndex) componentPath(did string, preferredAgentIndex int, ha
 		if hasPreferred && i == preferredAgentIndex {
 			continue
 		}
-		if path, ok := ix.componentsUnderAgent(i)[did]; ok {
+		if path, ok := ix.componentUnderAgent(did, i); ok {
 			return path, true
 		}
 	}
@@ -370,7 +391,7 @@ func verifyRegistryIdentities(registry *types.DIDRegistry, storedAgentRows int) 
 	retire = make(map[string][]string)
 
 	if !identityMatchesPath(registry.MasterSeed, rootDerivationPath, registry.RootDID) {
-		rootErr = fmt.Errorf("root DID %s for af server %s does not match its master seed (wrong encryption passphrase or corrupted seed)",
+		rootErr = fmt.Errorf("root DID %s for af server %s does not match its master seed (wrong encryption passphrase or corrupted seed); see docs/ENVIRONMENT_VARIABLES.md, Lost-root recovery",
 			registry.RootDID, registry.AgentFieldServerID)
 		for _, agent := range registry.AgentNodes {
 			quarantined[agent.DID] = rootErr.Error()

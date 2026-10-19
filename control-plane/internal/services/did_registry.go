@@ -114,7 +114,7 @@ func (r *DIDRegistry) CreateRegistry(registry *types.DIDRegistry) (*types.DIDReg
 	if stored.RootDID != registry.RootDID {
 		seed := r.decryptSeed(serverID, stored.MasterSeed)
 		if !identityMatchesPath(seed, rootDerivationPath, stored.RootDID) {
-			err := fmt.Errorf("stored root DID %s for af server %s does not match its master seed", stored.RootDID, serverID)
+			err := fmt.Errorf("stored root DID %s for af server %s does not match its master seed; see docs/ENVIRONMENT_VARIABLES.md, Lost-root recovery", stored.RootDID, serverID)
 			r.brokenServers[serverID] = err
 			return nil, err
 		}
@@ -263,7 +263,8 @@ func (e *unverifiableStoredIdentityError) Error() string {
 }
 
 // readThroughAgent adds only verified identities absent from this replica's
-// memory (D1.1-D1.3). It never repairs storage or replaces a local identity.
+// memory (D1.1-D1.3). It retries retirement of startup-quarantined components,
+// but never repairs derivation paths or replaces a local identity.
 func (r *DIDRegistry) readThroughAgent(serverID, nodeID string) (*types.AgentDIDInfo, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -291,10 +292,29 @@ func (r *DIDRegistry) readThroughAgent(serverID, nodeID string) (*types.AgentDID
 		normalizePublicKeyJWK(&agent.PublicKeyJWK, agent.DID)
 	}
 
+	if r.quarantined[agent.DID] != "" {
+		// An unrecoverable agent requires operator revocation. Its children
+		// are quarantined with it, not pending component retirement.
+		return &agent, nil
+	}
+
 	// D1.1: components are read by the agent DID already held in memory.
 	components, err := r.storageProvider.ListComponentDIDs(ctx, agent.DID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load components for agent %s: %w", nodeID, err)
+	}
+	// Retirement also covers duplicate names. Complete it before importing
+	// anything, then discard those names from this pre-retirement snapshot.
+	type componentName struct{ kind, name string }
+	retiredNames := make(map[componentName]bool)
+	for _, component := range components {
+		if r.quarantined[component.ComponentDID] == "" {
+			continue
+		}
+		if err := r.storageProvider.RetireComponentDIDs(ctx, agent.DID, []string{component.ComponentDID}); err != nil {
+			return nil, fmt.Errorf("cannot retire unverifiable component DID %s: %w; stop the control plane and run: UPDATE component_dids SET status = 'retired' WHERE did = '%s'; (see docs/ENVIRONMENT_VARIABLES.md, Component retirement recovery)", component.ComponentDID, err, strings.ReplaceAll(component.ComponentDID, "'", "''"))
+		}
+		retiredNames[componentName{component.ComponentType, component.ComponentName}] = true
 	}
 	var additions []string
 	changed := !inMemory
@@ -302,6 +322,9 @@ func (r *DIDRegistry) readThroughAgent(serverID, nodeID string) (*types.AgentDID
 	// earliest active component when old databases contain duplicate names.
 	for i := len(components) - 1; i >= 0; i-- {
 		component := components[i]
+		if retiredNames[componentName{component.ComponentType, component.ComponentName}] {
+			continue
+		}
 		switch component.ComponentType {
 		case "reasoner":
 			if _, exists := agent.Reasoners[component.ComponentName]; exists {
@@ -621,8 +644,8 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 			}
 			for agentDID, componentDIDs := range retire {
 				// The component was already dropped from the registry. Retiring the
-				// row keeps it from being loaded again; if this fails it is simply
-				// dropped again on the next start.
+				// row keeps it from being loaded again. Read-through retries failed
+				// retirements using registryQuarantine before issuing any keys.
 				if err := r.storageProvider.RetireComponentDIDs(ctx, agentDID, componentDIDs); err != nil {
 					log.Printf("Warning: failed to retire unverifiable component DIDs of agent %s: %v", agentDID, err)
 				}

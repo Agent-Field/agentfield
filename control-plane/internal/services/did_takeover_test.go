@@ -141,7 +141,7 @@ func postgresTakeoverStores(t *testing.T) (storage.StorageProvider, storage.Stor
 	admin, err := sql.Open("pgx", raw)
 	require.NoError(t, err)
 	defer admin.Close()
-	name := fmt.Sprintf("af_did_takeover_%d", time.Now().UnixNano())
+	name := fmt.Sprintf("fix_did_takeover_%d", time.Now().UnixNano())
 	_, err = admin.Exec("CREATE DATABASE " + name)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1061,5 +1061,251 @@ func TestDIDTakeover_TransientTransactionErrorsRetryWholeRegistration(t *testing
 			require.Len(t, rows, 1)
 			require.Equal(t, resp.IdentityPackage.AgentDID.DID, rows[0].DID)
 		})
+	}
+}
+
+// C2/F2: a stale replica must allocate from the committed epoch, on real storage.
+func runC2DurableX25519Rotation(t *testing.T, first, second storage.StorageProvider) {
+	t.Helper()
+	keyDir := filepath.Join(t.TempDir(), "keys")
+	a, _ := openReproService(t, first, "server-a", keyDir)
+	did := register(t, a, "node", nil, nil).IdentityPackage.AgentDID.DID
+	b, _ := openReproService(t, second, "server-a", keyDir)
+	pub1, epoch1, err := a.RotateAgentX25519Key(did)
+	require.NoError(t, err)
+	require.Equal(t, 1, epoch1)
+	pub2, epoch2, err := b.RotateAgentX25519Key(did)
+	require.NoError(t, err)
+	require.Equal(t, 2, epoch2)
+	require.NotEqual(t, pub1, pub2)
+	rows, err := first.ListAgentDIDs(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, 2, rows[0].X25519Epoch)
+	fresh, _ := openReproService(t, first, "server-a", keyDir)
+	identity, err := fresh.ResolveDID(did)
+	require.NoError(t, err)
+	require.Equal(t, 2, identity.X25519Epoch)
+	require.Equal(t, pub2, identity.X25519PublicKeyJWK)
+	// The original instance is now stale too; it must advance beyond 2.
+	_, epoch3, err := a.RotateAgentX25519Key(did)
+	require.NoError(t, err)
+	require.Equal(t, 3, epoch3)
+}
+
+func TestC2F2X25519DurableRotationSQLite(t *testing.T) {
+	env := newContinuityEnv(t)
+	env.restart()
+	// Independent real SQLite pools, sharing one file.
+	second := storage.NewLocalStorage(storage.LocalStorageConfig{})
+	vectorOff := false
+	require.NoError(t, second.Initialize(context.Background(), storage.StorageConfig{
+		Mode: "local", Local: storage.LocalStorageConfig{DatabasePath: filepath.Join(env.stateDir, "agentfield.db"), KVStorePath: filepath.Join(t.TempDir(), "second.bolt")},
+		Vector: storage.VectorStoreConfig{Enabled: &vectorOff},
+	}))
+	t.Cleanup(func() { require.NoError(t, second.Close(context.Background())) })
+	runC2DurableX25519Rotation(t, env.provider, second)
+}
+
+func TestC2F2X25519DurableRotationPostgres(t *testing.T) {
+	a, b, _ := postgresTakeoverStores(t)
+	runC2DurableX25519Rotation(t, a, b)
+}
+
+type c3AllocationBarrier struct {
+	storage.StorageProvider
+	arrived sync.WaitGroup
+	calls   atomic.Int32
+}
+
+func (s *c3AllocationBarrier) ListAllComponentDIDs(ctx context.Context, did string) ([]*types.ComponentDIDInfo, error) {
+	rows, err := s.StorageProvider.ListAllComponentDIDs(ctx, did)
+	if s.calls.Add(1) <= 2 {
+		s.arrived.Done()
+		s.arrived.Wait()
+	}
+	return rows, err
+}
+
+func runC3SharedRegistryRace(t *testing.T, provider storage.StorageProvider) {
+	t.Helper()
+	for round := 0; round < 20; round++ {
+		wrapped := &c3AllocationBarrier{StorageProvider: provider}
+		wrapped.arrived.Add(2)
+		a, reg := openReproService(t, wrapped, "server-a", filepath.Join(t.TempDir(), "keys"))
+		b := NewDIDService(a.config, a.keystore, reg)
+		require.NoError(t, b.Initialize("server-a"))
+		var wg sync.WaitGroup
+		responses := make([]*types.DIDRegistrationResponse, 2)
+		errs := make([]error, 2)
+		node := fmt.Sprintf("shared-%d", round)
+		for i, svc := range []*DIDService{a, b} {
+			wg.Add(1)
+			go func(i int, svc *DIDService) {
+				defer wg.Done()
+				responses[i], errs[i] = svc.RegisterAgent(&types.DIDRegistrationRequest{AgentNodeID: node, Reasoners: []types.ReasonerDefinition{{ID: "r"}}})
+			}(i, svc)
+		}
+		wg.Wait()
+		for i, resp := range responses {
+			require.NoError(t, errs[i])
+			require.NotNil(t, resp)
+			require.True(t, resp.Success, resp.Error)
+		}
+		require.Equal(t, responses[0].IdentityPackage.AgentDID.DID, responses[1].IdentityPackage.AgentDID.DID)
+		require.Equal(t, responses[0].IdentityPackage.ReasonerDIDs["r"].DID, responses[1].IdentityPackage.ReasonerDIDs["r"].DID)
+	}
+	rows, err := provider.ListAgentDIDs(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rows, 20)
+	for _, row := range rows {
+		require.Equal(t, types.AgentDIDStatusActive, row.Status)
+	}
+	components, err := provider.ListComponentDIDs(context.Background(), "")
+	require.NoError(t, err)
+	require.Len(t, components, 20)
+}
+
+func TestC3F3DIDSharedRegistrySameNodeSQLite(t *testing.T) {
+	env := newContinuityEnv(t)
+	env.restart()
+	runC3SharedRegistryRace(t, env.provider)
+}
+
+func TestC3F3DIDSharedRegistrySameNodePostgres(t *testing.T) {
+	a, _, _ := postgresTakeoverStores(t)
+	runC3SharedRegistryRace(t, a)
+}
+
+func TestC4F4DIDSQLiteContentionBudget(t *testing.T) {
+	t.Setenv("AGENTFIELD_SQLITE_BUSY_TIMEOUT_MS", "5")
+	env := newContinuityEnv(t)
+	env.restart()
+	// Count attempts at the first durable write in normal registration.
+	spy := &c4ServerWriteSpy{StorageProvider: env.provider}
+	svc, _ := openReproService(t, spy, "server-a", env.keyDir)
+	db, err := sql.Open("sqlite3", filepath.Join(env.stateDir, "agentfield.db"))
+	require.NoError(t, err)
+	defer db.Close()
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.Exec("UPDATE did_registry SET total_dids=total_dids+1")
+	require.NoError(t, err)
+	spy.writes.Store(0)
+	start := time.Now()
+	resp, err := svc.RegisterAgent(&types.DIDRegistrationRequest{AgentNodeID: "blocked"})
+	require.NoError(t, err)
+	require.False(t, resp.Success)
+	require.Contains(t, resp.Error, "database is locked")
+	require.EqualValues(t, maxDIDContentionRetries+1, spy.writes.Load())
+	require.Less(t, time.Since(start), 2*time.Second)
+	require.NoError(t, tx.Rollback())
+	register(t, svc, "blocked", nil, nil)
+}
+
+func TestC6F6DIDDuplicateComponentsRetireTogether(t *testing.T) {
+	env := newContinuityEnv(t)
+	env.restart()
+	db, err := sql.Open("sqlite3", filepath.Join(env.stateDir, "agentfield.db"))
+	require.NoError(t, err)
+	defer db.Close()
+	runC6DuplicateComponents(t, env.provider, db, false)
+}
+
+func TestC6F6DIDDuplicateComponentsRetireTogetherPostgres(t *testing.T) {
+	first, _, dsn := postgresTakeoverStores(t)
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	defer db.Close()
+	runC6DuplicateComponents(t, first, db, true)
+}
+
+func runC6DuplicateComponents(t *testing.T, provider storage.StorageProvider, db *sql.DB, postgres bool) {
+	t.Helper()
+	svc, _ := openReproService(t, provider, "server-a", filepath.Join(t.TempDir(), "keys"))
+	first := register(t, svc, "node", []string{"r"}, nil)
+	reg, err := svc.GetRegistry("server-a")
+	require.NoError(t, err)
+	path := componentDerivationPath(first.IdentityPackage.AgentDID.DerivationPath, 0, 1)
+	did, _, pub, err := svc.generateDIDWithKeys(reg.MasterSeed, path)
+	require.NoError(t, err)
+	// A legal main-schema row: only DID, not component name, was unique.
+	query := `INSERT INTO component_dids(did,agent_did,component_type,function_name,public_key_jwk,derivation_path,status,created_at) VALUES(?,?,?,?,?,?,'active',?)`
+	if postgres {
+		query = `INSERT INTO component_dids(did,agent_did,component_type,function_name,public_key_jwk,derivation_path,status,created_at) VALUES($1,$2,$3,$4,$5,$6,'active',$7)`
+	}
+	_, err = db.Exec(query, did, first.IdentityPackage.AgentDID.DID, "reasoner", "r", pub, path, time.Now().Add(time.Second))
+	require.NoError(t, err)
+	reg2 := NewDIDRegistryWithStorage(provider)
+	require.NoError(t, reg2.Initialize())
+	svc = NewDIDService(svc.config, svc.keystore, reg2)
+	require.NoError(t, svc.Initialize("server-a"))
+	resp, err := svc.DeregisterComponents(&types.ComponentDeregistrationRequest{AgentNodeID: "node", ReasonerIDsToRemove: []string{"r"}})
+	require.NoError(t, err)
+	require.True(t, resp.Success, resp.Error)
+	agent, err := svc.GetExistingAgentDID("node")
+	require.NoError(t, err)
+	require.NotContains(t, agent.Reasoners, "r")
+	for _, old := range []string{did, first.IdentityPackage.ReasonerDIDs["r"].DID} {
+		identity, err := svc.ResolveDID(old)
+		require.Error(t, err)
+		require.Nil(t, identity)
+	}
+	rows, err := provider.ListAllComponentDIDs(context.Background(), first.IdentityPackage.AgentDID.DID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	for _, row := range rows {
+		require.Equal(t, storage.ComponentDIDStatusRetired, row.Status)
+	}
+	again := register(t, svc, "node", []string{"r"}, nil)
+	require.NotEqual(t, did, again.IdentityPackage.ReasonerDIDs["r"].DID)
+	require.NotEqual(t, first.IdentityPackage.ReasonerDIDs["r"].DID, again.IdentityPackage.ReasonerDIDs["r"].DID)
+}
+
+type c4ServerWriteSpy struct {
+	storage.StorageProvider
+	writes atomic.Int32
+}
+
+func (s *c4ServerWriteSpy) StoreAgentFieldServerDID(ctx context.Context, serverID, rootDID string, seed []byte, created, rotated time.Time) error {
+	s.writes.Add(1)
+	return s.StorageProvider.StoreAgentFieldServerDID(ctx, serverID, rootDID, seed, created, rotated)
+}
+
+func TestC5F5DIDQuarantineRetiresSnapshotDuplicates(t *testing.T) {
+	env := newContinuityEnv(t)
+	env.restart()
+	svc := env.service(env.registry(), "server-a")
+	first := register(t, svc, "node", []string{"r"}, nil)
+	foreign, publicKey := foreignDIDKey(t)
+	db, err := sql.Open("sqlite3", filepath.Join(env.stateDir, "agentfield.db"))
+	require.NoError(t, err)
+	defer db.Close()
+	// Give both rows explicit timestamps: older schema defaults can leave the
+	// original row NULL, which would otherwise sort after our old duplicate.
+	_, err = db.Exec("UPDATE component_dids SET created_at = ? WHERE did = ?", time.Now(), first.IdentityPackage.ReasonerDIDs["r"].DID)
+	require.NoError(t, err)
+	// The oldest duplicate is the unrecoverable row chosen during startup.
+	_, err = db.Exec(`INSERT INTO component_dids(did,agent_did,component_type,function_name,public_key_jwk,derivation_path,status,created_at) VALUES(?,?,?,?,?,?,'active',?)`, foreign, first.IdentityPackage.AgentDID.DID, "reasoner", "r", publicKey, "legacy", time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+	faulty := &c5RetireFailure{StorageProvider: env.provider, failures: 1}
+	reg := NewDIDRegistryWithStorage(faulty)
+	require.NoError(t, reg.Initialize())
+	require.NotEmpty(t, reg.QuarantineReason(foreign))
+	svc = env.service(reg, "server-a")
+	again := register(t, svc, "node", []string{"r"}, nil)
+	require.NotEqual(t, foreign, again.IdentityPackage.ReasonerDIDs["r"].DID)
+	require.NotEqual(t, first.IdentityPackage.ReasonerDIDs["r"].DID, again.IdentityPackage.ReasonerDIDs["r"].DID)
+	rows, err := env.provider.ListAllComponentDIDs(context.Background(), first.IdentityPackage.AgentDID.DID)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	for _, row := range rows {
+		if row.ComponentDID != again.IdentityPackage.ReasonerDIDs["r"].DID {
+			require.Equal(t, storage.ComponentDIDStatusRetired, row.Status)
+			identity, err := svc.ResolveDID(row.ComponentDID)
+			require.Error(t, err)
+			require.Nil(t, identity)
+		}
 	}
 }

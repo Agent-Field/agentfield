@@ -335,3 +335,155 @@ func TestIdentityHardening_FailedSaveLeavesRegistryUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, first.IdentityPackage.AgentDID.DID, current.DID)
 }
+
+type c5RetireFailure struct {
+	storage.StorageProvider
+	failures int
+}
+
+func (s *c5RetireFailure) RetireComponentDIDs(ctx context.Context, agent string, dids []string) error {
+	if s.failures != 0 {
+		s.failures--
+		return errors.New("injected retirement write failure")
+	}
+	return s.StorageProvider.RetireComponentDIDs(ctx, agent, dids)
+}
+
+func TestC5F5DIDQuarantineRetirementRetry(t *testing.T) {
+	for _, persistent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("persistent=%v", persistent), func(t *testing.T) {
+			env := newContinuityEnv(t)
+			env.restart()
+			svc := env.service(env.registry(), "server-a")
+			agent := register(t, svc, "node", nil, nil).IdentityPackage.AgentDID
+			foreign, foreignJWK := foreignDIDKey(t)
+			require.NoError(t, env.provider.UpsertAgentDIDWithComponents(context.Background(), storage.AgentDIDRecord{
+				AgentNodeID: "node", DID: agent.DID, AgentFieldServerID: "server-a", PublicKeyJWK: agent.PublicKeyJWK, DerivationPath: agent.DerivationPath,
+				Components: []storage.ComponentDIDRequest{{ComponentDID: foreign, ComponentType: "reasoner", ComponentName: "r", PublicKeyJWK: foreignJWK, DerivationPath: "legacy"}},
+			}))
+			faulty := &c5RetireFailure{StorageProvider: env.provider, failures: 1}
+			if persistent {
+				faulty.failures = -1
+			}
+			reg := NewDIDRegistryWithStorage(faulty)
+			require.NoError(t, reg.Initialize())
+			svc = env.service(reg, "server-a")
+			identity, err := svc.ResolveDID(foreign)
+			require.Error(t, err)
+			require.Nil(t, identity)
+			resp, err := svc.RegisterAgent(&types.DIDRegistrationRequest{AgentNodeID: "node", Reasoners: []types.ReasonerDefinition{{ID: "r"}}})
+			require.NoError(t, err)
+			if persistent {
+				require.False(t, resp.Success)
+				require.Empty(t, resp.IdentityPackage)
+				require.Contains(t, resp.Error, foreign)
+				require.Contains(t, resp.Error, "UPDATE component_dids SET status = 'retired' WHERE did = '"+foreign+"';")
+				require.Contains(t, resp.Error, "injected retirement write failure")
+			} else {
+				require.True(t, resp.Success, resp.Error)
+				require.NotEqual(t, foreign, resp.IdentityPackage.ReasonerDIDs["r"].DID)
+				rows, err := env.provider.ListAllComponentDIDs(context.Background(), agent.DID)
+				require.NoError(t, err)
+				for _, row := range rows {
+					if row.ComponentDID == foreign {
+						require.Equal(t, storage.ComponentDIDStatusRetired, row.Status)
+					}
+				}
+			}
+			identity, err = svc.ResolveDID(foreign)
+			require.Error(t, err)
+			require.Nil(t, identity)
+		})
+	}
+}
+
+func TestC7F7DIDLegacyRecoveryDerivationCount(t *testing.T) {
+	reg := &types.DIDRegistry{AgentFieldServerID: "server", MasterSeed: []byte("synthetic"), AgentNodes: map[string]types.AgentDIDInfo{}}
+	for i := 0; i < 100; i++ {
+		agent := types.AgentDIDInfo{Reasoners: map[string]types.ReasonerDIDInfo{}}
+		count := 1
+		if i == 0 {
+			count = 100
+		}
+		for j := 0; j < count; j++ {
+			agent.Reasoners[fmt.Sprint(j)] = types.ReasonerDIDInfo{}
+		}
+		reg.AgentNodes[fmt.Sprint(i)] = agent
+	}
+	ix := newLegacyPathIndex(reg, 100)
+	for i := 0; i < 100; i++ {
+		agentPath := agentDerivationPath(ix.serverSegment, i)
+		did, err := didForPath(reg.MasterSeed, agentPath)
+		require.NoError(t, err)
+		path, ok := ix.agentPath(did)
+		require.True(t, ok)
+		require.Equal(t, agentPath, path)
+		count := 1
+		if i == 0 {
+			count = 100
+		}
+		for j := 0; j < count; j++ {
+			want := componentDerivationPath(agentPath, 0, j)
+			did, err := didForPath(reg.MasterSeed, want)
+			require.NoError(t, err)
+			path, ok := ix.componentPath(did, i, true)
+			require.True(t, ok)
+			require.Equal(t, want, path)
+		}
+	}
+	require.Less(t, ix.derivations, 600, "previous eager component search alone derived 41,800 candidates")
+	t.Logf("100 agents and 199 components recovered with %d candidate derivations", ix.derivations)
+	// Repeated lookups only use cached candidates.
+	before := ix.derivations
+	want := componentDerivationPath(agentDerivationPath(ix.serverSegment, 0), 0, 99)
+	did, err := didForPath(reg.MasterSeed, want)
+	require.NoError(t, err)
+	path, ok := ix.componentPath(did, 0, true)
+	require.True(t, ok)
+	require.Equal(t, want, path)
+	require.Equal(t, before, ix.derivations)
+}
+
+func TestC7F7DIDLegacyRecoveryPreservesSearchSpace(t *testing.T) {
+	reg := &types.DIDRegistry{AgentFieldServerID: "server", MasterSeed: []byte("synthetic"), AgentNodes: map[string]types.AgentDIDInfo{}}
+	ix := newLegacyPathIndex(reg, 1)
+	want := componentDerivationPath(agentDerivationPath(ix.serverSegment, ix.maxAgentIndex), 1, ix.maxComponentIx)
+	did, err := didForPath(reg.MasterSeed, want)
+	require.NoError(t, err)
+	path, ok := ix.componentPath(did, 0, true)
+	require.True(t, ok)
+	require.Equal(t, want, path)
+	missing, _ := foreignDIDKey(t)
+	_, ok = ix.componentPath(missing, 0, true)
+	require.False(t, ok)
+}
+
+func TestC5F5DIDUnrecoverableAgentDoesNotRetireChildren(t *testing.T) {
+	env := newContinuityEnv(t)
+	env.restart()
+	svc := env.service(env.registry(), "server-a")
+	reg, err := svc.GetRegistry("server-a")
+	require.NoError(t, err)
+	foreign, publicKey := foreignDIDKey(t)
+	path := componentDerivationPath(agentDerivationPath(serverPathSegment("server-a"), 4), 0, 0)
+	component, _, componentPublicKey, err := svc.generateDIDWithKeys(reg.MasterSeed, path)
+	require.NoError(t, err)
+	require.NoError(t, env.provider.UpsertAgentDIDWithComponents(context.Background(), storage.AgentDIDRecord{
+		AgentNodeID: "bad-node", DID: foreign, AgentFieldServerID: "server-a", PublicKeyJWK: publicKey, DerivationPath: "unrecoverable",
+		Components: []storage.ComponentDIDRequest{{ComponentDID: component, ComponentType: "reasoner", ComponentName: "r", PublicKeyJWK: componentPublicKey, DerivationPath: path}},
+	}))
+	spy := &readOnlyDIDSpy{StorageProvider: env.provider}
+	reloaded := NewDIDRegistryWithStorage(spy)
+	require.NoError(t, reloaded.Initialize())
+	svc = env.service(reloaded, "server-a")
+	spy.writes.Store(0)
+	resp, err := svc.RegisterAgent(&types.DIDRegistrationRequest{AgentNodeID: "bad-node", Reasoners: []types.ReasonerDefinition{{ID: "r"}}})
+	require.NoError(t, err)
+	require.False(t, resp.Success)
+	require.Contains(t, resp.Error, "revoked")
+	require.Zero(t, spy.writes.Load())
+	rows, err := env.provider.ListComponentDIDs(context.Background(), foreign)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, component, rows[0].ComponentDID)
+}
