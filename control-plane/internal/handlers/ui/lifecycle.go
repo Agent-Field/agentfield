@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -42,11 +43,13 @@ func (h *LifecycleHandler) getAgentBaseURL(ctx context.Context, agentID string, 
 // buildEndpoints creates endpoint URLs using the appropriate base URL
 func (h *LifecycleHandler) buildEndpoints(ctx context.Context, agentID string, port int) map[string]string {
 	baseURL := h.getAgentBaseURL(ctx, agentID, port)
-	return map[string]string{
-		"health":    baseURL + "/health",
-		"reasoners": baseURL + "/reasoners",
-		"skills":    baseURL + "/skills",
+	endpoints := make(map[string]string)
+	for _, name := range []string{"health", "reasoners", "skills"} {
+		if u, err := agenturl.ForNode(agentID, baseURL, name); err == nil {
+			endpoints[name] = u.String()
+		}
 	}
+	return endpoints
 }
 
 // StartAgentRequest represents the request body for starting an agent

@@ -7,18 +7,16 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/gin-gonic/gin"
 )
-
-const agentProcessLogsPath = "/agentfield/v1/logs"
 
 // NodeLogsProxyHandler proxies UI requests to an agent node's NDJSON log API.
 type NodeLogsProxyHandler struct {
@@ -44,14 +42,13 @@ func (h *NodeLogsProxyHandler) ProxyNodeLogsHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 		return
 	}
-	base := strings.TrimSpace(agent.BaseURL)
-	if base == "" {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "agent_unreachable", "message": "node has no base_url"})
-		return
-	}
-	u, err := url.Parse(base)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_base_url"})
+	upstreamURL, err := agenturl.ForNode(nodeID, agent.BaseURL, "agentfield", "v1", "logs")
+	if err != nil {
+		status := http.StatusBadRequest
+		if agent.BaseURL == "" {
+			status = http.StatusBadGateway
+		}
+		c.JSON(status, gin.H{"error": "invalid_base_url", "message": err.Error()})
 		return
 	}
 
@@ -73,10 +70,8 @@ func (h *NodeLogsProxyHandler) ProxyNodeLogsHandler(c *gin.Context) {
 		}
 	}
 
-	upstream := strings.TrimSuffix(base, "/") + agentProcessLogsPath
-	if raw := c.Request.URL.RawQuery; raw != "" {
-		upstream += "?" + raw
-	}
+	upstreamURL.RawQuery = q.Encode()
+	upstream := upstreamURL.String()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream, nil)
 	if err != nil {
@@ -88,15 +83,10 @@ func (h *NodeLogsProxyHandler) ProxyNodeLogsHandler(c *gin.Context) {
 	}
 	req.Header.Set("Accept", "application/x-ndjson, application/json")
 
-	dialer := &net.Dialer{Timeout: proxyCfg.ConnectTimeout}
-	transport := &http.Transport{
-		DialContext: func(dctx context.Context, network, addr string) (net.Conn, error) {
-			dctx2, cancel := context.WithTimeout(dctx, proxyCfg.ConnectTimeout)
-			defer cancel()
-			return dialer.DialContext(dctx2, network, addr)
-		},
-	}
-	client := &http.Client{Transport: transport, Timeout: 0}
+	client := agenturl.NewClient(0)
+	transport := agenturl.NewTransport(proxyCfg.ConnectTimeout)
+	defer transport.CloseIdleConnections()
+	client.Transport = transport
 
 	streamCtx := ctx
 	var cancel context.CancelFunc
@@ -107,6 +97,7 @@ func (h *NodeLogsProxyHandler) ProxyNodeLogsHandler(c *gin.Context) {
 	}
 
 	resp, err := client.Do(req)
+	agenturl.WarnNode(nodeID, err)
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {

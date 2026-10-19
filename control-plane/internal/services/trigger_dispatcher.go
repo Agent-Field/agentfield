@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
@@ -37,11 +38,9 @@ type TriggerDispatcher struct {
 // just without VC chain extension.
 func NewTriggerDispatcher(storage storage.StorageProvider, vcService *VCService) *TriggerDispatcher {
 	return &TriggerDispatcher{
-		storage:   storage,
-		vcService: vcService,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		storage:    storage,
+		vcService:  vcService,
+		httpClient: agenturl.NewClient(30 * time.Second),
 	}
 }
 
@@ -138,7 +137,12 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	dispatchExecutionID := utils.GenerateExecutionID()
 	requestID := utils.GenerateAgentFieldRequestID()
 
-	url := fmt.Sprintf("%s/reasoners/%s", node.BaseURL, trig.TargetReasoner)
+	endpoint, err := agenturl.ForNode(node.ID, node.BaseURL, "reasoners", trig.TargetReasoner)
+	if err != nil {
+		d.markFailed(ctx, ev.ID, fmt.Sprintf("build request: %v", err))
+		return
+	}
+	url := endpoint.String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("build request: %v", err))
@@ -172,6 +176,7 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	}
 
 	resp, err := d.httpClient.Do(req)
+	agenturl.WarnNode(node.ID, err)
 	if err != nil {
 		msg := fmt.Sprintf("dispatch request failed: %v", err)
 		d.failDispatchExecution(ctx, dispatchExecutionID, msg)
