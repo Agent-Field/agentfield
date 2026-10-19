@@ -386,7 +386,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Swap the worker, keep the loop | `provider="claude-code"` \| `"codex"` \| `"gemini"` \| `"opencode"` \| `"pi"` \| `"omp"` |
 | Fleet-wide default override | `AGENTFIELD_HARNESS_PROVIDER=codex` |
 | Schema-constrained output | `schema=ResultModel` (Pydantic/Zod) |
-| Cost capping | `max_budget_usd=3.0` |
+| Cost stop threshold (Claude Code) | `max_budget_usd=3.0` (the run may exceed it) |
 | Turn limiting | `max_turns=100` |
 | Tool access control | `tools=["Read", "Write", "Bash"]` |
 | Environment injection | `env={"KEY": "value"}` |
@@ -395,6 +395,8 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | OpenCode prompt compatibility | All SDKs support `AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT=1` for the opt-in inline rollback |
 | Provider-agnostic reasoning variants | `variant="high"` or a `#high` model suffix |
 | Multi-layer output recovery | Cosmetic repair → retry → full retry |
+
+For the `claude-code` provider, Claude Code checks spend after a model response, so the response that reaches `max_budget_usd` still completes and counts toward the total. Work already in flight, including subagent calls, may add more spend before it stops. At fleet scale, budget for each worker's threshold plus the cost of its largest billable call multiplied by its maximum number of concurrent calls; the fleet total can exceed the sum of worker thresholds. Use provider-side spending controls when you need a hard ceiling. See [Claude Code's budget headroom guidance](https://code.claude.com/docs/en/agent-sdk/agent-loop#budget-headroom).
 
 #### Connector API (Fleet Management)
 
