@@ -398,15 +398,19 @@ func (s *VCService) generateWorkflowVCDocument(workflowID string, executionVCs [
 
 	issuerDID := registry.RootDID
 	if len(executionVCs) > 0 {
-		// Use the issuer from the first execution VC if available
 		issuerDID = executionVCs[0].IssuerDID
 	}
+	issuerIdentity, err := s.didService.ResolveDID(issuerDID)
+	if err != nil || issuerIdentity == nil || issuerIdentity.PrivateKeyJWK == "" {
+		// Historical execution issuers may be retired or public-only. The
+		// active root signs the new wrapper without changing those executions.
+		issuerDID = registry.RootDID
+		issuerIdentity, err = s.didService.ResolveDID(issuerDID)
+	}
 
-	// Create WorkflowVC document
 	workflowVCDoc := s.createWorkflowVCDocument(workflowID, sessionID, componentVCIDs, status, startTime, endTime, issuerDID)
 
 	// Sign the WorkflowVC
-	issuerIdentity, err := s.didService.ResolveDID(issuerDID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve issuer DID: %w", err)
 	}
