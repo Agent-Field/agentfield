@@ -1,3 +1,4 @@
+import { safeExternalUrl } from "@/utils/safeExternalUrl";
 import {
   CheckCircle,
   XCircle,
@@ -185,7 +186,7 @@ export function ExecutionApprovalPanel({ execution }: ExecutionApprovalPanelProp
             <div className="flex items-center justify-between gap-2">
               <label className="text-muted-foreground flex-shrink-0">Review Page</label>
               <a
-                href={execution.approval_request_url}
+                href={safeExternalUrl(execution.approval_request_url) ?? undefined}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs font-medium text-foreground hover:underline flex items-center gap-1"
