@@ -1843,16 +1843,30 @@ func (s *DIDService) deregisterComponents(ctx context.Context, req *types.Compon
 	existingAgent = cloneAgentInfo(existingAgent)
 	removedCount := 0
 	var removedDIDs []string
+	seenDIDs := make(map[string]bool)
+	addRemovedDID := func(did string) {
+		if !seenDIDs[did] {
+			seenDIDs[did] = true
+			removedDIDs = append(removedDIDs, did)
+		}
+	}
+	// Values record whether a requested name was found in memory or storage.
+	removedNames := map[string]map[string]bool{"reasoner": {}, "skill": {}}
+	for _, name := range req.ReasonerIDsToRemove {
+		removedNames["reasoner"][name] = false
+	}
+	for _, name := range req.SkillIDsToRemove {
+		removedNames["skill"][name] = false
+	}
 
 	// Remove reasoners
 	for _, reasonerID := range req.ReasonerIDsToRemove {
 		if reasonerInfo, exists := existingAgent.Reasoners[reasonerID]; exists {
 			delete(existingAgent.Reasoners, reasonerID)
-			removedDIDs = append(removedDIDs, reasonerInfo.DID)
+			addRemovedDID(reasonerInfo.DID)
+			removedNames["reasoner"][reasonerID] = true
 			removedCount++
 			logger.Logger.Debug().Msgf("🗑️ Removed reasoner DID: %s from agent %s", reasonerID, req.AgentNodeID)
-		} else {
-			logger.Logger.Warn().Msgf("⚠️ Reasoner %s not found in agent %s, skipping removal", reasonerID, req.AgentNodeID)
 		}
 	}
 
@@ -1860,56 +1874,54 @@ func (s *DIDService) deregisterComponents(ctx context.Context, req *types.Compon
 	for _, skillID := range req.SkillIDsToRemove {
 		if skillInfo, exists := existingAgent.Skills[skillID]; exists {
 			delete(existingAgent.Skills, skillID)
-			removedDIDs = append(removedDIDs, skillInfo.DID)
+			addRemovedDID(skillInfo.DID)
+			removedNames["skill"][skillID] = true
 			removedCount++
 			logger.Logger.Debug().Msgf("🗑️ Removed skill DID: %s from agent %s", skillID, req.AgentNodeID)
-		} else {
-			logger.Logger.Warn().Msgf("⚠️ Skill %s not found in agent %s, skipping removal", skillID, req.AgentNodeID)
 		}
 	}
+	memoryRemovedCount := removedCount
 
 	// Older writers allowed multiple active rows per name. Explicit removal
-	// retires every such row; quarantine retirement remains strictly DID-scoped.
-	if len(removedDIDs) > 0 {
+	// retires every such row, even when the name is already absent from memory.
+	if len(removedNames["reasoner"]) > 0 || len(removedNames["skill"]) > 0 {
 		rows, err := s.registry.storageProvider.ListComponentDIDs(ctx, existingAgent.DID)
 		if err != nil {
 			return &types.ComponentDeregistrationResponse{Error: fmt.Sprintf("failed to list removed component DIDs: %v", err)}, nil
 		}
-		removedNames := make(map[string]map[string]bool)
-		removedNames["reasoner"] = make(map[string]bool)
-		removedNames["skill"] = make(map[string]bool)
-		for _, name := range req.ReasonerIDsToRemove {
-			removedNames["reasoner"][name] = true
-		}
-		for _, name := range req.SkillIDsToRemove {
-			removedNames["skill"][name] = true
-		}
 		for _, row := range rows {
-			if removedNames[row.ComponentType][row.ComponentName] {
-				removedDIDs = append(removedDIDs, row.ComponentDID)
+			if found, requested := removedNames[row.ComponentType][row.ComponentName]; requested {
+				addRemovedDID(row.ComponentDID)
+				if !found {
+					removedCount++
+					removedNames[row.ComponentType][row.ComponentName] = true
+				}
 			}
 		}
 	}
 
-	// Update registry
-	err = s.registry.updateAgents(ctx, agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
-		live.AgentNodes[req.AgentNodeID] = existingAgent
-		live.TotalDIDs -= removedCount
-		return []string{req.AgentNodeID}, nil
-	})
-	if err != nil {
-		return &types.ComponentDeregistrationResponse{
-			Success: false,
-			Error:   fmt.Sprintf("failed to store updated registry: %v", err),
-		}, nil
-	}
-
-	// Saving the registry only upserts the remaining components; the removed
-	// rows must be retired explicitly or they are reloaded on the next start.
+	// Retire durably before publishing the removal. A failed retirement must
+	// leave the live registry unchanged so a retry can still see the components.
 	if err := s.registry.retireComponents(ctx, agentfieldServerID, req.AgentNodeID, removedDIDs); err != nil {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to retire removed component DIDs: %v", err),
+		}, nil
+	}
+
+	// Persist and publish the remaining components using the same context.
+	// If this fails, retirement remains durable and retries can converge.
+	err = s.registry.updateAgents(ctx, agentfieldServerID, func(live *types.DIDRegistry) ([]string, error) {
+		live.AgentNodes[req.AgentNodeID] = existingAgent
+		live.TotalDIDs -= memoryRemovedCount
+		return []string{req.AgentNodeID}, nil
+	})
+	if err != nil {
+		logger.Logger.Error().Err(err).Str("agent_node_id", req.AgentNodeID).
+			Msg("Failed to publish component removal after durable retirement")
+		return &types.ComponentDeregistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to store updated registry: %v", err),
 		}, nil
 	}
 
