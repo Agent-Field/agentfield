@@ -51,6 +51,7 @@ func (s *VCService) GenerateExecutionVC(ctx *types.ExecutionContext, inputData, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve caller DID: %w", err)
 	}
+	callerDID = callerIdentity.DID
 
 	// Handle optional target DID
 	var targetIdentity *types.DIDIdentity
@@ -185,7 +186,7 @@ func (s *VCService) createVCDocument(ctx *types.ExecutionContext, callerIdentity
 		WorkflowID:  ctx.WorkflowID,
 		SessionID:   ctx.SessionID,
 		Caller: types.VCCaller{
-			DID:          ctx.CallerDID,
+			DID:          callerIdentity.DID,
 			Type:         callerIdentity.ComponentType,
 			AgentNodeDID: ctx.AgentNodeDID,
 		},
