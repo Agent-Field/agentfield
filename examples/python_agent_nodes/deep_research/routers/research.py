@@ -20,7 +20,14 @@ SERPLY_SEARCH_URL = "https://api.serply.io/v1/search"
 # the example's own budget client-side rather than trusting the count back.
 SERPLY_REQUEST_LIMIT = 10
 SERPLY_MAX_RESULTS = 5
-SUPPORTED_SEARCH_PROVIDERS = ("tavily", "parallel", "serply")
+# Keenable answers without a key on its public endpoint, which only asks the
+# caller to name itself. KEENABLE_API_KEY switches to the keyed endpoint, which
+# lifts the keyless rate limit. Five results per query matches the Tavily path.
+KEENABLE_PUBLIC_SEARCH_URL = "https://api.keenable.ai/v1/search/public"
+KEENABLE_SEARCH_URL = "https://api.keenable.ai/v1/search"
+KEENABLE_APP_TITLE = "agentfield"
+KEENABLE_MAX_RESULTS = 5
+SUPPORTED_SEARCH_PROVIDERS = ("tavily", "parallel", "serply", "keenable")
 
 
 def _search_provider() -> str:
@@ -159,6 +166,53 @@ def _serply_results(response: object) -> list[dict]:
     return normalized
 
 
+def _keenable_error(status: int, response: object) -> str:
+    """Prefer Keenable's own `message` text over a bare status code, when it sends one."""
+    message = f"Keenable returned HTTP status {status}"
+    if isinstance(response, dict):
+        text = response.get("message")
+        if isinstance(text, str) and text.strip():
+            return f"{message}: {text.strip()}"
+    return message
+
+
+def _keenable_results(response: object) -> list[dict]:
+    """Decode one Keenable search response into the example's existing result shape."""
+    if not isinstance(response, dict):
+        raise ValueError("Keenable returned an invalid JSON response")
+
+    results = response.get("results")
+    if not isinstance(results, list):
+        raise ValueError("Keenable returned no results array")
+
+    normalized = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url")
+        title = item.get("title")
+        if not isinstance(url, str) or not url.strip():
+            continue
+        if not isinstance(title, str) or not title.strip():
+            continue
+
+        # The page text lives in `snippet`; `description` is only a fallback.
+        snippet = item.get("snippet")
+        if not isinstance(snippet, str) or not snippet.strip():
+            snippet = item.get("description")
+        text = snippet.strip() if isinstance(snippet, str) else ""
+        normalized.append(
+            {
+                "title": title,
+                "url": url,
+                "content": text,
+                "raw_content": text,
+            }
+        )
+
+    return normalized
+
+
 def _execute_tavily_search(queries: List[str]) -> list[dict]:
     try:
         from tavily import TavilyClient
@@ -254,6 +308,43 @@ async def _execute_serply_search(queries: List[str]) -> list[dict]:
     return all_results
 
 
+async def _execute_keenable_search(queries: List[str]) -> list[dict]:
+    import aiohttp
+
+    headers = {
+        "Accept": "application/json",
+        "X-Keenable-Title": KEENABLE_APP_TITLE,
+    }
+    url = KEENABLE_PUBLIC_SEARCH_URL
+    api_key = os.getenv("KEENABLE_API_KEY")
+    if api_key:
+        headers["X-API-Key"] = api_key
+        url = KEENABLE_SEARCH_URL
+    timeout = aiohttp.ClientTimeout(total=30)
+    all_results = []
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for query in queries:
+            try:
+                async with session.post(
+                    url,
+                    json={"query": query, "max_results": KEENABLE_MAX_RESULTS},
+                    headers=headers,
+                ) as response:
+                    status = response.status
+                    try:
+                        payload = await response.json(content_type=None)
+                    except Exception:
+                        payload = None
+                    if status < 200 or status >= 300:
+                        raise ValueError(_keenable_error(status, payload))
+                all_results.append({"results": _keenable_results(payload)})
+            except Exception as e:
+                all_results.append({"error": str(e), "query": query})
+
+    return all_results
+
+
 @research_router.reasoner()
 async def generate_search_queries(
     task_description: str,
@@ -308,6 +399,8 @@ async def execute_search(queries: List[str]) -> dict:
         all_results = await _execute_parallel_search(queries)
     elif provider == "serply":
         all_results = await _execute_serply_search(queries)
+    elif provider == "keenable":
+        all_results = await _execute_keenable_search(queries)
     else:
         all_results = _execute_tavily_search(queries)
 

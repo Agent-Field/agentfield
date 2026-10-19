@@ -48,6 +48,10 @@ def serply_payload(results: list[dict]) -> dict:
     return {"query": "q", "total": len(results), "results": results}
 
 
+def keenable_payload(results: list[dict]) -> dict:
+    return {"query": "q", "results": results}
+
+
 class SearchProviderTests(unittest.TestCase):
     def test_search_provider_preserves_tavily_default(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -190,6 +194,86 @@ class SearchProviderTests(unittest.TestCase):
                 self.assertEqual(
                     research._serply_error(503, payload),
                     "Serply returned HTTP status 503",
+                )
+
+    def test_search_provider_accepts_keenable(self):
+        with patch.dict(os.environ, {"SEARCH_PROVIDER": " Keenable "}, clear=True):
+            self.assertEqual(research._search_provider(), "keenable")
+        with patch.dict(os.environ, {"SEARCH_PROVIDER": "other"}, clear=True):
+            with self.assertRaisesRegex(
+                ValueError, "tavily, parallel, serply, keenable"
+            ):
+                research._search_provider()
+
+    def test_keenable_results_normalize_and_skip_unusable_entries(self):
+        payload = keenable_payload(
+            [
+                {
+                    "title": "First",
+                    "url": "https://example.com/first",
+                    "description": "",
+                    "snippet": "  One  ",
+                    "published_at": "2026-01-01T00:00:00Z",
+                },
+                {"title": "Missing URL", "snippet": "ignored"},
+                {"url": "https://example.com/no-title", "snippet": "ignored"},
+                {
+                    "title": "Description only",
+                    "url": "https://example.com/description",
+                    "description": " Fallback ",
+                },
+                {"title": "Second", "url": "https://example.com/second"},
+            ]
+        )
+
+        self.assertEqual(
+            research._keenable_results(payload),
+            [
+                {
+                    "title": "First",
+                    "url": "https://example.com/first",
+                    "content": "One",
+                    "raw_content": "One",
+                },
+                {
+                    "title": "Description only",
+                    "url": "https://example.com/description",
+                    "content": "Fallback",
+                    "raw_content": "Fallback",
+                },
+                {
+                    "title": "Second",
+                    "url": "https://example.com/second",
+                    "content": "",
+                    "raw_content": "",
+                },
+            ],
+        )
+
+    def test_keenable_results_reject_malformed_payloads(self):
+        cases = [
+            ("not a dict", "invalid JSON response"),
+            ({"query": "q"}, "no results array"),
+            ({"results": "nope"}, "no results array"),
+        ]
+        for payload, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    research._keenable_results(payload)
+
+    def test_keenable_error_prefers_message_text_over_bare_status(self):
+        self.assertEqual(
+            research._keenable_error(
+                401,
+                {"error": "Authentication failed", "message": "Malformed API key"},
+            ),
+            "Keenable returned HTTP status 401: Malformed API key",
+        )
+        for payload in (None, {}, {"message": "   "}, "<html>"):
+            with self.subTest(payload=payload):
+                self.assertEqual(
+                    research._keenable_error(503, payload),
+                    "Keenable returned HTTP status 503",
                 )
 
     def test_tavily_path_preserves_key_and_request_options(self):
@@ -481,6 +565,166 @@ class AsyncSearchProviderTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaisesRegex(ValueError, "SERPLY_API_KEY"):
                 await research._execute_serply_search(["query"])
+
+    async def test_execute_search_routes_to_keenable_without_any_key(self):
+        async def fake_keenable(queries):
+            self.assertEqual(queries, ["query"])
+            return [
+                {
+                    "results": [
+                        {
+                            "title": "Result",
+                            "url": "https://example.com",
+                            "content": "Snippet",
+                        }
+                    ]
+                }
+            ]
+
+        environment = {"SEARCH_PROVIDER": "keenable"}
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(research, "_execute_keenable_search", fake_keenable),
+        ):
+            result = await research.execute_search(["query"])
+
+        self.assertEqual(
+            result,
+            {
+                "results": [
+                    {
+                        "title": "Result",
+                        "url": "https://example.com",
+                        "content": "Snippet",
+                    }
+                ],
+                "queries": ["query"],
+            },
+        )
+
+    def _fake_keenable_aiohttp(
+        self, responses: list[tuple[int, object]], requests: list
+    ):
+        class FakeResponse:
+            def __init__(self, status, payload=None):
+                self.status = status
+                self.payload = payload
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            async def json(self, content_type=None):
+                self_test.assertIsNone(content_type)
+                return self.payload
+
+        class FakeSession:
+            def __init__(self, **kwargs):
+                self_test.assertEqual(kwargs["timeout"].total, 30)
+                self.responses = [FakeResponse(*response) for response in responses]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            def post(self, url, *, json, headers):
+                requests.append((url, json, headers))
+                return self.responses.pop(0)
+
+        class FakeTimeout:
+            def __init__(self, total):
+                self.total = total
+
+        self_test = self
+        aiohttp = types.ModuleType("aiohttp")
+        aiohttp.ClientTimeout = FakeTimeout
+        aiohttp.ClientSession = FakeSession
+        return aiohttp
+
+    async def test_keenable_search_is_keyless_by_default_and_isolates_failures(self):
+        requests = []
+        aiohttp = self._fake_keenable_aiohttp(
+            [
+                (
+                    200,
+                    keenable_payload(
+                        [
+                            {
+                                "title": "Good",
+                                "url": "https://example.com/good",
+                                "description": "",
+                                "snippet": "text",
+                            }
+                        ]
+                    ),
+                ),
+                (
+                    429,
+                    {"error": "Rate limited", "message": "Too many requests"},
+                ),
+            ],
+            requests,
+        )
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.dict(sys.modules, {"aiohttp": aiohttp}),
+        ):
+            results = await research._execute_keenable_search(["good", "limited"])
+
+        self.assertEqual(requests[0][0], research.KEENABLE_PUBLIC_SEARCH_URL)
+        self.assertEqual(
+            requests[0][1],
+            {"query": "good", "max_results": research.KEENABLE_MAX_RESULTS},
+        )
+        self.assertEqual(requests[1][1]["query"], "limited")
+        self.assertEqual(
+            requests[0][2],
+            {"Accept": "application/json", "X-Keenable-Title": "agentfield"},
+        )
+        self.assertEqual(
+            results[0]["results"],
+            [
+                {
+                    "title": "Good",
+                    "url": "https://example.com/good",
+                    "content": "text",
+                    "raw_content": "text",
+                }
+            ],
+        )
+        self.assertEqual(
+            results[1],
+            {
+                "error": "Keenable returned HTTP status 429: Too many requests",
+                "query": "limited",
+            },
+        )
+
+    async def test_keenable_search_uses_keyed_endpoint_when_key_is_set(self):
+        requests = []
+        aiohttp = self._fake_keenable_aiohttp([(200, keenable_payload([]))], requests)
+
+        with (
+            patch.dict(os.environ, {"KEENABLE_API_KEY": "test-key"}, clear=True),
+            patch.dict(sys.modules, {"aiohttp": aiohttp}),
+        ):
+            results = await research._execute_keenable_search(["query"])
+
+        self.assertEqual(requests[0][0], research.KEENABLE_SEARCH_URL)
+        self.assertEqual(
+            requests[0][2],
+            {
+                "Accept": "application/json",
+                "X-Keenable-Title": "agentfield",
+                "X-API-Key": "test-key",
+            },
+        )
+        self.assertEqual(results, [{"results": []}])
 
 
 if __name__ == "__main__":
