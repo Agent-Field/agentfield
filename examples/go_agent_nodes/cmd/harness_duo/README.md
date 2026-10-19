@@ -12,8 +12,16 @@ compare
 results. Both branches name their provider explicitly — Pi and OMP are
 additional providers, while a call that omits `Provider` runs the SDK default,
 `aforge`. The default model is
-`openrouter/minimax/minimax-m2.7`; set
+`openrouter/minimax/minimax-m3.1-flash:free`; set
+`HARNESS_MODEL=openrouter/minimax/minimax-m3` for MiniMax M3, or
 `HARNESS_MODEL=openrouter/google/gemini-2.5-flash` for the Gemini Flash path.
+
+The Flash default uses the [published OpenRouter free route](https://openrouter.ai/minimax/minimax-m3.1-flash:free).
+Keep the `:free` suffix: the bare Flash route has no published endpoint as of
+2026-10-19. The current free endpoint supports automatic tool choice, which
+matches this example's normal tool flow; forced tool selection is not supported.
+OpenRouter availability and free-route limits may change. Use a current Pi/OMP
+model catalog, or select another available model with `HARNESS_MODEL`.
 
 ## Run
 
