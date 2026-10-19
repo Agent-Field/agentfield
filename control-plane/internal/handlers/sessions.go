@@ -195,49 +195,56 @@ func SessionRealtimeOfferHandler(store storage.StorageProvider) gin.HandlerFunc 
 	}
 }
 
-func SessionToolHandler(store storage.StorageProvider, timeout time.Duration, internalToken string) gin.HandlerFunc {
+// SessionToolExecuteRequest turns a session tool call into an execute-async
+// request for the handlers registered after it on the route: the execute rate
+// limiter, the permission check and the async execute handler. The call is
+// dispatched in-process, so its destination never comes from the request and it
+// faces the same authorization as POST /api/v1/execute/async/:target for the
+// resolved <node>.<reasoner> target.
+func SessionToolExecuteRequest() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		_ = store
 		sessionID := sessionPathID(c)
 		toolName := strings.TrimSpace(c.Param("tool"))
 		var req ToolSessionRequest
 		if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
 			return
 		}
 		target := firstNonEmptySession(req.Target, toolName)
 		if !strings.Contains(target, ".") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "session tool target must be <node>.<reasoner>"})
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "session tool target must be <node>.<reasoner>"})
 			return
 		}
 
 		body, _ := json.Marshal(gin.H{"input": req.Input})
-		scheme := "http"
-		if c.Request.TLS != nil {
-			scheme = "https"
-		}
-		executeURL := fmt.Sprintf("%s://%s/api/v1/execute/async/%s", scheme, c.Request.Host, url.PathEscape(target))
-		forwardReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, executeURL, strings.NewReader(string(body)))
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		forwardReq.Header.Set("Content-Type", "application/json")
-		forwardReq.Header.Set("X-Session-ID", sessionID)
-		copyForwardedSessionAuthHeaders(c, forwardReq)
-		if internalToken != "" {
-			forwardReq.Header.Set("Authorization", "Bearer "+internalToken)
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
+		c.Request.ContentLength = int64(len(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Header.Set("X-Session-ID", sessionID)
+
+		// Session tool calls have never carried replay controls; drop them so a
+		// tool call cannot select replay behavior. Authentication headers stay:
+		// the global middleware has already verified them on this request.
+		for _, header := range []string{
+			"X-AgentField-Replay-Source-Run-ID",
+			"X-AgentField-Replay-Before-Execution-ID",
+			"X-AgentField-Replay-Mode",
+		} {
+			c.Request.Header.Del(header)
 		}
 
-		client := &http.Client{Timeout: timeout}
-		resp, err := client.Do(forwardReq)
-		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-			return
+		found := false
+		for i := range c.Params {
+			if c.Params[i].Key == "target" {
+				c.Params[i].Value = target
+				found = true
+				break
+			}
 		}
-		defer resp.Body.Close()
-		respBody, _ := io.ReadAll(resp.Body)
-		c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), respBody)
+		if !found {
+			c.Params = append(c.Params, gin.Param{Key: "target", Value: target})
+		}
+		c.Next()
 	}
 }
 
@@ -263,22 +270,6 @@ func lookupSessionDefinition(c *gin.Context, store storage.StorageProvider, node
 	}
 	c.JSON(http.StatusNotFound, gin.H{"error": "session not registered"})
 	return types.SessionDefinition{}, false
-}
-
-func copyForwardedSessionAuthHeaders(c *gin.Context, req *http.Request) {
-	for _, header := range []string{
-		"X-Caller-Agent-ID",
-		"X-Caller-DID",
-		"X-Actor-ID",
-		"X-API-Key",
-		"X-Run-ID",
-		"X-Parent-Execution-ID",
-		"X-Parent-VC-ID",
-	} {
-		if value := strings.TrimSpace(c.GetHeader(header)); value != "" {
-			req.Header.Set(header, value)
-		}
-	}
 }
 
 func splitSessionTarget(target string) (string, string, bool) {

@@ -1,3 +1,4 @@
+import { safeExternalUrl } from "@/utils/safeExternalUrl";
 import { useState, useEffect, type ComponentType } from "react";
 import {
   ArrowLeft,
@@ -319,7 +320,7 @@ export function CompactExecutionHeader({
               {normalizedStatus === "waiting" &&
                 execution.approval_request_url && (
                   <a
-                    href={execution.approval_request_url}
+                    href={safeExternalUrl(execution.approval_request_url) ?? undefined}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex"

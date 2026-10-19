@@ -34,7 +34,6 @@ async def test_agent_stop_is_idempotent():
         node_id="shutdown-agent",
         agentfield_server="http://agentfield",
         auto_register=False,
-        enable_mcp=False,
         enable_did=False,
     )
 
@@ -72,7 +71,6 @@ async def test_agent_stop_skips_shutdown_notification_when_not_connected():
         node_id="shutdown-agent-disconnected",
         agentfield_server="http://agentfield",
         auto_register=False,
-        enable_mcp=False,
         enable_did=False,
     )
 
@@ -186,7 +184,6 @@ async def test_cleanup_async_resources_releases_manager_and_client():
         node_id="cleanup-agent",
         agentfield_server="http://agentfield",
         auto_register=False,
-        enable_mcp=False,
         enable_did=False,
     )
 
@@ -320,7 +317,6 @@ async def test_hanging_terminal_callback_is_abandoned_after_settlement(monkeypat
         node_id="shutdown-callback",
         agentfield_server="http://control",
         auto_register=False,
-        enable_mcp=False,
         enable_did=False,
     )
     agent._background_tasks = set()
@@ -393,7 +389,6 @@ async def test_shutdown_cancellation_status_and_workflow_payloads_agree(monkeypa
         node_id="shutdown-events",
         agentfield_server="http://control",
         auto_register=False,
-        enable_mcp=False,
         enable_did=False,
     )
     started = asyncio.Event()

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time" // Added for time.Now()
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils" // Added for ID generation
@@ -24,12 +25,122 @@ type ExecuteReasonerRequest struct {
 	Context map[string]interface{} `json:"context,omitempty"`
 }
 
+// legacyPersistTimeout bounds the final writes of a legacy call.
+const legacyPersistTimeout = 5 * time.Second
+
+// legacyPersistContext returns the context for the final writes of a legacy
+// call. It keeps the request's values but not its cancellation: a caller that
+// hangs up after dispatch must not leave the execution running with no
+// completion time.
+func legacyPersistContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), legacyPersistTimeout)
+}
+
 func persistWorkflowExecution(ctx context.Context, storageProvider storage.StorageProvider, execution *types.WorkflowExecution) {
-	if err := storageProvider.StoreWorkflowExecution(ctx, execution); err != nil {
+	persistCtx, cancel := legacyPersistContext(ctx)
+	defer cancel()
+	if err := storageProvider.StoreWorkflowExecution(persistCtx, execution); err != nil {
 		logger.Logger.Error().
 			Err(err).
 			Str("execution_id", execution.ExecutionID).
 			Msg("failed to persist workflow execution state")
+	}
+	finalizeLegacyExecutionRecord(persistCtx, storageProvider, execution)
+}
+
+// persistLegacyAcknowledgement records a legacy call the agent answered with
+// HTTP 202. The reasoner is still running in the background and its status
+// callback or workflow event completes the execution later, so neither row
+// is made terminal here.
+func persistLegacyAcknowledgement(ctx context.Context, storageProvider storage.StorageProvider, execution *types.WorkflowExecution) {
+	persistCtx, cancel := legacyPersistContext(ctx)
+	defer cancel()
+	if err := storageProvider.StoreWorkflowExecution(persistCtx, execution); err != nil {
+		logger.Logger.Error().
+			Err(err).
+			Str("execution_id", execution.ExecutionID).
+			Msg("failed to persist workflow execution state")
+		return
+	}
+
+	// A callback that landed before the 202 found no workflow row to update.
+	// Copy its outcome over now, so the row just written is not left running.
+	current, err := storageProvider.GetExecutionRecord(persistCtx, execution.ExecutionID)
+	if err != nil || current == nil || !types.IsTerminalExecutionStatus(current.Status) {
+		return
+	}
+	if err := storageProvider.UpdateWorkflowExecution(persistCtx, execution.ExecutionID, func(wf *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+		if wf == nil {
+			return nil, fmt.Errorf("workflow execution %s not found", execution.ExecutionID)
+		}
+		if types.IsTerminalExecutionStatus(wf.Status) {
+			return wf, nil
+		}
+		wf.Status = current.Status
+		wf.StatusReason = current.StatusReason
+		wf.ErrorMessage = current.ErrorMessage
+		wf.OutputData = current.ResultPayload
+		wf.OutputSize = len(current.ResultPayload)
+		wf.CompletedAt = current.CompletedAt
+		wf.DurationMS = current.DurationMS
+		wf.UpdatedAt = time.Now()
+		return wf, nil
+	}); err != nil {
+		logger.Logger.Warn().
+			Err(err).
+			Str("execution_id", execution.ExecutionID).
+			Msg("failed to sync workflow execution with an early status callback")
+	}
+}
+
+// createLegacyExecutionRecord writes the executions row for a legacy
+// /reasoners or /skills call before it is dispatched, so the agent's
+// status callback (POST /api/v1/executions/:id/status) finds it.
+func createLegacyExecutionRecord(ctx context.Context, storageProvider storage.StorageProvider, wfExec *types.WorkflowExecution) {
+	exec := &types.Execution{
+		ExecutionID:       wfExec.ExecutionID,
+		RunID:             wfExec.WorkflowID,
+		ParentExecutionID: wfExec.ParentExecutionID,
+		AgentNodeID:       wfExec.AgentNodeID,
+		ReasonerID:        wfExec.ReasonerID,
+		NodeID:            wfExec.AgentNodeID,
+		Status:            string(types.ExecutionStatusRunning),
+		InputPayload:      json.RawMessage(wfExec.InputData),
+		SessionID:         wfExec.SessionID,
+		ActorID:           wfExec.ActorID,
+		StartedAt:         wfExec.StartedAt,
+		CreatedAt:         wfExec.CreatedAt,
+		UpdatedAt:         wfExec.UpdatedAt,
+	}
+	if err := storageProvider.CreateExecutionRecord(ctx, exec); err != nil {
+		logger.Logger.Error().
+			Err(err).
+			Str("execution_id", wfExec.ExecutionID).
+			Msg("failed to create execution record for legacy call")
+	}
+}
+
+// finalizeLegacyExecutionRecord copies the outcome of a legacy call onto its
+// executions row, unless the agent's own status callback already made it terminal.
+func finalizeLegacyExecutionRecord(ctx context.Context, storageProvider storage.StorageProvider, wfExec *types.WorkflowExecution) {
+	_, err := storageProvider.UpdateExecutionRecord(ctx, wfExec.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+		if current == nil || types.IsTerminalExecutionStatus(current.Status) {
+			// Returning nil leaves the row as it is.
+			return nil, nil
+		}
+		current.Status = wfExec.Status
+		current.ErrorMessage = wfExec.ErrorMessage
+		current.ResultPayload = wfExec.OutputData
+		current.CompletedAt = wfExec.CompletedAt
+		current.DurationMS = wfExec.DurationMS
+		current.UpdatedAt = time.Now()
+		return current, nil
+	})
+	if err != nil {
+		logger.Logger.Warn().
+			Err(err).
+			Str("execution_id", wfExec.ExecutionID).
+			Msg("failed to finalize execution record for legacy call")
 	}
 }
 
@@ -43,6 +154,7 @@ type ExecuteReasonerResponse struct {
 
 // ExecuteReasonerHandler handles execution of reasoners with full tracking
 func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
+	client := agenturl.NewClient(0)
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		startTime := time.Now()
@@ -205,9 +317,25 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		}
 		workflowExecution.InputData = inputJSON
 		workflowExecution.InputSize = len(inputJSON)
+		createLegacyExecutionRecord(ctx, storageProvider, workflowExecution)
+
+		agentURL, endpointErr := checkedAgentURL(targetNode, &parsedTarget{TargetName: reasonerName, TargetType: "reasoner"})
+		if endpointErr != nil {
+			workflowExecution.Status = types.ExecutionStatusFailed
+			errorMessage := fmt.Sprintf("failed to create agent request: %v", endpointErr)
+			workflowExecution.ErrorMessage = &errorMessage
+			endTime := time.Now()
+			workflowExecution.CompletedAt = &endTime
+			duration := endTime.Sub(startTime).Milliseconds()
+			workflowExecution.DurationMS = &duration
+			workflowExecution.UpdatedAt = endTime
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": errorMessage})
+			return
+		}
 
 		// Prepare request to agent node with workflow context propagation
-		agentURL := fmt.Sprintf("%s/reasoners/%s", targetNode.BaseURL, reasonerName)
+
 		agentBody := inputJSON
 
 		if targetNode.DeploymentType == "serverless" {
@@ -245,7 +373,6 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 				CreatedAt:         now,
 				UpdatedAt:         now,
 			}
-			agentURL = buildAgentURL(targetNode, target)
 
 			serverlessPayload, err := json.Marshal(buildServerlessPayload(target, exec, headers, req.Input))
 			if err != nil {
@@ -319,7 +446,8 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		}
 
 		// Make HTTP request to agent node
-		resp, err := http.DefaultClient.Do(agentReq)
+		resp, err := client.Do(agentReq)
+		agenturl.WarnNode(targetNode.ID, err)
 		if err != nil {
 			// Update execution with error
 			endTime := time.Now()
@@ -390,19 +518,26 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			return
 		}
 
-		// Update execution with success
 		endTime := time.Now()
-		workflowExecution.Status = types.ExecutionStatusSucceeded
-		workflowExecution.OutputData = body
-		workflowExecution.OutputSize = len(body)
-		workflowExecution.CompletedAt = &endTime
 		duration := endTime.Sub(startTime).Milliseconds()
-		workflowExecution.DurationMS = &duration
-		workflowExecution.UpdatedAt = endTime
+		if resp.StatusCode == http.StatusAccepted {
+			// The agent acknowledged an async execution ("status":
+			// "processing"). The body is not the result; keep the
+			// execution running until the agent reports completion.
+			workflowExecution.UpdatedAt = endTime
+			persistLegacyAcknowledgement(ctx, storageProvider, workflowExecution)
+		} else {
+			// Update execution with success
+			workflowExecution.Status = types.ExecutionStatusSucceeded
+			workflowExecution.OutputData = body
+			workflowExecution.OutputSize = len(body)
+			workflowExecution.CompletedAt = &endTime
+			workflowExecution.DurationMS = &duration
+			workflowExecution.UpdatedAt = endTime
 
-		// Store execution record
-		// Store execution record
-		persistWorkflowExecution(ctx, storageProvider, workflowExecution)
+			// Store execution record
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
+		}
 
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)
@@ -423,6 +558,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 
 // ExecuteSkillHandler handles execution of skills via AgentField server
 func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
+	client := agenturl.NewClient(0)
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		startTime := time.Now()
@@ -583,9 +719,25 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		}
 		workflowExecution.InputData = inputJSON
 		workflowExecution.InputSize = len(inputJSON)
+		createLegacyExecutionRecord(ctx, storageProvider, workflowExecution)
+
+		agentURL, endpointErr := checkedAgentURL(targetNode, &parsedTarget{TargetName: skillName, TargetType: "skill"})
+		if endpointErr != nil {
+			workflowExecution.Status = types.ExecutionStatusFailed
+			errorMessage := fmt.Sprintf("failed to create agent request: %v", endpointErr)
+			workflowExecution.ErrorMessage = &errorMessage
+			endTime := time.Now()
+			workflowExecution.CompletedAt = &endTime
+			duration := endTime.Sub(startTime).Milliseconds()
+			workflowExecution.DurationMS = &duration
+			workflowExecution.UpdatedAt = endTime
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": errorMessage})
+			return
+		}
 
 		// Prepare request to agent node with workflow context propagation
-		agentURL := fmt.Sprintf("%s/skills/%s", targetNode.BaseURL, skillName)
+
 		agentReq, err := http.NewRequestWithContext(ctx, http.MethodPost, agentURL, bytes.NewBuffer(inputJSON))
 		if err != nil {
 			workflowExecution.Status = types.ExecutionStatusFailed
@@ -637,7 +789,8 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		}
 
 		// Make HTTP request to agent node
-		resp, err := http.DefaultClient.Do(agentReq)
+		resp, err := client.Do(agentReq)
+		agenturl.WarnNode(targetNode.ID, err)
 		if err != nil {
 			// Update execution with error
 			endTime := time.Now()
@@ -699,18 +852,26 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			return
 		}
 
-		// Update execution with success
 		endTime := time.Now()
-		workflowExecution.Status = types.ExecutionStatusSucceeded
-		workflowExecution.OutputData = body
-		workflowExecution.OutputSize = len(body)
-		workflowExecution.CompletedAt = &endTime
 		duration := endTime.Sub(startTime).Milliseconds()
-		workflowExecution.DurationMS = &duration
-		workflowExecution.UpdatedAt = endTime
+		if resp.StatusCode == http.StatusAccepted {
+			// The agent acknowledged an async execution ("status":
+			// "processing"). The body is not the result; keep the
+			// execution running until the agent reports completion.
+			workflowExecution.UpdatedAt = endTime
+			persistLegacyAcknowledgement(ctx, storageProvider, workflowExecution)
+		} else {
+			// Update execution with success
+			workflowExecution.Status = types.ExecutionStatusSucceeded
+			workflowExecution.OutputData = body
+			workflowExecution.OutputSize = len(body)
+			workflowExecution.CompletedAt = &endTime
+			workflowExecution.DurationMS = &duration
+			workflowExecution.UpdatedAt = endTime
 
-		// Store execution record
-		persistWorkflowExecution(ctx, storageProvider, workflowExecution)
+			// Store execution record
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
+		}
 
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)

@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { UnifiedJsonViewer } from "@/components/ui/UnifiedJsonViewer";
+import { SafeMarkdown } from "@/components/ui/SafeMarkdown";
 import { JsonHighlightedPre } from "@/components/ui/json-syntax-highlight";
 
 interface EnhancedModalProps {
@@ -122,25 +123,6 @@ export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps
     return false;
   }, [data]);
 
-  const MarkdownRenderer = ({ content }: { content: string }) => {
-    const formattedContent = React.useMemo(() => {
-      return content
-        .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold">$1</strong>')
-        .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
-        .replace(/`(.*?)`/g, '<code class="bg-muted px-1 rounded text-sm font-mono">$1</code>')
-        .replace(/\n\n/g, '</p><p class="mt-2">')
-        .replace(/\n/g, '<br>')
-        .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" class="text-blue-500 hover:underline" target="_blank" rel="noopener">$1</a>');
-    }, [content]);
-
-    return (
-      <div
-        className="prose prose-sm max-w-none text-foreground"
-        dangerouslySetInnerHTML={{ __html: `<p>${formattedContent}</p>` }}
-      />
-    );
-  };
-
   return (
     <EnhancedModal
       isOpen={isOpen}
@@ -213,7 +195,7 @@ export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps
               <TabsContent value="markdown" className="h-full m-0 p-4 overflow-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
                 <div className="border border-border rounded-lg h-full overflow-auto bg-background scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
                   <div className="p-4 h-full overflow-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border hover:scrollbar-thumb-muted-foreground">
-                    <MarkdownRenderer content={typeof data === "string" ? data : jsonString} />
+                    <SafeMarkdown content={typeof data === "string" ? data : jsonString} />
                   </div>
                 </div>
               </TabsContent>

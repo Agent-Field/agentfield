@@ -169,5 +169,19 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any, out 
 		}
 	}
 
+	// Preserve an explicit warning header even if the body omits the new field.
+	if chain, ok := out.(*WorkflowVCChain); ok {
+		switch resp.Header.Get("X-AgentField-VC-Chain-Verifiable") {
+		case "false":
+			value := false
+			chain.Verifiable = &value
+		case "true":
+			if chain.Verifiable == nil {
+				value := true
+				chain.Verifiable = &value
+			}
+		}
+	}
+
 	return nil
 }

@@ -69,6 +69,10 @@ func (s *persistWorkflowExecutionStore) StoreWorkflowExecution(ctx context.Conte
 	return s.err
 }
 
+func (s *persistWorkflowExecutionStore) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
+	return nil, s.err
+}
+
 func TestWorkflowExecutionEventHelpersCoverage(t *testing.T) {
 	now := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
 	parentExecutionID := "parent-exec"

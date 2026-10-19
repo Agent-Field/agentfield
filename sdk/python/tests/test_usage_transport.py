@@ -219,6 +219,18 @@ class TestCostResolution:
         assert cost == 0.0042
         assert source == "provider"
 
+    def test_openrouter_native_zero_cost_is_known(self):
+        # Free-tier models (e.g. ":free") report usage.cost == 0. That figure is
+        # determined, so it must not fall through to "unknown".
+        usage = types.SimpleNamespace(prompt_tokens=10, completion_tokens=5, cost=0.0)
+        resp = types.SimpleNamespace(model="openrouter/openai/gpt-4o-mini:free")
+        mock_litellm = MagicMock()
+        mock_litellm.completion_cost.side_effect = Exception("no price")
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            cost, source = _resolve_cost(resp, usage)
+        assert cost == 0.0
+        assert source == "provider"
+
     def test_hidden_params_response_cost(self):
         usage = types.SimpleNamespace(prompt_tokens=10, completion_tokens=5)
         resp = types.SimpleNamespace(
@@ -277,6 +289,21 @@ class TestDetectMultimodalUsage:
         result = detect_multimodal_response(resp)
         assert result.cost_usd == 0.0012
         assert result.cost_source == "provider"
+
+    def test_openrouter_native_zero_cost_read_through(self):
+        # A known $0 must reach the caller as 0.0/"provider"; reporting it as
+        # unknown makes CostTracker.serialize() emit total_cost_usd: null for a
+        # run whose calls were all free.
+        usage = types.SimpleNamespace(prompt_tokens=10, completion_tokens=5, cost=0.0)
+        resp = _fake_response(usage, model="openrouter/openai/gpt-4o-mini:free")
+        mock_litellm = MagicMock()
+        mock_litellm.completion_cost.side_effect = Exception("no price")
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            result = detect_multimodal_response(resp)
+        assert result.cost_usd == 0.0
+        assert result.cost_source == "provider"
+        assert result.usage["prompt_tokens"] == 10
+        assert result.usage["completion_tokens"] == 5
 
 
 # ---------------------------------------------------------------------------

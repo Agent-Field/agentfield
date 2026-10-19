@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -255,10 +256,8 @@ func newExecutionController(store ExecutionStore, payloads services.PayloadStore
 		ardConfigReader = readARDConfig[0]
 	}
 	return &executionController{
-		store: store,
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
+		store:          store,
+		httpClient:     agenturl.NewClient(timeout),
 		payloads:       payloads,
 		webhooks:       webhooks,
 		eventBus:       store.GetExecutionEventBus(),

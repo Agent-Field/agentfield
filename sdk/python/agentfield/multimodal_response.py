@@ -629,6 +629,8 @@ def _resolve_cost(response: Any, usage_obj: Any) -> tuple[Optional[float], Optio
     Returns ``(None, None)`` when no cost can be determined.
     """
     # 1. Provider-native cost (e.g. OpenRouter returns usage.cost in USD/credits).
+    # A reported 0 is a real figure here (free-tier models), unlike the LiteLLM
+    # branches below, where 0 means "absent from the pricing DB".
     if usage_obj is not None:
         native = getattr(usage_obj, "cost", None)
         if native is None and isinstance(usage_obj, dict):
@@ -636,7 +638,7 @@ def _resolve_cost(response: Any, usage_obj: Any) -> tuple[Optional[float], Optio
         if native is not None:
             try:
                 cost = float(native)
-                if cost > 0:
+                if cost >= 0:
                     return cost, "provider"
             except (TypeError, ValueError):
                 pass

@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
@@ -142,7 +141,7 @@ func TestSessionRoutesRegisterTogether(t *testing.T) {
 		group := router.Group("/api/v1/sessions")
 		group.POST("/:target/start", StartSessionHandler(store))
 		group.POST("/:target/realtime-offer", SessionRealtimeOfferHandler(store))
-		group.POST("/:target/tools/:tool", SessionToolHandler(store, time.Second, ""))
+		group.POST("/:target/tools/:tool", SessionToolExecuteRequest())
 	})
 }
 
@@ -308,62 +307,71 @@ func TestSessionRealtimeOfferHandlerSurfacesProviderErrors(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "OpenAI realtime call failed")
 }
 
-func TestSessionToolHandlerValidatesAndForwards(t *testing.T) {
+// C2, C3, C8: normalization is in-process, preserves caller authentication,
+// carries the session context, and discards controls the old forward omitted.
+func TestSessionToolExecuteRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	var gotSessionID string
-	var gotAuth string
-	var gotBody map[string]interface{}
-	router.POST("/api/v1/execute/async/:target", func(c *gin.Context) {
-		gotSessionID = c.GetHeader("X-Session-ID")
-		gotAuth = c.GetHeader("Authorization")
-		require.NoError(t, c.ShouldBindJSON(&gotBody))
-		require.Equal(t, "support.resolve", c.Param("target"))
-		c.JSON(http.StatusAccepted, gin.H{"execution_id": "exec-1"})
-	})
-	router.POST("/api/v1/sessions/:target/tools/:tool", SessionToolHandler(&nodeRESTStorageStub{}, time.Second, "internal-token"))
-	server := httptest.NewServer(router)
-	t.Cleanup(server.Close)
-
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/sessions/sess-1/tools/resolve", strings.NewReader(`{"target":"support.resolve","input":{"topic":"billing"}}`))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := server.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-
-	require.Equal(t, http.StatusAccepted, resp.StatusCode)
-	require.JSONEq(t, `{"execution_id":"exec-1"}`, string(body))
-	require.Equal(t, "sess-1", gotSessionID)
-	require.Equal(t, "Bearer internal-token", gotAuth)
-	require.Equal(t, map[string]interface{}{"input": map[string]interface{}{"topic": "billing"}}, gotBody)
-}
-
-func TestSessionToolHandlerRejectsInvalidRequests(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.POST("/api/v1/sessions/:target/tools/:tool", SessionToolHandler(&nodeRESTStorageStub{}, time.Second, ""))
-
-	tests := []struct {
-		name    string
-		body    string
-		message string
-	}{
-		{name: "bad json", body: "{", message: "invalid JSON body"},
-		{name: "bad target", body: `{"target":"resolve"}`, message: "session tool target must be"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/sess-1/tools/resolve", strings.NewReader(tt.body))
-			req.Header.Set("Content-Type", "application/json")
+	for _, tc := range []struct{ name, route, path, body, input string }{
+		{"body target", "/:session_id/tools/:tool", "/sess-1/tools/resolve", `{"target":" support.resolve ","input":{"topic":"billing"}}`, `{"topic":"billing"}`},
+		{"path target", "/:session_id/tools/:tool", "/sess-1/tools/support.resolve", `{"input":{}}`, `{}`},
+		{"empty body", "/:session_id/tools/:tool", "/sess-1/tools/support.resolve", "", `null`},
+		{"replace target param", "/:target/tools/:tool", "/sess-1/tools/support.resolve", `{}`, `null`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			router := gin.New()
+			called := false
+			router.POST(tc.route, SessionToolExecuteRequest(), func(c *gin.Context) {
+				called = true
+				require.Equal(t, "support.resolve", c.Param("target"))
+				require.Equal(t, "sess-1", c.GetHeader("X-Session-ID"))
+				require.Equal(t, "application/json", c.ContentType())
+				body, err := io.ReadAll(c.Request.Body)
+				require.NoError(t, err)
+				require.Equal(t, int64(len(body)), c.Request.ContentLength)
+				require.JSONEq(t, `{"input":`+tc.input+`}`, string(body))
+				for _, header := range sessionReplayHeaders {
+					require.Empty(t, c.GetHeader(header))
+				}
+				for _, header := range []string{"Authorization", "X-API-Key", "X-Caller-Agent-ID", "X-Caller-DID", "X-DID-Signature", "X-DID-Timestamp", "X-DID-Nonce", "X-Run-ID", "X-Parent-Execution-ID", "X-Parent-VC-ID", "X-Actor-ID"} {
+					require.True(t, c.GetHeader(header) == "caller-value", "caller header preserved: %s", header)
+				}
+				c.JSON(http.StatusAccepted, gin.H{"execution_id": "exec-1"})
+			})
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("X-Session-ID", "caller-session")
+			for _, header := range append([]string{"Authorization", "X-API-Key", "X-Caller-Agent-ID", "X-Caller-DID", "X-DID-Signature", "X-DID-Timestamp", "X-DID-Nonce", "X-Run-ID", "X-Parent-Execution-ID", "X-Parent-VC-ID", "X-Actor-ID"}, sessionReplayHeaders...) {
+				req.Header.Set(header, "caller-value")
+			}
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
+			require.True(t, called)
+			require.Equal(t, http.StatusAccepted, rec.Code)
+		})
+	}
+}
 
+var sessionReplayHeaders = []string{
+	"X-AgentField-Replay-Source-Run-ID",
+	"X-AgentField-Replay-Before-Execution-ID",
+	"X-AgentField-Replay-Mode",
+}
+
+// C4: invalid requests abort the chain without dispatch and keep the public errors.
+func TestSessionToolExecuteRequestRejectsInvalidRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct{ name, body, message string }{
+		{"bad json", "{", "invalid JSON body"},
+		{"bad target", `{"target":"resolve"}`, "session tool target must be <node>.<reasoner>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			router := gin.New()
+			router.POST("/:session_id/tools/:tool", SessionToolExecuteRequest(), func(c *gin.Context) { t.Fatal("invalid request reached dispatch") })
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sess-1/tools/resolve", strings.NewReader(tc.body)))
 			require.Equal(t, http.StatusBadRequest, rec.Code)
-			require.Contains(t, rec.Body.String(), tt.message)
+			expected, err := json.Marshal(gin.H{"error": tc.message})
+			require.NoError(t, err)
+			require.JSONEq(t, string(expected), rec.Body.String())
 		})
 	}
 }

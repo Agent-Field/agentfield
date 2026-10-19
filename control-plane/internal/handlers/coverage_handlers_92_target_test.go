@@ -952,13 +952,13 @@ func TestNormalizeServerlessDiscoveryURLAdditionalBranches(t *testing.T) {
 			name:    "query rejected",
 			rawURL:  "https://example.com?x=1",
 			allowed: []string{"example.com"},
-			wantErr: "must not include query parameters or fragments",
+			wantErr: "must not include a query",
 		},
 		{
 			name:    "fragment rejected",
 			rawURL:  "https://example.com/#frag",
 			allowed: []string{"example.com"},
-			wantErr: "must not include query parameters or fragments",
+			wantErr: "must not include a fragment",
 		},
 		{
 			name:    "wildcard host allowlist accepted",

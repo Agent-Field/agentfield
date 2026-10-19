@@ -90,6 +90,7 @@ func seedDIDHandlerData(t *testing.T, ls *storage.LocalStorage, registry *servic
 				FunctionName:   "plan",
 				Capabilities:   []string{"search", "draft"},
 				ExposureLevel:  "public",
+				PublicKeyJWK:   json.RawMessage(`{"kty":"OKP","crv":"Ed25519","x":"plan"}`),
 				DerivationPath: "m/44'/0'/1'/1'",
 				CreatedAt:      now,
 			},
@@ -100,6 +101,7 @@ func seedDIDHandlerData(t *testing.T, ls *storage.LocalStorage, registry *servic
 				FunctionName:   "toolbox",
 				Tags:           []string{"ops"},
 				ExposureLevel:  "private",
+				PublicKeyJWK:   json.RawMessage(`{"kty":"OKP","crv":"Ed25519","x":"toolbox"}`),
 				DerivationPath: "m/44'/0'/1'/2'",
 				CreatedAt:      now,
 			},
@@ -280,6 +282,13 @@ func TestDIDHandlerCoverageWithActiveServices(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code)
 		componentBundle := decodeJSONResponse[map[string]any](t, rec)
 		require.Equal(t, "resolved", componentBundle["resolution_status"])
+
+		// A retired component still appears in audit lookups, labelled as retired.
+		require.NoError(t, ls.RetireComponentDIDs(ctx, "did:agent:node-1", []string{"did:reasoner:plan"}))
+		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/did/did:reasoner:plan/resolution-bundle", nil)
+		require.Equal(t, http.StatusOK, rec.Code)
+		retiredBundle := decodeJSONResponse[map[string]any](t, rec)
+		require.Equal(t, "retired", retiredBundle["resolution_status"])
 
 		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/did/did:agent:node-1/resolution-bundle/download", nil)
 		require.Equal(t, http.StatusOK, rec.Code)
