@@ -19,6 +19,7 @@ import { Input } from "./input";
 import { CopyButton } from "./copy-button";
 import { cn } from "../../lib/utils";
 import { SafeMarkdown } from "./SafeMarkdown";
+import { safeExternalUrl } from "@/utils/safeExternalUrl";
 
 interface UnifiedJsonViewerProps {
   data: unknown;
@@ -190,6 +191,7 @@ function JsonNode({
 
     if (typeof data === "string") {
       const typeIcon = getTypeIcon(contentType);
+      const externalUrl = contentType === "url" ? safeExternalUrl(data) : null;
       const isLongString = data.length > 100;
       const displayValue =
         isLongString && !showPreview ? `${data.slice(0, 100)}...` : data;
@@ -217,13 +219,13 @@ function JsonNode({
                 )}
               </Button>
             )}
-            {contentType === "url" && (
+            {externalUrl && (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={(e) => {
                   e.stopPropagation();
-                  window.open(data, "_blank", "noopener,noreferrer");
+                  window.open(externalUrl, "_blank", "noopener,noreferrer");
                 }}
                 className="h-5 w-5 p-0 ml-1"
                 title="Open URL"

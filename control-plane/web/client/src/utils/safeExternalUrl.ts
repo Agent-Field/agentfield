@@ -1,4 +1,4 @@
-/** Returns a URL when it is safe to render as an external link, else null.
+/** Returns the normalized validated URL for a safe external link, else null.
  * Mirrors server validation and re-checks stored rows that may predate it. */
 export function safeExternalUrl(
     raw: string | null | undefined,
@@ -16,7 +16,7 @@ export function safeExternalUrl(
         ) {
             return null;
         }
-        return raw;
+        return parsed.href;
     } catch {
         return null;
     }

@@ -60,10 +60,10 @@ describe("SafeMarkdown", () => {
     expectSafeMarkdown(container);
   });
 
-  it.each(["http://example.com", "https://example.com/path?q=a&b=c", "HTTPS://example.com", "mailto:operator@example.com"])(
+  it.each(["http://example.com", "https://example.com/path?q=a&b=c", "HTTPS://example.com", "https:x", "http:/x", "mailto:operator@example.com"])(
     "C2: safe destination %s opens with isolation", (url) => {
       const { container } = render(<SafeMarkdown content={`[safe](${url})`} />);
-      expect(screen.getByRole("link")).toHaveAttribute("href", url);
+      expect(screen.getByRole("link")).toHaveAttribute("href", new URL(url).href);
       expectSafeMarkdown(container);
     },
   );
@@ -72,7 +72,7 @@ describe("SafeMarkdown", () => {
     const { container } = render(<SafeMarkdown content={'![visible alt](https://example.com/tracker) ![](data:image/png,x)\n\nwww.example.com https://example.com/path https://user:pass@example.com'} />);
     expect(container.textContent).toContain("visible alt");
     expect(container.querySelector("img")).toBeNull();
-    expect(screen.getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(["http://www.example.com", "https://example.com/path"]);
+    expect(screen.getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(["http://www.example.com/", "https://example.com/path"]);
     expectSafeMarkdown(container);
   });
 

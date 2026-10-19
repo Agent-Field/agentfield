@@ -1,11 +1,11 @@
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { UnifiedJsonViewer } from "./UnifiedJsonViewer";
 import { attackMarkdown, expectLegitimateMarkdown, expectSafeMarkdown, legitimateMarkdown } from "@/test/markdownSecurity";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 it("C1 C2 C3 C5: nested attacker string is safe through the actual Markdown Preview control", async () => {
   const user = userEvent.setup();
@@ -40,3 +40,28 @@ it("C5: ordinary strings keep their literal rendering", () => {
   expect(screen.queryByRole("button", { name: "Show preview" })).toBeNull();
   expect(container.querySelector("img")).toBeNull();
 });
+
+it.each(["https://user:pass@host.example/", "https://", "javascript:alert(1)"])(
+  "C2: viewer hides Open URL for unsafe destination %s", (url) => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(<UnifiedJsonViewer data={{ output: url }} />, { wrapper: TooltipProvider });
+    expect(screen.queryByRole("button", { name: "Open URL" })).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["https://host.example/", "https://HOST.example"])(
+  "C2: viewer opens the validated normalized destination %s with isolation", async (url) => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(<UnifiedJsonViewer data={{ output: url }} />, { wrapper: TooltipProvider });
+    await userEvent.click(screen.getByRole("button", { name: "Open URL" }));
+    expect(open).toHaveBeenCalledExactlyOnceWith(new URL(url).href, "_blank", "noopener,noreferrer");
+  },
+);
+
+it.each(["https:x", "https:\\x", "javascript:alert(1)"])(
+  "C2: strings not classified as http(s) URLs get no Open URL control: %s", (value) => {
+    render(<UnifiedJsonViewer data={{ output: value }} />, { wrapper: TooltipProvider });
+    expect(screen.queryByRole("button", { name: "Open URL" })).toBeNull();
+  },
+);
