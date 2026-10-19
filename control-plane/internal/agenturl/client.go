@@ -83,8 +83,16 @@ func NewTransport(connectTimeout time.Duration) *http.Transport {
 				}
 			}
 			var lastErr error
-			for _, ip := range ips {
-				conn, err := h.dial(ctx, network, net.JoinHostPort(ip, port))
+			for i, ip := range ips {
+				// Reserve a share of the remaining connect budget for each
+				// checked address, including a fallback to the other IP family.
+				attemptCtx := ctx
+				cancel := func() {}
+				if deadline, ok := ctx.Deadline(); ok && len(ips)-i > 1 {
+					attemptCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(ips)-i))
+				}
+				conn, err := h.dial(attemptCtx, network, net.JoinHostPort(ip, port))
+				cancel()
 				if err == nil {
 					return conn, nil
 				}

@@ -79,6 +79,7 @@ func TestStrictPolicy(t *testing.T) {
 	require.NoError(t, err)
 	_, err = Normalize("http://127.0.0.1")
 	require.NoError(t, err)
+	Configure(true, []string{"localhost"})
 	_, err = Normalize("http://foo.localhost.")
 	require.Error(t, err)
 	for _, host := range deniedHosts() {
@@ -183,7 +184,9 @@ func TestRedirectPolicy(t *testing.T) {
 		case "/loop":
 			http.Redirect(w, r, "/loop", 302)
 		default:
-			io.WriteString(w, "ok")
+			if _, err := io.WriteString(w, "ok"); err != nil {
+				t.Errorf("write response: %v", err)
+			}
 		}
 	}))
 	defer s.Close()
@@ -240,4 +243,82 @@ func TestStoredNodeWarningOnce(t *testing.T) {
 	WarnNode(nodeID, nil)
 	WarnNode("unrelated", errors.New("connection refused"))
 	require.Equal(t, 1, strings.Count(output.String(), "agent endpoint refused"))
+}
+
+// Review finding 1: a stalled checked address must leave time for later answers.
+func TestReviewAddressFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.WriteString(w, "fallback reached")
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+	var attempts []string
+	defer SetNetworkHooksForTesting(func(context.Context, string) ([]string, error) {
+		return []string{"2001:db8::1", "127.0.0.1"}, nil
+	}, func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(address)
+		require.NoError(t, err)
+		attempts = append(attempts, host)
+		if host == "2001:db8::1" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	})()
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	client := NewClient(2 * time.Second)
+	client.Transport = NewTransport(800 * time.Millisecond)
+	defer client.CloseIdleConnections()
+	started := time.Now()
+	resp, err := client.Get("http://fallback.test:" + u.Port())
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "fallback reached", string(body))
+	require.Less(t, time.Since(started), 800*time.Millisecond)
+	require.Equal(t, []string{"2001:db8::1", "127.0.0.1"}, attempts)
+}
+
+// Review finding 4: localhost CIDR exceptions apply after resolving every answer.
+func TestReviewLocalhostCIDRExceptions(t *testing.T) {
+	defer Configure(false, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	for _, allowed := range [][]string{{"127.0.0.0/8", "::1/128"}, {"localhost"}} {
+		Configure(true, allowed)
+		lookups := 0
+		restore := SetNetworkHooksForTesting(func(context.Context, string) ([]string, error) {
+			lookups++
+			return []string{"127.0.0.1", "::1"}, nil
+		}, nil)
+		endpoint := "http://localhost:" + u.Port()
+		_, validationErr := Validate(context.Background(), endpoint)
+		client := NewClient(time.Second)
+		resp, dialErr := client.Get(endpoint)
+		if resp != nil {
+			resp.Body.Close()
+		}
+		client.CloseIdleConnections()
+		restore()
+		require.NoError(t, validationErr)
+		require.NoError(t, dialErr)
+		require.Equal(t, 2, lookups)
+	}
+	Configure(true, []string{"127.0.0.0/8", "::1/128", "169.254.0.0/16", "localhost"})
+	defer SetNetworkHooksForTesting(func(context.Context, string) ([]string, error) {
+		return []string{"127.0.0.1", "169.254.169.254"}, nil
+	}, func(context.Context, string, string) (net.Conn, error) {
+		t.Error("always-denied DNS answer must prevent dialing")
+		return nil, errors.New("unexpected dial")
+	})()
+	_, err = Validate(context.Background(), "http://localhost")
+	require.ErrorContains(t, err, "link-local")
+	_, err = NewClient(time.Second).Get("http://localhost")
+	require.ErrorContains(t, err, "link-local")
 }

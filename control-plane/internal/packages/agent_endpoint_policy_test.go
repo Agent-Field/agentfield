@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,7 +28,9 @@ func TestAgentEndpointLifecycleClientPolicy(t *testing.T) {
 			http.Redirect(w, r, "http://other.test/health", 302)
 			return
 		}
-		w.Write([]byte(`{"status":"ok"}`))
+		if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 	client := NewNodeHTTPClient(time.Second)
@@ -45,4 +48,23 @@ func TestAgentEndpointLifecycleClientPolicy(t *testing.T) {
 	_, err = client.Get("http://169.254.169.254/health")
 	require.ErrorContains(t, err, "link-local")
 	require.EqualValues(t, 3, hits.Load())
+}
+
+// Review finding 4: managed local probes honor resolved loopback exceptions.
+func TestReviewStrictManagedLocalProbe(t *testing.T) {
+	agenturl.Configure(true, []string{"127.0.0.0/8", "::1/128"})
+	defer agenturl.Configure(false, nil)
+	defer agenturl.SetNetworkHooksForTesting(func(context.Context, string) ([]string, error) {
+		return []string{"127.0.0.1"}, nil
+	}, nil)()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/health", r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := NewNodeHTTPClient(time.Second)
+	resp, err := client.Get(strings.Replace(server.URL, "127.0.0.1", "localhost", 1) + "/health")
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 }

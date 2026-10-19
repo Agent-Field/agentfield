@@ -52,6 +52,15 @@ func hostAllowed(host string, ip net.IP, allowed []string) bool {
 	return false
 }
 
+func hasCIDRException(allowed []string) bool {
+	for _, entry := range allowed {
+		if _, _, err := net.ParseCIDR(entry); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *policy) check(host string, ip net.IP) error {
 	switch strings.ToLower(strings.TrimSuffix(host, ".")) {
 	case "metadata.google.internal", "metadata.goog", "metadata":
@@ -61,8 +70,9 @@ func (p *policy) check(host string, ip net.IP) error {
 		ip = literalIP(host)
 	}
 	if ip == nil {
-		// localhost is well-known even when DNS is not ready.
-		if p.strict && (strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || strings.HasSuffix(strings.ToLower(strings.TrimSuffix(host, ".")), ".localhost")) && !hostAllowed(host, nil, p.allowed) {
+		// CIDR exceptions require resolution, including for localhost. The
+		// registration validator and transport still check every DNS answer.
+		if p.strict && (strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || strings.HasSuffix(strings.ToLower(strings.TrimSuffix(host, ".")), ".localhost")) && !hostAllowed(host, nil, p.allowed) && !hasCIDRException(p.allowed) {
 			return fmt.Errorf("agent endpoint targets loopback in strict mode")
 		}
 		return nil

@@ -48,3 +48,29 @@ func TestAgentEndpointLegacyStartup(t *testing.T) {
 	_, err = srv.agentClient.GetAgentStatus(ctx, "legacy")
 	require.ErrorContains(t, err, "query")
 }
+
+// Review finding 5: constructor wiring must apply both strict mode and its
+// configured exceptions, even if the previous package-level policy was default.
+func TestReviewStartupAppliesAgentEndpointPolicy(t *testing.T) {
+	agenturl.Configure(false, nil)
+	defer agenturl.Configure(false, nil)
+	cfg := baseConfigForDBTests()
+	cfg.UI.Enabled = false
+	cfg.Features.DID.Enabled = false
+	cfg.Features.Connector.Enabled = false
+	cfg.API.Auth.APIKey = ""
+	cfg.AgentField.Registration.AgentEndpointStrict = true
+	cfg.AgentField.Registration.AgentEndpointAllowedHosts = []string{"127.0.0.2/32"}
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+	t.Setenv("AGENTFIELD_CONFIG_SOURCE", "")
+	cfg.Storage.Local.DatabasePath = filepath.Join(home, "policy.db")
+	cfg.Storage.Local.KVStorePath = filepath.Join(home, "policy.bolt")
+	srv, err := NewAgentFieldServer(&cfg)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, srv.Stop()) }()
+	_, err = agenturl.Validate(context.Background(), "http://127.0.0.1:18190")
+	require.ErrorContains(t, err, "strict mode")
+	_, err = agenturl.Validate(context.Background(), "http://127.0.0.2:18190")
+	require.NoError(t, err)
+}
