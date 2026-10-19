@@ -389,6 +389,7 @@ func (h *DIDHandler) GetWorkflowVCChainHandler(c *gin.Context) {
 		return
 	}
 
+	handlers.SetVCChainVerifiabilityHeader(c, response)
 	c.JSON(http.StatusOK, response)
 }
 
@@ -729,11 +730,16 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 
 	// If not found in agent DIDs, try component DIDs
 	if resolutionStatus == "not_found" {
-		componentDIDInfos, err := h.storage.ListComponentDIDs(c.Request.Context(), "")
+		// Include retired components so audit trails can still show who signed
+		// a credential; they are reported as "retired", not "resolved".
+		componentDIDInfos, err := h.storage.ListAllComponentDIDs(c.Request.Context(), "")
 		if err == nil {
 			for _, componentDID := range componentDIDInfos {
 				if componentDID.ComponentDID == did {
 					resolutionStatus = "resolved"
+					if componentDID.Status == storage.ComponentDIDStatusRetired {
+						resolutionStatus = "retired"
+					}
 
 					// Build DID document for component
 					didDocument = gin.H{

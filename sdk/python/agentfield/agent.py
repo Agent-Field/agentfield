@@ -1638,9 +1638,8 @@ class Agent(FastAPI):
               Read a value; with `scope=None` this is the hierarchical lookup above
             - `await app.memory.set(key, data, scope=None, scope_id=None)`: Store a value
             - `await app.memory.delete(key, scope=None, scope_id=None)`: Remove a value
-            - `await app.memory.exists(key)`: Present, but it answers True for any key
-              as long as the backend is reachable; compare
-              `await app.memory.get(key, sentinel)` against a sentinel instead
+            - `await app.memory.exists(key)`: True when the key is stored in any
+              reachable scope, False when it is absent or the lookup itself failed
             - `await app.memory.set_vector(key, embedding, metadata=None)`: Store an embedding
             - `await app.memory.delete_vector(key)`: Remove an embedding
             - `await app.memory.similarity_search(query_embedding, top_k=10, filters=None,
@@ -5588,8 +5587,12 @@ class Agent(FastAPI):
                     # Ignore async cleanup errors in destructor
                     pass
 
-            # Clear agent from thread-local storage as final cleanup
-            clear_current_agent()
+            # An obsolete agent may be collected after a newer agent has been
+            # registered in this context. Its finalizer must not clear that owner.
+            from agentfield.agent_registry import get_current_agent_instance
+
+            if get_current_agent_instance() is self:
+                clear_current_agent()
         except Exception:
             # Ignore errors in destructor to prevent warnings during garbage collection
             pass

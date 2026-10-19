@@ -122,6 +122,23 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 		}
 	}
 
+	// The "ionet/" prefix is a routing marker for callers that select the
+	// gateway by model string; IO Intelligence serves the bare
+	// Hugging Face-style `org/name` id, so the marker must not reach the
+	// wire.
+	//
+	// Only a non-empty req.Model is rewritten, and only on a copy: the
+	// caller's Request is left untouched, c.config.Model keeps what was
+	// configured, and IsIonet() still reports the truth.
+	if c.config.IsIonet() && req.Model != "" {
+		if stripped := stripIonetPrefix(req.Model); stripped != req.Model {
+			model = stripped
+			shadow := *req
+			shadow.Model = stripped
+			req = &shadow
+		}
+	}
+
 	// If the model needs max_completion_tokens and we have a max_tokens value,
 	// serialize with the rewritten field name — but only for endpoints known
 	// to understand it.

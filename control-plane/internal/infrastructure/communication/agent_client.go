@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -28,11 +29,9 @@ func NewHTTPAgentClient(storage storage.StorageProvider, timeout time.Duration) 
 	}
 
 	return &HTTPAgentClient{
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
-		storage: storage,
-		timeout: timeout,
+		httpClient: agenturl.NewClient(timeout),
+		storage:    storage,
+		timeout:    timeout,
 	}
 }
 
@@ -44,8 +43,16 @@ func (c *HTTPAgentClient) ShutdownAgent(ctx context.Context, nodeID string, grac
 		return nil, fmt.Errorf("failed to get agent node %s: %w", nodeID, err)
 	}
 
+	if agent == nil {
+		return nil, fmt.Errorf("agent node %s not found in storage", nodeID)
+	}
+
 	// Construct shutdown endpoint URL
-	shutdownURL := fmt.Sprintf("%s/shutdown", agent.BaseURL)
+	endpoint, err := agenturl.ForNode(nodeID, agent.BaseURL, "shutdown")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	shutdownURL := endpoint.String()
 
 	// Prepare request body
 	requestBody := map[string]interface{}{
@@ -71,6 +78,7 @@ func (c *HTTPAgentClient) ShutdownAgent(ctx context.Context, nodeID string, grac
 
 	// Make the request
 	resp, err := c.httpClient.Do(req)
+	agenturl.WarnNode(nodeID, err)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call agent shutdown endpoint: %w", err)
 	}
@@ -108,7 +116,11 @@ func (c *HTTPAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 	}
 
 	// Construct status endpoint URL
-	statusURL := fmt.Sprintf("%s/status", agent.BaseURL)
+	endpoint, err := agenturl.ForNode(nodeID, agent.BaseURL, "status")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	statusURL := endpoint.String()
 
 	// Implement retry logic (1 retry for transient network failures)
 	maxRetries := 1
@@ -131,6 +143,7 @@ func (c *HTTPAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 
 		// Make the request
 		resp, err := c.httpClient.Do(req)
+		agenturl.WarnNode(nodeID, err)
 		cancel() // Always cancel the timeout context
 
 		if err != nil {

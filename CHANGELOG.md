@@ -6,6 +6,1027 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.19] - 2026-10-19
+
+
+### Fixed
+
+- Fix(control-plane): run session tool calls through the execute pipeline in-process (#1121)
+
+* test(control-plane): add a reset hook for the process-wide async worker pool
+
+Server Stop retires the process-wide async execution pool for the rest of
+the process. Tests outside the handlers package that run async executions
+in the same test binary as a Stop call need a fresh pool to stay order
+independent; ResetAsyncWorkerPoolForTesting drains the current pool and
+lets the next async execution start a new one.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): run session tool calls through the execute pipeline in-process
+
+POST /api/v1/session-instances/:session_id/tools/:tool re-sent each call
+over HTTP to the control plane's own /api/v1/execute/async/:target. The
+URL of that second request was built from the incoming request's Host
+header, and the request carried the configured internal authorization
+token and copied caller headers.
+
+The route no longer makes an HTTP request. A small middleware validates
+the tool call as before, rewrites it into an execute request ({"input":
+...}, X-Session-ID from the path, the resolved <node>.<reasoner> as the
+target route param, replay-control headers dropped as before), and the
+route then runs the same execute rate limiter, permission check and
+async execute handler as /api/v1/execute/async/:target. The execute
+middleware list is built once and shared by both routes.
+
+Side effects of removing the hop: callers authenticating with
+"Authorization: Bearer <api key>" no longer get 401 when an internal
+token is configured, DID-signed callers are evaluated with their
+verified DID instead of being rejected, and rate limiting and policy
+evaluation see the original caller once.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): apply the execute body limit to session tool calls
+
+Session tool calls used to hit the execute body limit
+(AGENTFIELD_MAX_EXECUTE_BODY_BYTES, default 32 MiB) when the forwarded
+request re-entered /api/v1/execute/. Now that they run the execute
+pipeline in-process, apply the same limit to POSTs under
+/api/v1/session-instances/. The whole prefix is matched so path variants
+gin still routes to the tool handler, such as an empty session id, are
+covered; the only other route there, realtime-offer, takes a small SDP
+body.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (17abda7)
+
+## [0.1.142-rc.18] - 2026-10-19
+
+
+### Fixed
+
+- Fix(control-plane): validate agent endpoints and restrict control-plane-to-agent destinations (#1116)
+
+* feat(control-plane): add agent endpoint validation and outbound destination policy
+
+Introduce internal/agenturl, which owns how the control plane validates and
+reaches agent node endpoints:
+
+- Endpoint shape validation and normalization for base_url and
+  invocation_url: http/https only, host required, no userinfo, query,
+  fragment, whitespace/control characters, encoded separators or
+  dot-segments. A legitimate path prefix is kept.
+- Join(), which builds outbound URLs from a validated base plus
+  path-escaped segments instead of string concatenation.
+- A destination policy that always refuses link-local and cloud
+  instance-metadata addresses (including IPv4 embedded in IPv6 forms and
+  the well-known metadata hostnames), and an opt-in strict mode that also
+  refuses loopback and private ranges unless allowlisted.
+- An HTTP client/transport factory that checks every resolved address at
+  dial time and only follows same-origin redirects.
+
+New settings (default off / empty), documented in .env.example,
+config/agentfield.yaml and docs/ENVIRONMENT_VARIABLES.md:
+  registration.agent_endpoint_strict
+    (AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_STRICT)
+  registration.agent_endpoint_allowed_hosts
+    (AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_ALLOWED_HOSTS)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): validate agent endpoints at registration
+
+Generic and serverless node registration now run base_url and
+invocation_url through agenturl validation and the destination policy
+before anything is stored, and persist the normalized URL. Invalid
+endpoints are rejected with HTTP 400 naming the rule that failed.
+
+- invocation_url supplied in a generic register/re-register body gets the
+  same validation as base_url instead of being stored as-is.
+- Callback-discovery candidates are normalized with the same rules and
+  keep their path prefix.
+- Serverless discovery and execute endpoints are joined safely, and
+  dot-segment paths are rejected rather than silently cleaned.
+- Storage derives a missing serverless invocation URL with safe joining;
+  previously stored rows remain readable.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): constrain execution dispatch to validated agent endpoints
+
+Execution (sync, async, restart retry) and the legacy reasoner/skill call
+routes now:
+
+- re-validate the stored base_url / invocation_url before dispatch and
+  refuse with a clear JSON error (no agent response body relayed) when a
+  stored endpoint no longer passes validation;
+- build the target URL with agenturl.Join, so reasoner and skill names are
+  path-escaped and names containing "/", "..", "?", "#" or encoded
+  separators cannot move the request outside <base>/reasoners/ or
+  <base>/skills/;
+- send through the agenturl client, which applies the destination policy
+  at dial time and does not follow cross-origin redirects.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): apply the agent endpoint policy to logs, status and lifecycle traffic
+
+Every other control-plane request to an agent node now uses the same
+validation, safe joining and policy-checked client:
+
+- UI node logs proxy: joins <base>/agentfield/v1/logs with url.URL and
+  encodes caller parameters with url.Values, keeping its connect and
+  stream limits.
+- Node status and shutdown (also used by the health monitor, status
+  manager and UI service), UI lifecycle endpoint advertisement, trigger
+  dispatch, cancel dispatch, and the local node lifecycle HTTP client.
+
+Upgrade path: nodes stored before this change with an endpoint that no
+longer validates still load, list and survive server start; requests to
+them are refused with a clear error and a once-per-node warning, and
+re-registering with a valid URL fixes them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(agenturl): share the connect budget across resolved addresses; let CIDR exceptions match localhost
+
+- Dial each checked address with a share of the remaining connect
+  deadline, so a stalled first address (e.g. an unreachable IPv6 answer)
+  no longer consumes the whole budget before a working fallback is tried.
+- In strict mode, a CIDR exception now applies to localhost after
+  resolution instead of the name being refused up front, so allowlisting
+  127.0.0.0/8 and ::1/128 works for localhost agents and for the control
+  plane's managed local node probes. The always-on deny is still checked
+  first.
+- Add a server-level test proving startup applies the configured strict
+  mode and allowlist, and check response-write errors in the new tests.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): bound registration DNS checks and keep invocation-only nodes dispatchable
+
+- Registration validates each normalized endpoint once per request using
+  the request context, stops DNS checks once a callback candidate is
+  selected, and keeps "DNS not ready yet" a warning rather than an error.
+  A registration with slow-resolving extra candidates no longer waits on
+  each of them in turn, and a disconnected caller cancels the lookups.
+- Execution validates the endpoint it actually uses: a node registered
+  with a valid invocation_url and no base_url dispatches again, as it did
+  before. Logs, status/shutdown, lifecycle, trigger and cancel keep their
+  previous behaviour for an empty base_url.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test(handlers): inject the dial failure in the unbuildable-retry-URL test
+
+The test used a bound-then-closed loopback port to simulate a dead agent.
+On some hosts (seen on WSL2, also on main) connecting to that port
+intermittently yields a read reset instead of a dial error, so the retry
+path under test was never reached. Inject the dial failure through the
+existing round-tripper fixture instead; the assertion is unchanged and the
+invalid retry URL is additionally asserted never to reach the transport.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (f077154)
+
+## [0.1.142-rc.17] - 2026-10-19
+
+
+### Fixed
+
+- Fix(control-plane): preserve DID identities across restarts and home path changes (#1119)
+
+* Persist DID derivation paths and verify identities on load
+
+Identity state was not stored faithfully, so rebuilt keys could stop
+matching their DIDs after a restart.
+
+- Store agent and component derivation paths, component public keys, and
+  the X25519 key epoch verbatim, updating existing rows in place.
+- Load each agent only into the registry of the server that owns it.
+- Verify every identity against the master seed on load. Paths written by
+  earlier versions are recovered and saved back; identities that cannot be
+  verified are refused instead of receiving mismatched keys. A registry
+  whose root DID does not match its seed fails startup.
+- Allocate agent and component indices past every index already used, so
+  keys are never shared or reused.
+- Keep the existing server identity when AGENTFIELD_HOME moves, fail
+  closed when several registries make the choice ambiguous, and add
+  AGENTFIELD_DID_SERVER_ID to pin it.
+- Resolve DIDs from other registries in the same database, and report DIDs
+  the VC chain cannot resolve instead of dropping them.
+
+Regression tests include the reproducer supplied with the report.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* Use real key material in DID test fixtures
+
+The registry now verifies stored identities against the master seed, so
+fixtures need DIDs derived from a real seed and components with public keys.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* Keep other registries public-only and share the legacy server ID helper
+
+ResolveDID still falls back to other registries in the same database so older
+credentials stay verifiable, but identities resolved that way carry public keys
+only. Signing paths reject an identity without a private key with an error that
+names the inactive registry as the cause.
+
+The duplicated legacy ID helpers in server and application now call
+LegacyAgentFieldServerID. Registries stored under the legacy home-path ID are
+still found, and the single-registry adoption and ambiguous-choice error are
+unchanged.
+
+This commit also made SelectAgentFieldServerID mint a random ID when no
+registry exists. A later commit in this series ("Serialize DID allocation and
+harden registry recovery") returns new registries to the deterministic
+home-path ID, so replicas that start together on a fresh database converge on
+one registry; the master seed stays random either way.
+
+Document AGENTFIELD_DID_SERVER_ID / features.did.server_id.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* Retire removed component DIDs instead of reloading them
+
+When an agent re-registered with fewer reasoners or skills, the removed
+components were dropped from the in-memory registry but their rows stayed
+in component_dids, so the next restart loaded them back as registered
+identities that ResolveDID would hand keys out for.
+
+Component rows now carry a status. Deregistration marks removed rows
+retired; registry load and the UI only read active rows, while the
+derivation-path allocator reads active and retired rows so a retired
+component's key is never reissued.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* Report unverifiable VC chains in the API and UI
+
+The workflow VC chain response now carries an explicit "verifiable" flag
+alongside unresolved_dids. Both VC chain endpoints keep returning 200 but
+set X-AgentField-VC-Chain-Verifiable: false when some DIDs could not be
+resolved. `af verify` fails and prints a warning for exported chains that
+declare unresolved DIDs, and the run detail page shows a warning banner
+listing them.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* Label retired component DIDs in lookups and guard trigger signing
+
+- DID resolution bundles report retired component DIDs as "retired"
+  instead of "not found", so audit trails still show who signed.
+- The trigger-event signer refuses identities without a private key,
+  matching the other signers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* Serialize DID allocation and harden registry recovery
+
+- Allocate agent and component derivation paths against every DID and
+  path ever stored, across agents and servers, so a new identity can
+  never reuse a recovered legacy key.
+- Serialize identity changes in the DID service and apply registry
+  updates copy-on-write: only changed agents are written and a failed
+  write leaves the in-memory registry unchanged.
+- Abort allocation when stored identities cannot be read.
+- Bound legacy path recovery by all stored agent rows, retire components
+  that cannot be re-derived instead of blocking their agent, and skip
+  revoked agent rows so an operator can issue a new identity.
+- Name new registries after the home path again, never overwrite a
+  stored registry's key material, adopt a registry created concurrently
+  by another replica, and reject a pinned server ID with no stored
+  registry.
+- Keep saving remaining agents when one agent fails to save.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* Keep server DID rows in the server test stub storage
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* Coordinate DID allocation and identities across replicas
+
+Control-plane replicas that share one database each allocated derivation
+paths from their own snapshot. Two replicas picked the same next path, the
+database's conditional upsert refused the loser, and nothing retried: with
+40 concurrent registrations spread over two service instances, 18 to 19
+failed. On main the same race succeeded with duplicate DIDs instead.
+
+DID ownership conflicts are now typed in storage, and a refused
+registration is retried from fresh durable state, at most 64 times.
+Postgres serialization and deadlock errors and SQLite busy or locked errors
+retry the whole transaction the same way; any other error fails at once.
+
+DID writes for one server are serialized in the database (a Postgres
+transaction advisory lock bounded by a 15 second lock_timeout; SQLite
+immediate transactions), and a second active DID for the same node or the
+same component name is refused, so replicas that register one node at the
+same moment converge on one identity. Before differential analysis a
+registration merges, read-only, the verified identities other replicas
+stored for that node; it never replaces or drops what this replica holds,
+and a stored identity whose path does not verify is refused with recovery
+steps instead of being re-issued. Storage keeps a revoked agent revoked, a
+retired component retired and an X25519 epoch from going backwards, even
+when a replica with a stale view saves.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* Refuse to mint a DID registry while its agents survive
+
+If the did_registry row that holds a server's master seed was missing but
+agent DID rows survived, startup logged the orphans and created a new
+registry with a new seed. Every DID changed and every credential signed
+before stopped verifying, without anything failing.
+
+Creating a new registry now refuses while non-revoked agent rows reference
+a registry that does not exist. The error names each orphaned server ID,
+how many agents it had and up to ten of their node IDs, and says how to
+recover: restore the row or the database from a backup, or, if the
+identity is permanently lost, revoke those agents with the SQL it prints
+and restart so they get new identities. An empty database still
+initializes, orphans of another server do not block a control plane whose
+own registry exists, and agent rows are read before registry rows so a
+replica starting beside one that is creating the registry is never refused
+by mistake.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* Say how the DID server ID is chosen
+
+A new registry's public server ID is derived deterministically from the
+absolute AGENTFIELD_HOME path, so replicas that share a home path and start
+together on one fresh database converge on a single registry; the master
+seed stays random. AGENTFIELD_DID_SERVER_ID names the first registry on an
+empty database, and once registries exist a pinned ID that matches none of
+them stops startup. The environment reference, .env.example and the YAML
+example now say exactly that.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* Move the X25519 epoch migration to goose version 038
+
+main already has two goose migrations numbered 036. Renumber this branch's
+X25519 epoch migration to 038, with its SQL unchanged, so merging does not
+add a third migration with the same version.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* Report incomplete required issuers in VC chains and keep the signal in exports
+
+The workflow VC chain still skipped execution and workflow issuers that were
+empty, whitespace or malformed, so a chain could report verifiable: true while
+a required signer was missing. Required issuers now always go through
+resolution and land in unresolved_dids when they cannot be resolved; an
+absent optional caller or target DID is still not flagged.
+
+`af vc verify` now fails when an export says verifiable: false even if it has
+no unresolved_dids list. Exports from older versions that carry neither field
+verify as before.
+
+The Go SDK chain type gains optional Verifiable and UnresolvedDIDs fields, and
+the client keeps the X-AgentField-VC-Chain-Verifiable header signal, so an
+export through the SDK no longer drops the warning.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* Sign a workflow VC with the active root when its first issuer cannot sign
+
+The workflow VC that wraps a chain is signed with the issuer of the first
+execution VC. Once that issuer can no longer sign, because its reasoner was
+retired, its DID belongs to an inactive registry, or its agent was revoked,
+generating the chain failed and the historical audit trail could not be
+downloaded.
+
+Keep the first execution issuer when it still has a signing key. Otherwise
+sign the newly generated wrapper with the active control plane's root DID
+and include that DID in the resolution bundle. Execution VCs keep their
+original issuers and are verified with public keys.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* Coordinate key rotation, retries and component retirement across replicas
+
+Review of the replica coordination found five remaining gaps; this closes
+them.
+
+- X25519 rotation took the next epoch from the replica's in-memory view, so
+  a replica that had not seen another replica's rotation reported success
+  with an epoch that was already used. The next epoch is now allocated in
+  storage under the same per-server lock as other DID writes, committed, and
+  only then derived and published.
+- Two service instances sharing one registry and registering the same node
+  at once returned an untyped "registered concurrently" error to the loser.
+  It now carries the typed ownership conflict, so the loser retries through
+  the verified read-through and returns the stored identity.
+- Database contention (SQLite busy/locked, Postgres serialization, deadlock
+  or lock timeout) could be retried up to 64 times, each waiting out the
+  SQLite busy timeout. Contention now gets one retry, separate from the
+  ownership-conflict budget, and the final error keeps the database error.
+- A failed retirement of an unverifiable component was dropped, and the
+  agent could not register until the next restart. The retirement is retried
+  when registration meets the component again; if it still fails, the error
+  names the component DID and prints the SQL that retires it. The
+  unverifiable key is never issued.
+- Retiring a component retired only the row in memory, so a duplicate active
+  row with the same name written by an older version came straight back
+  through read-through. Retirement now retires every row with the same
+  agent, component type and name.
+
+Legacy derivation-path recovery also derived a full candidate table for
+every agent index up front, which grows with agents times the largest
+component count. Candidates are now derived on demand, cached, and the
+search stops at the first match, with the same search bounds. A wrong-seed
+startup error now points to the recovery section of the docs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* Document DID recovery when a root seed or component cannot be verified
+
+Describe how to recover when the stored root DID does not match its seed
+(restore the original passphrase or a backup; as a last resort, the exact
+destructive reset SQL; and AGENTFIELD_FEATURES_DID_ENABLED=false to keep the
+control plane available meanwhile), how to retire a component that cannot be
+re-derived, and the order in which a stored registry is selected: the one
+matching the current home path, else the only one, else an explicit pin.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* Use the signing DID as the execution VC issuer and check it in VC chains
+
+When an execution had no caller DID, the VC was signed with the agent node's
+key but the signed document named an empty issuer, so the VC failed
+verification while the workflow VC chain still reported verifiable: true,
+because the chain only looked at the issuer stored next to the document.
+
+New execution VCs name the DID that actually signs them. The chain now also
+reads each execution VC document's issuer: an empty or unreadable document
+issuer, or one that differs from the stored issuer, is listed in
+unresolved_dids and makes the chain verifiable: false. VCs already written
+with an empty issuer stay visibly unverifiable; normal chains are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* Back off serialization failures and keep healthy duplicate components
+
+Two follow-ups to the replica coordination change.
+
+Postgres serialization failures (40001) and deadlocks (40P01) shared the
+single contention retry meant for errors that already waited on a lock. With
+default_transaction_isolation=serializable, 37 of 40 concurrent
+registrations failed. They are now retried with jittered exponential backoff
+within the 64-attempt budget. SQLite busy/locked and Postgres lock timeouts
+keep their single retry. Each registration's retries are bounded by a
+30-second deadline that starts after the service lock is acquired, so
+registrations queued behind each other are not failed for waiting, and
+SQLite's busy timeout is left unchanged.
+
+Retiring components had been widened to every row with the same name, so
+quarantining an unverifiable duplicate also retired the healthy row of the
+same name and changed a working reasoner's DID. Storage retirement is
+DID-scoped again; startup quarantines only the unverifiable row and adopts a
+surviving verifiable one, and explicit deregistration retires every active
+row with the removed name.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* Use the resolved caller DID consistently in execution VCs
+
+An execution without a caller DID is signed with the agent node's key, and
+the stored metadata named that agent as the caller, but the signed
+credential subject still carried the empty caller. `af vc verify` then
+rejected an otherwise valid chain with "Caller DID mismatch".
+
+Resolve the caller once and use it for the stored metadata, the signed
+caller DID, the document issuer and the proof's verification method. VCs
+with an explicit caller are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* Retire removed component DIDs before dropping them from the registry
+
+Removing a reasoner or skill dropped it from the in-memory registry first
+and retired its stored row afterwards. When the retirement failed, for
+example because the registration deadline expired while another writer held
+the row, memory no longer had the component, its row stayed active, a retry
+reported nothing to remove, and the next restart brought the component back.
+
+Retire first, using both the in-memory DIDs and every active stored row for
+the removed names (so a name already missing from memory is still retired),
+then persist and publish the remaining components. A failed retirement
+leaves memory unchanged; a failure after retirement is returned and logged,
+and the stored rows stay retired.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* Drop retired components from memory even if the registry save fails
+
+Removal now retires component rows before saving the agent's remaining
+components. If that save failed, for example because another transaction
+held the agent row past the registration deadline, the in-memory registry
+kept the components, so this control plane went on resolving and signing
+with DIDs that storage already marked retired until it restarted.
+
+After retirement commits, a failed save now removes the retired DIDs from
+the live registry anyway and returns the save error. Storage keeps them
+retired, so memory and storage agree. If retirement itself fails, memory is
+left unchanged as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: santoshkumarradha <instrument.santosh@gmail.com>
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (8e2650b)
+
+- Fix(web): render untrusted markdown and links safely in the UI (#1118)
+
+* fix(web): render untrusted markdown previews without raw HTML
+
+The JSON viewer's Markdown Preview and the data modal's markdown tab
+built HTML from execution and webhook strings with regex replacements and
+inserted it with dangerouslySetInnerHTML, so markup in an execution input,
+output or inbound payload became live DOM in the operator's browser.
+
+Both previews now use a shared SafeMarkdown component on top of the
+existing react-markdown + remark-gfm dependencies. No raw-HTML plugin is
+enabled, so HTML in the source is shown as literal text. Every URL passes
+through safeExternalUrl (http, https and, for markdown, mailto; no
+credentials); a rejected link renders as plain text, and accepted links
+open in a new tab with rel="noopener noreferrer". Markdown images render
+as their alt text and are never fetched.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(web): escape quotes in the JSON syntax highlighter
+
+highlightJsonText already escapes &, < and > for every token, and its
+attributes are fixed class names, so the existing output was safe. Escape
+double and single quotes as well so the helper stays safe if a token is
+ever placed in an attribute, and add tests that feed markup, closing tags,
+quotes and an HTML-bearing truncation suffix through highlightJsonText and
+both JsonHighlightedPre inputs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(web): only link approval review pages with http(s) URLs
+
+approval_request_url is supplied by the agent that requests an approval
+and is stored as-is, and the execution header and approval panel used it
+directly as an href, so a javascript: value became a clickable script
+link. Pass it through safeExternalUrl; an unsafe value keeps its label but
+gets no href.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(web): validate the discovery catalog URL before opening it
+
+The Discovery page passed summary.catalog_url, built from the
+public_base_url runtime setting, straight to window.open. Open it only
+when it is an http(s) URL or the server's fixed local fallback
+(/.well-known/ai-catalog.json, resolved against the current origin), with
+noopener,noreferrer; otherwise the Open button is disabled.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(web): keep line breaks and list numbering in the markdown preview
+
+The previous regex renderer turned every single newline into a line
+break. Do the same structurally with a small local remark step that turns
+newlines inside text nodes into break nodes (code untouched), instead of
+whitespace-pre-line, which doubled hard breaks and did nothing inside
+tight list items. Pass the ordered-list start number through.
+
+Widen the shared test assertion to reject base/math/meta/link elements and
+check every URL-bearing attribute, and cover reference-style links and
+images, fenced-code info strings, footnotes and raw <base>.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(web): return the normalized URL from safeExternalUrl
+
+safeExternalUrl validated new URL(raw) but returned raw, so an input such
+as "https:x" validated as https://x/ yet an anchor resolved it relative
+to the current page. Return parsed.href so the destination that is used is
+the one that was validated.
+
+The JSON viewer's Open URL control now also requires the value to pass
+safeExternalUrl (it already required an http(s) prefix), so URLs with
+embedded credentials no longer get the control.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(web): keep a failing markdown preview from blanking the page
+
+Deeply nested markdown (a few KB of nested list or quote markers)
+overflows the stack while react-markdown and the line-break step walk
+the tree. The error reached the application-wide error boundary, so
+opening the preview on such a value blanked the page.
+
+Wrap the preview in a local error boundary that falls back to the raw
+content as plain text and resets when the content changes, and make the
+line-break step iterative.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test(web): make the markdown fallback tests independent of stack size
+
+Whether 1,250 nested list items overflow the renderer depends on the
+runtime stack (vitest forks vs threads). Assert the fallback with 20,000
+nested blockquotes, which overflow everywhere, and keep the shallower
+input as a no-crash / no-live-markup check.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (f4ea098)
+
+## [0.1.142-rc.16] - 2026-10-19
+
+
+### Fixed
+
+- Fix(control-plane): enforce memory authorization on the scope each request accesses (#1117)
+
+* fix(control-plane): authorize memory requests against the scope they access
+
+With memory authorization enabled, MemoryPermissionMiddleware skipped scope
+ownership and tag policy when no caller identity resolved, and it validated
+a scope inferred from headers while the handlers used the body/query scope,
+a hierarchical walk, or (events) unfiltered subscriptions. Any API-key
+holder could read, overwrite or delete another agent's actor scope, and
+event streams/history delivered every scope's data.
+
+The middleware now resolves identity (a verified DID is authoritative and
+never falls back to identity headers), evaluates memory tag policies on
+every scope, and installs a request-scoped authorizer. Handlers authorize
+the exact (scope, scope_id) they pass to storage before any storage access:
+
+- non-global scopes require a caller identity (memory_identity_required);
+- unknown scope names are denied;
+- actor ids that equal, or are colon-prefix related to, another registered
+  node id are denied, because local storage keys are "<scope_id>:<key>";
+  persona/user actor ids keep working;
+- session/workflow ids stay selectors for identified callers, including
+  the empty id that released SDKs probe during hierarchical reads;
+- hierarchical reads skip scopes the caller may not read.
+
+Concrete event selectors are authorized before the websocket upgrade/SSE
+headers and re-authorized per event. Wildcard streams/history deliver only
+global, own-actor and participated (stored execution) scopes; live streams
+cache positive decisions only, with rate-limited lookups.
+
+Startup logs warn that identity headers are client-asserted when DID
+request authentication is off, and when authorization is enabled but the
+memory middleware cannot be installed. Behavior with authorization
+disabled is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): send the API key and agent identity on memory requests
+
+The agent built its MemoryClient and MemoryEventClient from defaultHeaders
+only, so memory calls never carried the configured API key (they fail with
+401 against an API-key-protected control plane unless the key is repeated
+in defaultHeaders), and the memory events websocket and history requests
+never carried X-Agent-Node-ID, so the control plane treated them as
+anonymous. Pass the API key to both memory clients and the node id to the
+event client; explicit defaultHeaders keep precedence.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): do not follow redirects on memory requests
+
+Memory requests now carry the API key and caller identity. follow-redirects
+strips Authorization and Cookie across hosts but keeps X-API-Key, so a
+redirect could replay the key and memory payloads to another origin. Memory
+API routes never redirect, so the memory clients no longer follow
+redirects at all (which also holds behind HTTP proxies).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs: describe memory authorization rules
+
+Document how memory authorization resolves the caller, the per-scope
+rules, event stream visibility, tag policies on every scope, the error
+codes, and that identity headers are client-asserted unless DID request
+authentication is used.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (c53dfb9)
+
+## [0.1.142-rc.15] - 2026-10-19
+
+
+### Testing
+
+- Test(sdk/python): drop the stale enable_mcp kwarg from Agent fixtures (#1120)
+
+FastAPI 0.148.0 (released 2026-10-19) no longer accepts unknown keyword
+arguments in FastAPI.__init__. Agent forwards its extra kwargs to FastAPI,
+and six tests still passed enable_mcp=False, an Agent parameter that no
+longer exists, so they now fail with a TypeError and break the sdk-python
+coverage job on every PR.
+
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (8aa3aba)
+
+## [0.1.142-rc.14] - 2026-10-17
+
+
+### Fixed
+
+- Fix(sdk/python): make memory exists() detect a missing key (#1106)
+
+* fix(sdk/python): make memory exists() detect a missing key
+
+MemoryClient.exists() called get() and reported True whenever it did not
+raise. get() answers the control plane's deliberate 404 for an absent key
+with the caller's default instead of raising, so exists() returned True for
+every key as long as the backend was reachable, and the scoped, global and
+MemoryInterface surfaces inherited that answer. #966 documented the behavior
+and left the implementation fix for its own PR.
+
+Decide presence against a private sentinel passed as get()'s default: a
+stored value -- including a falsy one such as None, 0 or "" -- means True,
+a 404 means False, and a transport or backend failure still means False.
+get()'s default-on-404 contract is unchanged. This matches the TypeScript
+sibling, which decides presence from the returned value rather than from
+"did not raise". The four docstrings #966 rewrote now state the real
+behavior again.
+
+Refs #966
+
+* docs(sdk/python): state the real memory exists() contract in Agent.memory
+
+#966 recorded the exists() limitation in five places: the four docstrings in
+memory.py and the exists bullet of the Agent.memory "Memory Operations" API
+list. The previous commit corrected the four; this completes the set so the
+advertised API list no longer contradicts the implementation it describes,
+and drops the get(key, sentinel) workaround that is no longer needed.
+
+Refs #966
+
+---------
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com> (2460793)
+
+## [0.1.142-rc.13] - 2026-10-17
+
+
+### Fixed
+
+- Fix(sdk/python): report a provider-confirmed zero cost instead of unknown (#1105)
+
+_resolve_cost() accepted a provider-native cost figure only when it was
+strictly positive, so a provider-reported 0.0 -- what a zero-priced or
+free-tier model returns -- was discarded and resolution fell through to the
+LiteLLM branches, ending at (None, None). detect_multimodal_response() then
+reported cost_usd=None/cost_source=None, agent_ai.py recorded that into the
+execution CostTracker, and serialize() emitted total_cost_usd: null for a run
+whose calls were all free.
+
+Accept cost >= 0 in the provider-native branch only. The two LiteLLM branches
+keep > 0 because litellm.completion_cost() returns 0.0 for models absent from
+its pricing database, so a zero there means "unpriced" rather than "free".
+This also matches the TypeScript SDK, which accepts a real zero for the same
+provider figure (costFromUsageRaw: cost >= 0, "known zero receipts remain
+reported entries"). (07e148d)
+
+## [0.1.142-rc.12] - 2026-10-15
+
+
+### Fixed
+
+- Fix(control-plane): write the executions row for legacy reasoner and skill calls (#1099)
+
+* fix(control-plane): write the executions row for legacy reasoner and skill calls
+
+ExecuteReasonerHandler and ExecuteSkillHandler (POST /reasoners/:id and
+/skills/:id) sent X-Execution-ID to the agent but never created the
+executions row, so the agent's POST /api/v1/executions/:id/status
+callback hit UpdateExecutionRecord with no row and got a 404.
+
+Both handlers now create the row (status running) right after the input
+is marshalled, before the serverless branch and before dispatch. The
+shape matches the normal execute path in execute_prepare.go. A failed
+insert is logged and the call continues, so the legacy endpoints gain
+no new failure mode.
+
+persistWorkflowExecution, which every terminal exit of both handlers
+already calls, now also copies status, error, result, completed_at and
+duration onto the executions row. A row the agent's own callback has
+already made terminal is left untouched.
+
+Tests: two handler tests check the row exists while the agent is being
+called and ends as succeeded. A third test runs the legacy reasoner
+endpoint and the real status callback handler on LocalStorage; the stub
+agent posts a failed status callback during dispatch. It gets a 404 on
+main and a 200 here, and the agent's failed status is kept. A fourth
+test makes the insert fail and checks the call still returns 200.
+
+Test storages: reasonerHandlerStorage gains GetExecutionRecord and
+UpdateExecutionRecord passthroughs; reasonerTestStorage and
+persistWorkflowExecutionStore gain the record methods the handlers now
+call, so they do not hit the nil embedded interface.
+
+Fixes #1086
+
+$ cd control-plane && go test -tags sqlite_fts5 ./internal/handlers/ \
+    -run 'CreatesExecutionRowBeforeDispatch|AgentStatusCallbackFindsExecution' -v
+
+On main (tests only):
+--- FAIL: TestExecuteReasonerHandler_CreatesExecutionRowBeforeDispatch
+    Messages: executions row must exist while the agent is being called
+--- FAIL: TestExecuteSkillHandler_CreatesExecutionRowBeforeDispatch
+    Messages: executions row must exist while the agent is being called
+--- FAIL: TestExecuteReasonerHandler_AgentStatusCallbackFindsExecution
+    expected: 200, actual: 404
+
+With the fix: all 3 PASS.
+
+$ go test -tags sqlite_fts5 ./internal/handlers/... ./internal/storage/...
+2547 passed, 0 failed, 39 skipped (6 packages ok)
+$ go vet -tags sqlite_fts5 ./internal/handlers/ ./internal/storage/   clean
+$ golangci-lint run --new-from-rev=upstream/main ./internal/handlers/  0 issues
+
+* fix(control-plane): keep 202 acknowledgements running and finalize cancelled legacy calls
+
+Addresses review on #1099.
+
+202 acknowledgements. The Python and Go SDKs answer an async execution
+with HTTP 202 and status "processing" while the reasoner keeps running.
+The legacy reasoner and skill handlers treated that as success, and the
+finalizer then wrote "succeeded" with the acknowledgement as the result.
+A later failed callback got 409, a later successful one was a no-op that
+kept the acknowledgement, and a late failed workflow event could not
+repair the row.
+
+On a 202 both handlers now persist the workflow row as running and leave
+the executions row running, so the agent's status callback or workflow
+event completes the execution. If the callback landed before the 202
+came back, it found no workflow row to update; the acknowledgement then
+copies the terminal outcome from the executions row instead of leaving
+the workflow row running. The response to the legacy caller is
+unchanged.
+
+Cancelled requests. persistWorkflowExecution and the finalizer reused
+the request context, so a caller cancelling after dispatch made the
+dispatch fail and the final writes fail with it, leaving the row running
+with no completion time. Final persistence now runs on
+context.WithoutCancel(ctx) bounded by a 5 s timeout. The terminal-state
+guard in the finalizer is kept.
+
+Tests (real LocalStorage):
+- TestLegacyExecute_CallbackAfterAsyncAcknowledgement
+  {reasoner,skill}/{succeeded,failed}
+- TestLegacyExecute_CallbackBeforeAsyncAcknowledgement
+- TestLegacyExecute_FailedWorkflowEventAfterAsyncAcknowledgement
+- TestLegacyExecute_CancelledRequestFinalizesExecution/{reasoner,skill}
+
+$ cd control-plane && go test -tags sqlite_fts5 ./internal/handlers/ -run 'TestLegacyExecute_' -v
+
+On 61e498fb (tests only):
+--- FAIL: TestLegacyExecute_CallbackAfterAsyncAcknowledgement (4/4 subtests)
+    expected: "running", actual: "succeeded"
+    Messages: a 202 acknowledgement is not the result
+--- FAIL: TestLegacyExecute_CallbackBeforeAsyncAcknowledgement
+    workflow output is {"status":"processing",...}, not {"answer":42}
+--- FAIL: TestLegacyExecute_FailedWorkflowEventAfterAsyncAcknowledgement
+    expected: "failed", actual: "succeeded"
+--- FAIL: TestLegacyExecute_CancelledRequestFinalizesExecution (2/2 subtests)
+    expected: "failed", actual: "running"
+
+With the fix: all PASS (also -count=5).
+
+$ go test -tags sqlite_fts5 ./internal/handlers/... ./internal/storage/... ./internal/server/...
+10 packages ok, 0 failed
+$ go vet -tags sqlite_fts5 ./internal/handlers/... ./internal/storage/...   clean
+
+---------
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com> (ef72128)
+
+## [0.1.142-rc.11] - 2026-10-15
+
+
+### Added
+
+- Feat(sdk/go/ai): support IO Intelligence (io.net) provider (#1102)
+
+* feat(sdk/go/ai): support IO Intelligence (io.net) provider
+
+Mirror the Infron gateway support (#874) for IO Intelligence, io.net's
+OpenAI-compatible Chat Completions endpoint:
+
+- DefaultConfig picks up IONET_API_KEY when no provider key with higher
+  precedence is set, pointing at
+  https://api.intelligence.io.solutions/api/v1 (OPENAI, INFRON and
+  OPENROUTER keys all keep precedence, so adding IONET_API_KEY never
+  silently reroutes an existing deployment).
+- IsIonet() detects the endpoint by base URL or an ionet/ model prefix.
+- The ionet/ model prefix is a routing marker only and is stripped
+  before the request goes out: the endpoint serves bare Hugging
+  Face-style org/name ids (e.g.
+  meta-llama/Llama-3.3-70B-Instruct).
+- No usage opt-in or attribution headers: io.net reports usage in the
+  standard Chat Completions shape.
+- Documented in docs/ENVIRONMENT_VARIABLES.md and the Go SDK README,
+  next to the Infron sections.
+
+go test ./ai/... passes; the new suite covers env pickup and
+precedence, IsIonet, prefix stripping on the wire, no usage opt-in,
+and max_tokens preservation.
+
+* fix(sdk/go/ai): default to an io.net model when the io.net key is selected
+
+* fix(sdk/go/ai): decide the io.net default model with the same detection as the request path
+
+* docs(sdk/go/ai): state that the ionet/ marker never reroutes a request
+
+* docs(sdk/go/ai): refresh the APIKey doc comment and note catalog rotation
+
+* test(sdk/go/ai): isolate the config-error and ionet tests from ambient keys
+
+The config-validation subtest cleared the OpenAI, OpenRouter, base-URL and
+model variables but not the Infron and io.net keys, so an exported io.net key
+turned it into a live request against the real endpoint. Clear all six
+selection variables in the subtest, move the ionet env handling to t.Setenv
+like the rest of the package, and add a tools/tool_choice passthrough case
+for the ionet/ model marker.
+
+---------
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com> (0e134b1)
+
+## [0.1.142-rc.10] - 2026-10-14
+
+
+### Fixed
+
+- Fix(sdk/python): let AsyncConfig env flags fall back to the class default (#1100)
+
+The two boolean parsers added in #1082 each bake in a polarity: _env_flag_default_on
+returns True for anything outside the falsey vocabulary and _env_flag_default_off
+returns False for anything outside the truthy one. That is correct for AsyncConfig's
+own field defaults, but it makes the fallback independent of the class -- a subclass
+that changes a default gets the parser's answer for an unrecognised string instead of
+its own:
+
+    @dataclass
+    class CachingOff(AsyncConfig):
+        enable_result_caching: bool = False
+
+    # AGENTFIELD_ASYNC_ENABLE_RESULT_CACHING=maybe
+    CachingOff.from_environment().enable_result_caching   # True, should be False
+
+Add one polarity-free parser, _env_flag, that raises ValueError outside the
+vocabulary, and use it for all five flags. get_env_var already catches
+(ValueError, TypeError) and returns the default_value it was handed, which
+from_environment() passes as config.<field> -- so the fallback now comes from the
+class, exactly as the float and int converters in the same function already do.
+
+This is the second half of #1089; the remaining strict parsers in logger.py,
+agent.py and agent_server.py are handled separately in #1090.
+
+It also matches the Go control plane, which has always parsed this way:
+config.applyBoolEnv leaves *target untouched and logs a warning when
+strconv.ParseBool rejects the string, and the handler tests pin parseBool(" YeS ")
+-> true, parseBool("0") -> false, parseBool("maybe") -> error.
+
+_env_flag_default_on and _env_flag_default_off are kept, now expressed in terms of
+_env_flag, for call sites that know their default statically -- #1090 imports
+_env_flag_default_off into logger.py for the default-off AGENTFIELD_LOG_* flags, so
+removing them would break an open PR. A test pins both wrappers' contract.
+
+AsyncConfig's own observable behaviour is unchanged: with no AGENTFIELD_ASYNC_*
+variable set the converters are never reached, and digesting every field of
+from_environment() on both trees gives the same SHA-256
+(5960894a0c0bd6c817a09800eee26998e09625f7dfb23cd3d75ce1ee9088eb90). For a set
+variable, every value in the vocabulary parses as before and every value outside it
+still yields the field default -- the default just now comes from the class.
+
+Fixes the AsyncConfig half of #1089. (88a5f73)
+
+## [0.1.142-rc.9] - 2026-10-05
+
+
+### Other
+
+- Telemetry updates (752cc57)
+
 ## [0.1.142-rc.8] - 2026-10-03
 
 

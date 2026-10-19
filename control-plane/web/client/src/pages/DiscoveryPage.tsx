@@ -50,6 +50,7 @@ import type {
   ARDSearchResult,
 } from "@/types/ard";
 import { cn } from "@/lib/utils";
+import { safeExternalUrl } from "@/utils/safeExternalUrl";
 
 const QUERY_KEY = ["ard-dashboard"];
 
@@ -162,6 +163,10 @@ export function DiscoveryPage() {
 }
 
 function OverviewTab({ dashboard }: { dashboard: ARDDashboard }) {
+  // The server uses this fixed local path when no public base URL is configured.
+  const catalogUrl = dashboard.summary.catalog_url === "/.well-known/ai-catalog.json"
+    ? new URL("/.well-known/ai-catalog.json", window.location.origin).href
+    : safeExternalUrl(dashboard.summary.catalog_url);
   const saveSettings = useDashboardMutation(updateARDSettings);
   const [settings, setSettings] = useState<ARDRuntimeSettings>(() => ({
     enabled: dashboard.state.settings.enabled ?? dashboard.config.enabled,
@@ -210,7 +215,9 @@ function OverviewTab({ dashboard }: { dashboard: ARDDashboard }) {
                 <Copy className="size-4" />
                 Copy
               </Button>
-              <Button variant="outline" size="sm" onClick={() => window.open(dashboard.summary.catalog_url, "_blank")}>
+              <Button variant="outline" size="sm" disabled={!catalogUrl} onClick={() => {
+                if (catalogUrl) window.open(catalogUrl, "_blank", "noopener,noreferrer");
+              }}>
                 <ExternalLink className="size-4" />
                 Open
               </Button>

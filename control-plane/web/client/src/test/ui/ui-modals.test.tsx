@@ -384,7 +384,7 @@ describe("ui modals and empty states", () => {
     expect(screen.getByText(JSON.stringify(markdown, null, 2))).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Markdown Preview" }));
-    expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "https://example.com");
+    expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "https://example.com/");
     expect(screen.getByText("Bold").tagName).toBe("STRONG");
 
     await user.click(screen.getByTitle("Close"));

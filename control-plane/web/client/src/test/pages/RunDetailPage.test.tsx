@@ -971,6 +971,37 @@ describe("RunDetailPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("warns when the workflow VC chain cannot be fully verified", async () => {
+    state.runDag = {
+      data: buildDag(),
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    state.queryData = {
+      workflow_vc: { issuer_did: "did:example:issuer" },
+      verifiable: false,
+      unresolved_dids: ["did:web:example.com:agents:gone"],
+    };
+
+    const view = renderPage();
+
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+    expect(
+      screen.getByText("This audit chain cannot be fully verified: 1 DID could not be resolved"),
+    ).toBeInTheDocument();
+
+    view.unmount();
+    state.queryData = {
+      workflow_vc: { issuer_did: "did:example:issuer" },
+      verifiable: true,
+    };
+    renderPage();
+
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+    expect(screen.queryByText(/audit chain cannot be fully verified/)).not.toBeInTheDocument();
+  });
+
   it("renders empty execution detail states and pending webhook registrations", async () => {
     state.runDag = {
       data: {

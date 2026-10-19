@@ -18,6 +18,7 @@ func (s *AgentFieldServer) registerMemoryRoutes(agentAPI *gin.RouterGroup) {
 			memPermConfig := middleware.MemoryPermissionConfig{
 				Enabled:               true,
 				EnforceScopeOwnership: true,
+				ExecutionReader:       s.storage,
 			}
 			memoryGroup.Use(middleware.MemoryPermissionMiddleware(
 				s.accessPolicyService,
@@ -25,7 +26,15 @@ func (s *AgentFieldServer) registerMemoryRoutes(agentAPI *gin.RouterGroup) {
 				s.didWebService,
 				memPermConfig,
 			))
-			logger.Logger.Info().Msg("Memory permission middleware enabled on memory endpoints")
+			if !s.config.Features.DID.Authorization.DIDAuthEnabled {
+				logger.Logger.Warn().Msg("Memory authorization identifies callers by client-asserted X-Agent-Node-ID / X-Caller-Agent-ID headers, which any holder of the API key can set; requests without an identity are limited to global memory; enable DID request authentication for verified identities")
+			} else {
+				logger.Logger.Info().Msg("Memory authorization enabled with DID request authentication; unsigned requests still fall back to client-asserted identity headers")
+			}
+		} else if s.config.Features.DID.Authorization.Enabled {
+			logger.Logger.Warn().Bool("access_policy_service_available", s.accessPolicyService != nil).
+				Bool("did_web_service_available", s.didWebService != nil).
+				Msg("Memory endpoints are not authorization-checked because the access policy service or DID web service is unavailable")
 		}
 
 		// Key-value memory endpoints

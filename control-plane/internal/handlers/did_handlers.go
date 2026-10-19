@@ -238,6 +238,21 @@ func (h *DIDHandlers) VerifyAuditBundle(c *gin.Context) {
 	HandleVerifyAuditBundle(c)
 }
 
+// VCChainVerifiableHeader is set to "false" on VC chain responses that cannot
+// be fully verified because some referenced DIDs could not be resolved. The
+// status code stays 200 so existing clients keep working.
+const VCChainVerifiableHeader = "X-AgentField-VC-Chain-Verifiable"
+
+// SetVCChainVerifiabilityHeader marks an unverifiable VC chain response.
+func SetVCChainVerifiabilityHeader(c *gin.Context, chain *types.WorkflowVCChainResponse) {
+	if chain == nil {
+		return
+	}
+	if !chain.Verifiable || len(chain.UnresolvedDIDs) > 0 {
+		c.Header(VCChainVerifiableHeader, "false")
+	}
+}
+
 // GetWorkflowVCChain handles workflow VC chain requests.
 // GET /api/v1/did/workflow/:workflow_id/vc-chain
 func (h *DIDHandlers) GetWorkflowVCChain(c *gin.Context) {
@@ -265,6 +280,7 @@ func (h *DIDHandlers) GetWorkflowVCChain(c *gin.Context) {
 	}
 
 	logger.Logger.Debug().Msg("🔍 Successfully retrieved workflow VC chain, returning response")
+	SetVCChainVerifiabilityHeader(c, response)
 	c.JSON(http.StatusOK, response)
 }
 

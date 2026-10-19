@@ -55,9 +55,6 @@ func TestDIDServiceAdditionalHelperBranches(t *testing.T) {
 		require.NotNil(t, service.findSkillByID([]types.SkillDefinition{{ID: "skill-1"}}, "skill-1"))
 		require.Nil(t, service.findSkillByID([]types.SkillDefinition{{ID: "skill-1"}}, "missing"))
 
-		uninitialized := NewDIDService(&config.DIDConfig{Enabled: true}, nil, service.registry)
-		require.Empty(t, uninitialized.generateReasonerPath("agent-identity-package", "reasoner-2"))
-		require.Empty(t, uninitialized.generateSkillPath("agent-identity-package", "skill-2"))
 	})
 }
 

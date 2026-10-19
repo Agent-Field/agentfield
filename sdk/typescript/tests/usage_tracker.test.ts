@@ -222,13 +222,16 @@ describe('AI SDK usage extraction', () => {
     });
   });
 
-  it('skips empty results and calls made outside an execution', () => {
+  it('marks missing receipts and skips calls made outside an execution', () => {
     const ctx = makeContext('exec-u2');
     ExecutionContext.run(ctx, () => {
       recordAiSdkUsage({ source: { usage: undefined }, model: 'gpt-4o' });
       recordAiSdkUsage({ source: {}, model: 'gpt-4o' });
     });
-    expect(ctx.costTracker.hasEntries).toBe(false);
+    expect(ctx.costTracker.serialize().entries).toHaveLength(2);
+    for (const entry of ctx.costTracker.serialize().entries) {
+      expect(entry).toMatchObject({ usage_status: 'missing', routing_provider: 'unknown' });
+    }
     // Outside any execution: must not throw.
     expect(() => recordAiSdkUsage({ source: { usage: sdkUsage }, model: 'gpt-4o' })).not.toThrow();
   });
@@ -287,4 +290,15 @@ describe('withOpenRouterUsageInclude', () => {
     await wrapped('u');
     expect(base.mock.calls[2][1]).toBeUndefined();
   });
+});
+
+it('records a known zero-token receipt as reported rather than missing', () => {
+  const ctx = makeContext('known-zero-receipt');
+  ExecutionContext.run(ctx, () => {
+    recordAiSdkUsage({ source: { usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }, model: 'gpt-4o', provider: 'openrouter' });
+  });
+  expect(ctx.costTracker.serialize().entries).toEqual([expect.objectContaining({
+    routing_provider: 'openrouter', input_tokens: 0, output_tokens: 0, total_tokens: 0
+  })]);
+  expect(ctx.costTracker.serialize().entries[0].usage_status).toBeUndefined();
 });

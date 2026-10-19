@@ -242,6 +242,81 @@ async def test_list_keys_returns_names(memory_client, monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_exists_is_false_when_the_control_plane_returns_404(
+    memory_client, monkeypatch
+):
+    # The control plane answers a missing key with 404 (handlers/memory.go) and
+    # get() turns that into its default instead of raising, so "did not raise"
+    # cannot mean "is stored".
+    class NotFoundResponse:
+        status_code = 404
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    async def fake_request(method, url, json=None, headers=None, timeout=None):  # type: ignore[override]
+        assert url.endswith("/memory/get")
+        return NotFoundResponse()
+
+    monkeypatch.setattr(memory_client, "_async_request", fake_request)
+
+    assert await memory_client.exists("never-stored") is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_exists_is_true_for_a_stored_falsy_value(memory_client, monkeypatch):
+    # A stored null/0/"" is present; only the 404 means missing.
+    class StoredNullResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": "null"}
+
+    async def fake_request(method, url, json=None, headers=None, timeout=None):  # type: ignore[override]
+        return StoredNullResponse()
+
+    monkeypatch.setattr(memory_client, "_async_request", fake_request)
+
+    assert await memory_client.exists("stored-null") is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_scoped_exists_is_false_for_a_missing_key(memory_client, monkeypatch):
+    # The scoped/global/interface surfaces delegate here, so a missing key must
+    # read as absent through them too.
+    class NotFoundResponse:
+        status_code = 404
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    captured: dict[str, Any] = {}
+
+    async def fake_request(method, url, json=None, headers=None, timeout=None):  # type: ignore[override]
+        captured["json"] = json
+        return NotFoundResponse()
+
+    monkeypatch.setattr(memory_client, "_async_request", fake_request)
+
+    scoped = ScopedMemoryClient(memory_client, "session", "sess-1", event_client=None)
+
+    assert await scoped.exists("never-stored") is False
+    assert captured["json"]["scope"] == "session"  # type: ignore[index]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_exists_handles_errors(memory_client, monkeypatch):
     async def _raise(*args, **kwargs):
         raise RuntimeError("boom")

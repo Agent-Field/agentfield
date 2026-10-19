@@ -385,24 +385,26 @@ class MemoryClient:
         """
         Check if a memory key exists.
 
-        Known limitation: ``get`` returns ``default`` rather than raising when the
-        key is absent, so this answers ``True`` for any key as long as the memory
-        backend is reachable. Only a transport or backend failure yields ``False``.
-        For a real existence test, compare ``get(key, sentinel)`` against a
-        sentinel of your own.
+        ``get`` answers the control plane's 404 with its ``default`` rather than
+        raising, so presence is decided against a private sentinel: a stored value
+        — including a falsy one such as ``None``, ``0`` or ``""`` — means ``True``,
+        while a missing key means ``False``. A transport or backend failure also
+        yields ``False``.
 
         Args:
             key: The memory key
             scope: Optional explicit scope override
 
         Returns:
-            True unless the lookup itself failed.
+            True when the key is stored, False when it is absent or the lookup
+            itself failed.
         """
+        missing = object()
         try:
-            await self.get(key, scope=scope, scope_id=scope_id)
-            return True
+            value = await self.get(key, default=missing, scope=scope, scope_id=scope_id)
         except Exception:
             return False
+        return value is not missing
 
     async def delete(
         self, key: str, scope: Optional[str] = None, scope_id: Optional[str] = None
@@ -581,8 +583,8 @@ class ScopedMemoryClient:
     async def exists(self, key: str) -> bool:
         """Check if a key exists in this specific scope.
 
-        Carries the same limitation as ``MemoryClient.exists``: it answers ``True``
-        whenever the backend is reachable.
+        Delegates to ``MemoryClient.exists``, so a key this scope has never stored
+        reads as ``False``; see there for the falsy-value and failure semantics.
         """
         return await self.memory_client.exists(
             key, scope=self.scope, scope_id=self.scope_id
@@ -679,8 +681,8 @@ class GlobalMemoryClient:
     async def exists(self, key: str) -> bool:
         """Check if a key exists in global scope.
 
-        Carries the same limitation as ``MemoryClient.exists``: it answers ``True``
-        whenever the backend is reachable.
+        Delegates to ``MemoryClient.exists``, so a key never stored in global scope
+        reads as ``False``; see there for the falsy-value and failure semantics.
         """
         return await self.memory_client.exists(key, scope="global")
 
@@ -933,17 +935,18 @@ class MemoryInterface:
         """
         Check if a memory key exists in any scope.
 
-        Known limitation: this answers ``True`` for any key as long as the memory
-        backend is reachable - a missing key is not distinguished from a stored one
-        (see ``MemoryClient.exists``). Compare
-        ``await app.memory.get(key, sentinel)`` against a sentinel of your own
-        instead.
+        Delegates to ``MemoryClient.exists``, which walks the same
+        ``workflow -> session -> actor -> global`` precedence as ``get``: a key
+        stored in any reachable scope reads as ``True``, a key that was never
+        stored reads as ``False``, and a transport or backend failure also reads
+        as ``False``.
 
         Args:
             key: The memory key
 
         Returns:
-            True unless the lookup itself failed.
+            True when the key is stored, False when it is absent or the lookup
+            itself failed.
         """
         return await self.memory_client.exists(key)
 
