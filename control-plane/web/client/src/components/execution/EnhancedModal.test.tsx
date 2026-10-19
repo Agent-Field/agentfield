@@ -9,7 +9,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 it("C7: DataModal's deeply nested markdown tab falls back to text and keeps the dialog mounted", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
-  const content = "- ".repeat(1250) + '**x** <img src=x onerror="window.__pwned=1">';
+  const content = "> ".repeat(20000) + '**x** <img src=x onerror="window.__pwned=1">';
   const user = userEvent.setup();
   render(<DataModal isOpen onClose={() => {}} title="Output" data={content} />, { wrapper: TooltipProvider });
   await user.click(screen.getByRole("tab", { name: "Markdown Preview" }));

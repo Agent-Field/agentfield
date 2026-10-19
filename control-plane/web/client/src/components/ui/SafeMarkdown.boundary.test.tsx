@@ -5,9 +5,27 @@ import { SafeMarkdown } from "./SafeMarkdown";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+// 20,000 nested blockquotes overflow the renderer under any vitest pool/stack size, so the
+// fallback assertions are deterministic. Shallower nesting may or may not overflow depending on
+// the runtime stack; for that case only the no-crash / no-live-markup invariant is asserted.
+const overflowingContent = "> ".repeat(20000) + '**x** <img src=x onerror="window.__pwned=1">';
+
+it("C7: nested markdown that may or may not overflow never crashes and never yields live markup", () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const content = "- ".repeat(1250) + '**x** <img src=x onerror="window.__pwned=1">';
+  const { container } = render(
+    <>
+      <SafeMarkdown content={content} />
+      <span>Surrounding page</span>
+    </>,
+  );
+  expect(container.querySelector(".prose")?.textContent).toContain("x");
+  expect(screen.getByText("Surrounding page")).toBeInTheDocument();
+  expectSafeMarkdown(container);
+}, 30000);
+
 it.each([
-  ["1,250 nested list items", "- ".repeat(1250) + "**x**"],
-  ["20,000 nested blockquotes", "> ".repeat(20000) + '**x** <img src=x onerror="window.__pwned=1">'],
+  ["20,000 nested blockquotes", overflowingContent],
 ])("C7: deeply nested markdown falls back to text for %s without losing its sibling", (_name, content) => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const { container } = render(
@@ -26,7 +44,7 @@ it.each([
 
 it("C7: the same SafeMarkdown resets its failed boundary when content changes", () => {
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-  const content = "- ".repeat(1250) + "**x**";
+  const content = overflowingContent;
   const { container, rerender } = render(<SafeMarkdown content={content} />);
   const preview = container.querySelector(".prose")!;
   expect(preview.querySelector("pre")?.textContent).toBe(content);

@@ -9,7 +9,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 it("C7: a deeply nested markdown preview falls back to text and keeps the JSON viewer mounted", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
-  const content = "- ".repeat(1250) + '**x** <img src=x onerror="window.__pwned=1">';
+  const content = "> ".repeat(20000) + '**x** <img src=x onerror="window.__pwned=1">';
   const user = userEvent.setup();
   const { container } = render(
     <UnifiedJsonViewer data={{ nested: { output: content, sibling: "Still mounted" } }} />,
