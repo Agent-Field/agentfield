@@ -74,28 +74,24 @@ func (s *VCService) collectDIDResolutionBundle(executionVCs []types.ExecutionVC,
 	uniqueDIDs := make(map[string]bool)
 
 	for _, vc := range executionVCs {
-		if vc.IssuerDID != "" && vc.IssuerDID != "did:key:" {
-			uniqueDIDs[vc.IssuerDID] = true
-		}
-		if vc.CallerDID != "" && vc.CallerDID != "did:key:" {
+		uniqueDIDs[vc.IssuerDID] = true
+		if vc.CallerDID != "" {
 			uniqueDIDs[vc.CallerDID] = true
 		}
-		if vc.TargetDID != "" && vc.TargetDID != "did:key:" {
+		if vc.TargetDID != "" {
 			uniqueDIDs[vc.TargetDID] = true
 		}
 	}
-
-	// Add workflow VC issuer DID
-	if workflowVC.IssuerDID != "" && workflowVC.IssuerDID != "did:key:" {
-		uniqueDIDs[workflowVC.IssuerDID] = true
-	}
+	uniqueDIDs[workflowVC.IssuerDID] = true
 
 	var unresolved []string
 
 	// Resolve each unique DID and collect public keys
 	for did := range uniqueDIDs {
-		if did == "" || did == "did:key:" || len(strings.TrimSpace(did)) == 0 {
-			continue // Skip empty or incomplete DIDs
+		parts := strings.SplitN(did, ":", 3)
+		if strings.TrimSpace(did) != did || len(parts) != 3 || parts[0] != "did" || parts[1] == "" || strings.TrimSpace(parts[2]) == "" || strings.ContainsAny(did, " \t\r\n") {
+			unresolved = append(unresolved, did)
+			continue
 		}
 
 		// Determine DID method from the DID string

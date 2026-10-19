@@ -742,7 +742,7 @@ func TestVCChainBundleReportsUnresolvedDIDs(t *testing.T) {
 		IssuerDID: resp.IdentityPackage.AgentDID.DID,
 		CallerDID: orphanDID,
 		TargetDID: "did:web:example.com:agents:unknown",
-	}}, &types.WorkflowVC{})
+	}}, &types.WorkflowVC{IssuerDID: resp.IdentityPackage.AgentDID.DID})
 
 	require.Equal(t, "bundled", bundle[resp.IdentityPackage.AgentDID.DID].ResolvedFrom)
 	require.Equal(t, "did_key", bundle[orphanDID].ResolvedFrom)

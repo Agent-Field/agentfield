@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -47,4 +48,33 @@ func TestVCChainVerifiableFlag(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, chain.Verifiable)
 	require.Equal(t, []string{unknownDID}, chain.UnresolvedDIDs)
+}
+
+func TestC8F8RequiredIssuersAndOptionalParticipants(t *testing.T) {
+	env := newContinuityEnv(t)
+	env.restart()
+	svc := env.service(env.registry(), "server-a")
+	valid := register(t, svc, "node", nil, nil).IdentityPackage.AgentDID.DID
+	vc := NewVCService(svc.config, svc, env.provider)
+	for _, bad := range []string{"", " ", "did:key:", "did:", "garbage", "did::missing", "did:web:invalid host"} {
+		t.Run("execution/"+bad, func(t *testing.T) {
+			bundle, unresolved := vc.collectDIDResolutionBundle([]types.ExecutionVC{{IssuerDID: bad}}, &types.WorkflowVC{IssuerDID: valid})
+			require.Equal(t, []string{bad}, unresolved)
+			require.Contains(t, bundle, valid)
+		})
+		t.Run("workflow/"+bad, func(t *testing.T) {
+			_, unresolved := vc.collectDIDResolutionBundle([]types.ExecutionVC{{IssuerDID: valid}}, &types.WorkflowVC{IssuerDID: bad})
+			require.Equal(t, []string{bad}, unresolved)
+		})
+		// Even an invalid first execution issuer must not prevent exporting
+		// a wrapper; its required unresolved DID marks the chain false.
+		workflowID := "wf-" + bad
+		require.NoError(t, env.provider.StoreExecutionVC(context.Background(), "vc-"+bad, "exec-"+bad, workflowID, "session", bad, "", "", "in", "out", "succeeded", []byte(`{}`), "signature", "", 0))
+		chain, err := vc.GetWorkflowVCChain(workflowID)
+		require.NoError(t, err)
+		require.False(t, chain.Verifiable)
+		require.Equal(t, []string{bad}, chain.UnresolvedDIDs)
+	}
+	_, unresolved := vc.collectDIDResolutionBundle([]types.ExecutionVC{{IssuerDID: valid}}, &types.WorkflowVC{IssuerDID: valid})
+	require.Empty(t, unresolved, "absent optional caller and target are not required DIDs")
 }

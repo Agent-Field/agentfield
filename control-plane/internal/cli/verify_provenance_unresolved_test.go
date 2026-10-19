@@ -57,3 +57,24 @@ func TestVerifyProvenanceJSON_UnresolvedDIDsFailVerification(t *testing.T) {
 		t.Fatalf("expected empty verifiable chain to be valid, got %+v", res.Comprehensive.CriticalIssues)
 	}
 }
+
+func TestC8F8VerifiabilityCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields string
+		valid        bool
+	}{
+		{"old export", "", true},
+		{"explicit false", `,"verifiable":false`, false},
+		{"explicit true", `,"verifiable":true`, true},
+		{"empty required issuer", `,"unresolved_dids":[""]`, false},
+		{"whitespace required issuer", `,"unresolved_dids":[" "]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `{"workflow_id":"wf","component_vcs":[],"workflow_vc":{"workflow_id":"wf"},"status":"completed"` + tc.fields + `}`
+			result := VerifyProvenanceJSON([]byte(raw), VerifyOptions{})
+			if result.Valid != tc.valid {
+				t.Fatalf("valid=%v want=%v: %+v", result.Valid, tc.valid, result.Comprehensive)
+			}
+		})
+	}
+}

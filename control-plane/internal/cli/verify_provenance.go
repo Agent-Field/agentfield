@@ -116,6 +116,18 @@ func VerifyProvenanceJSON(vcData []byte, options VerifyOptions) VCVerificationRe
 	enhancedVerifier := NewEnhancedVCVerifier(didResolutions, options.Verbose)
 	comprehensiveResult := enhancedVerifier.VerifyEnhancedVCChain(enhancedChain)
 	if parseKind == "workflow" {
+		var declared struct {
+			Verifiable *bool `json:"verifiable"`
+		}
+		_ = json.Unmarshal(vcData, &declared)
+		if declared.Verifiable != nil && !*declared.Verifiable {
+			comprehensiveResult.CriticalIssues = append(comprehensiveResult.CriticalIssues, VerificationIssue{
+				Type: "unverifiable_chain", Severity: "critical",
+				Description: "Exporting control plane explicitly marked this chain verifiable:false",
+			})
+			comprehensiveResult.Valid = false
+			comprehensiveResult.OverallScore = enhancedVerifier.calculateOverallScore(comprehensiveResult)
+		}
 		if unresolved := declaredUnresolvedDIDs(vcData); len(unresolved) > 0 {
 			// The exporting control plane could not bundle keys for these DIDs,
 			// so the chain cannot be fully verified even if every signature we
@@ -221,13 +233,8 @@ func declaredUnresolvedDIDs(vcData []byte) []string {
 	if err := json.Unmarshal(vcData, &declared); err != nil {
 		return nil
 	}
-	var out []string
-	for _, did := range declared.UnresolvedDIDs {
-		if did = strings.TrimSpace(did); did != "" {
-			out = append(out, did)
-		}
-	}
-	return out
+	// Empty and whitespace identifiers represent invalid required issuers too.
+	return declared.UnresolvedDIDs
 }
 
 func tryParseEnhancedChain(vcData []byte) (EnhancedVCChain, bool) {
