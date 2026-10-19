@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -245,7 +246,11 @@ func isDialFailure(err error) bool {
 // Extracted from callAgent so the restart retry can build a second, identical
 // request: an *http.Request body is single-use, and the retry may also target
 // a different address if the node came back on another port.
-func (c *executionController) newAgentRequest(ctx context.Context, plan *preparedExecution, url string) (*http.Request, error) {
+func (c *executionController) newAgentRequest(ctx context.Context, plan *preparedExecution) (*http.Request, error) {
+	url, validationErr := checkedAgentURL(plan.agent, plan.target)
+	if validationErr != nil {
+		return nil, validationErr
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(plan.requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("create agent request: %w", err)
@@ -289,11 +294,12 @@ func (c *executionController) newAgentRequest(ctx context.Context, plan *prepare
 //
 // The returned response is the caller's to close.
 func (c *executionController) dispatchAgentRequest(ctx context.Context, plan *preparedExecution) (*http.Response, error) {
-	req, err := c.newAgentRequest(ctx, plan, buildAgentURL(plan.agent, plan.target))
+	req, err := c.newAgentRequest(ctx, plan)
 	if err != nil {
 		return nil, err
 	}
 	resp, err := c.httpClient.Do(req)
+	agenturl.WarnNode(plan.agent.ID, err)
 	if err == nil {
 		return resp, nil
 	}
@@ -413,12 +419,13 @@ func (c *executionController) retryAfterAgentRestart(ctx context.Context, plan *
 		}
 
 		plan.agent = agent
-		req, reqErr := c.newAgentRequest(ctx, plan, buildAgentURL(agent, plan.target))
+		req, reqErr := c.newAgentRequest(ctx, plan)
 		if reqErr != nil {
 			c.clearExecutionAwaitingRestart(ctx, plan)
 			return nil, reqErr
 		}
 		resp, callErr := c.httpClient.Do(req)
+		agenturl.WarnNode(plan.agent.ID, callErr)
 		if callErr == nil {
 			c.clearExecutionAwaitingRestart(ctx, plan)
 			logger.Logger.Info().

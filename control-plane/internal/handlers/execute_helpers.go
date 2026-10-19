@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
@@ -99,25 +100,37 @@ func determineTargetType(agent *types.AgentNode, name string) (string, error) {
 }
 
 func buildAgentURL(agent *types.AgentNode, target *parsedTarget) string {
+	endpoint, _ := checkedAgentURL(agent, target)
+	return endpoint
+}
+
+func checkedAgentURL(agent *types.AgentNode, target *parsedTarget) (string, error) {
 	if agent == nil {
-		return ""
+		return "", fmt.Errorf("agent is missing")
+	}
+	if _, err := agenturl.ForNode(agent.ID, agent.BaseURL); err != nil {
+		return "", err
 	}
 	if agent.InvocationURL != nil && *agent.InvocationURL != "" {
-		return *agent.InvocationURL
-	}
-	if agent.DeploymentType == "serverless" {
-		base := strings.TrimSuffix(agent.BaseURL, "/")
-		if base == "" {
-			return ""
+		u, err := agenturl.ForNode(agent.ID, *agent.InvocationURL)
+		if err != nil {
+			return "", err
 		}
-		return fmt.Sprintf("%s/execute", base)
+		return u.String(), nil
 	}
-
-	base := strings.TrimSuffix(agent.BaseURL, "/")
-	if target.TargetType == "skill" {
-		return fmt.Sprintf("%s/skills/%s", base, target.TargetName)
+	segments := []string{"execute"}
+	if agent.DeploymentType != "serverless" {
+		kind := "reasoners"
+		if target.TargetType == "skill" {
+			kind = "skills"
+		}
+		segments = []string{kind, target.TargetName}
 	}
-	return fmt.Sprintf("%s/reasoners/%s", base, target.TargetName)
+	u, err := agenturl.ForNode(agent.ID, agent.BaseURL, segments...)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
 }
 
 // versionRoundRobinCounter is used for round-robin selection across versioned agents.

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
@@ -145,11 +146,14 @@ func (c *executionController) prepareExecutionForTargetWithAdmissionAndStatus(ct
 			return nil, err
 		}
 	}
-	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
-		if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
-			execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
-			agent.InvocationURL = &execURL
+
+	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || *agent.InvocationURL == "") {
+		endpoint, err := agenturl.ForNode(agent.ID, agent.BaseURL, "execute")
+		if err != nil {
+			return nil, err
 		}
+		invocationURL := endpoint.String()
+		agent.InvocationURL = &invocationURL
 	}
 
 	targetType, err := determineTargetType(agent, target.TargetName)
@@ -157,6 +161,9 @@ func (c *executionController) prepareExecutionForTargetWithAdmissionAndStatus(ct
 		return nil, err
 	}
 	target.TargetType = targetType
+	if _, err := checkedAgentURL(agent, target); err != nil {
+		return nil, err
+	}
 
 	storedPayload, err := json.Marshal(buildClientPayload(req))
 	if err != nil {

@@ -296,7 +296,7 @@ func TestNewAgentRequestCarriesExecutionContext(t *testing.T) {
 	plan.replayBeforeExecutionID = "exec_before"
 	plan.replayMode = "strict"
 
-	req, err := controller.newAgentRequest(context.Background(), plan, buildAgentURL(plan.agent, plan.target))
+	req, err := controller.newAgentRequest(context.Background(), plan)
 	require.NoError(t, err)
 
 	assert.Equal(t, "http://127.0.0.1:8001/reasoners/echo", req.URL.String())
@@ -314,9 +314,10 @@ func TestNewAgentRequestCarriesExecutionContext(t *testing.T) {
 	assert.Equal(t, "strict", req.Header.Get("X-AgentField-Replay-Mode"))
 
 	t.Run("an unbuildable url is reported", func(t *testing.T) {
-		_, err := controller.newAgentRequest(context.Background(), plan, "http://\x7f/bad")
+		invalidPlan := testPlan(&types.AgentNode{ID: "bad-url", BaseURL: "http://\x7f/bad"})
+		_, err := controller.newAgentRequest(context.Background(), invalidPlan)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "create agent request")
+		assert.Contains(t, err.Error(), "control characters")
 	})
 }
 
@@ -905,7 +906,7 @@ func TestDispatchAgentRequestSurfacesAnUnbuildableRetryURL(t *testing.T) {
 
 	_, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "create agent request")
+	assert.Contains(t, err.Error(), "control characters")
 }
 
 func TestClassifyRawErrorNamesMissingTargets(t *testing.T) {
