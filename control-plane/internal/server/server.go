@@ -810,7 +810,7 @@ func maxExecuteBodyHandler(next http.Handler, limit int64) http.Handler {
 
 func maxRequestBodyHandler(next http.Handler, executeLimit, registerLimit int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		isExecuteRoute := r.URL.Path == "/api/v1/execute" || strings.HasPrefix(r.URL.Path, "/api/v1/execute/")
+		isExecuteRoute := r.URL.Path == "/api/v1/execute" || strings.HasPrefix(r.URL.Path, "/api/v1/execute/") || isSessionInstancePath(r.URL.Path)
 		if r.Method == http.MethodPost && isExecuteRoute {
 			if r.ContentLength > executeLimit {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -840,6 +840,16 @@ func maxRequestBodyHandler(next http.Handler, executeLimit, registerLimit int64)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isSessionInstancePath reports whether a path is under /api/v1/session-instances/.
+// Session tool calls (POST /api/v1/session-instances/:session_id/tools/:tool)
+// run the execute pipeline in-process, so they share the execute body limit.
+// The whole prefix is matched so that path variants gin still routes to the
+// tool handler (for example an empty session id) cannot skip the limit; the
+// only other route under it, realtime-offer, takes a small SDP body.
+func isSessionInstancePath(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/session-instances/")
 }
 
 func writeBodyTooLarge(w http.ResponseWriter) {
