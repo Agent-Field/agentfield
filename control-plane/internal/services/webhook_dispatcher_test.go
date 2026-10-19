@@ -442,6 +442,10 @@ func TestWebhookDispatcher_Notify_AlreadyFailed(t *testing.T) {
 }
 
 func TestWebhookDispatcher_DispatchWebhook_Success(t *testing.T) {
+	// C6: a permitted target is delivered using the default SSRF-safe client.
+	original := webhookAllowedHosts()
+	t.Cleanup(func() { SetWebhookAllowedHosts(original) })
+	SetWebhookAllowedHosts([]string{"127.0.0.1"})
 	// Create a test HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "POST", r.Method)
@@ -503,6 +507,7 @@ func TestWebhookDispatcher_DispatchWebhook_Success(t *testing.T) {
 
 	// Verify webhook event was stored
 	require.Greater(t, len(store.webhookEvents), 0)
+	require.Equal(t, types.ExecutionWebhookStatusDelivered, store.webhooks[executionID].Status)
 }
 
 func TestWebhookDispatcher_DispatchWebhook_WithSecret(t *testing.T) {

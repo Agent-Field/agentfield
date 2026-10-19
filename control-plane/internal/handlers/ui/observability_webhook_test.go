@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
@@ -121,8 +122,8 @@ func TestGetWebhookHandler_Configured(t *testing.T) {
 	// Set up a webhook config
 	secret := "test-secret"
 	config := &types.ObservabilityWebhookConfig{
-		ID:  "global",
-		URL: "https://example.com/webhook",
+		ID:     "global",
+		URL:    "https://example.com/webhook",
 		Secret: &secret,
 		Headers: map[string]string{
 			"X-Custom": "value",
@@ -199,19 +200,32 @@ func TestSetWebhookHandler_MissingURL(t *testing.T) {
 
 // Test POST /api/v1/settings/observability-webhook - invalid URL
 func TestSetWebhookHandler_InvalidURL(t *testing.T) {
-	_, _, _, router := setupTestEnvironment(t)
-
-	reqBody := map[string]interface{}{
-		"url": "not-a-valid-url",
+	services.SetWebhookAllowedHosts(nil)
+	t.Cleanup(func() { services.SetWebhookAllowedHosts(nil) })
+	for _, tc := range []struct {
+		name    string
+		url     string
+		wantErr string
+	}{
+		{"malformed URL", "not-a-valid-url", "invalid request body"},
+		// C1: observability settings refuse IPv4-embedding IPv6 literals.
+		{"nat64 loopback", "http://[64:ff9b::7f00:1]:9999/events", "private/internal address"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _, _, router := setupTestEnvironment(t)
+			body, err := json.Marshal(map[string]interface{}{"url": tc.url})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/observability-webhook", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			require.Equal(t, http.StatusBadRequest, resp.Code)
+			require.Contains(t, resp.Body.String(), tc.wantErr)
+			stored, err := store.GetObservabilityWebhook(context.Background())
+			require.NoError(t, err)
+			require.Nil(t, stored, "refused URL must not be persisted")
+		})
 	}
-	body, _ := json.Marshal(reqBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/observability-webhook", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-	router.ServeHTTP(resp, req)
-
-	require.Equal(t, http.StatusBadRequest, resp.Code)
 }
 
 // Test POST /api/v1/settings/observability-webhook - FTP URL rejected
@@ -298,14 +312,14 @@ func TestGetStatusHandler(t *testing.T) {
 	now := time.Now().UTC()
 	lastErr := "connection timeout"
 	mockFwd.status = types.ObservabilityForwarderStatus{
-		Enabled:          true,
-		WebhookURL:       "https://example.com/webhook",
-		QueueDepth:       10,
-		EventsForwarded:  500,
-		EventsDropped:    5,
-		DeadLetterCount:  15,
-		LastForwardedAt:  &now,
-		LastError:        &lastErr,
+		Enabled:         true,
+		WebhookURL:      "https://example.com/webhook",
+		QueueDepth:      10,
+		EventsForwarded: 500,
+		EventsDropped:   5,
+		DeadLetterCount: 15,
+		LastForwardedAt: &now,
+		LastError:       &lastErr,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/observability-webhook/status", nil)
