@@ -67,9 +67,10 @@ _LONG_PROMPT = (
 )
 
 
-def test_format_command_preview_names_only_the_executable():
+@pytest.mark.parametrize("executable", ["opencode", "/tmp/review-500/opencode"])
+def test_format_command_preview_names_only_the_executable(executable):
     cmd = [
-        "opencode",
+        executable,
         "run",
         "--format",
         "json",
@@ -80,16 +81,20 @@ def test_format_command_preview_names_only_the_executable():
 
     preview = format_command_preview(cmd)
 
-    assert preview == "opencode [6 args omitted]"
+    assert preview == f"{executable} [6 args omitted]"
     assert "PROMPT-MARKER" not in preview
-    assert "500" not in preview
-    assert len(preview) < 300
 
 
-def test_format_command_preview_drops_a_short_prompt_too():
-    preview = format_command_preview(["opencode", "run", "return 500 error"])
-    assert "500" not in preview
-    assert preview.startswith("opencode")
+@pytest.mark.parametrize(
+    ("cmd", "expected"),
+    [
+        ([], ""),
+        (["opencode"], "opencode"),
+        (["opencode", "run", "return 500 error"], "opencode [2 args omitted]"),
+    ],
+)
+def test_format_command_preview_drops_a_short_prompt_too(cmd, expected):
+    assert format_command_preview(cmd) == expected
 
 
 @pytest.mark.asyncio
@@ -102,12 +107,11 @@ async def test_run_cli_timeout_message_excludes_the_prompt():
         await run_cli(cmd, timeout=0.2, idle_seconds=0)
 
     message = str(excinfo.value)
-    assert message.startswith("CLI command timed out after 0.2s: ")
-    assert sys.executable in message
+    assert message == (
+        f"CLI command timed out after 0.2s: {sys.executable} [3 args omitted]"
+    )
     assert _LONG_PROMPT not in message
     assert "PROMPT-MARKER" not in message
-    assert message.endswith("args omitted]")
-    assert len(message) < 400
 
 
 def _stream_reader(chunks: list[bytes]) -> MagicMock:

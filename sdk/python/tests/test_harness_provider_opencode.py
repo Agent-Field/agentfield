@@ -1102,8 +1102,6 @@ async def test_opencode_timeout_message_excludes_prompt_text(
     assert result.is_error is True
     assert result.failure_type == FailureType.TIMEOUT
     message = result.error_message or ""
-    assert message.startswith("CLI command timed out after 1s: ")
-    assert str(fake_bin) in message
+    assert message == f"CLI command timed out after 1s: {fake_bin} [8 args omitted]"
+    assert prompt not in message
     assert "PROMPT-MARKER" not in message
-    assert "500" not in message
-    assert len(message) < 400

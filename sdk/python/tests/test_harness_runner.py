@@ -736,7 +736,10 @@ async def test_timed_out_run_with_status_like_prompt_runs_once(
 
     monkeypatch.setattr("agentfield.harness._runner.asyncio.sleep", fake_sleep)
 
-    provider = OpenCodeProvider(bin_path=str(fake_bin))
+    # Keep the diagnostic's retained executable independent of tmp_path:
+    # pytest's parent directory may itself contain classifier markers like 500.
+    monkeypatch.chdir(tmp_path)
+    provider = OpenCodeProvider(bin_path="./opencode-hang")
 
     with patch("agentfield.harness._runner.build_provider", return_value=provider):
         result = await HarnessRunner().run(
