@@ -1130,6 +1130,19 @@ func StopAsyncWorkerPool(ctx context.Context) {
 	}
 }
 
+// ResetAsyncWorkerPoolForTesting drains the process-wide pool and lets the next
+// async execution start a fresh one. Server Stop retires the pool for the rest
+// of the process, so tests in other packages that run async executions in the
+// same binary as a Stop call use this to stay order independent. Production
+// code must not call it.
+func ResetAsyncWorkerPoolForTesting() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	StopAsyncWorkerPool(ctx)
+	asyncPool = nil
+	asyncPoolOnce = sync.Once{}
+}
+
 // Stop rejects new work, lets accepted work finish until ctx expires, then
 // honestly terminates any jobs which have not started.
 func (p *asyncWorkerPool) Stop(ctx context.Context) {
