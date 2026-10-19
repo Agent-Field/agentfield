@@ -110,7 +110,9 @@ func TestAgentEndpointExecutionPaths(t *testing.T) {
 		require.Empty(t, r.URL.RawQuery)
 		require.True(t, strings.HasPrefix(r.URL.Path, "/prefix/reasoners/") || strings.HasPrefix(r.URL.Path, "/prefix/skills/"), r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true}`))
+		if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 	for _, name := range []string{"echo", "a?b", "a#b", "a/b", "..", "%2f"} {
@@ -156,7 +158,9 @@ func TestAgentEndpointStoredNodeDispatch(t *testing.T) {
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		w.Write([]byte(`{"secret":"must-not-relay"}`))
+		if _, err := w.Write([]byte(`{"secret":"must-not-relay"}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 	defer agenturl.SetNetworkHooksForTesting(func(context.Context, string) ([]string, error) { return []string{"169.254.169.254"}, nil }, func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -192,7 +196,9 @@ func TestAgentEndpointServerlessDiscovery(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/prefix/discover", r.URL.Path)
 		require.Empty(t, r.URL.RawQuery)
-		w.Write([]byte(`{"node_id":"fn","reasoners":[{"id":"echo"}]}`))
+		if _, err := w.Write([]byte(`{"node_id":"fn","reasoners":[{"id":"echo"}]}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 	defer agenturl.SetNetworkHooksForTesting(func(context.Context, string) ([]string, error) { return []string{"127.0.0.1"}, nil }, func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -263,7 +269,9 @@ func TestAgentEndpointReregistrationRepairsLegacyNode(t *testing.T) {
 		hits.Add(1)
 		require.Equal(t, "/prefix/reasoners/echo", r.URL.Path)
 		require.Empty(t, r.URL.RawQuery)
-		w.Write([]byte(`{"ok":true}`))
+		if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 	store := newLegacyLocalStorage(t)
@@ -293,4 +301,146 @@ func TestAgentEndpointReregistrationRepairsLegacyNode(t *testing.T) {
 	rec = request("POST", "/execute/legacy-policy.echo", `{"input":{}}`)
 	require.Equal(t, 200, rec.Code, rec.Body.String())
 	require.EqualValues(t, 1, hits.Load())
+}
+
+// Review finding 2: selection must not wait for unused candidates' DNS.
+func TestReviewRegistrationSkipsUnusedDNS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var lookups atomic.Int32
+	defer agenturl.SetNetworkHooksForTesting(func(ctx context.Context, host string) ([]string, error) {
+		lookups.Add(1)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}, nil)()
+	store := &nodeRESTStorageStub{}
+	started := time.Now()
+	rec := registerEndpointRequest(t, store, "http://127.0.0.1:18190", nil, &types.CallbackDiscoveryInfo{
+		Mode: "auto", Candidates: []string{"http://slow-one.test", "http://slow-two.test", "http://slow-three.test"},
+	})
+	require.Less(t, time.Since(started), 3*time.Second)
+	require.Equal(t, 201, rec.Code, rec.Body.String())
+	require.Equal(t, "http://127.0.0.1:18190", store.registeredAgent.BaseURL)
+	require.Zero(t, lookups.Load())
+}
+
+// Review finding 2: each normalized URL gets at most one DNS check per request.
+func TestReviewRegistrationChecksURLOnce(t *testing.T) {
+	var lookups atomic.Int32
+	defer agenturl.SetNetworkHooksForTesting(func(context.Context, string) ([]string, error) {
+		lookups.Add(1)
+		return []string{"127.0.0.1"}, nil
+	}, nil)()
+	endpoint := "http://agent.test:18190/prefix"
+	rec := registerEndpointRequest(t, &nodeRESTStorageStub{}, endpoint, &endpoint, &types.CallbackDiscoveryInfo{Mode: "auto", Candidates: []string{endpoint + "/"}})
+	require.Equal(t, 201, rec.Code, rec.Body.String())
+	require.EqualValues(t, 1, lookups.Load())
+}
+
+// Review finding 2: discovery DNS inherits request cancellation; unavailable
+// DNS still permits registration, with the destination checked at dial time.
+func TestReviewRegistrationDiscoveryContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer agenturl.SetNetworkHooksForTesting(func(lookupCtx context.Context, host string) ([]string, error) {
+		cancel()
+		<-lookupCtx.Done()
+		return nil, lookupCtx.Err()
+	}, nil)()
+	router := gin.New()
+	store := &nodeRESTStorageStub{}
+	router.POST("/nodes", RegisterNodeHandler(store, nil, nil, nil, nil, nil))
+	req := httptest.NewRequest("POST", "/nodes", strings.NewReader(`{"id":"context-node","callback_discovery":{"mode":"auto","candidates":["http://slow.test:18190"]}}`)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	started := time.Now()
+	router.ServeHTTP(rec, req)
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, 201, rec.Code, rec.Body.String())
+	require.Equal(t, "http://slow.test:18190", store.registeredAgent.BaseURL)
+}
+
+// Review finding 3: invocation-only registrations and existing database rows
+// dispatch through the real execute handler to the validated invocation path.
+func TestReviewInvocationOnlyDispatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, direct := range []bool{false, true} {
+		t.Run(map[bool]string{false: "registered", true: "stored-row"}[direct], func(t *testing.T) {
+			var hits atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				require.Equal(t, "/prefix/invoke", r.URL.Path)
+				require.Empty(t, r.URL.RawQuery)
+				w.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(w).Encode(gin.H{"result": "invocation reached"}))
+			}))
+			defer server.Close()
+			invocation := server.URL + "/prefix/invoke"
+			node := &types.AgentNode{ID: "invocation-only", DeploymentType: "serverless", InvocationURL: &invocation, Reasoners: []types.ReasonerDefinition{{ID: "echo"}}, RegisteredAt: time.Now(), LastHeartbeat: time.Now()}
+			store := newLegacyLocalStorage(t)
+			router := gin.New()
+			router.POST("/nodes", RegisterNodeHandler(store, nil, nil, nil, nil, nil))
+			router.POST("/execute/:target", ExecuteHandler(store, services.NewFilePayloadStore(t.TempDir()), nil, time.Second, ""))
+			if direct {
+				require.NoError(t, store.RegisterAgent(context.Background(), node))
+			} else {
+				body, err := json.Marshal(node)
+				require.NoError(t, err)
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest("POST", "/nodes", bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				router.ServeHTTP(rec, req)
+				require.Equal(t, 201, rec.Code, rec.Body.String())
+			}
+			stored, err := store.GetAgent(context.Background(), node.ID)
+			require.NoError(t, err)
+			require.Empty(t, stored.BaseURL)
+			listed, err := store.ListAgents(context.Background(), types.AgentFilters{})
+			require.NoError(t, err)
+			require.Len(t, listed, 1)
+			require.Empty(t, listed[0].BaseURL)
+			require.Equal(t, &invocation, listed[0].InvocationURL)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/execute/invocation-only.echo", strings.NewReader(`{"input":{}}`))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(rec, req)
+			require.Equal(t, 200, rec.Code, rec.Body.String())
+			require.Contains(t, rec.Body.String(), "invocation reached")
+			require.EqualValues(t, 1, hits.Load())
+		})
+	}
+}
+
+// Review finding 2: serverless discovery DNS also uses request cancellation.
+func TestReviewServerlessRegistrationContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer agenturl.SetNetworkHooksForTesting(func(lookupCtx context.Context, host string) ([]string, error) {
+		cancel()
+		<-lookupCtx.Done()
+		return nil, lookupCtx.Err()
+	}, nil)()
+	router := gin.New()
+	router.POST("/serverless", RegisterServerlessAgentHandler(&nodeRESTStorageStub{}, nil, nil, nil, nil, []string{"slow.test"}))
+	req := httptest.NewRequest("POST", "/serverless", strings.NewReader(`{"invocation_url":"http://slow.test/invoke"}`)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	started := time.Now()
+	router.ServeHTTP(rec, req)
+	require.Less(t, time.Since(started), time.Second)
+	// DNS unavailability is tolerated; the subsequent discovery HTTP request
+	// fails promptly because its request context was cancelled.
+	require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
+}
+
+// Review finding 4: handler registration honors localhost's resolved CIDRs.
+func TestReviewStrictLocalhostRegistration(t *testing.T) {
+	agenturl.Configure(true, []string{"127.0.0.0/8", "::1/128"})
+	defer agenturl.Configure(false, nil)
+	defer agenturl.SetNetworkHooksForTesting(func(context.Context, string) ([]string, error) {
+		return []string{"127.0.0.1", "::1"}, nil
+	}, nil)()
+	store := &nodeRESTStorageStub{}
+	rec := registerEndpointRequest(t, store, "http://localhost:18190", nil, nil)
+	require.Equal(t, 201, rec.Code, rec.Body.String())
+	require.Equal(t, "http://localhost:18190", store.registeredAgent.BaseURL)
 }

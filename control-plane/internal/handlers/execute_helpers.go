@@ -108,9 +108,6 @@ func checkedAgentURL(agent *types.AgentNode, target *parsedTarget) (string, erro
 	if agent == nil {
 		return "", fmt.Errorf("agent is missing")
 	}
-	if _, err := agenturl.ForNode(agent.ID, agent.BaseURL); err != nil {
-		return "", err
-	}
 	if agent.InvocationURL != nil && *agent.InvocationURL != "" {
 		u, err := agenturl.ForNode(agent.ID, *agent.InvocationURL)
 		if err != nil {

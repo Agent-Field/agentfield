@@ -35,7 +35,9 @@ func TestAgentEndpointLogsPolicy(t *testing.T) {
 		}
 		require.Equal(t, "/prefix/agentfield/v1/logs", r.URL.Path)
 		require.Equal(t, "tail_lines=2", r.URL.RawQuery)
-		w.Write([]byte("{\"message\":\"safe\"}\n"))
+		if _, err := w.Write([]byte("{\"message\":\"safe\"}\n")); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 	var lookups atomic.Int32
@@ -105,7 +107,9 @@ func TestAgentEndpointLogsEmptyQuery(t *testing.T) {
 		hits.Add(1)
 		require.Equal(t, "/prefix/agentfield/v1/logs", r.URL.Path)
 		require.Empty(t, r.URL.RawQuery)
-		w.Write([]byte("{}\n"))
+		if _, err := w.Write([]byte("{}\n")); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 	store := &overrideStorage{getAgentFn: func(context.Context, string) (*types.AgentNode, error) {
@@ -121,4 +125,23 @@ func TestAgentEndpointLogsEmptyQuery(t *testing.T) {
 	require.Equal(t, 200, rec.Code, rec.Body.String())
 	require.Equal(t, "{}\n", rec.Body.String())
 	require.EqualValues(t, 1, hits.Load())
+}
+
+// Review finding 3: invocation-only nodes keep the existing logs 502 and local
+// lifecycle fallback; those endpoints must not reuse the invocation URL.
+func TestReviewInvocationOnlyAuxiliaryEndpoints(t *testing.T) {
+	invocation := "http://127.0.0.1:18190/invoke"
+	store := &overrideStorage{getAgentFn: func(context.Context, string) (*types.AgentNode, error) {
+		return &types.AgentNode{ID: "invocation-only", InvocationURL: &invocation}, nil
+	}}
+	h := &NodeLogsProxyHandler{Storage: store, Snapshot: func() (config.NodeLogProxyConfig, string) {
+		return config.NodeLogProxyConfig{ConnectTimeout: time.Second}, ""
+	}}
+	router := gin.New()
+	router.GET("/nodes/:nodeId/logs", h.ProxyNodeLogsHandler)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("GET", "/nodes/invocation-only/logs", nil))
+	require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
+	endpoints := NewLifecycleHandler(store, nil).buildEndpoints(context.Background(), "invocation-only", 18190)
+	require.Equal(t, "http://localhost:18190/health", endpoints["health"])
 }

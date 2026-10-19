@@ -126,16 +126,41 @@ func normalizeCandidate(raw string, defaultPort string) (string, error) {
 	if parsed.Port() == "" && defaultPort != "" {
 		parsed.Host = net.JoinHostPort(parsed.Hostname(), defaultPort)
 	}
-	return agenturl.Validate(context.Background(), parsed.String())
+	return agenturl.Normalize(parsed.String())
 }
 
-func resolveCallbackCandidates(rawCandidates []string, defaultPort string) (string, []string, []types.CallbackTestResult) {
+// One validator belongs to one registration request. Cache by normalized URL so
+// base_url, invocation_url and callback selection share a single DNS check.
+type registrationEndpointValidator struct {
+	ctx     context.Context
+	checked map[string]error
+}
+
+func newRegistrationEndpointValidator(ctx context.Context) *registrationEndpointValidator {
+	return &registrationEndpointValidator{ctx: ctx, checked: make(map[string]error)}
+}
+
+func (v *registrationEndpointValidator) validate(raw string) (string, error) {
+	normalized, err := agenturl.Normalize(raw)
+	if err != nil {
+		return "", err
+	}
+	if err, ok := v.checked[normalized]; ok {
+		return normalized, err
+	}
+	_, err = agenturl.Validate(v.ctx, normalized)
+	v.checked[normalized] = err
+	return normalized, err
+}
+
+func (v *registrationEndpointValidator) resolveCallbackCandidates(rawCandidates []string, defaultPort string) (string, []string, []types.CallbackTestResult) {
 	if len(rawCandidates) == 0 {
 		return "", nil, nil
 	}
 
 	normalized := make([]string, 0, len(rawCandidates))
 	seen := make(map[string]struct{})
+	selected := ""
 
 	for _, candidate := range rawCandidates {
 		normalizedURL, err := normalizeCandidate(candidate, defaultPort)
@@ -148,6 +173,15 @@ func resolveCallbackCandidates(rawCandidates []string, defaultPort string) (stri
 			continue
 		}
 		seen[normalizedURL] = struct{}{}
+		if selected == "" {
+			if _, err := v.validate(normalizedURL); err != nil {
+				logger.Logger.Debug().Err(err).Msg("Skipping callback candidate refused by endpoint policy")
+				continue
+			}
+			selected = normalizedURL
+		}
+		// Retain shape-valid candidates as discovery metadata without DNS
+		// checks after an endpoint has been selected.
 		normalized = append(normalized, normalizedURL)
 	}
 
@@ -155,7 +189,7 @@ func resolveCallbackCandidates(rawCandidates []string, defaultPort string) (stri
 		return "", nil, nil
 	}
 
-	return normalized[0], normalized, nil
+	return selected, normalized, nil
 }
 
 // normalizeServerlessDiscoveryURL validates the caller-supplied invocation URL
@@ -195,9 +229,6 @@ func parseServerlessDiscoveryURL(rawURL string, allowedHosts []string) (*url.URL
 	}
 	if !isServerlessDiscoveryHostAllowed(hostname, allowedHosts) {
 		return nil, fmt.Errorf("invocation_url host %q is not allowlisted for server-side discovery; configure agentfield.registration.serverless_discovery_allowed_hosts or AGENTFIELD_REGISTRATION_SERVERLESS_DISCOVERY_ALLOWED_HOSTS", hostname)
-	}
-	if _, err := agenturl.Validate(context.Background(), parsedURL.String()); err != nil {
-		return nil, err
 	}
 	return parsedURL, nil
 }
@@ -256,6 +287,7 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 	}
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
+		endpoints := newRegistrationEndpointValidator(ctx)
 		var newNode types.AgentNode
 
 		// Log the incoming request
@@ -320,7 +352,7 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 			if endpoint == nil || (field == "base_url" && *endpoint == "") {
 				continue
 			}
-			normalized, err := agenturl.Validate(ctx, *endpoint)
+			normalized, err := endpoints.validate(*endpoint)
 			if err != nil {
 				label := "Invalid " + field
 				if field == "base_url" {
@@ -359,26 +391,12 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 
 		if len(candidateList) > 0 && !skipAutoDiscovery {
 			logger.Logger.Debug().Msgf("🔍 Auto-discovering callback URL for %s from %d candidates", newNode.ID, len(candidateList))
-			resolvedBaseURL, normalizedCandidates, probeResults = resolveCallbackCandidates(candidateList, defaultPort)
+			resolvedBaseURL, normalizedCandidates, probeResults = endpoints.resolveCallbackCandidates(candidateList, defaultPort)
 
 			if resolvedBaseURL != "" && resolvedBaseURL != newNode.BaseURL {
 				logger.Logger.Debug().Msgf("🔗 Auto-discovered callback URL for %s: %s (was %s)", newNode.ID, resolvedBaseURL, newNode.BaseURL)
 				newNode.BaseURL = resolvedBaseURL
 			}
-		}
-
-		// Validate callback URL if provided
-		if newNode.BaseURL != "" {
-			normalized, err := agenturl.Validate(ctx, newNode.BaseURL)
-			if err != nil {
-				logger.Logger.Error().Err(err).Msgf("❌ Callback URL validation failed for node %s", newNode.ID)
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error":   "Invalid callback URL: " + err.Error(),
-					"details": "The provided base_url must be a valid, reachable HTTP/HTTPS endpoint",
-				})
-				return
-			}
-			newNode.BaseURL = normalized
 		}
 
 		// Persist discovery metadata for observability
@@ -785,6 +803,9 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 		// flows into http.NewRequestWithContext — this is the SSRF sanitizer
 		// boundary.
 		safeInvocation, err := parseServerlessDiscoveryURL(req.InvocationURL, allowedDiscoveryHosts)
+		if err == nil {
+			_, err = agenturl.Validate(c.Request.Context(), safeInvocation.String())
+		}
 		if err != nil {
 			logger.Logger.Warn().Err(err).Msgf("❌ Rejected serverless discovery URL: %s", req.InvocationURL)
 			c.JSON(http.StatusBadRequest, gin.H{

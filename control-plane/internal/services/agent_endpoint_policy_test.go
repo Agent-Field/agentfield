@@ -39,7 +39,9 @@ func TestAgentEndpointTriggerPaths(t *testing.T) {
 		hits.Add(1)
 		require.Equal(t, "/prefix/reasoners/handle?x#y", r.URL.Path)
 		require.Empty(t, r.URL.RawQuery)
-		w.Write([]byte(`{}`))
+		if _, err := w.Write([]byte(`{}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 	for _, tc := range []struct {
@@ -50,6 +52,8 @@ func TestAgentEndpointTriggerPaths(t *testing.T) {
 		{"../status", server.URL + "/prefix", false},
 		{"%2f", server.URL + "/prefix", false},
 		{"handle", server.URL + "/prefix?hidden", false},
+		// Review finding 3: empty base_url retains trigger dispatch failure.
+		{"handle", "", false},
 	} {
 		t.Run(tc.name+tc.base, func(t *testing.T) {
 			node, trig, ev := dispatcherTrigger(tc.base, []types.ReasonerDefinition{{ID: tc.name}})

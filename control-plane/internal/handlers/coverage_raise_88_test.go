@@ -658,7 +658,7 @@ func TestNodeHelpers_AdditionalCoverage(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "http://[2001:db8::1]", normalized)
 
-		resolved, normalizedList, probeResults := resolveCallbackCandidates([]string{"", "://bad"}, "8080")
+		resolved, normalizedList, probeResults := newRegistrationEndpointValidator(context.Background()).resolveCallbackCandidates([]string{"", "://bad"}, "8080")
 		assert.Empty(t, resolved)
 		assert.Nil(t, normalizedList)
 		assert.Nil(t, probeResults)

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -360,7 +361,7 @@ func TestGatherCallbackCandidates_WhitespaceInCandidates(t *testing.T) {
 
 // C1/C3: do not silently repair whitespace-bearing endpoint candidates.
 func TestResolveCallbackCandidates_RejectsWhitespace(t *testing.T) {
-	resolved, normalized, probeResults := resolveCallbackCandidates([]string{" test-runner:8080 ", "http://second:8080"}, "8080")
+	resolved, normalized, probeResults := newRegistrationEndpointValidator(context.Background()).resolveCallbackCandidates([]string{" test-runner:8080 ", "http://second:8080"}, "8080")
 
 	require.Equal(t, "http://second:8080", resolved)
 	require.Equal(t, []string{"http://second:8080"}, normalized)
