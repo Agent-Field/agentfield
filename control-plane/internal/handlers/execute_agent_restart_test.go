@@ -903,10 +903,19 @@ func TestDispatchAgentRequestSurfacesAnUnbuildableRetryURL(t *testing.T) {
 		readsAt:              1,
 	}
 	controller := newExecutionController(store, nil, nil, 0, "")
+	// A closed local port can yield a read reset under network forwarding,
+	// which must not be retried. Inject the initial dial failure so this test
+	// deterministically exercises validation of the re-registered endpoint.
+	calls := 0
+	controller.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	})
 
 	_, err := controller.dispatchAgentRequest(context.Background(), testPlan(dead))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "control characters")
+	assert.Equal(t, 1, calls, "invalid retry endpoint must fail before reaching the transport")
 }
 
 func TestClassifyRawErrorNamesMissingTargets(t *testing.T) {
