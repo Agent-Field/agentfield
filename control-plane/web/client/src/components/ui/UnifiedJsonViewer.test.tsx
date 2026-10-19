@@ -1,0 +1,42 @@
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, expect, it } from "vitest";
+import { UnifiedJsonViewer } from "./UnifiedJsonViewer";
+import { attackMarkdown, expectLegitimateMarkdown, expectSafeMarkdown, legitimateMarkdown } from "@/test/markdownSecurity";
+
+afterEach(cleanup);
+
+it("C1 C2 C3 C5: nested attacker string is safe through the actual Markdown Preview control", async () => {
+  const user = userEvent.setup();
+  const { container } = render(<UnifiedJsonViewer data={{ nested: { output: attackMarkdown } }} />, { wrapper: TooltipProvider });
+  expect(container.querySelector(".prose")).toBeNull();
+  // The viewer's existing icon control is titled 'Show preview'.
+  await user.click(screen.getByRole("button", { name: "Show preview" }));
+  const preview = container.querySelector(".prose")!;
+  expect(preview.textContent).toContain('<img src=x onerror="window.__pwned=1">');
+  expect(preview.textContent).toContain("blocked");
+  expect(preview.querySelectorAll("a[href]")).toHaveLength(1);
+  expectSafeMarkdown(preview);
+  expect(preview).toHaveClass("bg-blue-50/30", "dark:bg-blue-950/20");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(window).not.toHaveProperty("__pwned");
+});
+
+it("C4 C5: nested legitimate markdown renders in the viewer; short strings keep their inline rendering", async () => {
+  const user = userEvent.setup();
+  const { container, rerender } = render(<UnifiedJsonViewer data={{ nested: { output: legitimateMarkdown } }} />, { wrapper: TooltipProvider });
+  await user.click(screen.getByRole("button", { name: "Show preview" }));
+  expectLegitimateMarkdown(container.querySelector(".prose")!);
+  rerender(<UnifiedJsonViewer data={{ output: "**short** <img src=x>" }} />);
+  expect(screen.queryByRole("button", { name: "Show preview" })).toBeNull();
+  expect(container.textContent).toContain("**short** <img src=x>");
+  expect(container.querySelector("img")).toBeNull();
+});
+
+it("C5: ordinary strings keep their literal rendering", () => {
+  const { container } = render(<UnifiedJsonViewer data={{ output: "plain <img src=x>" }} />, { wrapper: TooltipProvider });
+  expect(container.textContent).toContain("plain <img src=x>");
+  expect(screen.queryByRole("button", { name: "Show preview" })).toBeNull();
+  expect(container.querySelector("img")).toBeNull();
+});

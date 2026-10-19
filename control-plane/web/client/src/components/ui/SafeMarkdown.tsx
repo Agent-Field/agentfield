@@ -1,0 +1,34 @@
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { cn } from "@/lib/utils";
+import { safeExternalUrl } from "@/utils/safeExternalUrl";
+
+/** Untrusted markdown: raw HTML stays visible text and images never load. */
+export function SafeMarkdown({ content, className }: { content: string; className?: string }) {
+  return (
+    <div className={cn("prose prose-sm max-w-none text-foreground", className)}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={(url) => safeExternalUrl(url, true) ?? ""}
+        components={{
+          a: ({ href, title, children }) => href ? (
+            <a href={href} title={title} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
+              {children}
+            </a>
+          ) : <>{children}</>,
+          img: ({ alt }) => <>{alt}</>,
+          h1: ({ children }) => <h1 className="text-xl font-semibold mb-3">{children}</h1>,
+          h2: ({ children }) => <h2 className="text-base font-semibold mb-2">{children}</h2>,
+          p: ({ children }) => <p className="mt-2 whitespace-pre-line">{children}</p>,
+          ul: ({ children }) => <ul className="list-disc list-inside my-2">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal list-inside my-2">{children}</ol>,
+          code: ({ children, className }) => <code className={cn("bg-muted px-1 rounded text-sm font-mono", className)}>{children}</code>,
+          pre: ({ children }) => <pre className="bg-muted p-3 rounded-md overflow-auto my-2">{children}</pre>,
+          blockquote: ({ children }) => <blockquote className="border-l-4 border-border pl-3 italic my-2">{children}</blockquote>,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}

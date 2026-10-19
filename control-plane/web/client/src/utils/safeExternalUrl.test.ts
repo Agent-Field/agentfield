@@ -18,3 +18,21 @@ describe("safeExternalUrl", () => {
         (value) => expect(safeExternalUrl(value)).toBe(value),
     );
 });
+
+describe("markdown URL policy", () => {
+    it("C2: mailto is opt-in and existing callers still reject it", () => {
+        expect(safeExternalUrl("mailto:a@b.c", true)).toBe("mailto:a@b.c");
+        expect(safeExternalUrl("mailto:a@b.c")).toBeNull();
+    });
+
+    it.each([
+        "JaVaScRiPt:alert(1)", "java\tscript:alert(1)", " \x01javascript:alert(1)",
+        "&#106;avascript:alert(1)", "javascript&colon;alert(1)", "%6aavascript:alert(1)",
+        "javascript%3Aalert(1)", "data:text/html,x", "vbscript:x", "file:///tmp/x",
+        "blob:https://example.com/x", "//evil", "/relative", "#fragment",
+        "https://user:pass@example.com", "https://:pass@example.com", "mailto://user:pass@example.com",
+        "https://", undefined,
+    ])("C2: the parser rejects %s even with mailto enabled", (value) => {
+        expect(safeExternalUrl(value, true)).toBeNull();
+    });
+});

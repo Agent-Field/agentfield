@@ -18,9 +18,10 @@ import { Button } from "./button";
 import { Input } from "./input";
 import { CopyButton } from "./copy-button";
 import { cn } from "../../lib/utils";
+import { SafeMarkdown } from "./SafeMarkdown";
 
 interface UnifiedJsonViewerProps {
-  data: any;
+  data: unknown;
   title?: string;
   className?: string;
   maxHeight?: string;
@@ -31,7 +32,7 @@ interface UnifiedJsonViewerProps {
 }
 
 interface JsonNodeProps {
-  data: any;
+  data: unknown;
   keyName?: string;
   level: number;
   path: string[];
@@ -40,7 +41,7 @@ interface JsonNodeProps {
 }
 
 function detectContentType(
-  value: any
+  value: unknown
 ):
   | "markdown"
   | "json"
@@ -137,26 +138,10 @@ function getTypeIcon(type: string) {
 }
 
 function MarkdownPreview({ content }: { content: string }) {
-  const formattedContent = useMemo(() => {
-    return content
-      .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold">$1</strong>')
-      .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
-      .replace(
-        /`(.*?)`/g,
-        '<code class="bg-muted px-1 rounded text-sm font-mono text-foreground">$1</code>'
-      )
-      .replace(/\n\n/g, '</p><p class="mt-2">')
-      .replace(/\n/g, "<br>")
-      .replace(
-        /\[(.*?)\]\((.*?)\)/g,
-        '<a href="$2" class="text-blue-500 hover:underline" target="_blank" rel="noopener">$1</a>'
-      );
-  }, [content]);
-
   return (
-    <div
-      className="prose prose-sm max-w-none text-foreground bg-blue-50/30 dark:bg-blue-950/20 p-3 rounded-md border border-blue-200/50 dark:border-blue-800/50 mt-2"
-      dangerouslySetInnerHTML={{ __html: `<p>${formattedContent}</p>` }}
+    <SafeMarkdown
+      content={content}
+      className="bg-blue-50/30 dark:bg-blue-950/20 p-3 rounded-md border border-blue-200/50 dark:border-blue-800/50 mt-2"
     />
   );
 }
@@ -310,7 +295,7 @@ function JsonNode({
     );
   }
 
-  const entries = Array.isArray(data)
+  const entries: [string, unknown][] = Array.isArray(data)
     ? data.map((item, index) => [index.toString(), item])
     : Object.entries(data);
 
