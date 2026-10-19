@@ -95,7 +95,8 @@
         "brace-expansion@2": "2.1.7",
         "postcss": "$postcss",
         "@humanfs/node": "0.16.8",
-        "postcss-selector-parser": "6.1.4"
+        "postcss-selector-parser": "7.1.6",
+        "source-map-js": "1.2.2"
     },
     "pnpm": {
         "overrides": {
@@ -109,7 +110,8 @@
             "brace-expansion@2": "2.1.7",
             "postcss": "8.5.25",
             "@humanfs/node": "0.16.8",
-            "postcss-selector-parser": "6.1.4"
+            "postcss-selector-parser": "7.1.6",
+            "source-map-js": "1.2.2"
         }
     }
 }
