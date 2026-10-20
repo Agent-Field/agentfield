@@ -307,3 +307,26 @@ def test_format_payload_handles_non_serializable(base_logger):
     test_data = {1, 2, 3}
     formatted = base_logger._format_payload(test_data)
     assert "{1, 2, 3}" in formatted
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", " on "])
+def test_log_flags_accept_truthy_vocabulary(monkeypatch, value):
+    """AGENTFIELD_LOG_* opt-in flags share the SDK-wide truthy vocabulary."""
+    for name in ("PAYLOADS", "TRACKING", "FIRE"):
+        monkeypatch.setenv(f"AGENTFIELD_LOG_{name}", value)
+    logger = AgentFieldLogger(name="flag-test")
+    assert logger.show_payloads is True
+    assert logger.show_tracking is True
+    assert logger.show_fire is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "maybe"])
+def test_log_flags_stay_off_for_other_values(monkeypatch, value):
+    for name in ("PAYLOADS", "TRACKING", "FIRE"):
+        monkeypatch.setenv(f"AGENTFIELD_LOG_{name}", value)
+    logger = AgentFieldLogger(name="flag-test")
+    assert logger.show_payloads is False
+    assert logger.show_tracking is False
+    assert logger.show_fire is False

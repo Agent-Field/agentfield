@@ -50,7 +50,7 @@ def _env_flag_default_on(value: str) -> bool:
 def _env_flag_default_off(value: str) -> bool:
     """_env_flag for a caller whose flag defaults to False.
 
-    Imported by logger.py for the AGENTFIELD_LOG_* flags.
+    Used by logger.py, agent.py and agent_server.py for their opt-in flags.
     """
     try:
         return _env_flag(value)

@@ -335,7 +335,9 @@ def test_explicit_callback_argument_is_preferred_over_env_var(monkeypatch):
     assert "http://from-env:8001" in candidates
 
 
-@pytest.mark.parametrize("value", ["1", "true", "TRUE", "Yes", "  yes  "])
+@pytest.mark.parametrize(
+    "value", ["1", "true", "TRUE", "Yes", "  yes  ", "on", "ON", " On "]
+)
 def test_disable_flag_truthy_values_skip_the_probe(monkeypatch, value):
     probe_calls = _stub_callback_environment(monkeypatch)
     monkeypatch.setenv("AGENTFIELD_DISABLE_IP_DETECTION", value)

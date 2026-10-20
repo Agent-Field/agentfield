@@ -69,7 +69,7 @@ from agentfield.types import (
 )
 from agentfield.multimodal_response import MultimodalResponse
 from agentfield.run_async import run_coroutine, fire_and_forget
-from agentfield.async_config import AsyncConfig
+from agentfield.async_config import AsyncConfig, _env_flag_default_off
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.pydantic_utils import convert_function_args, should_convert_args
 from agentfield.session_turn_detection import TurnDetection
@@ -179,18 +179,14 @@ except ImportError:
     aiohttp = None
 
 
-# Values that count as "on" for opt-in boolean environment variables.
-_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
-
-
 def _env_flag_enabled(name: str) -> bool:
-    """Return True when ``name`` is set to a truthy value (``1``/``true``/``yes``).
+    """Return True when ``name`` is set to a truthy value (1/true/yes/on).
 
     Comparison is case-insensitive and tolerates surrounding whitespace. Unset,
     empty and unrecognised values are all treated as False, so a flag has to be
     opted into deliberately.
     """
-    return (os.getenv(name) or "").strip().lower() in _TRUTHY_ENV_VALUES
+    return _env_flag_default_off(os.getenv(name) or "")
 
 
 def _detect_container_ip() -> Optional[str]:
