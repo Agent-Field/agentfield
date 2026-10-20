@@ -208,8 +208,17 @@ per-call `Agent.harness(..., variant=...)` value overrides the configured
 default. Per provider:
 
 Pi and OMP accept the same OpenRouter model strings in every SDK, for example
-`openrouter/minimax/minimax-m2.7` or
+`openrouter/minimax/minimax-m3.1-flash:free`,
+`openrouter/minimax/minimax-m3`, or
 `openrouter/google/gemini-2.5-flash#low`.
+
+MiniMax M3.1 Flash currently uses OpenRouter's `:free` route; the bare Flash
+slug has no published endpoint as of 2026-10-19. The free endpoint supports
+`tool_choice=auto`, but not forced tool selection. The Pi/OMP adapters do not
+force tool choice, and their structured-output protocol uses files. Keep the
+suffix and use a current CLI model catalog. Availability and limits are governed
+by [OpenRouter](https://openrouter.ai/minimax/minimax-m3.1-flash:free); arbitrary
+model overrides remain supported.
 
 | Provider | Model flag | Variant handling |
 | --- | --- | --- |

@@ -13,7 +13,7 @@ import (
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 )
 
-const defaultModel = "openrouter/minimax/minimax-m2.7"
+const defaultModel = "openrouter/minimax/minimax-m3.1-flash:free"
 
 type workerOutput struct {
 	Summary  string   `json:"summary"`
