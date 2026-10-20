@@ -1,5 +1,8 @@
 import asyncio
+import json
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 import pytest
@@ -11,7 +14,7 @@ from agentfield.agent import (
     _is_transient_status_callback,
 )
 from agentfield.agent_pause import PauseClock
-from agentfield.client import AgentFieldClient, ApprovalResult
+from agentfield.client import AgentFieldClient, AgentFieldClientError, ApprovalResult
 
 
 @pytest.mark.asyncio
@@ -119,6 +122,8 @@ def test_is_retryable_status_callback_error_matches_transport_failures():
         requests.exceptions.Timeout("timed out"),
         requests.exceptions.ConnectionError("connection refused"),
         requests.exceptions.ConnectTimeout("timed out"),
+        requests.exceptions.ChunkedEncodingError("incomplete response"),
+        requests.exceptions.ContentDecodingError("invalid gzip response"),
     )
     for exc in retryable:
         assert _is_retryable_status_callback_error(exc), type(exc)
@@ -190,6 +195,95 @@ async def test_post_execution_status_does_not_retry_permanent_client_errors(
     assert len(errors) == 1
     assert str(status_code) in errors[0]
     assert "not retrying" in errors[0]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_response", ["truncated", "invalid-gzip", 401, 404])
+async def test_post_execution_status_requests_fallback(monkeypatch, first_response):
+    """Exercise eager response reads through the real requests fallback."""
+    received = []
+
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            received.append((self.path, payload))
+            first_attempt = len(received) == 1
+            status = 200
+            body = b"{}"
+            if first_attempt:
+                status = first_response if isinstance(first_response, int) else 503
+                if first_response == "truncated":
+                    body = b"partial"
+                elif first_response == "invalid-gzip":
+                    body = b"not gzip data"
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Connection", "close")
+            if first_attempt and first_response == "invalid-gzip":
+                self.send_header("Content-Encoding", "gzip")
+            content_length = len(body)
+            if first_attempt and first_response == "truncated":
+                content_length += 100
+            self.send_header("Content-Length", str(content_length))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            self.close_connection = True
+
+        def log_message(self, format, *args):
+            pass
+
+    agent = Agent(
+        node_id="test-agent", agentfield_server="http://control", auto_register=False
+    )
+
+    async def unavailable_async_client(self):
+        raise AgentFieldClientError("httpx unavailable")
+
+    monkeypatch.setattr(
+        AgentFieldClient, "get_async_http_client", unavailable_async_client
+    )
+    # Keep the production session/adapter setup while isolating shared state and
+    # avoiding environment proxy settings for this loopback-only server.
+    monkeypatch.setattr(AgentFieldClient, "_shared_sync_session", None)
+    session = AgentFieldClient._get_sync_session()
+    session.trust_env = False
+    sleeps = []
+    errors = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        "agentfield.agent.log_error", lambda message: errors.append(message)
+    )
+    path = "/api/v1/executions/exec-1/status"
+    payload = {"status": "succeeded", "result": {"value": 7}}
+    server = HTTPServer(("127.0.0.1", 0), CallbackHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        await agent._post_execution_status(
+            f"http://127.0.0.1:{server.server_port}{path}", payload, "exec-1"
+        )
+        if isinstance(first_response, int):
+            assert received == [(path, payload)]
+            assert sleeps == []
+            assert len(errors) == 1
+            assert str(first_response) in errors[0]
+            assert "not retrying" in errors[0]
+        else:
+            assert received == [(path, payload), (path, payload)]
+            assert sleeps == [1]
+            assert errors == []
+    finally:
+        session.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
 
 
 @pytest.mark.asyncio

@@ -664,8 +664,10 @@ def _is_retryable_status_callback_error(exc: BaseException) -> bool:
     connect/read/write/pool timeouts, network errors, and protocol errors.
     ``httpx.TimeoutException`` is a ``TransportError``. The sync fallback in
     ``AgentFieldClient._async_request`` raises the requests equivalents
-    (``ConnectionError`` and ``Timeout``). Bare ``TimeoutError`` and
-    ``ConnectionError`` cover the same failures if they surface unwrapped.
+    (``ConnectionError`` and ``Timeout``), plus ``ChunkedEncodingError`` and
+    ``ContentDecodingError`` from eagerly reading a broken response body.
+    Bare ``TimeoutError`` and ``ConnectionError`` cover the same failures if
+    they surface unwrapped.
 
     Request-construction and programming errors are permanent. That includes
     ``httpx.InvalidURL``, ``requests.exceptions.InvalidURL``, and ``TypeError``.
@@ -685,6 +687,8 @@ def _is_retryable_status_callback_error(exc: BaseException) -> bool:
         (
             requests.exceptions.ConnectionError,
             requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ContentDecodingError,
         ),
     )
 
