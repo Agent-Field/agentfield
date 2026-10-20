@@ -743,7 +743,7 @@ func (ls *LocalStorage) GetDIDDocument(ctx context.Context, did string) (*types.
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("DID document not found: %s", did)
+			return nil, fmt.Errorf("%w: %s", ErrDIDDocumentNotFound, did)
 		}
 		return nil, fmt.Errorf("failed to get DID document: %w", err)
 	}

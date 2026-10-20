@@ -5,9 +5,10 @@ package services
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +33,7 @@ func (s *didWebStorageStub) GetDIDDocument(_ context.Context, did string) (*type
 	if record, ok := s.docsByDID[did]; ok {
 		return record, nil
 	}
-	return nil, errors.New("not found")
+	return nil, fmt.Errorf("%w: %s", storage.ErrDIDDocumentNotFound, did)
 }
 
 func (s *didWebStorageStub) GetDIDDocumentByAgentID(_ context.Context, agentID string) (*types.DIDDocumentRecord, error) {
@@ -41,7 +42,7 @@ func (s *didWebStorageStub) GetDIDDocumentByAgentID(_ context.Context, agentID s
 			return record, nil
 		}
 	}
-	return nil, errors.New("not found")
+	return nil, fmt.Errorf("%w: %s", storage.ErrDIDDocumentNotFound, agentID)
 }
 
 func (s *didWebStorageStub) RevokeDIDDocument(_ context.Context, _ string) error {

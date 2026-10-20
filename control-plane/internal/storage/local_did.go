@@ -24,6 +24,11 @@ var ErrDIDAllocationConflict = errors.New("DID allocation conflict")
 // ErrDIDNodeAlreadyRegistered means another active identity owns the node or component name.
 var ErrDIDNodeAlreadyRegistered = errors.New("DID node or component already registered")
 
+// ErrDIDDocumentNotFound means no DID document exists for the requested DID.
+// It lets callers distinguish a genuine missing record from a transient
+// storage failure, so a momentary DB error is not reported as "not found".
+var ErrDIDDocumentNotFound = errors.New("DID document not found")
+
 const didPostgresLockTimeout = "15s"
 
 func isSQLiteContention(err error) bool {
