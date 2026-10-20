@@ -516,6 +516,8 @@ type StorageProvider interface {
 	// The ctx scopes the read, and agentID identifies the agent DID record to load.
 	// Returns the agent DID info or an error if it is missing or unreadable.
 	GetAgentDID(ctx context.Context, agentID string) (*types.AgentDIDInfo, error)
+	// GetActiveAgentDID reads the earliest active identity for one server and node.
+	GetActiveAgentDID(ctx context.Context, serverID, nodeID string) (*types.AgentDIDInfo, error)
 	// ListAgentDIDs lists stored DID records for agents.
 	// The ctx scopes the query and does not require additional parameters.
 	// Returns agent DID records or an error if the query fails.
@@ -530,16 +532,30 @@ type StorageProvider interface {
 	// The ctx scopes the read, and componentID identifies the component DID record to load.
 	// Returns the component DID info or an error if it is missing or unreadable.
 	GetComponentDID(ctx context.Context, componentID string) (*types.ComponentDIDInfo, error)
-	// ListComponentDIDs lists component DID records associated with an agent DID.
-	// The ctx scopes the query, and agentDID identifies the component DID owner to inspect.
+	// ListComponentDIDs lists active component DID records associated with an agent DID
+	// (every agent when agentDID is empty). Retired components are not returned.
 	// Returns component DID records or an error if the query fails.
 	ListComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error)
+	// ListAllComponentDIDs lists component DID records associated with an agent
+	// DID, including retired ones. Use it wherever a derivation path must never
+	// be reused; use ListComponentDIDs for the currently registered components.
+	ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error)
+	// RetireComponentDIDs marks the given component DIDs of an agent as retired.
+	// Retired rows are kept, so their keys are never reissued, but they are no
+	// longer returned by ListComponentDIDs. An empty list is a no-op.
+	RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error
 
 	// Multi-step DID operations with transaction safety
 	// StoreAgentDIDWithComponents stores an agent DID and its component DIDs atomically.
 	// The ctx scopes the transaction, and the agent, server, key, derivation, and components parameters define the stored records.
 	// Returns an error if any part of the transaction fails.
 	StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int, components []ComponentDIDRequest) error
+
+	// UpsertAgentDIDWithComponents atomically inserts or updates an agent DID and
+	// its component DIDs, storing derivation paths, public keys and the X25519
+	// epoch verbatim. A DID row owned by a different server or agent is never
+	// reassigned; that case returns an error.
+	UpsertAgentDIDWithComponents(ctx context.Context, record AgentDIDRecord) error
 
 	// Execution VC operations
 	// StoreExecutionVC stores verifiable credential data for an execution.
@@ -738,6 +754,12 @@ type StorageProvider interface {
 	TriggerMetrics(ctx context.Context) (*types.TriggerMetrics, error)
 }
 
+// Component DID lifecycle states stored in component_dids.status.
+const (
+	ComponentDIDStatusActive  = "active"
+	ComponentDIDStatusRetired = "retired"
+)
+
 // ComponentDIDRequest represents a component DID to be stored
 type ComponentDIDRequest struct {
 	ComponentDID    string
@@ -745,6 +767,22 @@ type ComponentDIDRequest struct {
 	ComponentName   string
 	PublicKeyJWK    string
 	DerivationIndex int
+	// DerivationPath is the exact path the component key was derived from.
+	// UpsertAgentDIDWithComponents stores it verbatim; it is required there.
+	DerivationPath string
+}
+
+// AgentDIDRecord is the full persisted form of an agent DID and its components.
+// Every field needed to re-derive and verify the identity is stored verbatim.
+type AgentDIDRecord struct {
+	AgentNodeID        string
+	DID                string
+	AgentFieldServerID string
+	PublicKeyJWK       string
+	DerivationPath     string
+	X25519Epoch        int
+	Status             string
+	Components         []ComponentDIDRequest
 }
 
 // CacheProvider is the interface for the high-performance caching layer.

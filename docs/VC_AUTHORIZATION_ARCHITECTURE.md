@@ -1056,6 +1056,64 @@ Incoming Request
 └──────────────────────────┘
 ```
 
+### Memory authorization
+
+With `features.did.authorization.enabled: true` in `config/agentfield.yaml` (or the
+file selected by `AGENTFIELD_CONFIG_FILE`), memory middleware resolves the caller
+from a verified DID first. An unresolved verified DID remains anonymous; identity
+headers do not override it. Without a verified DID, it uses the trimmed
+`X-Caller-Agent-ID`, then `X-Agent-Node-ID`. These headers are client-asserted: any
+API-key holder can set them. DID request authentication provides verified identity.
+
+Requests without an identity can access only global memory. Identified callers
+follow these scope rules, applied to the scope selected by each operation:
+
+- **Global:** shared, including anonymous callers.
+- **Actor:** an ID unrelated to any other registered agent's node
+  ID by equality or colon prefix in either direction, including when selecting
+  the caller's own ID. Node IDs containing colons are supported; composite storage
+  keys can alias their buckets. Empty IDs follow the same check, protecting nodes
+  whose IDs start with `:`. IDs with more than 16 colons are denied. Registry
+  snapshots include inactive/offline nodes, refresh every two seconds, and fail
+  closed on refresh errors without serving stale data.
+- **Session/workflow:** any identified caller, including empty IDs. Empty IDs are
+  shared buckets retained for compatibility with released SDKs. Explicit reads
+  and writes do not require execution participation.
+
+Wildcard event streams and history deliver only global events, the caller's own
+actor events, and events whose actor/session/workflow ID has a stored execution
+showing the caller's participation, subject to the same scope checks. Empty
+non-global IDs are excluded from wildcard delivery. Concrete event selectors
+follow explicit read rules; live streams recheck scope authorization before every
+delivery, including after registry refresh. Concrete history authorizes once.
+History may contain fewer than `limit` visible events
+because storage applies the limit before visibility filtering.
+
+Live streams cache only successful participation checks, with at most 256 cached
+scopes per connection. Missing participation is rechecked on the next event.
+Each connection permits 50 participation lookups per second with a burst of 100;
+events exceeding that budget are dropped without a lookup, with at most one debug
+log per second per connection. Global events, own-actor events, and scope denials
+consume no participation tokens. History caches both successful and failed
+participation checks within a single request, without a lookup rate limit, and
+rechecks on the next request.
+
+Python `ScopedMemoryEventClient.on_change` uses a wildcard WebSocket and filters
+locally, so with memory authorization enabled a scoped watcher receives events
+only for scopes the agent owns or participates in through stored executions,
+not arbitrary session/workflow/persona IDs it merely knows.
+
+Tag policies targeting `memory` apply to every scope, including global, using the
+caller's approved tags (empty for anonymous or unregistered callers). A matching
+deny policy returns HTTP 403 `memory_access_denied`; no matching policy allows
+the operation subject to scope checks. Other HTTP 403 codes are
+`memory_identity_required` for anonymous non-global access and
+`scope_ownership_denied` for unknown scopes, foreign actor buckets, or failed
+ownership lookups. A caller-tag registry lookup failure returns HTTP 503
+`memory_authorization_unavailable` before accessing memory. Disabling memory
+authorization preserves legacy access; startup logs warn if authorization is
+enabled but required services are unavailable.
+
 ### DID Auth Headers
 
 | Header | Description |

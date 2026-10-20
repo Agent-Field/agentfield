@@ -192,7 +192,7 @@ describe("DiscoveryPage", () => {
     expect(screen.getByText("Deployment config")).toBeInTheDocument();
   });
 
-  it("saves overview discovery settings and opens catalog actions", async () => {
+  it("C2 C7: saves overview discovery settings and opens catalog actions", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn();
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
@@ -212,7 +212,7 @@ describe("DiscoveryPage", () => {
     await user.click(screen.getByRole("button", { name: "Save discovery settings" }));
 
     expect(writeText).toHaveBeenCalledWith("https://cp.example.com/.well-known/ai-catalog.json");
-    expect(open).toHaveBeenCalledWith("https://cp.example.com/.well-known/ai-catalog.json", "_blank");
+    expect(open).toHaveBeenCalledWith("https://cp.example.com/.well-known/ai-catalog.json", "_blank", "noopener,noreferrer");
     await waitFor(() => {
       expect(api.updateARDSettings).toHaveBeenCalled();
     });

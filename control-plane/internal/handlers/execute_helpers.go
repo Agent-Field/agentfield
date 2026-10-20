@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
@@ -99,25 +100,34 @@ func determineTargetType(agent *types.AgentNode, name string) (string, error) {
 }
 
 func buildAgentURL(agent *types.AgentNode, target *parsedTarget) string {
+	endpoint, _ := checkedAgentURL(agent, target)
+	return endpoint
+}
+
+func checkedAgentURL(agent *types.AgentNode, target *parsedTarget) (string, error) {
 	if agent == nil {
-		return ""
+		return "", fmt.Errorf("agent is missing")
 	}
 	if agent.InvocationURL != nil && *agent.InvocationURL != "" {
-		return *agent.InvocationURL
-	}
-	if agent.DeploymentType == "serverless" {
-		base := strings.TrimSuffix(agent.BaseURL, "/")
-		if base == "" {
-			return ""
+		u, err := agenturl.ForNode(agent.ID, *agent.InvocationURL)
+		if err != nil {
+			return "", err
 		}
-		return fmt.Sprintf("%s/execute", base)
+		return u.String(), nil
 	}
-
-	base := strings.TrimSuffix(agent.BaseURL, "/")
-	if target.TargetType == "skill" {
-		return fmt.Sprintf("%s/skills/%s", base, target.TargetName)
+	segments := []string{"execute"}
+	if agent.DeploymentType != "serverless" {
+		kind := "reasoners"
+		if target.TargetType == "skill" {
+			kind = "skills"
+		}
+		segments = []string{kind, target.TargetName}
 	}
-	return fmt.Sprintf("%s/reasoners/%s", base, target.TargetName)
+	u, err := agenturl.ForNode(agent.ID, agent.BaseURL, segments...)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
 }
 
 // versionRoundRobinCounter is used for round-robin selection across versioned agents.
@@ -1118,6 +1128,19 @@ func StopAsyncWorkerPool(ctx context.Context) {
 	if asyncPool != nil {
 		asyncPool.Stop(ctx)
 	}
+}
+
+// ResetAsyncWorkerPoolForTesting drains the process-wide pool and lets the next
+// async execution start a fresh one. Server Stop retires the pool for the rest
+// of the process, so tests in other packages that run async executions in the
+// same binary as a Stop call use this to stay order independent. Production
+// code must not call it.
+func ResetAsyncWorkerPoolForTesting() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	StopAsyncWorkerPool(ctx)
+	asyncPool = nil
+	asyncPoolOnce = sync.Once{}
 }
 
 // Stop rejects new work, lets accepted work finish until ctx expires, then

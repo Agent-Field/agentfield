@@ -6,13 +6,43 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
+
+// ErrDIDAllocationConflict means a derived DID already belongs to another
+// identity. Callers may re-read issued identities and allocate a new path.
+var ErrDIDAllocationConflict = errors.New("DID allocation conflict")
+
+// ErrDIDNodeAlreadyRegistered means another active identity owns the node or component name.
+var ErrDIDNodeAlreadyRegistered = errors.New("DID node or component already registered")
+
+const didPostgresLockTimeout = "15s"
+
+func isSQLiteContention(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "database schema is locked") ||
+		strings.Contains(message, "SQLITE_BUSY") ||
+		strings.Contains(message, "SQLITE_LOCKED")
+}
+
+// IsTransientDIDTransactionError identifies contention that requires a new transaction.
+func IsTransientDIDTransactionError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "40001" || pgErr.Code == "40P01" || pgErr.Code == "55P03"
+	}
+	return err != nil && isSQLiteContention(err)
+}
 
 func (ls *LocalStorage) StoreAgentFieldServerDID(ctx context.Context, agentfieldServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
 	// Check context cancellation early
@@ -59,22 +89,19 @@ func (ls *LocalStorage) StoreAgentFieldServerDID(ctx context.Context, agentfield
 
 	// Execute with retry logic
 	err = ls.retryOnConstraintFailure(ctx, func() error {
+		// Never replace the key material of an existing registry with a
+		// different one. A row with the same root DID holds the same identity, so
+		// only its seed encoding (for example after enabling encryption at rest)
+		// and rotation time are refreshed. Callers read the row back to learn
+		// which identity won when two control planes create it at once.
 		query := `
-                        INSERT OR REPLACE INTO did_registry (agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
+                        INSERT INTO did_registry (agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
                         VALUES (?, ?, ?, ?, ?, 0)
+                        ON CONFLICT (agentfield_server_id) DO UPDATE SET
+                                master_seed_encrypted = excluded.master_seed_encrypted,
+                                last_key_rotation = excluded.last_key_rotation
+                        WHERE did_registry.root_did = excluded.root_did
                 `
-		if ls.mode == "postgres" {
-			query = `
-                                INSERT INTO did_registry (agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
-                                VALUES (?, ?, ?, ?, ?, 0)
-                                ON CONFLICT (agentfield_server_id) DO UPDATE SET
-                                        root_did = EXCLUDED.root_did,
-                                        master_seed_encrypted = EXCLUDED.master_seed_encrypted,
-                                        created_at = EXCLUDED.created_at,
-                                        last_key_rotation = EXCLUDED.last_key_rotation,
-                                        total_dids = did_registry.total_dids
-                        `
-		}
 		_, execErr := tx.ExecContext(ctx, query, agentfieldServerID, rootDID, masterSeed, createdAt, lastKeyRotation)
 		if execErr != nil {
 			return fmt.Errorf("failed to store af server DID: %w", execErr)
@@ -202,6 +229,151 @@ func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID
 	}
 
 	logger.Logger.Debug().Msgf("Successfully stored agent DID with %d components: agent_id=%s, did=%s", len(components), agentID, agentDID)
+	return nil
+}
+
+// UpsertAgentDIDWithComponents persists an agent DID and its components in one
+// transaction. Derivation paths and public keys are stored as given so the
+// identity can be re-derived after a restart. Status and X25519 epoch cannot
+// move backwards. A row is never moved to a different owner or component name.
+func (ls *LocalStorage) UpsertAgentDIDWithComponents(ctx context.Context, record AgentDIDRecord) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during upsert agent DID: %w", err)
+	}
+
+	required := map[string]string{
+		"agent_node_id":        record.AgentNodeID,
+		"did":                  record.DID,
+		"agentfield_server_id": record.AgentFieldServerID,
+		"public_key_jwk":       record.PublicKeyJWK,
+		"derivation_path":      record.DerivationPath,
+	}
+	for field, value := range required {
+		if strings.TrimSpace(value) == "" {
+			return &ValidationError{Field: field, Value: value, Reason: field + " cannot be empty", Context: "UpsertAgentDIDWithComponents"}
+		}
+	}
+	for _, component := range record.Components {
+		if component.ComponentDID == "" || component.ComponentName == "" || component.PublicKeyJWK == "" || component.DerivationPath == "" {
+			return &ValidationError{
+				Field:   "component",
+				Value:   component.ComponentName,
+				Reason:  "component DID, name, public key and derivation path are required",
+				Context: "UpsertAgentDIDWithComponents",
+			}
+		}
+		if component.ComponentType != "reasoner" && component.ComponentType != "skill" {
+			return &ValidationError{Field: "component_type", Value: component.ComponentType, Reason: "component type must be 'reasoner' or 'skill'", Context: "UpsertAgentDIDWithComponents"}
+		}
+	}
+	status := record.Status
+	if status == "" {
+		status = string(types.AgentDIDStatusActive)
+	}
+
+	if err := ls.validateAgentFieldServerExists(ctx, record.AgentFieldServerID); err != nil {
+		return fmt.Errorf("pre-storage validation failed: %w", err)
+	}
+
+	tx, err := ls.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	// Every early return, including a typed conflict, releases the transaction.
+	defer rollbackTx(tx, "UpsertAgentDIDWithComponents")
+	if err := ls.lockDIDServerTransaction(ctx, tx, record.AgentFieldServerID); err != nil {
+		return err
+	}
+	var storedDID string
+	err = tx.QueryRowContext(ctx, "SELECT did FROM agent_dids WHERE did = ?", record.DID).Scan(&storedDID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to check agent DID: %w", err)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `SELECT did FROM agent_dids WHERE agentfield_server_id = ? AND agent_node_id = ? AND status <> 'revoked' LIMIT 1`, record.AgentFieldServerID, record.AgentNodeID).Scan(&storedDID)
+		if err == nil {
+			return fmt.Errorf("agent node %s already has active DID %s: %w", record.AgentNodeID, storedDID, ErrDIDNodeAlreadyRegistered)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("failed to check active agent DID: %w", err)
+		}
+	}
+	err = nil
+
+	err = func() error {
+		result, execErr := tx.ExecContext(ctx, `
+			INSERT INTO agent_dids (
+				agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path, x25519_epoch, registered_at, status
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (did) DO UPDATE SET
+				public_key_jwk = excluded.public_key_jwk,
+				derivation_path = excluded.derivation_path,
+				x25519_epoch = CASE WHEN agent_dids.x25519_epoch > excluded.x25519_epoch THEN agent_dids.x25519_epoch ELSE excluded.x25519_epoch END,
+				status = CASE WHEN agent_dids.status = 'revoked' THEN 'revoked' ELSE excluded.status END,
+				updated_at = CURRENT_TIMESTAMP
+			WHERE agent_dids.agentfield_server_id = excluded.agentfield_server_id
+			  AND agent_dids.agent_node_id = excluded.agent_node_id`,
+			record.AgentNodeID, record.DID, record.AgentFieldServerID, record.PublicKeyJWK,
+			record.DerivationPath, record.X25519Epoch, time.Now(), status)
+		if execErr != nil {
+			return fmt.Errorf("failed to upsert agent DID: %w", execErr)
+		}
+		if affected, affErr := result.RowsAffected(); affErr == nil && affected == 0 {
+			return fmt.Errorf("agent DID %s is already stored for a different server or agent node: %w", record.DID, ErrDIDAllocationConflict)
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
+	}
+
+	for _, component := range record.Components {
+		component := component
+		err = tx.QueryRowContext(ctx, "SELECT did FROM component_dids WHERE did = ?", component.ComponentDID).Scan(&storedDID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("failed to check component DID: %w", err)
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			err = tx.QueryRowContext(ctx, `SELECT did FROM component_dids WHERE agent_did = ? AND component_type = ? AND function_name = ? AND COALESCE(status, 'active') = 'active' LIMIT 1`, record.DID, component.ComponentType, component.ComponentName).Scan(&storedDID)
+			if err == nil {
+				return fmt.Errorf("component %s already has active DID %s: %w", component.ComponentName, storedDID, ErrDIDNodeAlreadyRegistered)
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("failed to check active component DID: %w", err)
+			}
+		}
+		err = nil
+		err = func() error {
+			result, execErr := tx.ExecContext(ctx, `
+				INSERT INTO component_dids (
+					did, agent_did, component_type, function_name, public_key_jwk, derivation_path, status
+				) VALUES (?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (did) DO UPDATE SET
+					public_key_jwk = excluded.public_key_jwk,
+					derivation_path = excluded.derivation_path,
+					status = CASE WHEN component_dids.status = 'retired' THEN 'retired' ELSE excluded.status END,
+					updated_at = CURRENT_TIMESTAMP
+				WHERE component_dids.agent_did = excluded.agent_did
+				  AND component_dids.component_type = excluded.component_type
+				  AND component_dids.function_name = excluded.function_name`,
+				component.ComponentDID, record.DID, component.ComponentType, component.ComponentName,
+				component.PublicKeyJWK, component.DerivationPath, ComponentDIDStatusActive)
+			if execErr != nil {
+				return fmt.Errorf("failed to upsert component DID %s: %w", component.ComponentName, execErr)
+			}
+			if affected, affErr := result.RowsAffected(); affErr == nil && affected == 0 {
+				return fmt.Errorf("component DID %s is already stored for a different agent or component: %w", component.ComponentDID, ErrDIDAllocationConflict)
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
 	return nil
 }
 
@@ -434,10 +606,12 @@ func (ls *LocalStorage) retryOnConstraintFailure(ctx context.Context, operation 
 		if _, isDuplicateErr := lastErr.(*DuplicateDIDError); isDuplicateErr {
 			return lastErr
 		}
+		if errors.Is(lastErr, ErrDIDAllocationConflict) {
+			return lastErr
+		}
 
 		// Only retry on database-level transient errors
-		if strings.Contains(lastErr.Error(), "database is locked") ||
-			strings.Contains(lastErr.Error(), "SQLITE_BUSY") ||
+		if isSQLiteContention(lastErr) ||
 			strings.Contains(lastErr.Error(), "database is temporarily unavailable") {
 			if attempt < maxRetries {
 				// Exponential backoff: 10ms, 20ms, 40ms
@@ -557,7 +731,7 @@ func (ls *LocalStorage) GetAgentDID(ctx context.Context, agentID string) (*types
 
 	query := `
 		SELECT agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path,
-		       reasoners, skills, status, registered_at
+		       COALESCE(x25519_epoch, 0), reasoners, skills, status, registered_at
 		FROM agent_dids WHERE agent_node_id = ?`
 
 	row := ls.db.QueryRowContext(ctx, query, agentID)
@@ -565,7 +739,7 @@ func (ls *LocalStorage) GetAgentDID(ctx context.Context, agentID string) (*types
 
 	var reasonersJSON, skillsJSON, publicKeyJWK string
 	err := row.Scan(&info.AgentNodeID, &info.DID, &info.AgentFieldServerID, &publicKeyJWK,
-		&info.DerivationPath, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
+		&info.DerivationPath, &info.X25519Epoch, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("agent DID for %s not found", agentID)
@@ -594,6 +768,26 @@ func (ls *LocalStorage) GetAgentDID(ctx context.Context, agentID string) (*types
 	return info, nil
 }
 
+// GetActiveAgentDID reads one node without scanning or changing other identities.
+func (ls *LocalStorage) GetActiveAgentDID(ctx context.Context, serverID, nodeID string) (*types.AgentDIDInfo, error) {
+	row := ls.db.QueryRowContext(ctx, `SELECT agent_node_id, did, agentfield_server_id, public_key_jwk,
+		derivation_path, COALESCE(x25519_epoch, 0), status, registered_at
+		FROM agent_dids WHERE agentfield_server_id = ? AND agent_node_id = ? AND status <> 'revoked'
+		ORDER BY registered_at ASC, did ASC LIMIT 1`, serverID, nodeID)
+	info := &types.AgentDIDInfo{}
+	var publicKey string
+	err := row.Scan(&info.AgentNodeID, &info.DID, &info.AgentFieldServerID, &publicKey,
+		&info.DerivationPath, &info.X25519Epoch, &info.Status, &info.RegisteredAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active agent DID: %w", err)
+	}
+	info.PublicKeyJWK = json.RawMessage(publicKey)
+	return info, nil
+}
+
 func (ls *LocalStorage) ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInfo, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
@@ -602,7 +796,7 @@ func (ls *LocalStorage) ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInf
 
 	query := `
 		SELECT agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path,
-		       reasoners, skills, status, registered_at
+		       COALESCE(x25519_epoch, 0), reasoners, skills, status, registered_at
 		FROM agent_dids ORDER BY registered_at DESC`
 
 	rows, err := ls.db.QueryContext(ctx, query)
@@ -621,7 +815,7 @@ func (ls *LocalStorage) ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInf
 		info := &types.AgentDIDInfo{}
 		var reasonersJSON, skillsJSON, publicKeyJWK string
 		err := rows.Scan(&info.AgentNodeID, &info.DID, &info.AgentFieldServerID, &publicKeyJWK,
-			&info.DerivationPath, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
+			&info.DerivationPath, &info.X25519Epoch, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan agent DID: %w", err)
 		}
@@ -764,19 +958,23 @@ func (ls *LocalStorage) GetComponentDID(ctx context.Context, componentID string)
 	}
 
 	// Use function_name as the componentID since there's no separate component_id column
+	// A name can have retired rows from earlier registrations; prefer the active one.
 	query := `
 		SELECT function_name, did, agent_did, component_type, function_name,
-			   derivation_path, created_at
-		FROM component_dids WHERE function_name = ?`
+			   derivation_path, public_key_jwk, COALESCE(status, 'active'), created_at
+		FROM component_dids WHERE function_name = ?
+		ORDER BY CASE WHEN COALESCE(status, 'active') = 'active' THEN 0 ELSE 1 END, created_at DESC
+		LIMIT 1`
 
 	row := ls.db.QueryRowContext(ctx, query, componentID)
 	info := &types.ComponentDIDInfo{}
 
 	var derivationPath string
+	var publicKeyJWK sql.NullString
 	var createdAt sql.NullTime
 
 	err := row.Scan(&info.ComponentID, &info.ComponentDID, &info.AgentDID,
-		&info.ComponentType, &info.ComponentName, &derivationPath, &createdAt)
+		&info.ComponentType, &info.ComponentName, &derivationPath, &publicKeyJWK, &info.Status, &createdAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("component DID for %s not found", componentID)
@@ -787,6 +985,8 @@ func (ls *LocalStorage) GetComponentDID(ctx context.Context, componentID string)
 	if createdAt.Valid {
 		info.CreatedAt = createdAt.Time
 	}
+	info.DerivationPath = derivationPath
+	info.PublicKeyJWK = publicKeyJWK.String
 
 	// Parse derivation index from derivation path (e.g., "m/44'/0'/0'/123" -> 123)
 	if derivationPath != "" {
@@ -802,31 +1002,46 @@ func (ls *LocalStorage) GetComponentDID(ctx context.Context, componentID string)
 	return info, nil
 }
 
+// ListComponentDIDs lists the active component DIDs of an agent, or of every
+// agent when agentDID is empty. Retired components are excluded so that a
+// removed component is never loaded back into the registry.
 func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return ls.listComponentDIDs(ctx, agentDID, false)
+}
+
+// ListAllComponentDIDs lists an agent's component DIDs including retired ones,
+// or of every agent when agentDID is empty. Key allocation uses it so that a
+// retired component's derivation path is never handed out again.
+func (ls *LocalStorage) ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return ls.listComponentDIDs(ctx, agentDID, true)
+}
+
+func (ls *LocalStorage) listComponentDIDs(ctx context.Context, agentDID string, includeRetired bool) ([]*types.ComponentDIDInfo, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("context cancelled during list component DIDs: %w", err)
 	}
 
-	var query string
-	var rows *sql.Rows
-	var err error
-
-	if agentDID == "" {
-		// Get all components when agentDID is empty
-		query = `
-			SELECT function_name, did, agent_did, component_type, function_name,
-				   derivation_path, created_at
-			FROM component_dids ORDER BY created_at DESC`
-		rows, err = ls.db.QueryContext(ctx, query)
-	} else {
-		// Get components for specific agent
-		query = `
-			SELECT function_name, did, agent_did, component_type, function_name,
-				   derivation_path, created_at
-			FROM component_dids WHERE agent_did = ? ORDER BY created_at DESC`
-		rows, err = ls.db.QueryContext(ctx, query, agentDID)
+	query := `
+		SELECT function_name, did, agent_did, component_type, function_name,
+			   derivation_path, public_key_jwk, COALESCE(status, 'active'), created_at
+		FROM component_dids`
+	var conditions []string
+	var args []interface{}
+	if agentDID != "" {
+		conditions = append(conditions, "agent_did = ?")
+		args = append(args, agentDID)
 	}
+	if !includeRetired {
+		conditions = append(conditions, "COALESCE(status, 'active') = ?")
+		args = append(args, ComponentDIDStatusActive)
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := ls.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list component DIDs: %w", err)
 	}
@@ -841,10 +1056,11 @@ func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) 
 
 		info := &types.ComponentDIDInfo{}
 		var derivationPath string
+		var publicKeyJWK sql.NullString
 		var createdAt sql.NullTime
 
 		err := rows.Scan(&info.ComponentID, &info.ComponentDID, &info.AgentDID,
-			&info.ComponentType, &info.ComponentName, &derivationPath, &createdAt)
+			&info.ComponentType, &info.ComponentName, &derivationPath, &publicKeyJWK, &info.Status, &createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan component DID: %w", err)
 		}
@@ -852,6 +1068,8 @@ func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) 
 		if createdAt.Valid {
 			info.CreatedAt = createdAt.Time
 		}
+		info.DerivationPath = derivationPath
+		info.PublicKeyJWK = publicKeyJWK.String
 
 		// Parse derivation index from derivation path
 		if derivationPath != "" {
@@ -866,5 +1084,93 @@ func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) 
 
 		infos = append(infos, info)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate component DIDs: %w", err)
+	}
 	return infos, nil
+}
+
+// RetireComponentDIDs retires only the given component DIDs of this agent.
+// Retired rows stay in storage so their derivation paths are never reused, but
+// they are no longer listed as registered components. An empty list is a no-op.
+func (ls *LocalStorage) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during retire component DIDs: %w", err)
+	}
+	if len(componentDIDs) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(agentDID) == "" {
+		return &ValidationError{Field: "agent_did", Value: agentDID, Reason: "agent DID cannot be empty", Context: "RetireComponentDIDs"}
+	}
+
+	placeholders := make([]string, len(componentDIDs))
+	args := make([]interface{}, 0, len(componentDIDs)+2)
+	args = append(args, ComponentDIDStatusRetired, agentDID)
+	for i, did := range componentDIDs {
+		placeholders[i] = "?"
+		args = append(args, did)
+	}
+	query := `UPDATE component_dids SET status = ?, updated_at = CURRENT_TIMESTAMP
+  WHERE agent_did = ? AND did IN (` + strings.Join(placeholders, ", ") + `)`
+	tx, err := ls.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin component retirement: %w", err)
+	}
+	defer rollbackTx(tx, "RetireComponentDIDs")
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("failed to retire component DIDs for agent %s: %w", agentDID, err)
+	}
+	return tx.Commit()
+}
+
+// lockDIDServerTransaction shares identity-write serialization with rotations.
+// SQLite connections use BEGIN IMMEDIATE; Postgres uses a server advisory lock.
+func (ls *LocalStorage) lockDIDServerTransaction(ctx context.Context, tx *sqlTx, serverID string) error {
+	if ls.mode == "postgres" {
+		// Bound the wait before serializing identity decisions across replicas.
+		if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '"+didPostgresLockTimeout+"'"); err != nil {
+			return fmt.Errorf("failed to set DID transaction lock timeout: %w", err)
+		}
+		hash := fnv.New64a()
+		_, _ = hash.Write([]byte("agentfield:did-server:" + serverID))
+		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(?)", int64(hash.Sum64())); err != nil {
+			return fmt.Errorf("failed to lock DID server transaction: %w", err)
+		}
+	}
+	return nil
+}
+
+// AdvanceAgentX25519Epoch allocates the next epoch from durable state. The
+// returned epoch is committed before callers derive or publish its keypair.
+func (ls *LocalStorage) AdvanceAgentX25519Epoch(ctx context.Context, serverID, did string, memoryEpoch int) (int, error) {
+	tx, err := ls.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin X25519 rotation: %w", err)
+	}
+	defer rollbackTx(tx, "AdvanceAgentX25519Epoch")
+	if err := ls.lockDIDServerTransaction(ctx, tx, serverID); err != nil {
+		return 0, err
+	}
+	var epoch int
+	if err := tx.QueryRowContext(ctx, "SELECT x25519_epoch FROM agent_dids WHERE did = ? AND agentfield_server_id = ?", did, serverID).Scan(&epoch); err != nil {
+		return 0, fmt.Errorf("failed to read stored X25519 epoch: %w", err)
+	}
+	if memoryEpoch > epoch {
+		epoch = memoryEpoch
+	}
+	if epoch == int(^uint(0)>>1) {
+		return 0, fmt.Errorf("X25519 epoch exhausted for DID %s", did)
+	}
+	epoch++
+	if _, err := tx.ExecContext(ctx, "UPDATE agent_dids SET x25519_epoch = ?, updated_at = CURRENT_TIMESTAMP WHERE did = ? AND agentfield_server_id = ?", epoch, did, serverID); err != nil {
+		return 0, fmt.Errorf("failed to persist X25519 epoch: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE did_registry SET last_key_rotation = ? WHERE agentfield_server_id = ?", time.Now(), serverID); err != nil {
+		return 0, fmt.Errorf("failed to persist X25519 rotation time: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit X25519 rotation: %w", err)
+	}
+	return epoch, nil
 }

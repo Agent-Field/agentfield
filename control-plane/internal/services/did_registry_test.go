@@ -47,18 +47,35 @@ func TestDIDRegistryInitializeAndLookup(t *testing.T) {
 	agentfieldID := "agentfield-1"
 	now := time.Now().UTC().Truncate(time.Second)
 
-	require.NoError(t, provider.StoreAgentFieldServerDID(ctx, agentfieldID, "did:agentfield:root", []byte("seed"), now, now))
+	// Identities must be real: the registry verifies every DID against the
+	// master seed on load.
+	seed := make([]byte, 32)
+	for i := range seed {
+		seed[i] = byte(i + 1)
+	}
+	didAt := func(path string) string {
+		did, err := didForPath(seed, path)
+		require.NoError(t, err)
+		return did
+	}
+	rootDID := didAt(rootDerivationPath)
+	agentPath := agentDerivationPath(serverPathSegment(agentfieldID), 0)
+	agentDID := didAt(agentPath)
+	reasonerDID := didAt(componentDerivationPath(agentPath, 0, 0))
+	skillDID := didAt(componentDerivationPath(agentPath, 1, 0))
+
+	require.NoError(t, provider.StoreAgentFieldServerDID(ctx, agentfieldID, rootDID, seed, now, now))
 
 	components := []storage.ComponentDIDRequest{
 		{
-			ComponentDID:    "did:reasoner:1",
+			ComponentDID:    reasonerDID,
 			ComponentType:   "reasoner",
 			ComponentName:   "reasoner.fn",
 			PublicKeyJWK:    "{}",
 			DerivationIndex: 1,
 		},
 		{
-			ComponentDID:    "did:skill:1",
+			ComponentDID:    skillDID,
 			ComponentType:   "skill",
 			ComponentName:   "skill.fn",
 			PublicKeyJWK:    "{}",
@@ -66,7 +83,8 @@ func TestDIDRegistryInitializeAndLookup(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, provider.StoreAgentDIDWithComponents(ctx, "agent-1", "did:agent:1", agentfieldID, "{}", 0, components))
+	// Stored with placeholder paths, as earlier versions did; loading recovers them.
+	require.NoError(t, provider.StoreAgentDIDWithComponents(ctx, "agent-1", agentDID, agentfieldID, "{}", 0, components))
 
 	registry := NewDIDRegistryWithStorage(provider)
 	require.NoError(t, registry.Initialize())
@@ -79,12 +97,12 @@ func TestDIDRegistryInitializeAndLookup(t *testing.T) {
 	// Validate reasoner lookup
 	reasonerID, err := registry.FindDIDByComponent(agentfieldID, "reasoner", "reasoner.fn")
 	require.NoError(t, err)
-	require.Equal(t, "did:reasoner:1", reasonerID.DID)
+	require.Equal(t, reasonerDID, reasonerID.DID)
 
 	// Validate skill lookup
 	skillID, err := registry.FindDIDByComponent(agentfieldID, "skill", "skill.fn")
 	require.NoError(t, err)
-	require.Equal(t, "did:skill:1", skillID.DID)
+	require.Equal(t, skillDID, skillID.DID)
 
 	// Update status and ensure it is persisted in-memory
 	require.NoError(t, registry.UpdateAgentStatus(agentfieldID, "agent-1", types.AgentDIDStatusActive))
@@ -95,7 +113,7 @@ func TestDIDRegistryInitializeAndLookup(t *testing.T) {
 
 	packageResult, err := registry.GetAgentDIDs(agentfieldID, "agent-1")
 	require.NoError(t, err)
-	require.Equal(t, "did:agent:1", packageResult.AgentDID.DID)
+	require.Equal(t, agentDID, packageResult.AgentDID.DID)
 	require.Contains(t, packageResult.ReasonerDIDs, "reasoner.fn")
 	require.Contains(t, packageResult.SkillDIDs, "skill.fn")
 

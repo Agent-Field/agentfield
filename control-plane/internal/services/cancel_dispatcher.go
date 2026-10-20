@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -81,7 +82,7 @@ func NewCancelDispatcher(store storage.StorageProvider, cfg CancelDispatcherConf
 	}
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 5 * time.Second}
+		httpClient = agenturl.NewClient(5 * time.Second)
 	}
 	path := cfg.CancelPathTemplate
 	if strings.TrimSpace(path) == "" {
@@ -178,7 +179,7 @@ func (d *CancelDispatcher) dispatch(ctx context.Context, ev events.ExecutionEven
 		logger.Logger.Debug().Str("agent_node_id", agentNodeID).Str("execution_id", executionID).Msg("cancel-dispatcher: agent not registered, skipping")
 		return
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(agent.BaseURL), "/")
+	baseURL := agent.BaseURL
 	if baseURL == "" {
 		logger.Logger.Debug().Str("agent_node_id", agentNodeID).Str("execution_id", executionID).Msg("cancel-dispatcher: agent has no base_url (likely serverless), skipping")
 		return
@@ -199,7 +200,15 @@ func (d *CancelDispatcher) dispatch(ctx context.Context, ev events.ExecutionEven
 		"emitted_at":   ev.Timestamp.UTC().Format(time.RFC3339Nano),
 	})
 
-	url := baseURL + strings.ReplaceAll(d.cancelPath, ":execution_id", executionID)
+	segments := strings.Split(strings.TrimPrefix(d.cancelPath, "/"), "/")
+	for i, segment := range segments {
+		segments[i] = strings.ReplaceAll(segment, ":execution_id", executionID)
+	}
+	endpoint, err := agenturl.ForNode(agent.ID, baseURL, segments...)
+	if err != nil {
+		return
+	}
+	url := endpoint.String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		logger.Logger.Warn().Err(err).Str("url", url).Msg("cancel-dispatcher: build request failed")
@@ -214,6 +223,7 @@ func (d *CancelDispatcher) dispatch(ctx context.Context, ev events.ExecutionEven
 	}
 
 	resp, err := d.httpClient.Do(req)
+	agenturl.WarnNode(agent.ID, err)
 	if err != nil {
 		// Don't escalate timeouts/connection refused — the worker may have
 		// already exited or be unreachable. Workers reachable next time

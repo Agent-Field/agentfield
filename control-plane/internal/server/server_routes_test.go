@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,9 @@ import (
 // stubStorage implements storage.StorageProvider with minimal functionality for testing
 type stubStorage struct {
 	eventBus *events.ExecutionEventBus
+
+	serverDIDsMu sync.Mutex
+	serverDIDs   map[string]*types.AgentFieldServerDIDInfo
 }
 
 func newStubStorage() *stubStorage {
@@ -351,10 +355,27 @@ func (s *stubStorage) ListDIDs(ctx context.Context) ([]*types.DIDRegistryEntry, 
 
 // AgentField Server DID operations
 func (s *stubStorage) StoreAgentFieldServerDID(ctx context.Context, agentfieldServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
+	s.serverDIDsMu.Lock()
+	defer s.serverDIDsMu.Unlock()
+	if s.serverDIDs == nil {
+		s.serverDIDs = make(map[string]*types.AgentFieldServerDIDInfo)
+	}
+	// Like the real store, never replace an existing server identity.
+	if _, exists := s.serverDIDs[agentfieldServerID]; !exists {
+		s.serverDIDs[agentfieldServerID] = &types.AgentFieldServerDIDInfo{
+			AgentFieldServerID: agentfieldServerID,
+			RootDID:            rootDID,
+			MasterSeed:         masterSeed,
+			CreatedAt:          createdAt,
+			LastKeyRotation:    lastKeyRotation,
+		}
+	}
 	return nil
 }
 func (s *stubStorage) GetAgentFieldServerDID(ctx context.Context, agentfieldServerID string) (*types.AgentFieldServerDIDInfo, error) {
-	return nil, nil
+	s.serverDIDsMu.Lock()
+	defer s.serverDIDsMu.Unlock()
+	return s.serverDIDs[agentfieldServerID], nil
 }
 func (s *stubStorage) ListAgentFieldServerDIDs(ctx context.Context) ([]*types.AgentFieldServerDIDInfo, error) {
 	return nil, nil
@@ -364,6 +385,21 @@ func (s *stubStorage) ListAgentFieldServerDIDs(ctx context.Context) ([]*types.Ag
 func (s *stubStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int) error {
 	return nil
 }
+
+// GetActiveAgentDID selects the first active identity for a node in this test store.
+func (s *stubStorage) GetActiveAgentDID(ctx context.Context, serverID, nodeID string) (*types.AgentDIDInfo, error) {
+	rows, err := s.ListAgentDIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row != nil && row.AgentFieldServerID == serverID && row.AgentNodeID == nodeID && row.Status != types.AgentDIDStatusRevoked {
+			return row, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s *stubStorage) GetAgentDID(ctx context.Context, agentID string) (*types.AgentDIDInfo, error) {
 	return nil, nil
 }
@@ -384,6 +420,16 @@ func (s *stubStorage) ListComponentDIDs(ctx context.Context, agentDID string) ([
 
 // Multi-step DID operations
 func (s *stubStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int, components []storage.ComponentDIDRequest) error {
+	return nil
+}
+
+func (s *stubStorage) UpsertAgentDIDWithComponents(ctx context.Context, record storage.AgentDIDRecord) error {
+	return nil
+}
+func (s *stubStorage) ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return nil, nil
+}
+func (s *stubStorage) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
 	return nil
 }
 

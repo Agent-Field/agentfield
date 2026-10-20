@@ -1,6 +1,6 @@
 {
   "name": "@agentfield/sdk",
-  "version": "0.1.142-rc.14",
+  "version": "0.1.143-rc.1",
   "description": "AgentField TypeScript SDK",
   "type": "module",
   "main": "dist/index.js",
@@ -91,6 +91,9 @@
     "nanoid": "3.3.18",
     "postcss": "8.5.25",
     "body-parser": "1.20.6",
-    "qs": "6.16.0"
+    "qs": "6.16.0",
+    "source-map-js": "1.2.2",
+    "proxy-addr": "2.0.8",
+    "diff@4": "4.0.4"
   }
 }

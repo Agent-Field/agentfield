@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -4477,8 +4478,10 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 	}
 	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
 		if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
-			execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
-			agent.InvocationURL = &execURL
+			if endpoint, err := agenturl.Join(trimmed, "execute"); err == nil {
+				execURL := endpoint.String()
+				agent.InvocationURL = &execURL
+			}
 		}
 	}
 
@@ -4665,8 +4668,10 @@ func (ls *LocalStorage) postProcessAgentNode(agent *types.AgentNode, healthStatu
 	}
 	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
 		if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
-			execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
-			agent.InvocationURL = &execURL
+			if endpoint, err := agenturl.Join(trimmed, "execute"); err == nil {
+				execURL := endpoint.String()
+				agent.InvocationURL = &execURL
+			}
 		}
 	}
 

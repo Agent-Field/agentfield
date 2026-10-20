@@ -151,6 +151,8 @@ func TestExecuteHandlerWithARD_ExternalCallableBinding(t *testing.T) {
 
 func TestExecuteHandlerWithARD_ExternalCallableBindingGates(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	services.SetWebhookAllowedHosts(nil)
+	t.Cleanup(func() { services.SetWebhookAllowedHosts(nil) })
 	store := newTestExecutionStorage(nil)
 	state := ard.State{
 		Imports: []ard.ExternalEntry{{
@@ -180,6 +182,8 @@ func TestExecuteHandlerWithARD_ExternalCallableBindingGates(t *testing.T) {
 		cfg        config.ARDConfig
 		body       string
 		wantStatus int
+		endpoint   string
+		wantError  string
 	}{
 		{
 			name:       "external invocation disabled",
@@ -194,6 +198,15 @@ func TestExecuteHandlerWithARD_ExternalCallableBindingGates(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			// C1: external ARD invocation validates the entry URL before delivery.
+			name:       "nat64 loopback is rejected",
+			cfg:        config.ARDConfig{External: config.ARDExternalConfig{InvocationEnabled: true}},
+			body:       `{"input":{"operation":"review"}}`,
+			endpoint:   "http://[64:ff9b::7f00:1]:9999/invoke",
+			wantStatus: http.StatusBadGateway,
+			wantError:  "external ARD entry URL rejected: webhook url must not target private/internal address",
+		},
+		{
 			name:       "conflicting operation fields",
 			cfg:        config.ARDConfig{External: config.ARDExternalConfig{InvocationEnabled: true}},
 			body:       `{"input":{"operation":"delete"},"context":{"operation":"review"}}`,
@@ -201,6 +214,13 @@ func TestExecuteHandlerWithARD_ExternalCallableBindingGates(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			state.Imports[0].URL = "https://vendor.example/invoke"
+			if tc.endpoint != "" {
+				state.Imports[0].URL = tc.endpoint
+			}
+			rawState, err := json.Marshal(state)
+			require.NoError(t, err)
+			store.config[ard.StateConfigKey] = string(rawState)
 			router := gin.New()
 			router.POST("/api/v1/execute/:target", ExecuteHandlerWithARD(store, nil, nil, 90*time.Second, "", func() config.ARDConfig {
 				return tc.cfg
@@ -210,6 +230,9 @@ func TestExecuteHandlerWithARD_ExternalCallableBindingGates(t *testing.T) {
 			resp := httptest.NewRecorder()
 			router.ServeHTTP(resp, req)
 			require.Equal(t, tc.wantStatus, resp.Code, resp.Body.String())
+			if tc.wantError != "" {
+				require.Contains(t, resp.Body.String(), tc.wantError)
+			}
 		})
 	}
 }

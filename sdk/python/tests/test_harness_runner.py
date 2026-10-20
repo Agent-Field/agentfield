@@ -685,3 +685,66 @@ async def test_incremental_mode_recovers_by_patching_missing_field(tmp_path):
     retry_prompt = provider.prompts[1].lower()
     assert "patch only" in retry_prompt
     assert "count" in retry_prompt
+
+
+@pytest.mark.asyncio
+async def test_execute_with_retry_retries_error_503(tmp_path, monkeypatch):
+    provider = MockProvider(
+        [
+            RawResult(is_error=True, error_message="Error 503"),
+            RawResult(result="ok", metrics=Metrics(num_turns=1)),
+        ]
+    )
+
+    async def fake_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("agentfield.harness._runner.asyncio.sleep", fake_sleep)
+
+    with patch("agentfield.harness._runner.build_provider", return_value=provider):
+        result = await HarnessRunner().run(
+            "hello", provider="codex", cwd=str(tmp_path), max_retries=3
+        )
+
+    assert result.is_error is False
+    assert provider.call_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "return 500 error",
+        "fix the check, where its coded 500 would fall through" + "x" * 5000,
+    ],
+)
+async def test_timed_out_run_with_status_like_prompt_runs_once(
+    tmp_path, monkeypatch, prompt
+):
+    from agentfield.harness.providers.opencode import OpenCodeProvider
+
+    counter = tmp_path / "runs"
+    fake_bin = tmp_path / "opencode-hang"
+    fake_bin.write_text(
+        f"#!/bin/sh\necho x >> {counter}\nsleep 30\n", encoding="utf-8"
+    )
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1")
+
+    async def fake_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("agentfield.harness._runner.asyncio.sleep", fake_sleep)
+
+    # Keep the diagnostic's retained executable independent of tmp_path:
+    # pytest's parent directory may itself contain classifier markers like 500.
+    monkeypatch.chdir(tmp_path)
+    provider = OpenCodeProvider(bin_path="./opencode-hang")
+
+    with patch("agentfield.harness._runner.build_provider", return_value=provider):
+        result = await HarnessRunner().run(
+            prompt, provider="opencode", cwd=str(tmp_path), max_retries=3
+        )
+
+    assert result.is_error is True
+    assert len(counter.read_text().splitlines()) == 1

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,18 +30,23 @@ func setupMemoryTestRoute(policyService AccessPolicyServiceInterface, config Mem
 		config,
 	))
 
-	router.POST("/api/v1/memory/set", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
-	router.POST("/api/v1/memory/get", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
-	router.POST("/api/v1/memory/delete", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
-	router.GET("/api/v1/memory/list", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
+	handler := func(c *gin.Context) {
+		// Simulate a handler authorizing its resolved scope (C2/C4/C5).
+		scope, id := "global", "global"
+		for _, candidate := range []struct{ scope, header string }{{"workflow", "X-Workflow-ID"}, {"session", "X-Session-ID"}, {"actor", "X-Actor-ID"}} {
+			if value := c.GetHeader(candidate.header); value != "" {
+				scope, id = candidate.scope, value
+				break
+			}
+		}
+		if RequireMemoryScope(c, scope, id) {
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+		}
+	}
+	router.POST("/api/v1/memory/set", handler)
+	router.POST("/api/v1/memory/get", handler)
+	router.POST("/api/v1/memory/delete", handler)
+	router.GET("/api/v1/memory/list", handler)
 
 	return router
 }
@@ -222,6 +228,10 @@ func TestResolveMemoryOperation(t *testing.T) {
 		{"list memory", "GET", "/api/v1/memory/list", "memory.read"},
 		{"set vector", "POST", "/api/v1/memory/vector", "vector.write"},
 		{"get vector", "GET", "/api/v1/memory/vector/my-key", "vector.read"},
+		// C7: vector keys containing operation names must retain read policies.
+		{"get delete key", "GET", "/api/v1/memory/vector/delete", "vector.read"},
+		{"get search key", "GET", "/api/v1/memory/vector/search", "vector.read"},
+		{"legacy delete", "POST", "/api/v1/memory/vector/delete", "vector.delete"},
 		{"search vector", "POST", "/api/v1/memory/vector/search", "vector.search"},
 		{"delete vector", "DELETE", "/api/v1/memory/vector/my-key", "vector.delete"},
 		{"events ws", "GET", "/api/v1/memory/events/ws", "memory.subscribe"},
@@ -237,4 +247,12 @@ func TestResolveMemoryOperation(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func (r *testAgentResolver) ListAgents(context.Context, types.AgentFilters) ([]*types.AgentNode, error) {
+	var nodes []*types.AgentNode
+	for _, node := range r.agents {
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
 }

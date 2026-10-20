@@ -439,6 +439,10 @@ func TestGenerateObservabilitySignature(t *testing.T) {
 // Test webhook delivery with mock HTTP server
 // Note: This test uses the internal forwarder directly to avoid race conditions with global event buses
 func TestObservabilityForwarder_WebhookDelivery(t *testing.T) {
+	// C6: delivery uses the default SSRF-safe client with an explicitly permitted target.
+	original := webhookAllowedHosts()
+	t.Cleanup(func() { SetWebhookAllowedHosts(original) })
+	SetWebhookAllowedHosts([]string{"127.0.0.1"})
 	var (
 		mu            sync.Mutex
 		receivedBatch *types.ObservabilityEventBatch
@@ -479,7 +483,6 @@ func TestObservabilityForwarder_WebhookDelivery(t *testing.T) {
 		BatchTimeout: 100 * time.Millisecond,
 		WorkerCount:  1,
 		HTTPTimeout:  5 * time.Second,
-		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg).(*observabilityForwarder)

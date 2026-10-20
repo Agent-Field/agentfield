@@ -75,10 +75,10 @@ describe("UnifiedJsonViewer", () => {
     const markdownRow = screen.getByText('"markdown":').closest(".group");
     expect(markdownRow).toBeTruthy();
     await user.click(within(markdownRow as HTMLElement).getByRole("button", { name: "Show preview" }));
-    expect(await screen.findByRole("link", { name: "link" })).toHaveAttribute("href", "https://example.com");
+    expect(await screen.findByRole("link", { name: "link" })).toHaveAttribute("href", "https://example.com/");
 
     await user.click(screen.getByRole("button", { name: "Open URL" }));
-    expect(openSpy).toHaveBeenCalledWith("https://example.com", "_blank", "noopener,noreferrer");
+    expect(openSpy).toHaveBeenCalledWith("https://example.com/", "_blank", "noopener,noreferrer");
 
     const copyButtons = screen.getAllByRole("button", { name: /Copy /i });
     expect(copyButtons.length).toBeGreaterThan(0);

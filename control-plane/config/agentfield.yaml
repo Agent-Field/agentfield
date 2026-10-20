@@ -2,7 +2,10 @@ agentfield:
   port: 8080
   shutdown_timeout: 30s  # Graceful shutdown drain timeout for in-flight requests
   registration:
-    serverless_discovery_allowed_hosts: [] # Optional extra hosts allowed for server-side /discover fetches; localhost/loopback are always allowed.
+    # agent_endpoint_strict: false # Also deny loopback/private agent destinations; default permits local, Docker and Kubernetes agents.
+    # agent_endpoint_allowed_hosts: [] # Hostnames, *.suffix wildcards or CIDRs exempt from strict mode only; metadata/link-local/multicast/broadcast always denied.
+    # CIDRs match resolved addresses, including localhost; use 127.0.0.0/8 and ::1/128 to allow both loopback families.
+    serverless_discovery_allowed_hosts: [] # Optional extra hosts allowed for server-side /discover fetches; localhost/loopback pass this allowlist; agent endpoint policy still applies.
   execution_cleanup:
     enabled: true
     retention_period: 0 # 0 = keep forever; set e.g. 72h to prune finished executions
@@ -93,6 +96,10 @@ features:
     key_algorithm: "Ed25519"
     derivation_method: "BIP32"
     key_rotation_days: 90
+    # An empty database uses this ID if set; otherwise the public ID is derived from the absolute AGENTFIELD_HOME path.
+    # Pins which stored DID registry this control plane owns. Leave unset unless several
+    # registries share one database. Once registries exist, an absent pinned ID stops startup.
+    server_id: ""
     vc_requirements:
       require_vc_registration: true
       require_vc_execution: true

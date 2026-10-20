@@ -119,6 +119,8 @@ An execution's terminal outcome is reported once. If a lifecycle event is republ
 - `AGENTFIELD_EXEC_ASYNC_WORKERS` (default: the greater of the available CPU count and `16`): Worker count for asynchronous execution and restart jobs, which are I/O-bound; non-positive values use the default.
 - `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): Additional admitted asynchronous work beyond the worker count; `workers + queue_capacity` bounds work across preparation, queue wait, and worker dispatch. Admitted but undispatched executions report `queued`. A paused execution pins a worker and reservation for up to 24 hours. Non-positive values use the default. Requests arriving once admission is saturated are rejected with `503`, a `Retry-After` header and a `retry_after` field, and no execution row is persisted for them.
 - `AGENTFIELD_MAX_EXECUTE_BODY_BYTES` (default: `33554432`, 32 MiB): Maximum request body size, in bytes, for POST routes under `/api/v1/execute`. Oversize requests are rejected with `413` before any execution is persisted; other routes are not capped by this setting.
+- `AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_STRICT` (default: `false`): Additionally deny agent endpoints resolving to loopback, RFC1918, ULA, CGNAT, benchmark (`198.18.0.0/15`), IPv4 `0.0.0.0/8`, or IPv6 unspecified addresses. Default mode supports localhost/desktop, Docker Compose, `host.docker.internal`, Kubernetes and public/serverless agents. Equivalent YAML: `agentfield.registration.agent_endpoint_strict` in `config/agentfield.yaml` (or the file selected by `AGENTFIELD_CONFIG_FILE`).
+- `AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_ALLOWED_HOSTS` (default: empty): Comma-separated strict-mode exceptions: case-insensitive hostnames, `*.suffix` subdomain wildcards (excluding the suffix itself), or CIDRs matched against resolved addresses, including `localhost`. To allow localhost through CIDRs, include both `127.0.0.0/8` and `::1/128`; every resolved address must pass the policy. This also covers control-plane-managed local node probes. An explicitly empty variable clears YAML exceptions. Equivalent YAML: `agentfield.registration.agent_endpoint_allowed_hosts` (list). These exceptions never permit link-local, instance metadata (including embedded IPv4 forms and metadata hostnames), multicast or broadcast destinations, which are always denied. Validation checks registration and actual dial addresses; cross-origin redirects are refused. Agent endpoints must use HTTP(S), may include a path prefix, and must omit userinfo, query, fragment, whitespace and traversal/encoded separators. Existing invalid nodes remain listable; re-register them with a valid endpoint before dispatch.
 - `AGENTFIELD_MAX_REGISTER_BODY_BYTES` (default: `8388608`, 8 MiB): Maximum request body size, in bytes, for node registration POST routes (`/api/v1/nodes`, `/api/v1/nodes/register`, and `/api/v1/nodes/register-serverless`). Oversize requests are rejected with `413` before registration handling begins.
 - `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control-plane HTTP server. Accepts bare seconds (`30`) and Go duration strings (`30s`, `5m`). The same budget is shared with `StopAsyncWorkerPool`, which is guaranteed a fresh budget of at least 5s, so total shutdown can exceed this value. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
 - `AGENTFIELD_SHUTDOWN_MIN_DELAY` (default: `0`): Control-plane-only delay between SIGTERM/SIGINT and closing the listener; zero preserves existing timing. Accepts bare seconds or a Go duration; invalid or negative values warn and keep the current value. This name is reserved for the control plane so future SDKs do not acquire another dual-meaning shutdown variable. Equivalent YAML: `agentfield.shutdown_min_delay`. It also affects `af server`, the code path the desktop app launches, so a value in `~/.agentfield/agentfield.yaml` slows local Ctrl+C too. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
@@ -159,6 +161,48 @@ These map to `api.cors.*` in config. When set via env, use comma-separated value
 - `AGENTFIELD_API_CORS_ALLOWED_HEADERS` (comma-separated): Include `X-Admin-Token` when browser clients access admin or `/debug/pprof/*` endpoints.
 - `AGENTFIELD_API_CORS_EXPOSED_HEADERS` (comma-separated)
 - `AGENTFIELD_API_CORS_ALLOW_CREDENTIALS` (`true`/`false`)
+
+### DID server identity
+
+The control plane's DID identity (master seed, root DID, and every agent and component DID) is stored in the database. By default, a new registry's public ID is derived deterministically from the absolute `AGENTFIELD_HOME` path, so replicas that share a home path and database converge on one identity; if two start at once, the second adopts the identity the first stored. On later boots the control plane adopts the stored registry, so moving `AGENTFIELD_HOME` keeps the same identity.
+
+- `AGENTFIELD_DID_SERVER_ID` (default: unset): An unpinned startup first selects a registry matching the current home path; otherwise it adopts the sole stored registry. If several registries remain and none matches the current home, startup refuses, lists the stored IDs, and asks you to pin one. On an empty database, a set value names the first registry; otherwise the new registry's public ID is derived from the absolute `AGENTFIELD_HOME` path. On later boots it pins which stored registry this control plane owns. Once registries exist, a pinned ID that matches none of them stops startup. Replicas with different home paths should pin the same stored ID. Equivalent YAML: `features.did.server_id`.
+- If agent DIDs remain but their server's `did_registry` row is missing, startup refuses to create a new identity. Restore the row or database from a backup; the master seed exists only there. If permanently lost, revoke its agents with `UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = '<server ID>';` and restart.
+- DIDs from other registries in the same database stay resolvable so their credentials still verify, but only the active registry's identities can sign.
+- At startup every stored identity is checked against the master seed. A component whose DID cannot be re-derived is retired and gets a new DID when its agent registers again. An agent whose DID cannot be re-derived is refused keys. If it cannot be recovered, revoke it so the node gets a new identity on its next registration (the old identity cannot sign new credentials; historical signatures can still verify with retained public keys or a self-contained `did:key`):
+
+  ```sql
+  UPDATE agent_dids SET status = 'revoked' WHERE did = '<agent DID from the startup log>';
+  ```
+
+  Then restart the control plane. Revoked rows are kept so their keys are never issued again.
+
+#### Component retirement recovery
+
+Startup quarantines a component whose DID cannot be re-derived, and attempts to retire it without issuing its key. If that write fails transiently, the next registration retries retirement. If it continues to fail, fix database write access or stop the control plane, back up the database, and run the exact statement from the error (substitute the named component DID):
+
+```sql
+UPDATE component_dids SET status = 'retired' WHERE did = '<component DID from the error>';
+```
+
+Restart and register the agent again to allocate a fresh component DID. Retired rows remain reserved and cannot be reused. Normal component deregistration also retires every duplicate row with the same agent DID, component type, and function name.
+
+#### Lost-root recovery
+
+If startup reports that the root DID does not match its master seed, stop the control plane and back up the database before changing identity state. Restore the original encryption passphrase (`features.did.keystore.encryption_passphrase` in the configuration) if it changed; use the original database backup if the seed is corrupted. Restart with that passphrase and database to preserve the root and agent identities. Changing the home directory or revoking agents alone cannot repair an inconsistent root.
+
+If the original seed/passphrase is permanently lost, an explicit destructive identity reset is required. Stop every replica using this registry, back up the database, replace `<server ID>` below with the affected `did_registry.agentfield_server_id` (escape any SQL quotes), and run both statements in one transaction:
+
+```sql
+BEGIN;
+UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = '<server ID>';
+DELETE FROM did_registry WHERE agentfield_server_id = '<server ID>';
+COMMIT;
+```
+
+Keep the revoked agent and component rows so their identities remain reserved. Restart with the same `features.did.server_id` / `AGENTFIELD_DID_SERVER_ID` if this was the only registry; on an empty registry table that ID names the new registry. If other registries remain, remove the pin to the deleted ID and select an existing healthy registry explicitly. The next agent registration creates new identities. Old signatures retain their original issuers and can still be checked with retained public keys or a self-contained `did:key`, but the lost identities cannot sign new credentials.
+
+To restore server availability while arranging recovery, set `features.did.enabled: false` in `config/agentfield.yaml` (or the file selected by `AGENTFIELD_CONFIG_FILE`), or set `AGENTFIELD_FEATURES_DID_ENABLED=false`, and restart. This bypasses DID initialization and disables DID/VC operations without resetting identity data. Restore the setting after recovery.
 
 ### Authorization (VC-Based Permissions)
 

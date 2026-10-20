@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time" // Added for time.Now()
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils" // Added for ID generation
@@ -153,6 +154,7 @@ type ExecuteReasonerResponse struct {
 
 // ExecuteReasonerHandler handles execution of reasoners with full tracking
 func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
+	client := agenturl.NewClient(0)
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		startTime := time.Now()
@@ -317,8 +319,23 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		workflowExecution.InputSize = len(inputJSON)
 		createLegacyExecutionRecord(ctx, storageProvider, workflowExecution)
 
+		agentURL, endpointErr := checkedAgentURL(targetNode, &parsedTarget{TargetName: reasonerName, TargetType: "reasoner"})
+		if endpointErr != nil {
+			workflowExecution.Status = types.ExecutionStatusFailed
+			errorMessage := fmt.Sprintf("failed to create agent request: %v", endpointErr)
+			workflowExecution.ErrorMessage = &errorMessage
+			endTime := time.Now()
+			workflowExecution.CompletedAt = &endTime
+			duration := endTime.Sub(startTime).Milliseconds()
+			workflowExecution.DurationMS = &duration
+			workflowExecution.UpdatedAt = endTime
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": errorMessage})
+			return
+		}
+
 		// Prepare request to agent node with workflow context propagation
-		agentURL := fmt.Sprintf("%s/reasoners/%s", targetNode.BaseURL, reasonerName)
+
 		agentBody := inputJSON
 
 		if targetNode.DeploymentType == "serverless" {
@@ -356,7 +373,6 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 				CreatedAt:         now,
 				UpdatedAt:         now,
 			}
-			agentURL = buildAgentURL(targetNode, target)
 
 			serverlessPayload, err := json.Marshal(buildServerlessPayload(target, exec, headers, req.Input))
 			if err != nil {
@@ -430,7 +446,8 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		}
 
 		// Make HTTP request to agent node
-		resp, err := http.DefaultClient.Do(agentReq)
+		resp, err := client.Do(agentReq)
+		agenturl.WarnNode(targetNode.ID, err)
 		if err != nil {
 			// Update execution with error
 			endTime := time.Now()
@@ -541,6 +558,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 
 // ExecuteSkillHandler handles execution of skills via AgentField server
 func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
+	client := agenturl.NewClient(0)
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		startTime := time.Now()
@@ -703,8 +721,23 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		workflowExecution.InputSize = len(inputJSON)
 		createLegacyExecutionRecord(ctx, storageProvider, workflowExecution)
 
+		agentURL, endpointErr := checkedAgentURL(targetNode, &parsedTarget{TargetName: skillName, TargetType: "skill"})
+		if endpointErr != nil {
+			workflowExecution.Status = types.ExecutionStatusFailed
+			errorMessage := fmt.Sprintf("failed to create agent request: %v", endpointErr)
+			workflowExecution.ErrorMessage = &errorMessage
+			endTime := time.Now()
+			workflowExecution.CompletedAt = &endTime
+			duration := endTime.Sub(startTime).Milliseconds()
+			workflowExecution.DurationMS = &duration
+			workflowExecution.UpdatedAt = endTime
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": errorMessage})
+			return
+		}
+
 		// Prepare request to agent node with workflow context propagation
-		agentURL := fmt.Sprintf("%s/skills/%s", targetNode.BaseURL, skillName)
+
 		agentReq, err := http.NewRequestWithContext(ctx, http.MethodPost, agentURL, bytes.NewBuffer(inputJSON))
 		if err != nil {
 			workflowExecution.Status = types.ExecutionStatusFailed
@@ -756,7 +789,8 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		}
 
 		// Make HTTP request to agent node
-		resp, err := http.DefaultClient.Do(agentReq)
+		resp, err := client.Do(agentReq)
+		agenturl.WarnNode(targetNode.ID, err)
 		if err != nil {
 			// Update execution with error
 			endTime := time.Now()

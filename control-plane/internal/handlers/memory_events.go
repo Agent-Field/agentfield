@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
@@ -55,6 +57,10 @@ func normalizePatterns(raw string) []string {
 // WebSocketHandler handles WebSocket connections for memory events.
 func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 	ctx := c.Request.Context()
+	eventFilter, allowed := authorizeMemoryEvents(c)
+	if !allowed {
+		return
+	}
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		// upgrader.Upgrade automatically sends an error response, so just return
@@ -90,6 +96,9 @@ func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 
 	// Forward events to the client
 	for event := range eventChan {
+		if eventFilter != nil && !eventFilter(ctx, &event) {
+			continue
+		}
 		// Apply pattern matching
 		if len(patterns) > 0 {
 			match := false
@@ -113,6 +122,10 @@ func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 // SSEHandler handles Server-Sent Events connections for memory events.
 func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 	ctx := c.Request.Context()
+	eventFilter, allowed := authorizeMemoryEvents(c)
+	if !allowed {
+		return
+	}
 
 	// Parse query parameters for filtering
 	scope := c.Query("scope")
@@ -151,6 +164,9 @@ func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 				return
 			}
 
+			if eventFilter != nil && !eventFilter(ctx, &event) {
+				continue
+			}
 			// Apply pattern matching
 			if len(patterns) > 0 {
 				match := false
@@ -182,13 +198,17 @@ func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 func GetEventHistoryHandler(storage storage.StorageProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
+		eventFilter, allowed := authorizeMemoryEventHistory(c)
+		if !allowed {
+			return
+		}
 		var filter types.EventFilter
 
 		// Parse query parameters
-		if scope := c.Query("scope"); scope != "" {
+		if scope := c.Query("scope"); scope != "" && scope != "*" {
 			filter.Scope = &scope
 		}
-		if scopeID := c.Query("scope_id"); scopeID != "" {
+		if scopeID := c.Query("scope_id"); scopeID != "" && scopeID != "*" {
 			filter.ScopeID = &scopeID
 		}
 		if patterns := c.Query("patterns"); patterns != "" {
@@ -211,6 +231,45 @@ func GetEventHistoryHandler(storage storage.StorageProvider) gin.HandlerFunc {
 			return
 		}
 
+		if eventFilter != nil {
+			// Storage applies limit before visibility filtering, so wildcard
+			// history may return fewer than limit events for this caller.
+			visible := make([]*types.MemoryChangeEvent, 0, len(events))
+			for _, event := range events {
+				if eventFilter(ctx, event) {
+					visible = append(visible, event)
+				}
+			}
+			events = visible
+		}
 		c.JSON(http.StatusOK, events)
 	}
+}
+
+// Concrete selectors use the same rules as explicit reads. A wildcard presents
+// no selector, so each event must establish ownership or execution participation.
+func authorizeMemoryEvents(c *gin.Context) (func(context.Context, *types.MemoryChangeEvent) bool, bool) {
+	return authorizeMemoryEventSelector(c, false)
+}
+
+func authorizeMemoryEventHistory(c *gin.Context) (func(context.Context, *types.MemoryChangeEvent) bool, bool) {
+	return authorizeMemoryEventSelector(c, true)
+}
+
+func authorizeMemoryEventSelector(c *gin.Context, snapshot bool) (func(context.Context, *types.MemoryChangeEvent) bool, bool) {
+	scope, scopeID := c.Query("scope"), c.Query("scope_id")
+	if scope != "" && scope != "*" && ((scopeID != "" && scopeID != "*") ||
+		(scope != "global" && scope != "actor" && scope != "session" && scope != "workflow")) {
+		if !middleware.RequireMemoryScope(c, scope, scopeID) {
+			return nil, false
+		}
+		if !snapshot {
+			return middleware.MemoryEventScopeFilter(c), true
+		}
+		return nil, true
+	}
+	if snapshot {
+		return middleware.MemoryEventSnapshotFilter(c), true
+	}
+	return middleware.MemoryEventFilter(c), true
 }

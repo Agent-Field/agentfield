@@ -79,14 +79,27 @@ var privateRanges []*net.IPNet
 
 func init() {
 	cidrs := []string{
-		"127.0.0.0/8",    // IPv4 loopback
-		"10.0.0.0/8",     // RFC-1918
-		"172.16.0.0/12",  // RFC-1918
-		"192.168.0.0/16", // RFC-1918
-		"169.254.0.0/16", // Link-local
-		"::1/128",        // IPv6 loopback
-		"fe80::/10",      // IPv6 link-local
-		"fc00::/7",       // IPv6 unique local (ULA)
+		"0.0.0.0/8",       // RFC-1122 "this network"
+		"127.0.0.0/8",     // IPv4 loopback
+		"10.0.0.0/8",      // RFC-1918
+		"172.16.0.0/12",   // RFC-1918
+		"192.168.0.0/16",  // RFC-1918
+		"169.254.0.0/16",  // Link-local
+		"100.64.0.0/10",   // RFC-6598 shared address space (carrier-grade NAT)
+		"198.18.0.0/15",   // RFC-2544 benchmarking networks
+		"192.0.0.0/29",    // RFC-7335 IPv4 service continuity prefix (DS-Lite)
+		"240.0.0.0/4",     // Reserved, including the limited broadcast address
+		"::1/128",         // IPv6 loopback
+		"fe80::/10",       // IPv6 link-local
+		"fc00::/7",        // IPv6 unique local (ULA)
+		"fec0::/10",       // Deprecated IPv6 site-local
+		"64:ff9b::/96",    // RFC-6052 NAT64 well-known prefix (embeds an IPv4 dst)
+		"64:ff9b:1::/48",  // RFC-8215 NAT64 local-use prefix
+		"2002::/16",       // RFC-3056 6to4 (embeds an IPv4 dst in bits 16-47)
+		"2001::/32",       // RFC-4380 Teredo (embeds an IPv4 server/client)
+		"2001:2::/48",     // RFC-5180 IPv6 benchmarking
+		"::/96",           // RFC-4291 IPv4-compatible, deprecated (embeds an IPv4 dst)
+		"::ffff:0:0:0/96", // RFC-2765 IPv4-translated (never ::ffff:0:0/96: Go reads that as all of IPv4)
 	}
 	for _, cidr := range cidrs {
 		_, network, err := net.ParseCIDR(cidr)
@@ -97,13 +110,21 @@ func init() {
 	}
 }
 
-// isPrivateIP returns true if the IP belongs to a loopback, link-local,
-// RFC-1918 private, or unspecified range.
+// isPrivateIP denies invalid and non-global-unicast addresses, private and
+// special-use ranges (including "this network", reserved IPv4 and site-local
+// IPv6), and IPv4-compatible, translated, NAT64, 6to4 and Teredo ranges.
+// IPv4-mapped addresses are classified by their embedded IPv4 destination.
 func isPrivateIP(ip net.IP) bool {
 	if ip == nil {
 		return true // treat unparseable as private (deny by default)
 	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+	// Normalize IPv4-in-IPv6 forms (e.g. "::ffff:127.0.0.1") to their 4-byte
+	// representation so the IPv4 CIDR checks below apply regardless of how the
+	// net.IP was constructed.
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	if !ip.IsGlobalUnicast() {
 		return true
 	}
 	for _, network := range privateRanges {

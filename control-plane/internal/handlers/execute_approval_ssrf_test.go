@@ -94,6 +94,12 @@ func TestRequestApprovalHandler_RejectsPrivateCallbackURL(t *testing.T) {
 			wantReject:  true,
 		},
 		{
+			// C1: approval callback registration refuses IPv4-embedding IPv6 literals.
+			name:        "6to4 loopback is rejected",
+			callbackURL: "http://[2002:7f00:1::]:8080/callback",
+			wantReject:  true,
+		},
+		{
 			name:        "empty callback_url is allowed (optional field)",
 			callbackURL: "",
 			wantReject:  false,
@@ -131,6 +137,7 @@ func TestRequestApprovalHandler_RejectsPrivateCallbackURL(t *testing.T) {
 				require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
 				assert.Equal(t, "invalid_callback_url", result["error"],
 					"error code should be invalid_callback_url for %q", tc.callbackURL)
+				assert.Contains(t, resp.Body.String(), "private/internal")
 			} else {
 				assert.Equal(t, http.StatusOK, resp.Code,
 					"expected success for callback_url=%q, got body: %s", tc.callbackURL, resp.Body.String())

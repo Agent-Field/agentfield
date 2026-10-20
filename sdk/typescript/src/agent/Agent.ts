@@ -183,8 +183,19 @@ export class Agent {
       apiKey: this.config.apiKey,
       headers: this.sanitizeDefaultHeaders(this.config.defaultHeaders)
     });
-    this.memoryClient = new MemoryClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
-    this.memoryEventClient = new MemoryEventClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
+    const memoryHeaders = { ...this.config.defaultHeaders };
+    // Header names are case insensitive; explicit defaults retain precedence.
+    const hasMemoryHeader = (name: string) => Object.entries(memoryHeaders)
+      .some(([key, value]) => key.toLowerCase() === name.toLowerCase() && value != null);
+    if (this.config.apiKey && !hasMemoryHeader('X-API-Key')) {
+      memoryHeaders['X-API-Key'] = this.config.apiKey;
+    }
+    this.memoryClient = new MemoryClient(this.config.agentFieldUrl!, memoryHeaders);
+    const memoryEventHeaders = { ...memoryHeaders };
+    if (!hasMemoryHeader('X-Agent-Node-ID')) {
+      memoryEventHeaders['X-Agent-Node-ID'] = this.config.nodeId;
+    }
+    this.memoryEventClient = new MemoryEventClient(this.config.agentFieldUrl!, memoryEventHeaders);
     this.didClient = new DidClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.didManager = new DidManager(this.didClient, this.config.nodeId);
     this.executionLogger = createExecutionLogger({

@@ -254,6 +254,10 @@ export interface WorkflowVCChainResponse {
   total_steps: number;
   status: string;
   did_resolution_bundle?: DIDResolutionBundle;
+  /** False when some referenced DIDs could not be resolved. Absent on older servers. */
+  verifiable?: boolean;
+  /** DIDs whose public keys the control plane could not include in the bundle. */
+  unresolved_dids?: string[];
 }
 
 export interface DIDResolutionBundle {

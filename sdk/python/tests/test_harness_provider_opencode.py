@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 from agentfield.exceptions import HarnessProviderUnavailable
 
+from agentfield.harness._result import FailureType
 from agentfield.harness.providers._factory import build_provider
 from agentfield.harness.providers.opencode import OpenCodeProvider
 from agentfield.types import HarnessConfig
@@ -1076,3 +1077,31 @@ async def test_opencode_bare_model_has_no_variant_flag(
     await provider.execute("hello", {"model": "deepseek/deepseek-v4-flash"})
 
     assert "--variant" not in captured["cmd"]
+
+
+@pytest.mark.asyncio
+async def test_opencode_timeout_message_excludes_prompt_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """The TIMEOUT error message the provider surfaces keeps the argv prefix
+    and never quotes the prompt (the runner classifies this text for retries)."""
+    fake_bin = tmp_path / "opencode-hang"
+    fake_bin.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1")
+
+    prompt = (
+        "PROMPT-MARKER fix the shape check, where its coded 500 would fall "
+        "through the global filter" + ("x" * 5000)
+    )
+
+    result = await OpenCodeProvider(bin_path=str(fake_bin)).execute(
+        prompt, {"cwd": str(tmp_path), "project_dir": str(tmp_path)}
+    )
+
+    assert result.is_error is True
+    assert result.failure_type == FailureType.TIMEOUT
+    message = result.error_message or ""
+    assert message == f"CLI command timed out after 1s: {fake_bin} [8 args omitted]"
+    assert prompt not in message
+    assert "PROMPT-MARKER" not in message

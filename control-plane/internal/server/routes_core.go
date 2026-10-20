@@ -108,32 +108,16 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 
 	// Unified execution endpoints (path-based)
 	// These routes may have permission middleware applied if authorization is enabled.
-	executeGroup := agentAPI.Group("/execute")
+	executeMiddleware := s.executeRouteMiddleware()
+	executeAsync := handlers.ExecuteAsyncHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken)
+	executeGroup := agentAPI.Group("/execute", executeMiddleware...)
 	{
-		if s.rateLimitExecute != nil {
-			executeGroup.Use(middleware.RateLimit(s.rateLimitExecute))
-		}
-		if s.config.Features.DID.Authorization.Enabled && s.accessPolicyService != nil && s.didWebService != nil {
-			permConfig := middleware.PermissionConfig{
-				Enabled:     true,
-				DefaultDeny: s.config.Features.DID.Authorization.DefaultDeny,
-			}
-			executeGroup.Use(middleware.PermissionCheckMiddleware(
-				s.accessPolicyService,
-				s.tagVCVerifier,
-				s.storage,
-				s.didWebService,
-				permConfig,
-			))
-			logger.Logger.Info().Msg("🔒 Permission checking enabled on execute endpoints")
-		}
-
 		executeGroup.POST("/:target", handlers.ExecuteHandlerWithARD(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken, func() config.ARDConfig {
 			s.configMu.RLock()
 			defer s.configMu.RUnlock()
 			return s.config.AgentField.ARD
 		}))
-		executeGroup.POST("/async/:target", handlers.ExecuteAsyncHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
+		executeGroup.POST("/async/:target", executeAsync)
 	}
 	// Static "active" coexists with the :execution_id param route (same
 	// pattern as POST /executions/batch-status); gin matches static first.
@@ -201,10 +185,35 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	sessionInstanceGroup := agentAPI.Group("/session-instances")
 	{
 		sessionInstanceGroup.POST("/:session_id/realtime-offer", handlers.SessionRealtimeOfferHandler(s.storage))
-		sessionInstanceGroup.POST("/:session_id/tools/:tool", handlers.SessionToolHandler(s.storage, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
+		toolHandlers := append([]gin.HandlerFunc{handlers.SessionToolExecuteRequest()}, executeMiddleware...)
+		toolHandlers = append(toolHandlers, executeAsync)
+		sessionInstanceGroup.POST("/:session_id/tools/:tool", toolHandlers...)
 	}
 
 	// Workflow endpoints will be reintroduced once the simplified execution pipeline lands.
+}
+
+// executeRouteMiddleware is shared by direct execute calls and session tools.
+// Session tools resolve their target before entering this chain.
+func (s *AgentFieldServer) executeRouteMiddleware() []gin.HandlerFunc {
+	var chain []gin.HandlerFunc
+	if s.rateLimitExecute != nil {
+		chain = append(chain, middleware.RateLimit(s.rateLimitExecute))
+	}
+	if s.config.Features.DID.Authorization.Enabled && s.accessPolicyService != nil && s.didWebService != nil {
+		chain = append(chain, middleware.PermissionCheckMiddleware(
+			s.accessPolicyService,
+			s.tagVCVerifier,
+			s.storage,
+			s.didWebService,
+			middleware.PermissionConfig{
+				Enabled:     true,
+				DefaultDeny: s.config.Features.DID.Authorization.DefaultDeny,
+			},
+		))
+		logger.Logger.Info().Msg("🔒 Permission checking enabled on execute endpoints")
+	}
+	return chain
 }
 
 // unregisterAgentFromMonitoring removes an agent from health monitoring.
