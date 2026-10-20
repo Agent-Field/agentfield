@@ -96,7 +96,7 @@ func persistLegacyAcknowledgement(ctx context.Context, storageProvider storage.S
 // createLegacyExecutionRecord writes the executions row for a legacy
 // /reasoners or /skills call before it is dispatched, so the agent's
 // status callback (POST /api/v1/executions/:id/status) finds it.
-func createLegacyExecutionRecord(ctx context.Context, storageProvider storage.StorageProvider, wfExec *types.WorkflowExecution) {
+func createLegacyExecutionRecord(ctx context.Context, storageProvider storage.StorageProvider, wfExec *types.WorkflowExecution) error {
 	exec := &types.Execution{
 		ExecutionID:       wfExec.ExecutionID,
 		RunID:             wfExec.WorkflowID,
@@ -117,7 +117,9 @@ func createLegacyExecutionRecord(ctx context.Context, storageProvider storage.St
 			Err(err).
 			Str("execution_id", wfExec.ExecutionID).
 			Msg("failed to create execution record for legacy call")
+		return err
 	}
+	return nil
 }
 
 // finalizeLegacyExecutionRecord copies the outcome of a legacy call onto its
@@ -317,7 +319,10 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		}
 		workflowExecution.InputData = inputJSON
 		workflowExecution.InputSize = len(inputJSON)
-		createLegacyExecutionRecord(ctx, storageProvider, workflowExecution)
+		if err := createLegacyExecutionRecord(ctx, storageProvider, workflowExecution); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create execution record"})
+			return
+		}
 
 		agentURL, endpointErr := checkedAgentURL(targetNode, &parsedTarget{TargetName: reasonerName, TargetType: "reasoner"})
 		if endpointErr != nil {
@@ -719,7 +724,10 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		}
 		workflowExecution.InputData = inputJSON
 		workflowExecution.InputSize = len(inputJSON)
-		createLegacyExecutionRecord(ctx, storageProvider, workflowExecution)
+		if err := createLegacyExecutionRecord(ctx, storageProvider, workflowExecution); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create execution record"})
+			return
+		}
 
 		agentURL, endpointErr := checkedAgentURL(targetNode, &parsedTarget{TargetName: skillName, TargetType: "skill"})
 		if endpointErr != nil {
