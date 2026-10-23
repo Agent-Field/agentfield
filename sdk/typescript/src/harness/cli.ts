@@ -38,7 +38,7 @@ function resolveIdleMs(idleSeconds?: number): number | undefined {
 export async function runCli(
   cmd: string[],
   options?: {
-    env?: Record<string, string>;
+    env?: NodeJS.ProcessEnv;
     cwd?: string;
     timeout?: number;
     idleSeconds?: number;

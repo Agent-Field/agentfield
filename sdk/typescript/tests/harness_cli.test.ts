@@ -48,6 +48,14 @@ describe('harness cli utilities', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('V11 identifies CodeAF commands and provides the ensure hint before spawning', async () => {
+    const command = markProviderCommand('codeaf', ['codeaf-definitely-missing-agentfield-test']);
+    await expect(runCli(command)).rejects.toMatchObject({
+      name: 'HarnessProviderUnavailable', provider: 'codeaf', installCommand: 'af codeaf ensure',
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('runs a CLI command and captures stdout, stderr, exit code, cwd, and env', async () => {
     const proc = createProcess();
     spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);

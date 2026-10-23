@@ -53,6 +53,50 @@ describe('harness provider availability', () => {
     execFileMock.mockReset();
   });
 
+  it('V11 discovers the managed CodeAF binary offline and parses its version', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-doctor-codeaf-'));
+    const binary = path.join(directory, 'bin', process.platform === 'win32' ? 'codeaf.exe' : 'codeaf');
+    fs.mkdirSync(path.dirname(binary));
+    fs.writeFileSync(binary, '', { mode: 0o755 });
+    fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.2\n');
+    const resolveBinary = vi.fn().mockReturnValue('/path/codeaf');
+    const versionProbe = vi.fn().mockResolvedValue('codeaf v0.8.2 built 2026-10-23 11:39 · go1.26.5 linux/amd64\nextra');
+    try {
+      const [health] = await harnessDoctor(['codeaf'], {
+        env: { AGENTFIELD_HOME: directory, OPENROUTER_API_KEY: 'configured' }, resolveBinary, versionProbe,
+      });
+      expect(resolveBinary).not.toHaveBeenCalled();
+      expect(versionProbe).toHaveBeenCalledWith([binary, 'version']);
+      expect(health).toEqual({ provider: 'codeaf', binary, installed: true, version: 'v0.8.2',
+        auth: 'configured', usable: true, installCommand: 'af codeaf ensure',
+        authEnvVars: ['OPENROUTER_API_KEY'], issues: [] });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('V11 discovers the managed temp binary while retaining the legacy aforge doctor row', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-doctor-codeaf-temp-'));
+    const binary = path.join(directory, 'agentfield-codeaf', 'v0.8.2', process.platform === 'win32' ? 'codeaf.exe' : 'codeaf');
+    fs.mkdirSync(path.dirname(binary), { recursive: true });
+    fs.writeFileSync(binary, '', { mode: 0o755 });
+    fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.2\n');
+    const temp = vi.spyOn(os, 'tmpdir').mockReturnValue(directory);
+    try {
+      const [codeaf, aforge] = await harnessDoctor(['codeaf', 'aforge'], {
+        env: { AGENTFIELD_HOME: path.join(directory, 'home') },
+        resolveBinary: (name) => name === 'aforge' ? '/legacy/aforge' : undefined,
+        versionProbe: async () => 'aforge v0.1.0',
+      });
+      expect(codeaf).toMatchObject({ binary, installed: true });
+      expect(aforge).toMatchObject({ binary: '/legacy/aforge', version: 'aforge v0.1.0',
+        installCommand: 'af aforge ensure', authEnvVars: ['OPENROUTER_API_KEY'] });
+    } finally {
+      temp.mockRestore();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('reports an installed CLI provider with version and auth details', async () => {
     const versionProbe = vi.fn().mockResolvedValue('codex-cli 1.2.3\nextra');
 
@@ -394,7 +438,7 @@ describe('harness provider availability', () => {
 
   it('rejects unknown providers with the supported list', async () => {
     await expect(harnessDoctor(['not-a-provider'])).rejects.toThrow(
-      'Unknown harness provider: "not-a-provider". Supported providers: aforge, claude-code, codex, gemini, omp, opencode, pi'
+      'Unknown harness provider: "not-a-provider". Supported providers: aforge, claude-code, codeaf, codex, gemini, omp, opencode, pi'
     );
   });
 
@@ -418,6 +462,7 @@ describe('harness provider availability', () => {
   });
 
   it.each([
+    ['codeaf', 'codeafBin'],
     ['aforge', 'aforgeBin'],
     ['codex', 'codexBin'],
     ['gemini', 'geminiBin'],

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { findManagedCodeaf } from './codeafInstall.js';
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -11,6 +12,12 @@ interface ProviderSpec {
 }
 
 const PROVIDER_SPECS = {
+  codeaf: {
+    binary: 'codeaf',
+    versionArgs: ['version'],
+    installCommand: 'af codeaf ensure',
+    authEnvVars: ['OPENROUTER_API_KEY'],
+  },
   aforge: {
     binary: 'aforge',
     versionArgs: ['version'],
@@ -346,7 +353,8 @@ export async function harnessDoctor(
     }
 
     const binaryName = spec.binary as string;
-    const binary = resolveBinary(binaryName, env) ?? null;
+    const binary = (provider === 'codeaf' ? findManagedCodeaf(env) : undefined)
+      ?? resolveBinary(binaryName, env) ?? null;
     const issues: string[] = [];
     let version: string | null = null;
     if (binary === null) {
@@ -355,6 +363,9 @@ export async function harnessDoctor(
       try {
         const output = (await versionProbe([binary, ...spec.versionArgs])).trim();
         version = output ? output.split(/\r?\n/, 1)[0] : 'unknown';
+        if (provider === 'codeaf') {
+          version = version.match(/^codeaf\s+(v\S+)/)?.[1] ?? version;
+        }
       } catch {
         issues.push('version_probe_failed');
       }
