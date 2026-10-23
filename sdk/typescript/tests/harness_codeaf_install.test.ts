@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const bytes = Buffer.from('#!/bin/sh\nprintf fake-codeaf\n');
+const bytes = Buffer.from('#!/bin/sh\nprintf \'%s\\n\' \'{"ok":true,"stop":"done","answer":"installed answer"}\'\n');
 const digest = createHash('sha256').update(bytes).digest('hex');
 let directory: string;
 let server: http.Server;
@@ -20,6 +20,9 @@ beforeEach(async () => {
   vi.stubEnv('AGENTFIELD_HOME', path.join(directory, 'home'));
   vi.stubEnv('AGENTFIELD_SKIP_CODEAF', '');
   vi.stubEnv('AGENTFIELD_SKIP_AFORGE', '');
+  for (const name of ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy']) {
+    vi.stubEnv(name, undefined);
+  }
   vi.spyOn(os, 'tmpdir').mockReturnValue(path.join(directory, 'temp'));
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
   requests = [];
@@ -48,6 +51,7 @@ afterEach(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   Object.defineProperty(process, 'platform', originalPlatform);
   vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.doUnmock('../src/harness/codeafRelease.js');
   fs.rmSync(directory, { recursive: true, force: true });
@@ -127,7 +131,8 @@ describe('V6 pinned CodeAF installation', () => {
   });
 
   it.each(['checksum', 'declared-size', 'stream-size', 'http', 'redirect-loop', 'connection'])
-    ('rejects %s failures, removes temporary files, and caches the failed attempt', async (kind) => {
+    ('rejects %s failures, cleans up, and throttles downloads for 60 seconds', async (kind) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
       if (kind === 'stream-size') limit = 16;
       handler = (request, response) => {
         if (kind === 'checksum') response.end('tampered');
@@ -148,12 +153,32 @@ describe('V6 pinned CodeAF installation', () => {
         http: 'HTTP 404', 'redirect-loop': 'Too many', connection: 'socket hang up' };
       await expect(install.ensureCodeafInstalled()).rejects.toThrow(errors[kind]);
       const count = requests.length;
-      await expect(install.ensureCodeafInstalled()).rejects.toThrow(errors[kind]);
+      await expect(install.ensureCodeafInstalled()).resolves.toBeUndefined();
       expect(requests).toHaveLength(count);
       const [binary] = install.codeafManagedPaths();
       expect(install.isCodeafInstalled(binary)).toBe(false);
       expect(fs.readdirSync(path.dirname(binary))).toEqual([]);
+      handler = (_request, response) => response.end(bytes);
+      vi.setSystemTime(Date.now() + 59_999);
+      await expect(install.ensureCodeafInstalled()).resolves.toBeUndefined();
+      expect(requests).toHaveLength(count);
+      vi.setSystemTime(Date.now() + 1);
+      // A stream-size fixture's cap deliberately remains below the fixture size.
+      if (kind === 'stream-size') await expect(install.ensureCodeafInstalled()).rejects.toThrow('128 MiB');
+      else await expect(install.ensureCodeafInstalled()).resolves.toBe(binary);
+      expect(requests).toHaveLength(count + 1);
     });
+
+  it('rechecks a repaired managed install immediately after a failed download', async () => {
+    handler = (_request, response) => response.writeHead(503).end();
+    const install = await import('../src/harness/codeafInstall.js');
+    await expect(install.ensureCodeafInstalled()).rejects.toThrow('HTTP 503');
+    const [binary] = install.codeafManagedPaths();
+    fs.writeFileSync(binary, bytes, { mode: 0o755 });
+    fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.2\n');
+    await expect(install.ensureCodeafInstalled()).resolves.toBe(binary);
+    expect(requests).toHaveLength(1);
+  });
 
   it('uses a private temp cache when the home bin cannot be created', async () => {
     fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'home is a file');
@@ -162,6 +187,26 @@ describe('V6 pinned CodeAF installation', () => {
     await expect(install.ensureCodeafInstalled()).resolves.toBe(fallback);
     expect(fallback).toBe(path.join(directory, 'temp', 'agentfield-codeaf', 'v0.8.2', path.basename(fallback)));
     expect(install.findManagedCodeaf()).toBe(fallback);
+  });
+
+  it.skipIf(process.platform === 'win32')('A2 downloads and executes with a read-only AgentField home', async () => {
+    const home = process.env.AGENTFIELD_HOME!;
+    fs.mkdirSync(home, { mode: 0o555 });
+    vi.stubEnv('CODEAF_HOME', undefined);
+    vi.stubEnv('CODEAF_BIN', undefined);
+    vi.stubEnv('PATH', '');
+    try {
+      const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+      const result = await new CodeafProvider().execute('task', {});
+      expect(result).toMatchObject({ isError: false, result: 'installed answer' });
+      const install = await import('../src/harness/codeafInstall.js');
+      expect(install.findManagedCodeaf()).toBe(install.codeafManagedPaths()[1]);
+      const state = path.join(directory, 'temp', 'agentfield-codeaf', 'state');
+      expect(fs.statSync(state).mode & 0o777).toBe(0o700);
+      expect(requests).toHaveLength(1);
+    } finally {
+      fs.chmodSync(home, 0o755);
+    }
   });
 
   it('reports an error when neither managed location is writable', async () => {

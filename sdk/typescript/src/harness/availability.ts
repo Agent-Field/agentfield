@@ -353,8 +353,10 @@ export async function harnessDoctor(
     }
 
     const binaryName = spec.binary as string;
-    const binary = (provider === 'codeaf' ? findManagedCodeaf(env) : undefined)
-      ?? resolveBinary(binaryName, env) ?? null;
+    const override = provider === 'codeaf' ? env.CODEAF_BIN?.trim() : undefined;
+    const binary = override ? resolveBinary(override, env) ?? null
+      : (provider === 'codeaf' ? findManagedCodeaf(env) : undefined)
+        ?? resolveBinary(binaryName, env) ?? null;
     const issues: string[] = [];
     let version: string | null = null;
     if (binary === null) {

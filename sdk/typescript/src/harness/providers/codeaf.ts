@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
@@ -7,7 +6,7 @@ import type { FailureType, RawResult } from '../types.js';
 import { createMetrics, createRawResult } from '../types.js';
 import { markProviderCommand, runCli } from '../cli.js';
 import { findExecutable, HarnessProviderUnavailable, providerUnavailable } from '../availability.js';
-import { agentfieldHome, ensureCodeafInstalled, findManagedCodeaf, isTruthy } from '../codeafInstall.js';
+import { agentfieldHome, codeafStateHome, ensureCodeafInstalled, findManagedCodeaf, isTruthy } from '../codeafInstall.js';
 import { resolveModelAndVariant } from '../modelVariant.js';
 
 export const CODEAF_DEFAULT_MODEL = '~deepseek/deepseek-v4-flash-latest';
@@ -90,7 +89,10 @@ function resolveBinary(explicit?: string): Promise<ResolvedBinary> {
   if (override) {
     return Promise.resolve({ provider: 'codeaf', binary: override });
   }
-  resolution ??= resolveAutomaticBinary();
+  resolution ??= resolveAutomaticBinary().catch((error: unknown) => {
+    resolution = undefined;
+    throw error;
+  });
   return resolution;
 }
 
@@ -162,8 +164,7 @@ function childEnvironment(options: Record<string, unknown>, variant: string | un
   const inherited = { ...process.env, ...overlay };
   const env: NodeJS.ProcessEnv = { CODEAF_MODELS: undefined, AFORGE_MODELS: undefined };
   if (inherited.CODEAF_HOME === undefined) {
-    env.CODEAF_HOME = path.join(agentfieldHome(inherited), 'codeaf');
-    fs.mkdirSync(env.CODEAF_HOME, { recursive: true });
+    env.CODEAF_HOME = codeafStateHome(inherited);
   }
   if (inherited.CODEAF_NO_UPDATE_CHECK === undefined) env.CODEAF_NO_UPDATE_CHECK = '1';
   if (inherited.CODEAF_TELEMETRY === undefined && (isTruthy(inherited.CI) || isTruthy(inherited.DO_NOT_TRACK)

@@ -53,6 +53,34 @@ describe('harness provider availability', () => {
     execFileMock.mockReset();
   });
 
+  it('A3 honors off-PATH CODEAF_BIN before managed/PATH without downloading', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-doctor-override-'));
+    const binary = path.join(directory, process.platform === 'win32' ? 'explicit-codeaf.exe' : 'explicit-codeaf');
+    const managed = path.join(directory, 'bin', process.platform === 'win32' ? 'codeaf.exe' : 'codeaf');
+    fs.mkdirSync(path.dirname(managed));
+    fs.writeFileSync(binary, '', { mode: 0o755 });
+    fs.writeFileSync(managed, '', { mode: 0o755 });
+    fs.writeFileSync(path.join(path.dirname(managed), '.codeaf.version'), 'v0.8.2\n');
+    const install = await import('../src/harness/codeafInstall.js');
+    const ensure = vi.spyOn(install, 'ensureCodeafInstalled');
+    const versionProbe = vi.fn().mockResolvedValue('codeaf v0.8.2 built fixture');
+    try {
+      const [health] = await harnessDoctor(['codeaf'], {
+        env: { CODEAF_BIN: binary, AGENTFIELD_HOME: directory, PATH: directory }, versionProbe,
+      });
+      expect(health).toMatchObject({ binary, installed: true, version: 'v0.8.2' });
+      expect(versionProbe).toHaveBeenCalledExactlyOnceWith([binary, 'version']);
+      expect(ensure).not.toHaveBeenCalled();
+      const [missing] = await harnessDoctor(['codeaf'], {
+        env: { CODEAF_BIN: path.join(directory, 'missing'), AGENTFIELD_HOME: directory }, versionProbe,
+      });
+      expect(missing).toMatchObject({ installed: false, issues: ['binary_not_found'] });
+    } finally {
+      ensure.mockRestore();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('V11 discovers the managed CodeAF binary offline and parses its version', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-doctor-codeaf-'));
     const binary = path.join(directory, 'bin', process.platform === 'win32' ? 'codeaf.exe' : 'codeaf');

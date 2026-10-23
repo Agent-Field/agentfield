@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -75,6 +77,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.doUnmock('../src/harness/codeafRelease.js');
   vi.unstubAllEnvs();
   fs.rmSync(directory, { recursive: true, force: true });
 });
@@ -216,13 +220,103 @@ describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake
     await expect(promise).rejects.toThrow('CODEAF_BIN');
     await expect(promise).rejects.toThrow('fixture checksum failed');
     await expect(new HarnessRunner().run('task', { maxRetries: 0 })).rejects.toThrow('fixture checksum failed');
-    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(ensure).toHaveBeenCalledTimes(2);
   });
 
   it('V5 skips the download and reports unavailable when no fallback exists', async () => {
     const { HarnessRunner } = await import('../src/harness/runner.js');
     await expect(new HarnessRunner().run('task', { maxRetries: 0 })).rejects.toThrow('af codeaf ensure');
     expect(console.info).not.toHaveBeenCalled();
+  });
+
+  it.each(['home', 'temp', 'path', 'legacy', 'override'])('A1 recovers from failed resolution via %s without resetting caches', async (repair) => {
+    const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+    const provider = new CodeafProvider();
+    await expect(provider.execute('task', {})).rejects.toThrow('af codeaf ensure');
+    let binary: string;
+    if (repair === 'home' || repair === 'temp') binary = await managedBinary(repair === 'home' ? 0 : 1);
+    else if (repair === 'path') binary = fakeBinary(path.join(binDirectory, 'codeaf'));
+    else if (repair === 'legacy') binary = fakeBinary(path.join(binDirectory, 'aforge'), true);
+    else {
+      binary = fakeBinary(path.join(directory, 'override'));
+      vi.stubEnv('CODEAF_BIN', binary);
+    }
+    for (const instance of [provider, new CodeafProvider()]) {
+      const result = await instance.execute('task', {});
+      expect(result.isError).toBe(false);
+      expect(result.messages[0].observed).toHaveProperty('binary', binary);
+    }
+  });
+
+  it('A1 retries a failed real download after 60 seconds and shares the retry', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.stubEnv('AGENTFIELD_SKIP_CODEAF', '');
+    const source = fakeBinary(path.join(directory, 'source'));
+    const bytes = fs.readFileSync(source);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    vi.doMock('../src/harness/codeafRelease.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/harness/codeafRelease.js')>();
+      return { ...actual, CODEAF_SHA256: Object.fromEntries(Object.keys(actual.CODEAF_SHA256).map((asset) => [asset, digest])) };
+    });
+    let requests = 0;
+    let healthy = false;
+    const server = http.createServer((_request, response) => {
+      requests += 1;
+      if (healthy) response.end(bytes);
+      else response.writeHead(503).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    vi.stubEnv('AGENTFIELD_CODEAF_BASE_URL', `http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    for (const name of ['HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy']) vi.stubEnv(name, undefined);
+    try {
+      const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+      const provider = new CodeafProvider();
+      await expect(provider.execute('task', {})).rejects.toThrow('HTTP 503');
+      healthy = true;
+      await expect(new CodeafProvider().execute('task', {})).rejects.toThrow('af codeaf ensure');
+      expect(requests).toBe(1);
+      vi.setSystemTime(Date.now() + 60_000);
+      const results = await Promise.all(Array.from({ length: 8 }, () => provider.execute('task', {})));
+      expect(results.every((result) => result.result === 'codeaf answer')).toBe(true);
+      expect(requests).toBe(2);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it.each(['create', 'write'])('A2 executes a temp-managed CLI when default state cannot %s', async (failure) => {
+    await managedBinary(1);
+    const home = process.env.AGENTFIELD_HOME!;
+    if (failure === 'create') fs.writeFileSync(home, 'home is a file');
+    else {
+      fs.mkdirSync(home);
+      fs.mkdirSync(path.join(home, 'codeaf'));
+      fs.chmodSync(path.join(home, 'codeaf'), 0o555);
+    }
+    try {
+      const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+      const result = await new CodeafProvider().execute('task', {});
+      expect(result.isError).toBe(false);
+      const fallback = path.join(directory, 'temp', 'agentfield-codeaf', 'state');
+      expect(result.messages[0].observed).toHaveProperty('home', fallback);
+      expect(fs.statSync(fallback).mode & 0o777).toBe(0o700);
+      fs.accessSync(fallback, fs.constants.W_OK);
+    } finally {
+      if (failure === 'write') fs.chmodSync(path.join(home, 'codeaf'), 0o755);
+    }
+  });
+
+  it.each(['process', 'overlay', 'empty'])('A2 preserves explicit %s CODEAF_HOME as-is', async (source) => {
+    await managedBinary(1);
+    fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'home is a file');
+    const explicit = source === 'empty' ? '' : path.join(directory, 'explicit');
+    if (source === 'process') vi.stubEnv('CODEAF_HOME', explicit);
+    const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+    const result = await new CodeafProvider().execute('task', source === 'process' ? {} : { env: { CODEAF_HOME: explicit } });
+    expect(result.isError).toBe(false);
+    expect(result.messages[0].observed).toHaveProperty('home', explicit);
+    expect(fs.existsSync(path.join(directory, 'temp', 'agentfield-codeaf', 'state'))).toBe(false);
   });
 
   it('V8 removes inherited model panels in the real child and honors overlays', async () => {

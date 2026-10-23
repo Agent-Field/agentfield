@@ -1,15 +1,28 @@
 import { createHash, randomUUID } from 'node:crypto';
 import fs, { type promises } from 'node:fs';
-import http, { type IncomingMessage } from 'node:http';
-import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
+import { codeafDownloadResponse } from './codeafDownload.js';
 import { CODEAF_BASE_URL, CODEAF_MAX_DOWNLOAD_BYTES, CODEAF_SHA256, CODEAF_VERSION } from './codeafRelease.js';
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
 export function agentfieldHome(env: Environment = process.env): string {
   return env.AGENTFIELD_HOME || path.join(os.homedir(), '.agentfield');
+}
+
+export function codeafStateHome(env: Environment): string {
+  const preferred = path.join(agentfieldHome(env), 'codeaf');
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    fs.accessSync(preferred, fs.constants.W_OK);
+    return preferred;
+  } catch {
+    const fallback = path.join(os.tmpdir(), 'agentfield-codeaf', 'state');
+    fs.mkdirSync(fallback, { recursive: true, mode: 0o700 });
+    fs.chmodSync(fallback, 0o700);
+    return fallback;
+  }
 }
 
 export function codeafManagedPaths(env: Environment = process.env): string[] {
@@ -55,32 +68,8 @@ export function codeafAsset(platform: string = process.platform, arch: string = 
   return Object.hasOwn(CODEAF_SHA256, asset) ? asset : undefined;
 }
 
-async function downloadResponse(url: URL, redirects = 0): Promise<IncomingMessage> {
-  const client = url.protocol === 'https:' ? https : url.protocol === 'http:' ? http : undefined;
-  if (!client) {
-    throw new Error(`Unsupported CodeAF download protocol: ${url.protocol}`);
-  }
-  const response = await new Promise<IncomingMessage>((resolve, reject) => {
-    const request = client.get(url, resolve);
-    request.on('error', reject);
-    request.setTimeout(30_000, () => request.destroy(new Error('CodeAF download timed out')));
-  });
-  if ([301, 302, 303, 307, 308].includes(response.statusCode ?? 0) && response.headers.location) {
-    response.resume();
-    if (redirects >= 5) {
-      throw new Error('Too many CodeAF download redirects');
-    }
-    return downloadResponse(new URL(response.headers.location, url), redirects + 1);
-  }
-  if (response.statusCode !== 200) {
-    response.resume();
-    throw new Error(`CodeAF download failed: HTTP ${response.statusCode}`);
-  }
-  return response;
-}
-
 async function download(url: URL, file: promises.FileHandle, expectedHash: string): Promise<void> {
-  const response = await downloadResponse(url);
+  const response = await codeafDownloadResponse(url);
   try {
     if (Number(response.headers['content-length']) > CODEAF_MAX_DOWNLOAD_BYTES) {
       throw new Error('CodeAF download exceeds the 128 MiB size limit');
@@ -148,8 +137,9 @@ async function installCodeaf(): Promise<string> {
 }
 
 let installation: Promise<string> | undefined;
+let nextInstallAttempt = 0;
 
-/** Download at most once per process; construction and offline doctor never install. */
+/** Share in-flight installs and throttle retries; construction and offline doctor never install. */
 export async function ensureCodeafInstalled(): Promise<string | undefined> {
   const installed = findManagedCodeaf();
   if (installed) {
@@ -158,6 +148,9 @@ export async function ensureCodeafInstalled(): Promise<string | undefined> {
   if (skipCodeafInstall()) {
     return undefined;
   }
-  installation ??= installCodeaf();
+  if (installation) return installation;
+  if (Date.now() < nextInstallAttempt) return undefined;
+  nextInstallAttempt = Date.now() + 60_000;
+  installation = installCodeaf().finally(() => { installation = undefined; });
   return installation;
 }
