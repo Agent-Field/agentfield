@@ -130,7 +130,15 @@ func Doctor(ctx context.Context, opts DoctorOptions) ([]ProviderHealth, error) {
 			AuthEnvVars:    append([]string(nil), spec.AuthEnvVars...),
 		}
 
-		if resolved, err := lookPath(spec.Binary); err == nil {
+		binary := spec.Binary
+		if provider == ProviderCodeAF {
+			if override := strings.TrimSpace(getenv("CODEAF_BIN")); override != "" {
+				binary = override
+			} else if managed := findManagedCodeAF(); managed != "" {
+				binary = managed
+			}
+		}
+		if resolved, err := lookPath(binary); err == nil {
 			health.Binary = resolved
 			health.Installed = true
 		} else {
@@ -144,6 +152,12 @@ func Doctor(ctx context.Context, opts DoctorOptions) ([]ProviderHealth, error) {
 				health.Issues = append(health.Issues, IssueVersionProbeFailed)
 			} else {
 				health.Version = version
+				if provider == ProviderCodeAF {
+					fields := strings.Fields(version)
+					if len(fields) >= 2 && fields[0] == "codeaf" {
+						health.Version = fields[1]
+					}
+				}
 			}
 		}
 

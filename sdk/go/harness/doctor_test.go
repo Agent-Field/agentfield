@@ -51,7 +51,7 @@ func TestSupportedProviderNames_CoversEveryBuildableProvider(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		ProviderAforge, ProviderClaudeCode, ProviderCodex, ProviderGemini,
+		ProviderCodeAF, ProviderAforge, ProviderClaudeCode, ProviderCodex, ProviderGemini,
 		ProviderOpenCode, ProviderPi, ProviderOMP, ProviderCursor,
 	} {
 		_, ok := SpecForProvider(name)
@@ -357,4 +357,50 @@ func TestExecVersionProbe_FailingCommandErrors(t *testing.T) {
 	_, err := execVersionProbe(context.Background(), []string{"definitely-not-a-real-binary-xyz", "--version"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "version probe failed")
+}
+
+// V11: managed lookup works offline, the CodeAF version is parsed, legacy spec stays intact.
+func TestDoctorCodeAFManagedAndVersion(t *testing.T) {
+	isolateCodeAF(t)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("OPENROUTER_API_KEY", "fixture-key")
+	home, _ := codeAFManagedPaths()
+	writeManagedCodeAF(t, home, "codeaf v0.8.2 built 2026-10-23 11:39 · go1.26.5 linux/amd64")
+	reports, err := Doctor(context.Background(), DoctorOptions{Providers: []string{ProviderCodeAF}, Probe: true})
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	assert.True(t, reports[0].Installed)
+	assert.True(t, reports[0].Usable)
+	assert.Equal(t, home, reports[0].Binary)
+	assert.Equal(t, "v0.8.2", reports[0].Version)
+	assert.Equal(t, "af codeaf ensure", reports[0].InstallCommand)
+	assert.Equal(t, AuthConfigured, reports[0].Auth)
+	resolved, err := ensureCLIAvailable(ProviderCodeAF, "codeaf")
+	require.NoError(t, err)
+	assert.Equal(t, home, resolved)
+	codeaf, ok := SpecForProvider(ProviderCodeAF)
+	require.True(t, ok)
+	assert.Equal(t, ProviderSpec{Binary: "codeaf", VersionArgs: []string{"version"}, InstallCommand: "af codeaf ensure", AuthEnvVars: []string{"OPENROUTER_API_KEY"}}, codeaf)
+	legacy, ok := SpecForProvider(ProviderAforge)
+	require.True(t, ok)
+	assert.Equal(t, ProviderSpec{Binary: "aforge", VersionArgs: []string{"version"}, InstallCommand: "af aforge ensure", AuthEnvVars: []string{"OPENROUTER_API_KEY"}}, legacy)
+}
+
+func TestDoctorCodeAFOverrideAndMissing(t *testing.T) {
+	isolateCodeAF(t)
+	t.Setenv("CODEAF_BIN", "/explicit/codeaf")
+	opts := DoctorOptions{Providers: []string{ProviderCodeAF}, LookPath: fakeLookPath(map[string]string{"/explicit/codeaf": "/explicit/codeaf"}), Probe: true, VersionProbe: func(_ context.Context, cmd []string) (string, error) {
+		assert.Equal(t, []string{"/explicit/codeaf", "version"}, cmd)
+		return "codeaf v0.8.2 built today", nil
+	}}
+	reports, err := Doctor(context.Background(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, "v0.8.2", reports[0].Version)
+	_, err = ensureCLIAvailable(ProviderCodeAF, "codeaf")
+	require.ErrorIs(t, err, ErrProviderUnavailable)
+	opts.LookPath = fakeLookPath(nil)
+	reports, err = Doctor(context.Background(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, []string{IssueBinaryNotFound}, reports[0].Issues)
+	assert.Equal(t, "af codeaf ensure", reports[0].InstallCommand)
 }

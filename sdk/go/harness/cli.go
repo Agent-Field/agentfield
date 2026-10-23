@@ -92,7 +92,7 @@ func RunCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 }
 
 // runCLIWithStdinIdle is the provider-internal variant with an explicit idle
-// watchdog. A value <= 0 disables the watchdog. Aforge uses this because its
+// watchdog. A value <= 0 disables the watchdog. Aforge and CodeAF use this because their
 // machine-readable mode is intentionally silent until the final JSON envelope.
 func runCLIWithStdinIdle(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout, idleSeconds int, stdin []byte) (*CLIResult, error) {
 	return runCLIWithStdin(ctx, cmd, env, cwd, timeout, stdin, &idleSeconds)
