@@ -167,7 +167,7 @@ printf '%s\n' '{"ok":true,"stop":"done","answer":"temp state works"}'
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, data) }))
 			defer server.Close()
 			t.Setenv("AGENTFIELD_CODEAF_BASE_URL", server.URL)
-			state := filepath.Join(os.TempDir(), "agentfield-codeaf", "state")
+			state := filepath.Join(expectedCodeAFTempBase(), "state")
 			t.Setenv("EXPECTED_STATE", state)
 			raw, err := NewCodeAFProvider("").Execute(context.Background(), "fixture only", opts)
 			require.NoError(t, err)
@@ -217,7 +217,7 @@ func TestCodeAFExplicitStateHomeIsPreserved(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, explicit, raw.Result)
 			assert.DirExists(t, explicit)
-			assert.NoDirExists(t, filepath.Join(os.TempDir(), "agentfield-codeaf", "state"))
+			assert.NoDirExists(t, filepath.Join(expectedCodeAFTempBase(), "state"))
 		})
 	}
 }

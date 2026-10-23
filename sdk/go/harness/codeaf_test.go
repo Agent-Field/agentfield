@@ -29,6 +29,7 @@ func isolateCodeAF(t *testing.T) {
 	t.Setenv("AGENTFIELD_SKIP_CODEAF", "1")
 	resetCodeAFResolution()
 	codeAFAliasOnce, codeAFLegacyOnce, codeAFCommandOnce = sync.Once{}, sync.Once{}, sync.Once{}
+	codeAFTempWarningOnce = sync.Once{}
 	t.Cleanup(resetCodeAFResolution)
 }
 
@@ -426,5 +427,5 @@ func TestCodeAFEnvironmentErrorsAndOverlayHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	env, err = codeAFEnvironment(Options{}, "")
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(os.TempDir(), "agentfield-codeaf", "state"), env["CODEAF_HOME"])
+	assert.Equal(t, filepath.Join(expectedCodeAFTempBase(), "state"), env["CODEAF_HOME"])
 }

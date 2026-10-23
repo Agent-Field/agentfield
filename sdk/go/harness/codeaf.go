@@ -95,7 +95,11 @@ func codeAFEnvironment(options Options, variant string) (map[string]string, erro
 		}
 		state := filepath.Join(home, "codeaf")
 		if home == "" || prepareCodeAFState(state) != nil {
-			state = filepath.Join(os.TempDir(), "agentfield-codeaf", "state")
+			var err error
+			state, err = prepareCodeAFTempDirectory("state")
+			if err != nil {
+				return nil, fmt.Errorf("create CODEAF_HOME: %w", err)
+			}
 			if err := prepareCodeAFState(state); err != nil {
 				return nil, fmt.Errorf("create CODEAF_HOME: %w", err)
 			}

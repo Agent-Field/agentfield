@@ -97,7 +97,7 @@ func codeAFManagedPaths() (homePath, tempPath string) {
 	if home, err := agentFieldHome(); err == nil {
 		homePath = filepath.Join(home, "bin", codeAFExecutable(runtime.GOOS))
 	}
-	tempPath = filepath.Join(os.TempDir(), "agentfield-codeaf", CodeAFVersion, codeAFExecutable(runtime.GOOS))
+	tempPath = filepath.Join(codeAFTempBase(), CodeAFVersion, codeAFExecutable(runtime.GOOS))
 	return
 }
 
@@ -112,10 +112,11 @@ func codeAFInstalled(path string) bool {
 
 func findManagedCodeAF() string {
 	homePath, tempPath := codeAFManagedPaths()
-	for _, path := range []string{homePath, tempPath} {
-		if path != "" && codeAFInstalled(path) {
-			return path
-		}
+	if homePath != "" && codeAFInstalled(homePath) {
+		return homePath
+	}
+	if _, err := prepareCodeAFTempDirectory(CodeAFVersion); err == nil && codeAFInstalled(tempPath) {
+		return tempPath
 	}
 	return ""
 }
@@ -127,7 +128,14 @@ func resolveCodeAF(ctx context.Context, override string) (codeAFBinary, error) {
 	codeAFResolver.Lock()
 	defer codeAFResolver.Unlock()
 	if cached, ok := codeAFResolver.cache[override]; ok {
-		return cached, nil
+		_, tempPath := codeAFManagedPaths()
+		if cached.path != tempPath {
+			return cached, nil
+		}
+		if _, err := prepareCodeAFTempDirectory(CodeAFVersion); err == nil {
+			return cached, nil
+		}
+		delete(codeAFResolver.cache, override)
 	}
 	binary, err := findCodeAF(ctx, override)
 	// Failed lookups must recheck every location on the next call.
@@ -198,7 +206,7 @@ func installCodeAF(ctx context.Context, homePath, tempPath, asset, expectedHash 
 	temp, err := prepareCodeAFDownload(target)
 	if err != nil {
 		target = tempPath
-		temp, err = prepareCodeAFDownload(target)
+		temp, err = prepareCodeAFTempDownload(target)
 	}
 	if err != nil {
 		return "", fmt.Errorf("prepare CodeAF download: %w", err)
@@ -266,4 +274,16 @@ func prepareCodeAFDownload(target string) (*os.File, error) {
 		return nil, err
 	}
 	return os.CreateTemp(filepath.Dir(target), ".codeaf-download-*")
+}
+
+func prepareCodeAFTempDownload(target string) (*os.File, error) {
+	_, tempPath := codeAFManagedPaths()
+	if target != tempPath {
+		return nil, fmt.Errorf("CodeAF temp path unavailable")
+	}
+	dir, err := prepareCodeAFTempDirectory(CodeAFVersion)
+	if err != nil {
+		return nil, err
+	}
+	return os.CreateTemp(dir, ".codeaf-download-*")
 }
