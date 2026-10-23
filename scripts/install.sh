@@ -629,7 +629,7 @@ install_skill() {
   esac
 }
 
-# Install the pinned codeaf coding-harness binary beside af. Delegated to
+# Install the pinned codeaf coding-harness binary in $AGENTFIELD_HOME/bin. Delegated to
 # `af codeaf ensure` so the download, checksum verification and upgrade rules
 # live in one place (control-plane/internal/codeaf) and stay testable —
 # mirroring how the skill install is delegated to `af skill install`.
@@ -652,9 +652,6 @@ install_codeaf() {
   fi
 
   local ensure_args=(codeaf ensure --lock-wait 30s)
-  if [[ "${install_dir%/}" != "${AGENTFIELD_HOME%/}/bin" ]]; then
-    ensure_args+=(--bin-dir "$install_dir")
-  fi
   if "$af_bin" "${ensure_args[@]}"; then
     print_success "codeaf coding harness installed"
   else

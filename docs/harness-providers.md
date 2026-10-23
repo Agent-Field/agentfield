@@ -16,7 +16,11 @@ Windows). The curl installer, `af skill install --all`, successful `af install`,
 and Desktop launch ensure it best-effort. `af run` immediately continues agent
 launch; if CodeAF is missing, it starts a detached `af codeaf ensure` process
 whose output goes to `$AGENTFIELD_HOME/logs/codeaf-ensure.log` and which survives
-`af run` exiting. Install and skill hooks honor the command context and wait
+`af run` exiting. A cross-process lease at `$AGENTFIELD_HOME/bin/.codeaf.background`
+suppresses further background spawns for up to 15 minutes. The child removes
+the lease on completion; failures record `.codeaf.lastfail` in the same directory
+and suppress automatic attempts for 10 minutes. Explicit ensure ignores these
+guards. Install and skill hooks honor the command context and wait
 at most 30 seconds for an installer lock, warning once if that wait expires.
 A progress line appears only when a download starts. Explicit `af codeaf ensure`
 can wait for another installer until canceled; `--lock-wait 30s` bounds that wait.
@@ -27,14 +31,13 @@ a failed download or hash verification fails those image builds.
 ```bash
 af codeaf ensure          # install or repair the pinned release
 af codeaf ensure --force  # re-download even when already current
-af codeaf ensure --bin-dir /opt/agentfield-tools  # custom af directory
 ```
 
 Installers resolve one managed home for all child commands: staging uses
 `~/.agentfield-staging`, otherwise an explicit `AGENTFIELD_HOME` wins, followed
-by `~/.agentfield`. `AGENTFIELD_INSTALL_DIR` places both `af` and `codeaf` in
-that directory; for a custom directory outside `<managed home>/bin`, the
-installer passes `--bin-dir` while retaining the managed home for state.
+by `~/.agentfield`. `AGENTFIELD_INSTALL_DIR` selects the directory for `af`.
+CodeAF always installs into `<managed home>/bin`, so skill provisioning and
+the installer's explicit ensure share one download and destination.
 
 Set `OPENROUTER_API_KEY`, then call the harness with nothing else configured:
 
@@ -124,8 +127,13 @@ is never modified.
 The SDK resolves the binary lazily at the first execution: explicit CodeAF
 binary option, then `CODEAF_BIN`, then the managed installation, then a managed
 download, then `codeaf` on PATH. When the home bin directory is unwritable, SDK
-downloads use `<os temp dir>/agentfield-codeaf/v0.8.2/codeaf[.exe]`. If CodeAF
-still cannot be found, a managed or PATH `aforge` binary is a warned legacy
+downloads use `<os temp dir>/agentfield-codeaf-<uid>/v0.8.2/codeaf[.exe]`
+on Unix or `<os temp dir>/agentfield-codeaf/v0.8.2/codeaf.exe` on Windows.
+The default state fallback is `state` under the same base. Before use, the base
+and selected subdirectory must be real directories, owned by the current Unix
+user, with mode 0700 enforced. Windows skips uid/mode checks. An untrusted
+fallback is skipped with one warning. If CodeAF still cannot be found, a managed
+or PATH `aforge` binary is a warned legacy
 fallback. Otherwise the unavailable error includes `af codeaf ensure` and any
 download failure. Results and usage identify the adapter that actually ran.
 Both CLI doctors use the same read-only order: `CODEAF_BIN`, home-managed,

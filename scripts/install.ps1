@@ -338,9 +338,6 @@ function Install-Codeaf {
     try {
         # agentfield.exe is always installed; the af.exe alias is best-effort.
         $ensureArgs = @('codeaf', 'ensure', '--lock-wait', '30s')
-        if ([IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/') -ne [IO.Path]::GetFullPath((Join-Path $ManagedHome 'bin')).TrimEnd('\', '/')) {
-            $ensureArgs += @('--bin-dir', $InstallDir)
-        }
         & (Join-Path $InstallDir 'agentfield.exe') @ensureArgs
         if ($LASTEXITCODE -eq 0) {
             Write-Success "codeaf coding harness installed"

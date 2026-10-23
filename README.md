@@ -42,14 +42,16 @@ https://github.com/user-attachments/assets/9fb7b1cf-26de-4b9b-9ba2-917252cc26ec
 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
 
-The installer also drops the `codeaf` coding harness beside `af` in
-`~/.agentfield/bin`, so harness-backed agents work out of the box; skip it with
-`--no-codeaf` (`--no-aforge` remains an alias). Staging uses
+The installer also installs the `codeaf` coding harness in
+`$AGENTFIELD_HOME/bin` (`~/.agentfield/bin` by default), so harness-backed agents
+work out of the box; skip it with `--no-codeaf` (`--no-aforge` remains an alias). Staging uses
 `~/.agentfield-staging`; an explicit `AGENTFIELD_HOME` selects the production
-managed home, and `AGENTFIELD_INSTALL_DIR` keeps both binaries together in a
-custom directory. Repair it with `af codeaf ensure` (`--bin-dir <dir>` for a
-custom binary directory). `af run` provisions a missing harness in a detached
-process and continues immediately; its installer log is
+managed home. `AGENTFIELD_INSTALL_DIR` selects the `af` directory; CodeAF
+always uses the managed home's `bin`. Repair it with `af codeaf ensure`.
+`af run` provisions a missing harness in a detached process and continues
+immediately. Launches share a 15-minute background lease
+and wait 10 minutes before retrying a failed attempt; explicit ensure bypasses
+these guards. The installer log is
 `$AGENTFIELD_HOME/logs/codeaf-ensure.log`.
 The provider name `aforge` remains an alias; set `AFORGE_BIN` and select
 `provider="aforge"` to pin the legacy adapter. CodeAF state stays isolated in
