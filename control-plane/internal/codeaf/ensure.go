@@ -30,7 +30,6 @@ const (
 type Options struct {
 	GOOS, GOARCH string
 	Home         string
-	BinDir       string          // empty uses <Home>/bin
 	Context      context.Context // nil uses context.Background
 	LockWait     time.Duration   // zero waits until Context is canceled
 	OnDownload   func()          // called only when a download starts
@@ -102,14 +101,11 @@ func ensure(opts Options, pins map[string]string) error {
 	if !supported {
 		return nil
 	}
-	binDir := opts.BinDir
-	if binDir == "" {
-		home, err := agentfieldHome(opts.Home)
-		if err != nil {
-			return err
-		}
-		binDir = filepath.Join(home, "bin")
+	home, err := agentfieldHome(opts.Home)
+	if err != nil {
+		return err
 	}
+	binDir := filepath.Join(home, "bin")
 	destination := filepath.Join(binDir, BinaryName(goos))
 	markerPath := filepath.Join(binDir, versionMarker)
 	if !opts.Force && alreadyInstalled(destination, markerPath) {
@@ -285,10 +281,11 @@ func Lookup(override string) (string, error) {
 			return path, nil
 		}
 	}
-	dir := filepath.Join(os.TempDir(), "agentfield-codeaf", Version)
-	path := filepath.Join(dir, BinaryName(runtime.GOOS))
-	if alreadyInstalled(path, filepath.Join(dir, versionMarker)) {
-		return path, nil
+	if dir, err := trustedTempDir(); err == nil {
+		path := filepath.Join(dir, BinaryName(runtime.GOOS))
+		if alreadyInstalled(path, filepath.Join(dir, versionMarker)) {
+			return path, nil
+		}
 	}
 	return exec.LookPath(BinaryName(runtime.GOOS))
 }

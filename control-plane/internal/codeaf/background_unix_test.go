@@ -130,6 +130,9 @@ func TestBackgroundSkipInstalledAndErrors(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(home, "logs")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Remove(filepath.Join(home, "bin", backgroundFailure)); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(home, "logs"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}

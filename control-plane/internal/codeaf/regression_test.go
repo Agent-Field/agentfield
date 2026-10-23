@@ -189,9 +189,9 @@ func TestEnsureBestEffortRetryAfterFailure(t *testing.T) {
 	}
 }
 
-func TestEnsureCustomBinDirAndProgress(t *testing.T) {
+func TestEnsureManagedHomeAndProgress(t *testing.T) {
 	opts, pins, requests := fixture(t)
-	opts.BinDir = t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
 	progress := 0
 	opts.OnDownload = func() { progress++ }
 	for i := 0; i < 2; i++ {
@@ -202,10 +202,8 @@ func TestEnsureCustomBinDirAndProgress(t *testing.T) {
 	if progress != 1 || requests.Load() != 1 {
 		t.Fatalf("progress=%d downloads=%d", progress, requests.Load())
 	}
-	if !alreadyInstalled(filepath.Join(opts.BinDir, "codeaf"), filepath.Join(opts.BinDir, versionMarker)) {
-		t.Fatal("custom placement missing")
-	}
-	if _, err := os.Stat(filepath.Join(opts.Home, "bin")); !os.IsNotExist(err) {
-		t.Fatal("installed in wrong bin")
+	bin := filepath.Join(opts.Home, "bin")
+	if !alreadyInstalled(filepath.Join(bin, "codeaf"), filepath.Join(bin, versionMarker)) {
+		t.Fatal("managed home placement missing")
 	}
 }
