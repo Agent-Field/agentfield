@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -7,6 +8,7 @@ if TYPE_CHECKING:
     from agentfield.types import HarnessConfig
 
 SUPPORTED_PROVIDERS = {
+    "codeaf",
     "aforge",
     "claude-code",
     "codex",
@@ -25,10 +27,20 @@ def build_provider(config: "HarnessConfig") -> "HarnessProvider":
             f"Unknown harness provider: {provider_name!r}. Supported providers: "
             f"{', '.join(sorted(SUPPORTED_PROVIDERS))}"
         )
-    if provider_name == "aforge":
-        from agentfield.harness.providers.aforge import AforgeProvider
+    if provider_name in {"codeaf", "aforge"}:
+        legacy_bin = getattr(config, "aforge_bin", "aforge")
+        if provider_name == "aforge" and (
+            legacy_bin != "aforge" or os.environ.get("AFORGE_BIN")
+        ):
+            from agentfield.harness.providers.aforge import AforgeProvider
 
-        return AforgeProvider(bin_path=getattr(config, "aforge_bin", "aforge"))
+            return AforgeProvider(bin_path=legacy_bin)
+        from agentfield.harness.providers.codeaf import CodeafProvider
+
+        return CodeafProvider(
+            bin_path=getattr(config, "codeaf_bin", None),
+            alias=provider_name == "aforge",
+        )
     if provider_name == "claude-code":
         from agentfield.harness.providers.claude import ClaudeCodeProvider
 

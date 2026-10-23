@@ -285,16 +285,16 @@ class HarnessConfig(BaseModel):
     provider: str = Field(
         default_factory=_default_harness_provider,
         description=(
-            'Coding agent provider: "aforge" (default) | "claude-code" | "codex" | '
+            'Coding agent provider: "codeaf" (default) | "aforge" (alias) | "claude-code" | "codex" | '
             '"gemini" | "opencode" | "grok" | "pi" | "omp". Unset resolves to '
-            'the AGENTFIELD_HARNESS_PROVIDER env var when present, else "aforge".'
+            'the AGENTFIELD_HARNESS_PROVIDER env var when present, else "codeaf".'
         ),
     )
     model: Optional[str] = Field(
         default=None,
         description=(
             "Model identifier. None/empty means the provider's own default "
-            "(aforge picks its own; claude-code uses sonnet)."
+            "(codeaf uses ~deepseek/deepseek-v4-flash-latest; claude-code uses sonnet)."
         ),
     )
     variant: Optional[str] = Field(
@@ -349,6 +349,7 @@ class HarnessConfig(BaseModel):
     pi_bin: str = Field(default="pi", description="Path to Pi binary.")
     omp_bin: str = Field(default="omp", description="Path to OMP binary.")
     aforge_bin: str = Field(default="aforge", description="Path to aforge binary.")
+    codeaf_bin: Optional[str] = Field(default=None, description="Path to CodeAF binary.")
     grok_bin: str = Field(
         default="grok", description="Path to Grok Build CLI binary."
     )

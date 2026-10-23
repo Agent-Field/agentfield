@@ -151,6 +151,7 @@ class TestAforgeLive:
             'Return exactly: greeting="Hello from Aforge" and number=42. '
             "Follow the OUTPUT REQUIREMENTS below precisely.",
             provider="aforge",
+            aforge_bin=shutil.which("aforge"),
             schema=SimpleResponse,
             cwd=work_dir,
             max_retries=1,

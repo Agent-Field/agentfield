@@ -174,6 +174,7 @@ def _resolve_options(
             "cwd",
             "project_dir",
             "aforge_bin",
+            "codeaf_bin",
             "codex_bin",
             "gemini_bin",
             "opencode_bin",
@@ -206,6 +207,7 @@ def _accumulate_metrics(
         "cache_read_tokens": 0,
         "cache_creation_tokens": 0,
         "model": None,
+        "provider": None,
     }
 
     for raw in all_raws:
@@ -223,6 +225,8 @@ def _accumulate_metrics(
         tokens["cache_creation_tokens"] += raw.metrics.cache_creation_tokens or 0
         if raw.metrics.model and not tokens["model"]:
             tokens["model"] = raw.metrics.model
+        if raw.provider:
+            tokens["provider"] = raw.provider
 
     return total_cost, total_turns, session_id, all_messages, tokens
 
@@ -240,6 +244,7 @@ def _token_result_kwargs(tokens: Dict[str, Any]) -> Dict[str, Any]:
         "cache_creation_tokens": cache_creation,
         "total_tokens": input_tokens + output_tokens,
         "model": tokens.get("model"),
+        "provider": tokens.get("provider"),
     }
 
 

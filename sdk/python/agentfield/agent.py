@@ -3970,9 +3970,9 @@ class Agent(FastAPI):
         Args:
             prompt: Task description for the coding agent.
             schema: Pydantic BaseModel class for structured output validation.
-            provider: Override provider ("aforge", "claude-code", "codex", "gemini",
+            provider: Override provider ("codeaf", "aforge", "claude-code", "codex", "gemini",
                 "opencode", "grok", "pi", "omp"). Omit to use
-                ``AGENTFIELD_HARNESS_PROVIDER`` when set, otherwise ``aforge``.
+                ``AGENTFIELD_HARNESS_PROVIDER`` when set, otherwise ``codeaf``.
             model: Override model identifier. Empty uses the provider's own default.
             variant: Provider-specific reasoning-effort variant. Wins over a
                 ``#variant`` suffix on the model when supported by the provider.
@@ -4065,7 +4065,8 @@ class Agent(FastAPI):
                 return
 
             resolved_provider = resolve_harness_provider(
-                str(provider) if provider else self._harness_provider_name()
+                getattr(result, "provider", None)
+                or (str(provider) if provider else self._harness_provider_name())
             )
             harness_name = (
                 resolved_provider.replace("-", "_") if resolved_provider else None
