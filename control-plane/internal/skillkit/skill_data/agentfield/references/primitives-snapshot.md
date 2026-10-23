@@ -16,7 +16,7 @@ This is a minimal cheat sheet of the five primitives so an offline build can sti
 | `@app.skill()` | Registers a deterministic function (no LLM) | Sort, parse, dedupe, score-with-formula |
 | `app.ai(...)` | Single call OR multi-turn tool-using LLM call when `tools=` is passed | Classification, routing, structured analysis, stateful tool-using |
 | `app.call(target, **kwargs)` | Call another reasoner THROUGH the control plane. Returns `dict`. Tracks the workflow DAG | All inter-reasoner traffic |
-| `app.harness(prompt, provider=...)` | Delegate to a coding-agent CLI (aforge by default; claude-code / codex / gemini / opencode / pi / omp) | When you need a real coding agent to write files / run shell |
+| `app.harness(prompt, provider=...)` | Delegate to a coding-agent CLI (codeaf by default; aforge alias; claude-code / codex / gemini / opencode / pi / omp) | When you need a real coding agent to write files / run shell |
 
 ---
 
@@ -157,7 +157,7 @@ Default canonical pattern: `AgentRouter(prefix="", tags=["domain"])`. `prefix="c
 result = await app.harness(
     prompt: str,
     schema: type[BaseModel] | None = None,
-    provider: "aforge" | "claude-code" | "codex" | "gemini" | "opencode" | "pi" | "omp" | None = None,  # None -> "aforge"
+    provider: "codeaf" | "aforge" | "claude-code" | "codex" | "gemini" | "opencode" | "pi" | "omp" | None = None,  # None -> "codeaf"
     model: str | None = None,
     max_turns: int | None = None,
     max_budget_usd: float | None = None,
@@ -170,6 +170,17 @@ result = await app.harness(
 )
 # Returns HarnessResult with .text, .parsed, .result
 ```
+
+CodeAF v0.8.2 is managed at `$AGENTFIELD_HOME/bin/codeaf` (`~/.agentfield/bin`
+by default). Repair with `af codeaf ensure`; `af harness doctor --provider codeaf`
+checks version/auth without a model task. `CODEAF_BIN` overrides the binary;
+`AGENTFIELD_CODEAF_BASE_URL` overrides the full release directory while embedded
+hashes still apply. `AGENTFIELD_SKIP_CODEAF` or `AGENTFIELD_SKIP_AFORGE` set to
+`1`/`true`/`yes`/`on` opts out of downloads. `AGENTFIELD_CODEAF_COMMAND` chooses
+`exec` (default) or `do`. SDK children isolate `CODEAF_HOME` under
+`$AGENTFIELD_HOME/codeaf` and disable telemetry for truthy `CI`/`DO_NOT_TRACK`
+or explicitly false `AGENTFIELD_TELEMETRY_ENABLED`, unless overridden by the
+caller. Select `aforge` with `AFORGE_BIN` to retain the legacy adapter.
 
 **Harness availability gate** — DO NOT use unless ALL true:
 

@@ -19,7 +19,7 @@ func TestSkillCatalogAndEmbeddedMirrorsStayAligned(t *testing.T) {
 		name    string
 		version string
 	}{
-		{name: "agentfield", version: "0.5.2"},
+		{name: "agentfield", version: "0.5.3"},
 		{name: "agentfield-personal", version: "0.1.0"},
 		{name: "agentfield-use", version: "0.8.0"},
 	}
