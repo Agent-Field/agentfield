@@ -325,7 +325,7 @@ func TestHarnessDoctorGrokReportsUsable(t *testing.T) {
 
 func TestHarnessProviderSpecsMatchPythonProviderNames(t *testing.T) {
 	// Keep in sync with sdk/python/agentfield/harness/_availability.py.
-	expected := []string{"aforge", "claude-code", "codex", "gemini", "opencode", "grok", "pi", "omp"}
+	expected := []string{"codeaf", "aforge", "claude-code", "codex", "gemini", "opencode", "grok", "pi", "omp"}
 	actual := make([]string, 0, len(harnessProviderSpecs))
 	for _, spec := range harnessProviderSpecs {
 		actual = append(actual, spec.Name)
