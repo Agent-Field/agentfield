@@ -79,7 +79,7 @@ Examples:
 				err = cmd.execute(args[0], force, verbose, path)
 			}
 			if err == nil {
-				_ = ensureCodeaf(codeaf.Options{}, os.Stderr)
+				_ = ensureCodeaf(codeaf.Options{Context: cobraCmd.Context()}, os.Stderr)
 			}
 			return err
 		},

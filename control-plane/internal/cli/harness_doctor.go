@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/codeaf"
 	"github.com/spf13/cobra"
 )
 
@@ -151,7 +152,16 @@ func buildHarnessDoctorReports(requested []string) ([]HarnessProviderHealth, err
 // probeHarnessBinary resolves a provider binary and asks it for a version,
 // trying each candidate argument set in order.
 func probeHarnessBinary(spec harnessProviderSpec) ToolStatus {
-	path, err := exec.LookPath(spec.Binary)
+	var path string
+	var err error
+	if spec.Name == "codeaf" {
+		path, err = codeaf.Lookup("")
+		if err != nil {
+			return ToolStatus{}
+		}
+	} else {
+		path, err = exec.LookPath(spec.Binary)
+	}
 	if err != nil {
 		// The ensure commands install into AgentField's own bin directory,
 		// which the current shell may not have re-read into PATH yet. Looking there

@@ -1,6 +1,7 @@
 package skillkit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ var ensureCodeaf = codeaf.EnsureBestEffort
 
 // InstallOptions controls how a skill is installed across targets.
 type InstallOptions struct {
+	Context       context.Context
 	SkillName     string   // canonical skill name; empty = first in catalog
 	Version       string   // explicit version; empty = current binary's embedded version
 	Targets       []string // explicit target list; empty = use AllDetected/AllRegistered/Selection
@@ -208,7 +210,7 @@ func InstallAll(opts InstallOptions) ([]*InstallReport, error) {
 		// `af skill install --all` is the one call every fresh install makes;
 		// keeping this out of install() avoids provisioning a 70MB binary once
 		// per catalog entry, and keeps --dry-run side-effect free.
-		_ = ensureCodeaf(codeaf.Options{}, os.Stderr)
+		_ = ensureCodeaf(codeaf.Options{Context: opts.Context}, os.Stderr)
 	}
 	return reports, errors.Join(failures...)
 }

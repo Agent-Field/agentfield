@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func noSkip(t *testing.T) {
@@ -310,10 +311,10 @@ func TestEnsureFilesystemErrors(t *testing.T) {
 	}
 }
 
-func TestEnsureBestEffortOnceAndQuiet(t *testing.T) {
+func TestEnsureBestEffortSharesAttemptAndQuiet(t *testing.T) {
 	noSkip(t)
-	bestEffortOnce = sync.Once{}
-	t.Cleanup(func() { bestEffortOnce = sync.Once{} })
+	resetBestEffort()
+	t.Cleanup(func() { resetBestEffort() })
 	var count atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { count.Add(1); http.Error(w, "bad", 503) }))
 	defer server.Close()
@@ -333,7 +334,7 @@ func TestEnsureBestEffortOnceAndQuiet(t *testing.T) {
 	if count.Load() != 1 || strings.Count(warnings.String(), "warning:") != 1 {
 		t.Fatal(count.Load(), warnings.String())
 	}
-	bestEffortOnce = sync.Once{}
+	resetBestEffort()
 	t.Setenv("AGENTFIELD_SKIP_CODEAF", "yes")
 	warnings.Reset()
 	_ = EnsureBestEffort(opts, &warnings)
@@ -345,7 +346,7 @@ func TestEnsureBestEffortOnceAndQuiet(t *testing.T) {
 	if count.Load() != 2 {
 		t.Fatal("skip consumed guard")
 	}
-	bestEffortOnce = sync.Once{}
+	resetBestEffort()
 	opts, pins, _ := fixture(t)
 	if err := ensure(opts, pins); err != nil {
 		t.Fatal(err)
@@ -426,4 +427,10 @@ func TestEnsurePublicRejectsUnpinnedMirrorPayload(t *testing.T) {
 	if requests.Load() != 1 {
 		t.Fatal("must fetch only the raw asset, never trust a downloaded checksums file")
 	}
+}
+
+func resetBestEffort() {
+	bestEffort.Lock()
+	bestEffort.lastDownload = time.Time{}
+	bestEffort.Unlock()
 }

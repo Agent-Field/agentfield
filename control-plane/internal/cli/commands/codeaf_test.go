@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -17,8 +18,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestCodeafInstallAndRunHooks(t *testing.T) {
-	old := ensureCodeaf
-	t.Cleanup(func() { ensureCodeaf = old })
+	old, oldBackground := ensureCodeaf, ensureCodeafBackground
+	t.Cleanup(func() { ensureCodeaf = old; ensureCodeafBackground = oldBackground })
 	for _, jsonOutput := range []bool{false, true} {
 		for _, succeeds := range []bool{false, true} {
 			install := &fakePackageService{}
@@ -29,7 +30,11 @@ func TestCodeafInstallAndRunHooks(t *testing.T) {
 			}
 			services := &framework.ServiceContainer{PackageService: install, AgentService: run}
 			calls := 0
-			ensureCodeaf = func(codeaf.Options, io.Writer) error {
+			ctx := context.WithValue(context.Background(), struct{}{}, "install-context")
+			ensureCodeaf = func(opts codeaf.Options, _ io.Writer) error {
+				if opts.Context != ctx {
+					t.Error("command context not forwarded")
+				}
 				calls++
 				if install.installCalls != 1 {
 					t.Error("ensure before successful install")
@@ -42,6 +47,7 @@ func TestCodeafInstallAndRunHooks(t *testing.T) {
 				args = append(args, "--json")
 			}
 			cmd.SetArgs(args)
+			cmd.SetContext(ctx)
 			captureStdout(t, func() { _ = cmd.Execute() })
 			want := 0
 			if succeeds {
@@ -51,16 +57,20 @@ func TestCodeafInstallAndRunHooks(t *testing.T) {
 				t.Fatalf("install hook calls=%d want %d", calls, want)
 			}
 			calls = 0
-			ensureCodeaf = func(codeaf.Options, io.Writer) error {
+			ensureCodeafBackground = func() error {
 				calls++
 				if run.runCalls != 0 {
 					t.Error("ensure after node started")
 				}
-				return nil
+				return errors.New("background installer unavailable")
 			}
 			cmd = NewRunCommand(services).BuildCobraCommand()
 			cmd.SetArgs(args)
-			captureStdout(t, func() { _ = cmd.Execute() })
+			captureStdout(t, func() {
+				if err := cmd.Execute(); err != run.runErr {
+					t.Errorf("background error changed node result: %v", err)
+				}
+			})
 			if calls != 1 {
 				t.Fatalf("run hook calls=%d", calls)
 			}

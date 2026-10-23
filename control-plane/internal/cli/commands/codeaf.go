@@ -2,5 +2,7 @@ package commands
 
 import "github.com/Agent-Field/agentfield/control-plane/internal/codeaf"
 
-// All automatic hooks share CodeAF's once-per-process provisioning guard.
+// Synchronous install hooks share CodeAF's in-flight provisioning guard.
 var ensureCodeaf = codeaf.EnsureBestEffort
+
+var ensureCodeafBackground = codeaf.EnsureBackground

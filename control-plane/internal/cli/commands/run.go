@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli/framework"
-	"github.com/Agent-Field/agentfield/control-plane/internal/codeaf"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/spf13/cobra"
 )
@@ -56,7 +55,9 @@ Examples:
   af run my-agent --detach=false`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
-			_ = ensureCodeaf(codeaf.Options{}, os.Stderr)
+			if err := ensureCodeafBackground(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "warning: codeaf background install was not started: %v\n", err)
+			}
 			if jsonOutput {
 				return cmd.executeJSON(args[0], port, detach)
 			}

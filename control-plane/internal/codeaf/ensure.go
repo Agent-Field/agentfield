@@ -2,6 +2,7 @@
 package codeaf
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -28,6 +30,10 @@ const (
 type Options struct {
 	GOOS, GOARCH string
 	Home         string
+	BinDir       string          // empty uses <Home>/bin
+	Context      context.Context // nil uses context.Background
+	LockWait     time.Duration   // zero waits until Context is canceled
+	OnDownload   func()          // called only when a download starts
 	BaseURL      string
 	Client       *http.Client
 	Force        bool
@@ -96,17 +102,36 @@ func ensure(opts Options, pins map[string]string) error {
 	if !supported {
 		return nil
 	}
-	home, err := agentfieldHome(opts.Home)
-	if err != nil {
-		return err
+	binDir := opts.BinDir
+	if binDir == "" {
+		home, err := agentfieldHome(opts.Home)
+		if err != nil {
+			return err
+		}
+		binDir = filepath.Join(home, "bin")
 	}
-	binDir := filepath.Join(home, "bin")
 	destination := filepath.Join(binDir, BinaryName(goos))
 	markerPath := filepath.Join(binDir, versionMarker)
+	if !opts.Force && alreadyInstalled(destination, markerPath) {
+		return nil
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return fmt.Errorf("create codeaf bin directory: %w", err)
 	}
-	unlock, err := lockCodeaf(filepath.Join(binDir, ".codeaf.lock"))
+	lockCtx := ctx
+	cancel := func() {}
+	if opts.LockWait > 0 {
+		lockCtx, cancel = context.WithTimeout(ctx, opts.LockWait)
+	}
+	unlock, err := lockCodeaf(lockCtx, filepath.Join(binDir, ".codeaf.lock"))
+	cancel()
 	if err != nil {
 		return fmt.Errorf("lock codeaf installation: %w", err)
 	}
@@ -126,6 +151,7 @@ func ensure(opts Options, pins map[string]string) error {
 	if client == nil {
 		client = &http.Client{
 			Transport: &http.Transport{
+				Proxy:                 http.ProxyFromEnvironment,
 				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 				TLSHandshakeTimeout:   10 * time.Second,
 				ResponseHeaderTimeout: 30 * time.Second,
@@ -138,7 +164,10 @@ func ensure(opts Options, pins map[string]string) error {
 		return fmt.Errorf("create temporary codeaf file: %w", err)
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	err = download(client, baseURL+"/"+asset, tmp, pins[asset])
+	if opts.OnDownload != nil {
+		opts.OnDownload()
+	}
+	err = downloadContext(ctx, client, baseURL+"/"+asset, tmp, pins[asset])
 	if err == nil {
 		err = tmp.Chmod(0o755)
 	}
@@ -171,20 +200,97 @@ func alreadyInstalled(destination, markerPath string) bool {
 	return err == nil && strings.TrimSpace(string(installed)) == Version
 }
 
-var bestEffortOnce sync.Once
+var bestEffort struct {
+	sync.Mutex
+	inFlight     chan struct{}
+	lastDownload time.Time
+}
 
-// EnsureBestEffort provisions at most once per process; a failure may warn but
-// never fails the skill/package install or node launch that requested it.
+// EnsureBestEffort shares an in-flight install and bounds automatic lock waits.
+// Failures are retried after a minute; an externally repaired install is visible
+// immediately. Explicit Ensure calls remain independent of this retry guard.
 func EnsureBestEffort(opts Options, warnings io.Writer) error {
 	if SkipRequested() {
 		return nil
 	}
-	bestEffortOnce.Do(func() {
-		if err := Ensure(opts); err != nil && warnings != nil {
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	warn := func(err error) {
+		if warnings != nil {
 			_, _ = fmt.Fprintf(warnings, "warning: codeaf was not installed: %v\n", err)
 		}
-	})
+	}
+	for {
+		bestEffort.Lock()
+		if flight := bestEffort.inFlight; flight != nil {
+			bestEffort.Unlock()
+			select {
+			case <-flight:
+				continue
+			case <-waitCtx.Done():
+				warn(waitCtx.Err())
+				return nil
+			}
+		}
+		if time.Since(bestEffort.lastDownload) < time.Minute {
+			bestEffort.Unlock()
+			return nil
+		}
+		bestEffort.inFlight = make(chan struct{})
+		bestEffort.Unlock()
+		break
+	}
+	defer func() {
+		bestEffort.Lock()
+		close(bestEffort.inFlight)
+		bestEffort.inFlight = nil
+		bestEffort.Unlock()
+	}()
+	opts.Context = ctx
+	// Account for time spent waiting on another automatic call as well.
+	opts.LockWait = 30 * time.Second
+	if deadline, ok := waitCtx.Deadline(); ok {
+		opts.LockWait = max(time.Nanosecond, time.Until(deadline))
+	}
+	opts.OnDownload = func() {
+		bestEffort.Lock()
+		bestEffort.lastDownload = time.Now()
+		bestEffort.Unlock()
+		if warnings != nil {
+			_, _ = fmt.Fprintln(warnings, "Installing the CodeAF harness (~70 MB)…")
+		}
+	}
+	if err := Ensure(opts); err != nil {
+		warn(err)
+	}
 	return nil
+}
+
+// Lookup resolves CodeAF without downloading, in execution order.
+func Lookup(override string) (string, error) {
+	if override == "" {
+		override = os.Getenv("CODEAF_BIN")
+	}
+	if override != "" {
+		return exec.LookPath(override)
+	}
+	if home, err := agentfieldHome(""); err == nil {
+		dir := filepath.Join(home, "bin")
+		path := filepath.Join(dir, BinaryName(runtime.GOOS))
+		if alreadyInstalled(path, filepath.Join(dir, versionMarker)) {
+			return path, nil
+		}
+	}
+	dir := filepath.Join(os.TempDir(), "agentfield-codeaf", Version)
+	path := filepath.Join(dir, BinaryName(runtime.GOOS))
+	if alreadyInstalled(path, filepath.Join(dir, versionMarker)) {
+		return path, nil
+	}
+	return exec.LookPath(BinaryName(runtime.GOOS))
 }
 
 func agentfieldHome(override string) (string, error) {
@@ -202,7 +308,15 @@ func agentfieldHome(override string) (string, error) {
 }
 
 func download(client *http.Client, url string, dst io.Writer, want string) error {
-	response, err := client.Get(url)
+	return downloadContext(context.Background(), client, url, dst, want)
+}
+
+func downloadContext(ctx context.Context, client *http.Client, url string, dst io.Writer, want string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(req)
 	if err != nil {
 		return err
 	}
