@@ -39,7 +39,7 @@ type CodeAFProvider struct {
 
 // NewCodeAFProvider creates a CodeAF provider without resolving or downloading a binary.
 func NewCodeAFProvider(binPath string) *CodeAFProvider {
-	return &CodeAFProvider{BinPath: binPath, runCLI: runCLIWithStdinIdle, resolveBinary: resolveCodeAF}
+	return &CodeAFProvider{BinPath: binPath, resolveBinary: resolveCodeAF}
 }
 
 func codeAFMaxConcurrent() int {
@@ -74,7 +74,7 @@ func codeAFCommand() string {
 }
 
 func codeAFEnvironment(options Options, variant string) (map[string]string, error) {
-	env := map[string]string{"CODEAF_MODELS": "", "AFORGE_MODELS": ""}
+	env := make(map[string]string)
 	present := func(key string) bool {
 		if _, ok := options.Env[key]; ok {
 			return true
@@ -91,13 +91,16 @@ func codeAFEnvironment(options Options, variant string) (map[string]string, erro
 	if !present("CODEAF_HOME") {
 		home := value("AGENTFIELD_HOME")
 		if home == "" {
-			var err error
-			home, err = agentFieldHome()
-			if err != nil {
-				return nil, err
+			home, _ = agentFieldHome()
+		}
+		state := filepath.Join(home, "codeaf")
+		if home == "" || prepareCodeAFState(state) != nil {
+			state = filepath.Join(os.TempDir(), "agentfield-codeaf", "state")
+			if err := prepareCodeAFState(state); err != nil {
+				return nil, fmt.Errorf("create CODEAF_HOME: %w", err)
 			}
 		}
-		env["CODEAF_HOME"] = filepath.Join(home, "codeaf")
+		env["CODEAF_HOME"] = state
 	}
 	if !present("CODEAF_NO_UPDATE_CHECK") {
 		env["CODEAF_NO_UPDATE_CHECK"] = "1"
@@ -120,12 +123,24 @@ func codeAFEnvironment(options Options, variant string) (map[string]string, erro
 	if home == "" {
 		home = value("CODEAF_HOME")
 	}
-	if home != "" {
+	if present("CODEAF_HOME") && home != "" {
 		if err := os.MkdirAll(home, 0o755); err != nil {
 			return nil, fmt.Errorf("create CODEAF_HOME: %w", err)
 		}
 	}
 	return env, nil
+}
+
+func prepareCodeAFState(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	probe, err := os.CreateTemp(path, ".codeaf-write-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(probe.Name())
+	return probe.Close()
 }
 
 func parseCodeAFEnvelope(stdout string) map[string]any {
@@ -180,7 +195,9 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 			log.Printf("WARNING CodeAF is not installed; falling back to the legacy aforge binary at %s. Run `af codeaf ensure`.", binary.path)
 		})
 		legacy := NewAforgeProvider(binary.path)
-		legacy.runCLI = p.runCLI
+		if p.runCLI != nil {
+			legacy.runCLI = p.runCLI
+		}
 		raw, err := legacy.Execute(ctx, prompt, options)
 		if raw != nil {
 			raw.Provider = ProviderAforge
@@ -234,7 +251,11 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	started := time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(outerTimeout)*time.Second)
 	defer cancel()
-	cli, err := p.runCLI(runCtx, cmd, env, "", outerTimeout, 0, input)
+	runCLI := p.runCLI
+	if runCLI == nil {
+		runCLI = runCodeAFCLI
+	}
+	cli, err := runCLI(runCtx, cmd, env, "", outerTimeout, 0, input)
 	elapsed := int(time.Since(started).Milliseconds())
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		return &RawResult{Provider: ProviderCodeAF, IsError: true, FailureType: FailureTimeout,

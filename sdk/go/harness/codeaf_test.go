@@ -35,7 +35,9 @@ func isolateCodeAF(t *testing.T) {
 func resetCodeAFResolution() {
 	codeAFResolver.Lock()
 	defer codeAFResolver.Unlock()
-	codeAFResolver.cache = make(map[string]codeAFResolution)
+	codeAFResolver.cache = make(map[string]codeAFBinary)
+	codeAFResolver.lastDownloadAttempt = time.Time{}
+	codeAFResolver.lastDownloadError = nil
 }
 
 func captureCodeAFLogs(t *testing.T) *bytes.Buffer {
@@ -135,8 +137,8 @@ func TestCodeAFEnvironment(t *testing.T) {
 	assert.DirExists(t, env["CODEAF_HOME"])
 	assert.Equal(t, "1", env["CODEAF_NO_UPDATE_CHECK"])
 	assert.Equal(t, "high", env["CODEAF_EXEC_REASONING"])
-	assert.Equal(t, "", env["CODEAF_MODELS"])
-	assert.Equal(t, "", env["AFORGE_MODELS"])
+	assert.NotContains(t, env, "CODEAF_MODELS")
+	assert.NotContains(t, env, "AFORGE_MODELS")
 	assert.NotContains(t, env, "CODEAF_TELEMETRY")
 
 	for _, tc := range []struct{ key, value string }{
@@ -422,6 +424,7 @@ func TestCodeAFEnvironmentErrorsAndOverlayHome(t *testing.T) {
 	require.ErrorContains(t, err, "create CODEAF_HOME")
 	t.Setenv("AGENTFIELD_HOME", "")
 	t.Setenv("HOME", "")
-	_, err = codeAFEnvironment(Options{}, "")
-	require.Error(t, err)
+	env, err = codeAFEnvironment(Options{}, "")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(os.TempDir(), "agentfield-codeaf", "state"), env["CODEAF_HOME"])
 }

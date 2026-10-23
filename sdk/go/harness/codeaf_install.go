@@ -23,6 +23,7 @@ const (
 	CodeAFBaseURL         = "https://github.com/Agent-Field/CodeAF/releases/download/v0.8.2"
 	maxCodeAFDownloadSize = 128 << 20
 	codeAFVersionFilename = ".codeaf.version"
+	codeAFDownloadRetry   = time.Minute
 )
 
 var codeAFHashes = map[string]string{
@@ -39,16 +40,13 @@ type codeAFBinary struct {
 	legacy bool
 }
 
-type codeAFResolution struct {
-	binary codeAFBinary
-	err    error
-}
-
 // Overrides have separate cache entries so explicit per-call paths always win.
 var codeAFResolver = struct {
 	sync.Mutex
-	cache map[string]codeAFResolution
-}{cache: make(map[string]codeAFResolution)}
+	cache               map[string]codeAFBinary
+	lastDownloadAttempt time.Time
+	lastDownloadError   error
+}{cache: make(map[string]codeAFBinary)}
 
 var (
 	codeAFAliasOnce   sync.Once
@@ -129,12 +127,12 @@ func resolveCodeAF(ctx context.Context, override string) (codeAFBinary, error) {
 	codeAFResolver.Lock()
 	defer codeAFResolver.Unlock()
 	if cached, ok := codeAFResolver.cache[override]; ok {
-		return cached.binary, cached.err
+		return cached, nil
 	}
 	binary, err := findCodeAF(ctx, override)
-	// Cancellation should not poison resolution for a later caller.
-	if ctx.Err() == nil {
-		codeAFResolver.cache[override] = codeAFResolution{binary, err}
+	// Failed lookups must recheck every location on the next call.
+	if err == nil && ctx.Err() == nil {
+		codeAFResolver.cache[override] = binary
 	}
 	return binary, err
 }
@@ -152,10 +150,16 @@ func findCodeAF(ctx context.Context, override string) (codeAFBinary, error) {
 	}
 	var downloadErr error
 	if !codeAFSkipped() {
-		if path, err := downloadManagedCodeAF(ctx); err == nil {
-			return codeAFBinary{path: path}, nil
-		} else {
+		if time.Since(codeAFResolver.lastDownloadAttempt) >= codeAFDownloadRetry {
+			codeAFResolver.lastDownloadAttempt = time.Now()
+			path, err := downloadManagedCodeAF(ctx)
+			codeAFResolver.lastDownloadError = err
+			if err == nil {
+				return codeAFBinary{path: path}, nil
+			}
 			downloadErr = err
+		} else {
+			downloadErr = codeAFResolver.lastDownloadError
 		}
 	}
 	if path, err := exec.LookPath("codeaf"); err == nil {

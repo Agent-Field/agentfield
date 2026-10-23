@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
+	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -403,4 +407,45 @@ func TestDoctorCodeAFOverrideAndMissing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{IssueBinaryNotFound}, reports[0].Issues)
 	assert.Equal(t, "af codeaf ensure", reports[0].InstallCommand)
+}
+
+// A3 / V11: doctor follows execution's read-only order, even with downloads enabled.
+func TestDoctorCodeAFReadOnlyResolutionOrder(t *testing.T) {
+	for _, location := range []string{"override", "home", "temp", "path", "missing"} {
+		t.Run(location, func(t *testing.T) {
+			isolateCodeAF(t)
+			t.Setenv("AGENTFIELD_SKIP_CODEAF", "0")
+			t.Setenv("OPENROUTER_API_KEY", "fixture-key")
+			dir := t.TempDir()
+			t.Setenv("PATH", dir)
+			home, temp := codeAFManagedPaths()
+			paths := []string{filepath.Join(t.TempDir(), "override"), home, temp, filepath.Join(dir, "codeaf")}
+			start := map[string]int{"override": 0, "home": 1, "temp": 2, "path": 3, "missing": 4}[location]
+			for i := start; i < len(paths); i++ {
+				if i == 1 || i == 2 {
+					writeManagedCodeAF(t, paths[i], "codeaf v0.8.2 built fixture")
+				} else {
+					writeCodeAFCLI(t, paths[i], "codeaf v0.8.2 built fixture", 0)
+				}
+			}
+			if location == "override" {
+				t.Setenv("CODEAF_BIN", paths[0])
+			}
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { requests.Add(1) }))
+			defer server.Close()
+			t.Setenv("AGENTFIELD_CODEAF_BASE_URL", server.URL)
+			reports, err := Doctor(context.Background(), DoctorOptions{Providers: []string{ProviderCodeAF}, Probe: true})
+			require.NoError(t, err)
+			require.Len(t, reports, 1)
+			if location == "missing" {
+				assert.False(t, reports[0].Installed)
+			} else {
+				assert.True(t, reports[0].Installed)
+				assert.Equal(t, paths[start], reports[0].Binary)
+				assert.Equal(t, "v0.8.2", reports[0].Version)
+			}
+			assert.Zero(t, requests.Load())
+		})
+	}
 }
