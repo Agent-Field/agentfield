@@ -7,6 +7,7 @@ import logging
 import os
 import platform
 import shutil
+import stat
 import tempfile
 import urllib.request
 from collections.abc import Mapping
@@ -26,6 +27,7 @@ CODEAF_SHA256 = {
 }
 MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024
 logger = logging.getLogger("agentfield.harness.codeaf")
+_warned_temp_paths: set[Path] = set()
 
 
 def truthy(value: str | None) -> bool:
@@ -41,13 +43,51 @@ def binary_name() -> str:
     return "codeaf.exe" if platform.system() == "Windows" else "codeaf"
 
 
+def _temp_base() -> Path:
+    name = "agentfield-codeaf"
+    if platform.system() != "Windows":
+        name += f"-{os.getuid()}"
+    return Path(tempfile.gettempdir()) / name
+
+
+def _secure_directory(path: Path) -> None:
+    try:
+        path.mkdir(mode=0o700, parents=True)
+    except FileExistsError:
+        pass
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or (
+        getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    ):
+        raise OSError(f"{path} is not a real directory")
+    if platform.system() != "Windows":
+        if info.st_uid != os.getuid():
+            raise OSError(f"{path} is not owned by the current user")
+        if stat.S_IMODE(info.st_mode) != 0o700:
+            path.chmod(0o700)
+
+
+def _prepare_temp_directory(name: str) -> Path | None:
+    base = _temp_base()
+    directory = base / name
+    try:
+        _secure_directory(base)
+        _secure_directory(directory)
+    except OSError as exc:
+        if base not in _warned_temp_paths:
+            logger.warning(
+                "Skipping unusable CodeAF temp fallback at %s: %s", base, exc
+            )
+            _warned_temp_paths.add(base)
+        return None
+    return directory
+
+
 def managed_paths(env: Mapping[str, str] | None = None) -> tuple[Path, Path]:
     return (
         agentfield_home(env) / "bin" / binary_name(),
-        Path(tempfile.gettempdir())
-        / "agentfield-codeaf"
-        / CODEAF_VERSION
-        / binary_name(),
+        _temp_base() / CODEAF_VERSION / binary_name(),
     )
 
 
@@ -64,11 +104,16 @@ def is_installed(binary: Path) -> bool:
 
 
 def find_managed_binary(env: Mapping[str, str] | None = None) -> str | None:
-    return next((str(path) for path in managed_paths(env) if is_installed(path)), None)
+    home, fallback = managed_paths(env)
+    if is_installed(home):
+        return str(home)
+    if _prepare_temp_directory(CODEAF_VERSION) is not None and is_installed(fallback):
+        return str(fallback)
+    return None
 
 
 def find_codeaf_binary(env: Mapping[str, str] | None = None) -> str | None:
-    """Read-only lookup, with explicit overrides taking precedence over the pin."""
+    """Lookup without downloading, with explicit overrides before the pin."""
     environment = os.environ if env is None else env
     override = environment.get("CODEAF_BIN")
     path = environment.get("PATH")
@@ -87,9 +132,9 @@ def default_state_directory(env: Mapping[str, str]) -> str:
         Path(probe).unlink()
         return str(home)
     except OSError:
-        fallback = Path(tempfile.gettempdir()) / "agentfield-codeaf" / "state"
-        fallback.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fallback.chmod(0o700)
+        fallback = _prepare_temp_directory("state")
+        if fallback is None:
+            raise OSError("CodeAF temporary state directory is unusable")
         return str(fallback)
 
 
@@ -127,8 +172,9 @@ def install_codeaf() -> str | None:
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".codeaf-", dir=target.parent)
     except OSError:
+        if _prepare_temp_directory(CODEAF_VERSION) is None:
+            return None
         target = temp_path
-        target.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".codeaf-", dir=target.parent)
 
     logger.info("downloading CodeAF %s (~70 MB) to %s", CODEAF_VERSION, target)

@@ -254,7 +254,7 @@ async def test_unwritable_home_installs_and_executes_using_temp_state(
     result = await CodeafProvider().execute("p", {})
     assert not result.is_error
     environment = json.loads(result.result)
-    state = Path(install.tempfile.gettempdir()) / "agentfield-codeaf/state"
+    state = install.managed_paths()[1].parent.parent / "state"
     assert environment["CODEAF_HOME"] == str(state)
     assert await asyncio.to_thread(install.is_installed, install.managed_paths()[1])
     assert stat.S_IMODE((await asyncio.to_thread(state.stat)).st_mode) == 0o700
@@ -283,7 +283,7 @@ async def test_explicit_state_directory_is_used_as_is(monkeypatch, source, value
 async def test_temp_binary_executes_with_a_real_mode_0555_home(monkeypatch):
     home = install.agentfield_home()
     temp = install.managed_paths()[1]
-    state = Path(install.tempfile.gettempdir()) / "agentfield-codeaf/state"
+    state = temp.parent.parent / "state"
 
     def prepare():
         home.mkdir(mode=0o555)
