@@ -85,7 +85,7 @@ async def test_doctor_rejects_unknown_provider():
 
 @pytest.mark.asyncio
 async def test_doctor_checks_all_supported_providers_with_no_args(monkeypatch):
-    monkeypatch.setattr("agentfield.harness._doctor.shutil.which", lambda _: None)
+    monkeypatch.setattr("agentfield.harness._doctor.shutil.which", lambda _, **__: None)
 
     reports = await harness_doctor(env={})
 

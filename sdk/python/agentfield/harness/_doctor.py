@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from agentfield.harness._availability import PROVIDER_SPECS
-from agentfield.harness._codeaf_install import find_managed_binary
+from agentfield.harness._codeaf_install import find_codeaf_binary
 from agentfield.harness.providers._factory import SUPPORTED_PROVIDERS
 
 VersionProbe = Callable[[list[str]], Awaitable[str]]
@@ -71,19 +71,22 @@ async def harness_doctor(
             continue
 
         spec = PROVIDER_SPECS[provider]
-        binary = shutil.which(spec.binary)
         if provider == "codeaf":
-            binary = await asyncio.to_thread(find_managed_binary, environment) or binary
+            binary = await asyncio.to_thread(find_codeaf_binary, environment)
+        else:
+            binary = shutil.which(spec.binary)
         issues: list[str] = []
         version: str | None = None
         if binary is None:
             issues.append("binary_not_found")
         else:
             try:
-                version = await probe([
-                    binary if provider == "codeaf" else spec.binary,
-                    *spec.version_args,
-                ])
+                version = await probe(
+                    [
+                        binary if provider == "codeaf" else spec.binary,
+                        *spec.version_args,
+                    ]
+                )
                 if provider == "codeaf":
                     match = re.search(r"\bv\d+\.\d+\.\d+\b", version)
                     version = match.group(0) if match else version

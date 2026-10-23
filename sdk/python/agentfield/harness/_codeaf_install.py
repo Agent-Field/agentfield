@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import platform
+import shutil
 import tempfile
 import urllib.request
 from collections.abc import Mapping
@@ -66,6 +67,32 @@ def find_managed_binary(env: Mapping[str, str] | None = None) -> str | None:
     return next((str(path) for path in managed_paths(env) if is_installed(path)), None)
 
 
+def find_codeaf_binary(env: Mapping[str, str] | None = None) -> str | None:
+    """Read-only lookup, with explicit overrides taking precedence over the pin."""
+    environment = os.environ if env is None else env
+    override = environment.get("CODEAF_BIN")
+    path = environment.get("PATH")
+    if override:
+        return shutil.which(override, path=path)
+    return find_managed_binary(environment) or shutil.which("codeaf", path=path)
+
+
+def default_state_directory(env: Mapping[str, str]) -> str:
+    """Keep default state isolated even when AgentField's home is read-only."""
+    home = agentfield_home(env) / "codeaf"
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        fd, probe = tempfile.mkstemp(prefix=".codeaf-state-", dir=home)
+        os.close(fd)
+        Path(probe).unlink()
+        return str(home)
+    except OSError:
+        fallback = Path(tempfile.gettempdir()) / "agentfield-codeaf" / "state"
+        fallback.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fallback.chmod(0o700)
+        return str(fallback)
+
+
 def release_asset() -> str | None:
     system = platform.system().lower()
     machine = platform.machine().lower()
@@ -109,7 +136,10 @@ def install_codeaf() -> str | None:
     digest = hashlib.sha256()
     try:
         with os.fdopen(fd, "wb") as output:
-            with urllib.request.urlopen(f"{base}/{asset}", timeout=60) as response:
+            # Refresh proxy configuration for each attempt rather than retaining
+            # urllib's process-global opener from an earlier environment.
+            opener = urllib.request.build_opener()
+            with opener.open(f"{base}/{asset}", timeout=60) as response:
                 total = 0
                 while chunk := response.read(
                     min(1024 * 1024, MAX_DOWNLOAD_BYTES - total + 1)

@@ -50,8 +50,15 @@ def isolated_codeaf(monkeypatch, tmp_path, caplog):
     monkeypatch.setenv("AGENTFIELD_HOME", str(tmp_path / "af-home"))
     monkeypatch.setenv("AGENTFIELD_SKIP_CODEAF", "1")
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / "temp"))
-    for attr in ("_resolution_cache", "_resolution_lock", "_concurrency_sem"):
+    for attr in (
+        "_resolution_cache",
+        "_resolution_lock",
+        "_resolution_task",
+        "_concurrency_sem",
+    ):
         monkeypatch.setattr(CodeafProvider, attr, None)
+    monkeypatch.setattr(codeaf, "_download_retry_at", 0.0)
+    monkeypatch.setattr(codeaf, "_last_download_error", None)
     for attr in ("_alias_logged", "_fallback_logged", "_command_warning_logged"):
         monkeypatch.setattr(CodeafProvider, attr, False)
 
@@ -475,6 +482,8 @@ async def test_automatic_resolution_order(monkeypatch, tmp_path, caplog, level):
         expected = ["download", "codeaf", str(tmp_path / "af-home/bin/aforge")]
         if level != "legacy-home":
             expected.append("aforge")
+        if level == "missing":
+            expected.extend(expected[1:])
         assert calls == expected
 
 

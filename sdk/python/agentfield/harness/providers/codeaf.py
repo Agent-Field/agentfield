@@ -8,12 +8,14 @@ import logging
 import os
 import shutil
 import time
+from http.client import HTTPException
 from typing import ClassVar
 
 from agentfield.harness._availability import provider_unavailable
 from agentfield.harness._cli import resolve_model_and_variant, run_cli, strip_ansi
 from agentfield.harness._codeaf_install import (
     agentfield_home,
+    default_state_directory,
     find_managed_binary,
     install_codeaf,
     truthy,
@@ -29,6 +31,8 @@ from agentfield.harness.providers.aforge import (
 logger = logging.getLogger("agentfield.harness.codeaf")
 CODEAF_DEFAULT_MODEL = "~deepseek/deepseek-v4-flash-latest"
 _REASONING_VARIANTS = {"off", "low", "medium", "high"}
+_download_retry_at = 0.0
+_last_download_error: str | None = None
 
 
 def _max_concurrent() -> int:
@@ -61,17 +65,21 @@ def _parse_envelope(stdout: str) -> dict[str, object] | None:
 
 
 def _resolve_binary() -> tuple[str | None, str, str | None]:
-    """Resolve the automatic path once; overrides are handled before this cache."""
+    """Recheck every location after failure, throttling only download retries."""
+    global _download_retry_at, _last_download_error
     managed = find_managed_binary()
     if managed:
         return managed, "codeaf", None
-    download_error = None
-    try:
-        installed = install_codeaf()
-        if installed:
-            return installed, "codeaf", None
-    except (OSError, ValueError) as exc:
-        download_error = str(exc)
+    attempted_at = time.monotonic()
+    if attempted_at >= _download_retry_at:
+        try:
+            installed = install_codeaf()
+            if installed:
+                return installed, "codeaf", None
+        except (OSError, ValueError, HTTPException) as exc:
+            _last_download_error = str(exc)
+            _download_retry_at = attempted_at + 60
+    download_error = _last_download_error
     binary = shutil.which("codeaf")
     if binary:
         return binary, "codeaf", download_error
@@ -97,9 +105,7 @@ def _child_environment(
     )
     environment = {**os.environ, **overlay}
     if "CODEAF_HOME" not in environment:
-        home = agentfield_home(environment) / "codeaf"
-        home.mkdir(parents=True, exist_ok=True)
-        overlay["CODEAF_HOME"] = str(home)
+        overlay["CODEAF_HOME"] = default_state_directory(environment)
     if "CODEAF_NO_UPDATE_CHECK" not in environment:
         overlay["CODEAF_NO_UPDATE_CHECK"] = "1"
     if "CODEAF_TELEMETRY" not in environment and (
@@ -125,6 +131,9 @@ class CodeafProvider:
     _concurrency_sem: ClassVar[asyncio.Semaphore | None] = None
     _resolution_lock: ClassVar[asyncio.Lock | None] = None
     _resolution_cache: ClassVar[tuple[str | None, str, str | None] | None] = None
+    _resolution_task: ClassVar[
+        asyncio.Task[tuple[str | None, str, str | None]] | None
+    ] = None
     _alias_logged: ClassVar[bool] = False
     _fallback_logged: ClassVar[bool] = False
     _command_warning_logged: ClassVar[bool] = False
@@ -138,6 +147,16 @@ class CodeafProvider:
         if cls._concurrency_sem is None:
             cls._concurrency_sem = asyncio.Semaphore(cls._MAX_CONCURRENT)
         return cls._concurrency_sem
+
+    @classmethod
+    async def _resolve_automatic(cls) -> tuple[str | None, str, str | None]:
+        try:
+            resolved = await asyncio.to_thread(_resolve_binary)
+            if resolved[0] is not None:
+                cls._resolution_cache = resolved
+            return resolved
+        finally:
+            cls._resolution_task = None
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
         cls = type(self)
@@ -155,8 +174,14 @@ class CodeafProvider:
                 cls._resolution_lock = asyncio.Lock()
             async with cls._resolution_lock:
                 if cls._resolution_cache is None:
-                    cls._resolution_cache = await asyncio.to_thread(_resolve_binary)
-                binary, provider, download_error = cls._resolution_cache
+                    if cls._resolution_task is None:
+                        cls._resolution_task = asyncio.create_task(
+                            cls._resolve_automatic()
+                        )
+                    resolved = await asyncio.shield(cls._resolution_task)
+                else:
+                    resolved = cls._resolution_cache
+                binary, provider, download_error = resolved
             if binary is None:
                 raise provider_unavailable("codeaf", "codeaf", detail=download_error)
         if provider == "aforge":

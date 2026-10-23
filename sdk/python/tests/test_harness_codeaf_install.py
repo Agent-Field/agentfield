@@ -58,8 +58,17 @@ def local_release(monkeypatch, tmp_path, caplog):
         monkeypatch.setitem(
             install.CODEAF_SHA256, asset, hashlib.sha256(data).hexdigest()
         )
-    for attr in ("_resolution_cache", "_resolution_lock", "_concurrency_sem"):
+    for attr in (
+        "_resolution_cache",
+        "_resolution_lock",
+        "_resolution_task",
+        "_concurrency_sem",
+    ):
         monkeypatch.setattr(CodeafProvider, attr, None)
+    monkeypatch.setattr("agentfield.harness.providers.codeaf._download_retry_at", 0.0)
+    monkeypatch.setattr(
+        "agentfield.harness.providers.codeaf._last_download_error", None
+    )
     yield data, requests
     server.shutdown()
     server.server_close()
@@ -122,7 +131,7 @@ def test_rejected_download_leaves_no_binary_marker_or_temp(
         def fail(*_, **__):
             raise OSError("network unavailable")
 
-        monkeypatch.setattr(install.urllib.request, "urlopen", fail)
+        monkeypatch.setattr(install.urllib.request.OpenerDirector, "open", fail)
     with pytest.raises(
         (ValueError, OSError),
         match={
