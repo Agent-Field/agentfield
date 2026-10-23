@@ -13,14 +13,28 @@ reasoner.
 AgentField provisions CodeAF **v0.8.2** in its own managed directory,
 `$AGENTFIELD_HOME/bin/codeaf` (`~/.agentfield/bin/codeaf` by default, `.exe` on
 Windows). The curl installer, `af skill install --all`, successful `af install`,
-`af run`, and Desktop launch all ensure it best-effort. The Python-agent,
+and Desktop launch ensure it best-effort. `af run` immediately continues agent
+launch; if CodeAF is missing, it starts a detached `af codeaf ensure` process
+whose output goes to `$AGENTFIELD_HOME/logs/codeaf-ensure.log` and which survives
+`af run` exiting. Install and skill hooks honor the command context and wait
+at most 30 seconds for an installer lock, warning once if that wait expires.
+A progress line appears only when a download starts. Explicit `af codeaf ensure`
+can wait for another installer until canceled; `--lock-wait 30s` bounds that wait.
+The Python-agent,
 Go-agent, and cloud control-plane Docker images ship `/usr/local/bin/codeaf`;
 a failed download or hash verification fails those image builds.
 
 ```bash
 af codeaf ensure          # install or repair the pinned release
 af codeaf ensure --force  # re-download even when already current
+af codeaf ensure --bin-dir /opt/agentfield-tools  # custom af directory
 ```
+
+Installers resolve one managed home for all child commands: staging uses
+`~/.agentfield-staging`, otherwise an explicit `AGENTFIELD_HOME` wins, followed
+by `~/.agentfield`. `AGENTFIELD_INSTALL_DIR` places both `af` and `codeaf` in
+that directory; for a custom directory outside `<managed home>/bin`, the
+installer passes `--bin-dir` while retaining the managed home for state.
 
 Set `OPENROUTER_API_KEY`, then call the harness with nothing else configured:
 
@@ -114,10 +128,14 @@ downloads use `<os temp dir>/agentfield-codeaf/v0.8.2/codeaf[.exe]`. If CodeAF
 still cannot be found, a managed or PATH `aforge` binary is a warned legacy
 fallback. Otherwise the unavailable error includes `af codeaf ensure` and any
 download failure. Results and usage identify the adapter that actually ran.
+Both CLI doctors use the same read-only order: `CODEAF_BIN`, home-managed,
+temp-managed, then PATH. Managed binaries require the matching version marker.
+Doctors never download CodeAF.
 
 Set `AGENTFIELD_CODEAF_BASE_URL` to a full release directory URL (including the
 version) to use a mirror. Embedded pins still apply; no downloaded checksum
-file is trusted. `AGENTFIELD_SKIP_CODEAF` or the legacy `AGENTFIELD_SKIP_AFORGE`
+file is trusted. CLI downloads follow redirects and honor `HTTP_PROXY`,
+`HTTPS_PROXY`, `NO_PROXY` and their lowercase forms. `AGENTFIELD_SKIP_CODEAF` or the legacy `AGENTFIELD_SKIP_AFORGE`
 opts out of every CodeAF download, including explicit ensure and SDK lazy
 provisioning. Truthy values are `1`, `true`, `yes`, and `on`, case-insensitive.
 The shell installers accept `--no-codeaf` / `CODEAF_MODE=none` and PowerShell

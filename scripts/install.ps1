@@ -5,8 +5,10 @@ Install AgentField and its managed CodeAF coding harness.
 Skip CodeAF provisioning, including later af/skill/tray subprocesses.
 .PARAMETER NoAforge
 Legacy alias for NoCodeaf.
+.PARAMETER Staging
+Use the separate .agentfield-staging managed home.
 #>
-param([switch]$NoCodeaf, [switch]$NoAforge)
+param([switch]$NoCodeaf, [switch]$NoAforge, [switch]$Staging)
 
 # AgentField CLI Installer for Windows
 # Usage: iwr -useb https://agentfield.ai/install.ps1 | iex
@@ -17,7 +19,9 @@ $ErrorActionPreference = "Stop"
 
 # Configuration
 $Repo = "Agent-Field/agentfield"
-$InstallDir = if ($env:AGENTFIELD_INSTALL_DIR) { $env:AGENTFIELD_INSTALL_DIR } else { "$env:USERPROFILE\.agentfield\bin" }
+$ManagedHome = if ($Staging) { Join-Path $env:USERPROFILE '.agentfield-staging' } elseif ($env:AGENTFIELD_HOME) { $env:AGENTFIELD_HOME } else { Join-Path $env:USERPROFILE '.agentfield' }
+$env:AGENTFIELD_HOME = $ManagedHome
+$InstallDir = if ($env:AGENTFIELD_INSTALL_DIR) { $env:AGENTFIELD_INSTALL_DIR } else { Join-Path $ManagedHome 'bin' }
 $Version = if ($env:VERSION) { $env:VERSION } else { "latest" }
 $Verbose = if ($env:VERBOSE -eq "1") { $true } else { $false }
 $SkipPathConfig = if ($env:SKIP_PATH_CONFIG -eq "1") { $true } else { $false }
@@ -332,19 +336,12 @@ function Install-Codeaf {
     }
 
     try {
-        Write-Info "Installing the codeaf coding harness..."
-        # agentfield.exe, not the af.exe alias: Install-Binary creates the alias
-        # best-effort and warns when both the hardlink and the copy fail.
-        # codeaf installs into AGENTFIELD_HOME\bin, so pin its home to the
-        # install directory's parent to keep codeaf beside agentfield.exe.
-        $previousAgentFieldHome = $env:AGENTFIELD_HOME
-        try {
-            $env:AGENTFIELD_HOME = Split-Path -Parent $InstallDir
-            & (Join-Path $InstallDir 'agentfield.exe') codeaf ensure
+        # agentfield.exe is always installed; the af.exe alias is best-effort.
+        $ensureArgs = @('codeaf', 'ensure', '--lock-wait', '30s')
+        if ([IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/') -ne [IO.Path]::GetFullPath((Join-Path $ManagedHome 'bin')).TrimEnd('\', '/')) {
+            $ensureArgs += @('--bin-dir', $InstallDir)
         }
-        finally {
-            $env:AGENTFIELD_HOME = $previousAgentFieldHome
-        }
+        & (Join-Path $InstallDir 'agentfield.exe') @ensureArgs
         if ($LASTEXITCODE -eq 0) {
             Write-Success "codeaf coding harness installed"
         }

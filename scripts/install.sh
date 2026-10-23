@@ -152,6 +152,7 @@ parse_args() {
         echo "  STAGING=1               Same as --staging flag"
         echo "  VERBOSE=1               Same as --verbose flag"
         echo "  SKIP_PATH_CONFIG=1      Skip PATH configuration"
+        echo "  AGENTFIELD_HOME         Managed home (staging uses ~/.agentfield-staging)"
         echo "  AGENTFIELD_INSTALL_DIR  Custom install directory"
         echo "  SKILL_MODE              all (default) | all-targets | interactive | none"
         echo "  TRAY_MODE               auto (default, macOS only) | none"
@@ -170,10 +171,12 @@ parse_args() {
 # Set install directory based on channel
 set_install_dir() {
   if [[ "$STAGING" == "1" ]]; then
-    INSTALL_DIR="${AGENTFIELD_INSTALL_DIR:-$HOME/.agentfield-staging/bin}"
+    export AGENTFIELD_HOME="$HOME/.agentfield-staging"
+    INSTALL_DIR="${AGENTFIELD_INSTALL_DIR:-$AGENTFIELD_HOME/bin}"
     SYMLINK_NAME="af-staging"
   else
-    INSTALL_DIR="${AGENTFIELD_INSTALL_DIR:-$HOME/.agentfield/bin}"
+    export AGENTFIELD_HOME="${AGENTFIELD_HOME:-$HOME/.agentfield}"
+    INSTALL_DIR="${AGENTFIELD_INSTALL_DIR:-$AGENTFIELD_HOME/bin}"
     SYMLINK_NAME="af"
   fi
 }
@@ -632,11 +635,7 @@ install_skill() {
 # mirroring how the skill install is delegated to `af skill install`.
 # Best-effort: a harness download failure must never fail an install whose
 # control plane is already working.
-# `af codeaf ensure` installs into $AGENTFIELD_HOME/bin, defaulting to
-# ~/.agentfield/bin. Staging puts af in ~/.agentfield-staging/bin and only adds
-# that directory to PATH, so the default left codeaf off PATH. Pinning the home
-# to INSTALL_DIR's parent keeps both binaries together; production remains
-# ~/.agentfield because ~/.agentfield/bin strips to ~/.agentfield.
+# The resolved managed home is exported once for every installer subprocess.
 install_codeaf() {
   local install_dir="$1"
   local af_bin="$install_dir/agentfield"
@@ -652,9 +651,11 @@ install_codeaf() {
     return 0
   fi
 
-  printf "\n"
-  print_info "Installing the codeaf coding harness..."
-  if AGENTFIELD_HOME="${install_dir%/bin}" "$af_bin" codeaf ensure; then
+  local ensure_args=(codeaf ensure --lock-wait 30s)
+  if [[ "${install_dir%/}" != "${AGENTFIELD_HOME%/}/bin" ]]; then
+    ensure_args+=(--bin-dir "$install_dir")
+  fi
+  if "$af_bin" "${ensure_args[@]}"; then
     print_success "codeaf coding harness installed"
   else
     print_warning "codeaf install reported an issue; the control plane is unaffected"
