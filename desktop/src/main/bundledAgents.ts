@@ -9,7 +9,7 @@
 // is the decision of when to press install, and a status row per node so the
 // UI can show the two arriving before they exist on disk.
 //
-// Same two-part shape as aforge-companion.ts, for the same reason:
+// Same two-part shape as codeaf-companion.ts, for the same reason:
 //   1. planBundledInstalls() — pure: given the registry, what we already
 //      provisioned, the skip env var, the resolved CLI and whether the control
 //      plane is up, decide which names to install.
@@ -113,7 +113,7 @@ export interface BundledDeps {
 
 // Live provisioning rows for the snapshot, module state because the run is a
 // launch-time side effect with no owner object to hang it off — same place the
-// once-per-launch latch in aforge-companion.ts lives.
+// once-per-launch latch in codeaf-companion.ts lives.
 //
 // Lifetime rule: rows appear when a run starts and `installed` rows are dropped
 // when the whole run finishes, so a node the registry now lists never keeps a

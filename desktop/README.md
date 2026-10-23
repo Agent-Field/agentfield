@@ -301,7 +301,7 @@ Packaging is unsigned for now (no notarization/signing identities configured).
   `planBundledInstalls()` (what to install, given the registry, the
   already-provisioned set, the resolved CLI, and whether the control plane is
   up) plus an effectful runner driven by injected deps — the same
-  planner/runner split as `src/main/aforge-companion.ts`, so the decision is
+  planner/runner split as `src/main/codeaf-companion.ts`, so the decision is
   unit-tested without ever spawning an install. Progress rides the existing
   5-second snapshot as `bundled: BundledStatus[]`, so the renderer needs no
   second polling loop.
