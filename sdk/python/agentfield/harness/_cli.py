@@ -11,7 +11,7 @@ import shutil
 import signal
 import subprocess
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
 
 from agentfield.openrouter_attribution import apply_subprocess_env
 
@@ -275,6 +275,7 @@ async def run_cli(
     cmd: List[str],
     *,
     env: Optional[Dict[str, str]] = None,
+    unset_env: Optional[Sequence[str]] = None,
     cwd: Optional[str] = None,
     timeout: Optional[float] = None,
     idle_seconds: Optional[float] = None,
@@ -299,6 +300,8 @@ async def run_cli(
     the final JSONL result/usage events remain parseable.
     """
     merged_env = {**os.environ}
+    for key in unset_env or ():
+        merged_env.pop(key, None)
     try:
         parent_depth = int(merged_env.get("AGENTFIELD_HARNESS_DEPTH", "0"))
     except ValueError:

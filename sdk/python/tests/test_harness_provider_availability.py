@@ -7,6 +7,7 @@ import pytest
 from agentfield.exceptions import HarnessProviderUnavailable
 from agentfield.harness._availability import ensure_cli_available, provider_unavailable
 from agentfield.harness.providers.aforge import AforgeProvider
+from agentfield.harness.providers.codeaf import CodeafProvider
 from agentfield.harness.providers.codex import CodexProvider
 from agentfield.harness.providers.claude import ClaudeCodeProvider
 from agentfield.harness.providers.gemini import GeminiProvider
@@ -18,6 +19,7 @@ from agentfield.harness.providers.pi import OMPProvider, PiProvider
 @pytest.mark.parametrize(
     ("provider", "name", "module", "install_command"),
     [
+        (CodeafProvider(bin_path="codeaf-missing"), "codeaf", "codeaf", "af codeaf ensure"),
         (AforgeProvider(bin_path="aforge-missing"), "aforge", "aforge", "af aforge ensure"),
         (CodexProvider(bin_path="codex-missing"), "codex", "codex", "@openai/codex"),
         (

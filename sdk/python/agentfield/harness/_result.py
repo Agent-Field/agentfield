@@ -51,6 +51,7 @@ class RawResult:
     error_message: Optional[str] = None
     failure_type: FailureType = FailureType.NONE
     returncode: Optional[int] = None
+    provider: Optional[str] = None
 
 
 @dataclass
@@ -74,6 +75,7 @@ class HarnessResult:
     total_tokens: int = 0
     # Model slug reported by the provider (if any).
     model: Optional[str] = None
+    provider: Optional[str] = None
 
     @property
     def text(self) -> str:
