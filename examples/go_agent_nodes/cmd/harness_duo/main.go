@@ -58,7 +58,7 @@ func main() {
 
 	registerWorker(duo, "pi_worker", harness.ProviderPi, "PI_BIN")
 	// Both branches name their provider explicitly. Omitting Provider would
-	// select the SDK default, aforge — not OMP.
+	// select the SDK default, codeaf.
 	registerWorker(duo, "omp_worker", harness.ProviderOMP, "OMP_BIN")
 
 	duo.RegisterReasoner("compare", func(ctx context.Context, input map[string]any) (any, error) {

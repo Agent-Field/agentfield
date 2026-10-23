@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -41,7 +42,7 @@ func TestHarnessRunner_LazyInitialization(t *testing.T) {
 
 func TestHarnessRunner_DefaultOptions(t *testing.T) {
 	// Agent with no HarnessConfig — runner gets zero-value Options; the
-	// provider is resolved at dispatch time (explicit > env > "aforge").
+	// provider is resolved at dispatch time (explicit > env > "codeaf").
 	a := newTestAgentForHarness(t)
 
 	runner := a.HarnessRunner()
@@ -114,18 +115,17 @@ func TestHarnessRunner_ConcurrentAccess(t *testing.T) {
 }
 
 func TestHarness_ErrorWithoutProvider(t *testing.T) {
-	// With no provider configured, Harness() defaults to aforge and reaches
+	// With no provider configured, Harness() defaults to codeaf and reaches
 	// provider execution. A missing binary may fail, but provider resolution does not.
 	t.Setenv(harness.ProviderEnvVar, "")
 	a := newTestAgentForHarness(t)
 
-	missingAforge := filepath.Join(t.TempDir(), "missing-aforge")
-	result, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{BinPath: missingAforge})
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.True(t, result.IsError)
-	assert.Contains(t, result.ErrorMessage, "missing-aforge")
-	assert.NotContains(t, result.ErrorMessage, "no harness provider specified")
+	missingCodeAF := filepath.Join(t.TempDir(), "missing-codeaf")
+	result, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{BinPath: missingCodeAF})
+	assert.Nil(t, result)
+	require.ErrorIs(t, err, harness.ErrProviderUnavailable)
+	assert.Contains(t, err.Error(), "missing-codeaf")
+	assert.Contains(t, err.Error(), "af codeaf ensure")
 }
 
 func TestHarness_PassesOptsToRunner(t *testing.T) {
@@ -206,4 +206,28 @@ func TestHarnessDoctor_UnknownProviderIsAnError(t *testing.T) {
 	_, err := a.HarnessDoctor(context.Background(), "not-a-provider")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not-a-provider")
+}
+
+func TestHarnessDefaultCodeAFRecordsUsage(t *testing.T) {
+	t.Setenv(harness.ProviderEnvVar, "")
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "codeaf")
+	require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+printf '%s\n' '{"ok":true,"stop":"done","answer":"ok","spend_usd":0,"tokens":{"in":10,"out":5},"model":"reported/model","steps":2}'
+`), 0o755))
+	t.Setenv("CODEAF_BIN", path)
+	a := newTestAgentForHarness(t)
+	tracker := NewCostTracker()
+	ctx := contextWithCostTracker(context.Background(), tracker)
+	result, err := a.Harness(ctx, "task", nil, nil, harness.Options{})
+	require.NoError(t, err)
+	require.False(t, result.IsError, result.ErrorMessage)
+	assert.Equal(t, harness.ProviderCodeAF, result.Provider)
+	entries := tracker.Serialize()["entries"].([]map[string]any)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "codeaf", entries[0]["harness"])
+	assert.Equal(t, "reported/model", entries[0]["model"])
+	assert.Equal(t, 10, entries[0]["input_tokens"])
+	assert.Equal(t, 5, entries[0]["output_tokens"])
+	assert.Equal(t, 0.0, entries[0]["cost_usd"])
 }

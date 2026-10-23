@@ -301,7 +301,7 @@ func TestRecordHarnessUsage(t *testing.T) {
 		assert.Equal(t, "openrouter", entries[0]["provider"])
 	})
 
-	t.Run("provider defaults to aforge", func(t *testing.T) {
+	t.Run("provider defaults to codeaf", func(t *testing.T) {
 		t.Setenv(harness.ProviderEnvVar, "")
 		a := newAgentForTest(t)
 		tracker := NewCostTracker()
@@ -311,8 +311,8 @@ func TestRecordHarnessUsage(t *testing.T) {
 
 		entries := tracker.Serialize()["entries"].([]map[string]any)
 		require.Len(t, entries, 1)
-		assert.Equal(t, "aforge", entries[0]["harness"])
-		assert.Equal(t, "aforge", entries[0]["model"])
+		assert.Equal(t, "codeaf", entries[0]["harness"])
+		assert.Equal(t, "codeaf", entries[0]["model"])
 	})
 
 	t.Run("provider falls back to environment", func(t *testing.T) {
@@ -342,7 +342,7 @@ func TestRecordHarnessUsage(t *testing.T) {
 
 		entries := tracker.Serialize()["entries"].([]map[string]any)
 		require.Len(t, entries, 1)
-		assert.Equal(t, "aforge", entries[0]["harness"])
+		assert.Equal(t, "codeaf", entries[0]["harness"])
 		assert.Equal(t, "~deepseek/deepseek-v4-flash-latest", entries[0]["model"])
 		assert.Equal(t, "~deepseek", entries[0]["provider"])
 	})
@@ -363,4 +363,20 @@ func TestRecordHarnessUsage(t *testing.T) {
 			"usage must attribute to the BASE model, not the #variant-suffixed string")
 		assert.Equal(t, "openrouter", entries[0]["provider"])
 	})
+}
+
+func TestRecordHarnessUsageUsesActualAdapter(t *testing.T) {
+	for _, tc := range []struct{ requested, actual string }{{"aforge", "codeaf"}, {"codeaf", "aforge"}} {
+		t.Run(tc.requested+" to "+tc.actual, func(t *testing.T) {
+			a := newTestAgentForHarness(t)
+			tracker := NewCostTracker()
+			ctx := contextWithCostTracker(context.Background(), tracker)
+			zero := 0.0
+			a.recordHarnessUsage(ctx, &harness.Result{Provider: tc.actual, Model: "returned/model", InputTokens: 10, OutputTokens: 5, CostUSD: &zero}, harness.Options{Provider: tc.requested})
+			entries := tracker.Serialize()["entries"].([]map[string]any)
+			require.Len(t, entries, 1)
+			assert.Equal(t, tc.actual, entries[0]["harness"])
+			assert.Equal(t, "returned/model", entries[0]["model"])
+		})
+	}
 }

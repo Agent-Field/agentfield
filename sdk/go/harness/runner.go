@@ -156,12 +156,14 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 
 	if schema != nil {
 		result := r.handleSchemaWithRetry(ctx, raw, schema, dest, outputDir, startTime, provider, opts, effectivePrompt, useIncremental)
+		result.Provider = raw.Provider
 		CleanupTempFiles(outputDir)
 		return result, nil
 	}
 
 	elapsed := int(time.Since(startTime).Milliseconds())
 	res := &Result{
+		Provider:     raw.Provider,
 		Result:       raw.Result,
 		IsError:      raw.IsError,
 		ErrorMessage: raw.ErrorMessage,
@@ -342,6 +344,12 @@ func (r *Runner) executeWithRetry(ctx context.Context, provider Provider, prompt
 			return nil, err
 		}
 
+		if raw.Provider == "" {
+			raw.Provider = opts.Provider
+			if _, legacy := provider.(*AforgeProvider); legacy {
+				raw.Provider = ProviderAforge
+			}
+		}
 		if !raw.IsError {
 			return raw, nil
 		}

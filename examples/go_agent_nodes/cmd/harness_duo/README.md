@@ -11,7 +11,7 @@ compare
 `compare` starts both child reasoners concurrently and joins their structured
 results. Both branches name their provider explicitly — Pi and OMP are
 additional providers, while a call that omits `Provider` runs the SDK default,
-`aforge`. The default model is
+`codeaf`. The default model is
 `openrouter/minimax/minimax-m2.7`; set
 `HARNESS_MODEL=openrouter/google/gemini-2.5-flash` for the Gemini Flash path.
 

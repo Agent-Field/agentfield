@@ -10,9 +10,9 @@ import (
 // providing lazy initialization and a convenience Harness() method.
 // HarnessConfig configures the default harness runner for the agent.
 type HarnessConfig struct {
-	// Provider is the default provider: "aforge", "claude-code", "codex",
+	// Provider is the default provider: "codeaf", "aforge", "claude-code", "codex",
 	// "gemini", "opencode", "pi", or "omp". When empty,
-	// AGENTFIELD_HARNESS_PROVIDER overrides the default, "aforge"
+	// AGENTFIELD_HARNESS_PROVIDER overrides the default, "codeaf"
 	// (AgentField's native harness). An explicit value always wins.
 	Provider string
 
