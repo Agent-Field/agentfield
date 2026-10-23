@@ -3,12 +3,12 @@ import type { HarnessConfig } from '../types.js';
 import { SUPPORTED_PROVIDER_NAMES } from '../availability.js';
 
 export const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(SUPPORTED_PROVIDER_NAMES);
-export const DEFAULT_HARNESS_PROVIDER = 'aforge';
+export const DEFAULT_HARNESS_PROVIDER = 'codeaf';
 export const HARNESS_PROVIDER_ENV_VAR = 'AGENTFIELD_HARNESS_PROVIDER';
 
 /**
  * Applies harness provider precedence: an explicit name wins, then
- * AGENTFIELD_HARNESS_PROVIDER, then DEFAULT_HARNESS_PROVIDER ("aforge").
+ * AGENTFIELD_HARNESS_PROVIDER, then DEFAULT_HARNESS_PROVIDER ("codeaf").
  * Blank / whitespace-only values are treated as unset.
  */
 export function resolveProviderName(explicit?: string): string {
@@ -28,9 +28,13 @@ export async function buildProvider(config: HarnessConfig): Promise<HarnessProvi
       `Unknown harness provider: "${provider}". Supported: ${[...SUPPORTED_PROVIDERS].sort().join(', ')}`
     );
   }
-  if (provider === 'aforge') {
+  if (provider === 'aforge' && config.aforgeBin !== undefined) {
     const { AforgeProvider } = await import('./aforge.js');
-    return new AforgeProvider(config.aforgeBin ?? 'aforge');
+    return new AforgeProvider(config.aforgeBin);
+  }
+  if (provider === 'codeaf' || provider === 'aforge') {
+    const { CodeafProvider } = await import('./codeaf.js');
+    return new CodeafProvider(config.codeafBin, provider === 'aforge');
   }
   if (provider === 'claude-code') {
     const { ClaudeCodeProvider } = await import('./claude.js');

@@ -436,7 +436,7 @@ export class Agent {
         return;
       }
 
-      const providerName = resolveProviderName(options?.provider ?? this.config.harnessConfig?.provider);
+      const providerName = result.provider ?? resolveProviderName(options?.provider ?? this.config.harnessConfig?.provider);
       const harnessName = providerName ? String(providerName).replace(/-/g, '_') : null;
       // Usage is recorded against the base model — a "#variant"
       // reasoning-effort suffix on the configured model never reaches the

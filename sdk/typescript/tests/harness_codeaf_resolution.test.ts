@@ -1,0 +1,322 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+let directory: string;
+let binDirectory: string;
+
+function fakeBinary(binary: string, legacy = false, delay = 0): string {
+  fs.mkdirSync(path.dirname(binary), { recursive: true });
+  const result = legacy
+    ? { text: 'legacy answer', stop: 'done', turns: 2, usage: { prompt_tokens: 5, completion_tokens: 3, cost: 0.02 } }
+    : { ok: true, stop: 'done', answer: 'codeaf answer', files: [], error: '', spend_usd: 0,
+        tokens: { in: 5, out: 3 }, seconds: 1, model: 'reported/model', steps: 2, calls: 3 };
+  fs.writeFileSync(binary, `#!${process.execPath}
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => input += chunk);
+process.stdin.on('end', () => {
+  const result = ${JSON.stringify(result)};
+  result.observed = {
+    binary: ${JSON.stringify(binary)}, argv: process.argv.slice(2), input,
+    home: process.env.CODEAF_HOME, update: process.env.CODEAF_NO_UPDATE_CHECK,
+    telemetry: process.env.CODEAF_TELEMETRY,
+    panels: [process.env.CODEAF_MODELS ?? null, process.env.AFORGE_MODELS ?? null],
+    reasoning: process.env.CODEAF_EXEC_REASONING,
+  };
+  const output = input.match(/(\\S*\\.agentfield_output\\.json)/);
+  if (output) require('fs').writeFileSync(output[1], JSON.stringify({ answer: 'schema answer' }));
+  setTimeout(() => console.log(JSON.stringify(result)), ${delay});
+});
+`, { mode: 0o755 });
+  return binary;
+}
+
+function fakeOutcome(stdout: string, exitCode: number): string {
+  const binary = path.join(directory, 'outcome');
+  fs.writeFileSync(binary, `#!${process.execPath}
+process.stdin.resume();
+process.stdin.on('end', () => {
+  process.stdout.write(${JSON.stringify(stdout)});
+  process.stderr.write('fixture diagnostic');
+  ${exitCode < 0 ? "process.kill(process.pid, 'SIGTERM');" : `process.exitCode = ${exitCode};`}
+});
+`, { mode: 0o755 });
+  return binary;
+}
+
+async function managedBinary(location = 0): Promise<string> {
+  const { codeafManagedPaths } = await import('../src/harness/codeafInstall.js');
+  const binary = fakeBinary(codeafManagedPaths()[location]);
+  fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.2\n');
+  return binary;
+}
+
+beforeEach(() => {
+  vi.resetModules();
+  directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-codeaf-resolution-'));
+  binDirectory = path.join(directory, 'path');
+  fs.mkdirSync(binDirectory);
+  for (const name of [
+    'AGENTFIELD_HARNESS_PROVIDER', 'CODEAF_BIN', 'AFORGE_BIN', 'AGENTFIELD_CODEAF_COMMAND',
+    'AGENTFIELD_AFORGE_COMMAND', 'AGENTFIELD_HARNESS_TIMEOUT_SECONDS', 'CODEAF_HOME',
+    'CODEAF_NO_UPDATE_CHECK', 'CODEAF_TELEMETRY', 'CODEAF_EXEC_REASONING', 'CODEAF_MODELS',
+    'AFORGE_MODELS', 'CI', 'DO_NOT_TRACK', 'AGENTFIELD_TELEMETRY_ENABLED',
+  ]) vi.stubEnv(name, undefined);
+  vi.stubEnv('AGENTFIELD_HOME', path.join(directory, 'home'));
+  vi.stubEnv('PATH', binDirectory);
+  vi.stubEnv('AGENTFIELD_SKIP_CODEAF', 'true');
+  vi.stubEnv('AGENTFIELD_SKIP_AFORGE', '');
+  vi.spyOn(os, 'tmpdir').mockReturnValue(path.join(directory, 'temp'));
+  vi.spyOn(console, 'info').mockImplementation(() => undefined);
+  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
+// Executable Node scripts exercise the real subprocess transport on Unix.
+describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake CLIs', () => {
+  it('V1 uses CodeAF with no provider configuration and returns its canonical metrics', async () => {
+    await managedBinary();
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const result = await new HarnessRunner().run('task', { maxRetries: 0 });
+    expect(result).toMatchObject({ provider: 'codeaf', result: 'codeaf answer', costUsd: 0,
+      inputTokens: 5, outputTokens: 3, numTurns: 2, model: 'reported/model', failureType: 'none' });
+    expect(result.messages[0].observed).toMatchObject({ input: 'task', argv: [
+      'exec', '--json', '--dir', '.', '--model', '~deepseek/deepseek-v4-flash-latest', '--timeout', '1795s',
+    ] });
+  });
+
+  it('V3 resolves an unpinned aforge alias through CodeAF and logs the note once', async () => {
+    await managedBinary();
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const runner = new HarnessRunner({ provider: 'aforge' });
+    const results = await Promise.all([runner.run('first'), runner.run('second')]);
+    expect(results.map((result) => result.provider)).toEqual(['codeaf', 'codeaf']);
+    expect(console.info).toHaveBeenCalledExactlyOnceWith("provider 'aforge' now runs CodeAF; set AFORGE_BIN to pin the legacy binary");
+  });
+
+  it.each(['config', 'env'])('V4 honors a legacy %s pin and the unchanged protocol', async (pin) => {
+    const legacy = fakeBinary(path.join(directory, 'legacy'), true);
+    vi.stubEnv('CODEAF_BIN', fakeBinary(path.join(directory, 'other-codeaf')));
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const runner = new HarnessRunner(pin === 'config'
+      ? { provider: 'aforge', aforgeBin: legacy } : { provider: 'aforge' });
+    if (pin === 'env') vi.stubEnv('AFORGE_BIN', legacy);
+    const result = await runner.run('task', { maxRetries: 0 });
+    expect(result).toMatchObject({ provider: 'aforge', result: 'legacy answer', costUsd: 0.02, inputTokens: 5 });
+    const observed = result.messages[0].observed as { argv: string[] };
+    expect(observed.argv).toContain('-w');
+    expect(observed.argv).toContain('1795');
+    expect(console.info).not.toHaveBeenCalled();
+  });
+
+  it('V4 reads AFORGE_BIN at first execution, after construction', async () => {
+    const { buildProvider } = await import('../src/harness/providers/factory.js');
+    const provider = await buildProvider({ provider: 'aforge' });
+    vi.stubEnv('AFORGE_BIN', fakeBinary(path.join(directory, 'legacy'), true));
+    expect(await provider.execute('task', {})).toMatchObject({ provider: 'aforge', result: 'legacy answer' });
+  });
+
+  it('V5 prefers codeafBin over CODEAF_BIN, then CODEAF_BIN over managed/PATH', async () => {
+    await managedBinary();
+    fakeBinary(path.join(binDirectory, 'codeaf'));
+    const configured = fakeBinary(path.join(directory, 'configured'));
+    const fromEnv = fakeBinary(path.join(directory, 'from-env'));
+    vi.stubEnv('CODEAF_BIN', fromEnv);
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const runner = new HarnessRunner({ codeafBin: configured });
+    const first = await runner.run('task');
+    const second = await new HarnessRunner().run('task');
+    expect(first.messages[0].observed).toHaveProperty('binary', configured);
+    expect(second.messages[0].observed).toHaveProperty('binary', fromEnv);
+  });
+
+  it('V5 reads CODEAF_BIN lazily and codeaf ignores an unrelated AFORGE_BIN pin', async () => {
+    const { buildProvider } = await import('../src/harness/providers/factory.js');
+    const provider = await buildProvider({ provider: 'codeaf' });
+    vi.stubEnv('AFORGE_BIN', fakeBinary(path.join(directory, 'legacy'), true));
+    vi.stubEnv('CODEAF_BIN', fakeBinary(path.join(directory, 'from-env')));
+    expect(await provider.execute('task', {})).toMatchObject({ provider: 'codeaf', result: 'codeaf answer' });
+  });
+
+  it.each([0, 1])('V5 finds managed location %s ahead of PATH without installing', async (location) => {
+    const managed = await managedBinary(location);
+    fakeBinary(path.join(binDirectory, 'codeaf'));
+    const install = await import('../src/harness/codeafInstall.js');
+    const ensure = vi.spyOn(install, 'ensureCodeafInstalled');
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const result = await new HarnessRunner().run('task');
+    expect(result.messages[0].observed).toHaveProperty('binary', managed);
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it('V5–V6 installs before considering PATH, shares resolution across concurrent executes, and caches it', async () => {
+    fakeBinary(path.join(binDirectory, 'codeaf'));
+    const installed = fakeBinary(path.join(directory, 'downloaded'));
+    const install = await import('../src/harness/codeafInstall.js');
+    const ensure = vi.spyOn(install, 'ensureCodeafInstalled').mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return installed;
+    });
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const runner = new HarnessRunner();
+    const results = await Promise.all(Array.from({ length: 12 }, () => runner.run('task')));
+    expect(results.every((result) => (result.messages[0].observed as { binary: string }).binary === installed)).toBe(true);
+    await runner.run('after');
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it('V5 falls back to PATH after a failed download', async () => {
+    const onPath = fakeBinary(path.join(binDirectory, 'codeaf'));
+    const install = await import('../src/harness/codeafInstall.js');
+    vi.spyOn(install, 'ensureCodeafInstalled').mockRejectedValue(new Error('fixture network error'));
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const result = await new HarnessRunner().run('task');
+    expect(result).toHaveProperty('provider', 'codeaf');
+    expect(result.messages[0].observed).toHaveProperty('binary', onPath);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['AGENTFIELD_SKIP_CODEAF', 'AGENTFIELD_SKIP_AFORGE'])('V5–V6 falls back to PATH when %s skips downloading', async (key) => {
+    vi.stubEnv('AGENTFIELD_SKIP_CODEAF', '');
+    vi.stubEnv(key, 'YeS');
+    fakeBinary(path.join(binDirectory, 'codeaf'));
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    expect(await new HarnessRunner().run('task')).toHaveProperty('provider', 'codeaf');
+    expect(console.info).not.toHaveBeenCalled();
+  });
+
+  it.each(['home', 'path'])('V5 falls back to legacy aforge on %s and warns once', async (location) => {
+    const legacy = fakeBinary(location === 'home'
+      ? path.join(process.env.AGENTFIELD_HOME!, 'bin', 'aforge') : path.join(binDirectory, 'aforge'), true);
+    if (location === 'home') fakeBinary(path.join(binDirectory, 'aforge'), true);
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const runner = new HarnessRunner();
+    const first = await runner.run('task');
+    await runner.run('task');
+    expect(first).toMatchObject({ provider: 'aforge', result: 'legacy answer' });
+    expect(first.messages[0].observed).toHaveProperty('binary', legacy);
+    expect(console.warn).toHaveBeenCalledExactlyOnceWith(
+      `CodeAF is not installed; falling back to the legacy aforge binary at ${legacy}. Run \`af codeaf ensure\`.`
+    );
+  });
+
+  it('V5 reports a typed codeaf-unavailable error with installer hint and download failure', async () => {
+    const install = await import('../src/harness/codeafInstall.js');
+    const ensure = vi.spyOn(install, 'ensureCodeafInstalled').mockRejectedValue(new Error('fixture checksum failed'));
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const promise = new HarnessRunner().run('task', { maxRetries: 0 });
+    await expect(promise).rejects.toMatchObject({ provider: 'codeaf', installCommand: 'af codeaf ensure' });
+    await expect(promise).rejects.toThrow('CODEAF_BIN');
+    await expect(promise).rejects.toThrow('fixture checksum failed');
+    await expect(new HarnessRunner().run('task', { maxRetries: 0 })).rejects.toThrow('fixture checksum failed');
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it('V5 skips the download and reports unavailable when no fallback exists', async () => {
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    await expect(new HarnessRunner().run('task', { maxRetries: 0 })).rejects.toThrow('af codeaf ensure');
+    expect(console.info).not.toHaveBeenCalled();
+  });
+
+  it('V8 removes inherited model panels in the real child and honors overlays', async () => {
+    await managedBinary();
+    vi.stubEnv('CODEAF_MODELS', 'wrong');
+    vi.stubEnv('AFORGE_MODELS', 'wrong');
+    vi.stubEnv('CI', 'true');
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const runner = new HarnessRunner();
+    const defaults = await runner.run('task');
+    expect(defaults.messages[0].observed).toMatchObject({
+      panels: [null, null], update: '1', telemetry: 'off', home: path.join(process.env.AGENTFIELD_HOME!, 'codeaf'),
+    });
+    const overlay = await runner.run('task', { env: {
+      CODEAF_HOME: directory, CODEAF_NO_UPDATE_CHECK: '0', CODEAF_TELEMETRY: 'on',
+      CODEAF_MODELS: 'new', AFORGE_MODELS: 'old', CODEAF_EXEC_REASONING: 'off',
+    } });
+    expect(overlay.messages[0].observed).toMatchObject({
+      panels: ['new', 'old'], home: directory, update: '0', telemetry: 'on', reasoning: 'off',
+    });
+  });
+
+  it('preserves the existing schema pipeline and actual provider in its result', async () => {
+    await managedBinary();
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const result = await new HarnessRunner({ provider: 'aforge' }).run('task', {
+      cwd: directory, schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] },
+    });
+    expect(result).toMatchObject({ provider: 'codeaf', parsed: { answer: 'schema answer' }, isError: false, costUsd: 0 });
+    expect(fs.readdirSync(directory).filter((name) => name.startsWith('.agentfield-out-'))).toEqual([]);
+  });
+
+  it.each([
+    ['done', true, 'answer', 0, 'none'],
+    ['deadline', false, 'partial', 3, 'timeout'],
+    ['deadline', false, 'partial', 124, 'timeout'],
+    ['unchecked', false, 'answer', 2, 'none'],
+    ['budget', false, 'partial', 3, 'none'],
+    ['turn-cap', false, 'partial', 3, 'none'],
+    ['budget', false, '', 3, 'no_output'],
+    ['turn-cap', false, '', 3, 'no_output'],
+    ['question', false, 'partial', 4, 'crash'],
+    ['incomplete', false, 'partial', 2, 'crash'],
+    ['error', false, 'partial', 1, 'crash'],
+    ['price', false, 'partial', 3, 'crash'],
+    ['unknown', true, 'answer', 0, 'none'],
+    ['unknown', true, '', 0, 'crash'],
+    ['unknown', true, 'answer', 1, 'crash'],
+    ['done', true, 'answer', -15, 'crash'],
+  ])('V10 real CLI: stop=%s ok=%s answer=%s exit=%s gives %s', async (stop, ok, answer, exitCode, failureType) => {
+    const binary = fakeOutcome(JSON.stringify({ ok, stop, answer, blocked_on: 'Which project?' }), exitCode);
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const result = await new HarnessRunner({ codeafBin: binary }).run('task', { maxRetries: 0 });
+    expect(result).toMatchObject({ provider: 'codeaf', failureType, isError: failureType !== 'none' });
+    expect(result.result).toBe(failureType === 'none' ? answer : undefined);
+    if (stop === 'question') expect(result.errorMessage).toContain('Which project?');
+  });
+
+  it.each([
+    ['', 0, 'no_output'], ['', 1, 'crash'], ['not JSON', 0, 'crash'],
+    ['{"text":"legacy","usage":{"cost":1}}', 0, 'crash'],
+  ])('V9–V10 real CLI: missing envelope %s exit=%s gives %s', async (stdout, exitCode, failureType) => {
+    const binary = fakeOutcome(stdout, exitCode);
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const result = await new HarnessRunner({ codeafBin: binary }).run('task', { maxRetries: 0 });
+    expect(result).toMatchObject({ provider: 'codeaf', failureType, isError: true });
+  });
+
+  it('V10 classifies a real outer timeout even when the process has produced no output', async () => {
+    vi.stubEnv('AGENTFIELD_HARNESS_TIMEOUT_SECONDS', '1');
+    const binary = fakeBinary(path.join(directory, 'slow'), false, 3000);
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const result = await new HarnessRunner({ codeafBin: binary }).run('task', { maxRetries: 0 });
+    expect(result).toMatchObject({ provider: 'codeaf', failureType: 'timeout', isError: true });
+    expect(result.result).toBeUndefined();
+  });
+});
+
+describe('V12 CodeAF semaphore', () => {
+  it('limits all provider instances in the process to the configured concurrency', async () => {
+    vi.stubEnv('CODEAF_MAX_CONCURRENT', '2');
+    const cli = await import('../src/harness/cli.js');
+    let active = 0;
+    let maximum = 0;
+    vi.spyOn(cli, 'runCli').mockImplementation(async () => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return { stdout: '{"ok":true,"stop":"done","answer":"ok"}', stderr: '', exitCode: 0 };
+    });
+    const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+    const results = await Promise.all(Array.from({ length: 11 }, () => new CodeafProvider('/fixture/codeaf').execute('task', {})));
+    expect(results.every((result) => result.result === 'ok')).toBe(true);
+    expect(maximum).toBe(2);
+  });
+});

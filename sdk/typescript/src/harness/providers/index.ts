@@ -7,6 +7,7 @@ export {
   SUPPORTED_PROVIDERS,
 } from './factory.js';
 export { AforgeProvider } from './aforge.js';
+export { CODEAF_DEFAULT_MODEL, CodeafProvider } from './codeaf.js';
 export { ClaudeCodeProvider } from './claude.js';
 export { CodexProvider } from './codex.js';
 export { GeminiProvider } from './gemini.js';

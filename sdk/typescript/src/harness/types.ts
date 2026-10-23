@@ -1,10 +1,10 @@
 export interface HarnessConfig {
   /**
-   * Coding agent provider. Defaults to `aforge`, AgentField's native harness.
+   * Coding agent provider. Defaults to `codeaf`, AgentField's native harness.
    * When unset, `AGENTFIELD_HARNESS_PROVIDER` is consulted before the default.
    * An explicit value always wins.
    */
-  provider?: 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
+  provider?: 'codeaf' | 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
   /** Model identifier. Empty means the provider's own default. */
   model?: string;
   /**
@@ -24,6 +24,7 @@ export interface HarnessConfig {
   env?: Record<string, string>;
   cwd?: string;
   projectDir?: string;
+  codeafBin?: string;
   aforgeBin?: string;
   codexBin?: string;
   geminiBin?: string;
@@ -34,7 +35,7 @@ export interface HarnessConfig {
 
 export interface HarnessOptions {
   /**
-   * Coding agent provider. Defaults to `aforge`, AgentField's native harness.
+   * Coding agent provider. Defaults to `codeaf`, AgentField's native harness.
    * When unset, `AGENTFIELD_HARNESS_PROVIDER` is consulted before the default.
    * An explicit value always wins.
    */
@@ -58,6 +59,7 @@ export interface HarnessOptions {
   env?: Record<string, string>;
   cwd?: string;
   projectDir?: string;
+  codeafBin?: string;
   aforgeBin?: string;
   codexBin?: string;
   geminiBin?: string;
@@ -89,6 +91,8 @@ export interface Metrics {
 export type FailureType = 'none' | 'crash' | 'timeout' | 'api_error' | 'no_output' | 'schema';
 
 export interface RawResult {
+  /** Actual adapter used, including alias resolution and legacy fallback. */
+  provider?: string;
   result?: string;
   messages: Array<Record<string, unknown>>;
   metrics: Metrics;
@@ -99,6 +103,8 @@ export interface RawResult {
 }
 
 export interface HarnessResult {
+  /** Actual provider used for this run. */
+  provider?: string;
   result?: string;
   parsed?: unknown;
   isError: boolean;
