@@ -105,7 +105,8 @@ describe('harness provider availability', () => {
 
   it('V11 discovers the managed temp binary while retaining the legacy aforge doctor row', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-doctor-codeaf-temp-'));
-    const binary = path.join(directory, 'agentfield-codeaf', 'v0.8.2', process.platform === 'win32' ? 'codeaf.exe' : 'codeaf');
+    const base = process.platform === 'win32' ? 'agentfield-codeaf' : `agentfield-codeaf-${process.getuid!()}`;
+    const binary = path.join(directory, base, 'v0.8.2', process.platform === 'win32' ? 'codeaf.exe' : 'codeaf');
     fs.mkdirSync(path.dirname(binary), { recursive: true });
     fs.writeFileSync(binary, '', { mode: 0o755 });
     fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.2\n');
@@ -120,6 +121,48 @@ describe('harness provider availability', () => {
       expect(aforge).toMatchObject({ binary: '/legacy/aforge', version: 'aforge v0.1.0',
         installCommand: 'af aforge ensure', authEnvVars: ['OPENROUTER_API_KEY'] });
     } finally {
+      temp.mockRestore();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['base', 'symlink'], ['release', 'symlink'], ['base', 'owner'], ['release', 'owner'],
+  ])('A5 doctor skips a temp %s with invalid %s without probing or downloading it', async (level, failure) => {
+    if (failure === 'owner' && process.platform === 'win32') return;
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-doctor-trust-'));
+    const temp = vi.spyOn(os, 'tmpdir').mockReturnValue(directory);
+    const install = await import('../src/harness/codeafInstall.js');
+    const ensure = vi.spyOn(install, 'ensureCodeafInstalled');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const [, binary] = install.codeafManagedPaths({ AGENTFIELD_HOME: path.join(directory, 'home') });
+    const unsafe = level === 'base' ? path.dirname(path.dirname(binary)) : path.dirname(binary);
+    const outside = path.join(directory, 'outside');
+    fs.mkdirSync(outside);
+    fs.mkdirSync(path.dirname(unsafe), { recursive: true });
+    if (failure === 'symlink') fs.symlinkSync(outside, unsafe, 'junction');
+    fs.mkdirSync(path.dirname(binary), { recursive: true });
+    fs.writeFileSync(binary, '', { mode: 0o755 });
+    fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.2\n');
+    const lstat = fs.lstatSync.bind(fs);
+    const stats = vi.spyOn(fs, 'lstatSync').mockImplementation((name, ...args) => {
+      const result = lstat(name, ...args);
+      if (String(name) === unsafe && failure === 'owner') result.uid = process.getuid!() + 1;
+      return result;
+    });
+    const versionProbe = vi.fn().mockResolvedValue('codeaf v0.8.2');
+    try {
+      const [health] = await harnessDoctor(['codeaf'], {
+        env: { AGENTFIELD_HOME: path.join(directory, 'home') },
+        resolveBinary: () => '/path/codeaf', versionProbe,
+      });
+      expect(health).toMatchObject({ binary: '/path/codeaf', installed: true, version: 'v0.8.2' });
+      expect(versionProbe).toHaveBeenCalledExactlyOnceWith(['/path/codeaf', 'version']);
+      expect(ensure).not.toHaveBeenCalled();
+    } finally {
+      stats.mockRestore();
+      warn.mockRestore();
+      ensure.mockRestore();
       temp.mockRestore();
       fs.rmSync(directory, { recursive: true, force: true });
     }

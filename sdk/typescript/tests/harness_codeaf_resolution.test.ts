@@ -85,6 +85,26 @@ afterEach(() => {
 
 // Executable Node scripts exercise the real subprocess transport on Unix.
 describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake CLIs', () => {
+  it.each([
+    ['base', 'codeaf'], ['release', 'codeaf'], ['base', 'aforge'], ['release', 'aforge'],
+  ])('A5 skips an unsafe temp %s and continues to %s on PATH', async (level, provider) => {
+    const { codeafManagedPaths } = await import('../src/harness/codeafInstall.js');
+    const [, unsafeBinary] = codeafManagedPaths();
+    const base = path.dirname(path.dirname(unsafeBinary));
+    const unsafe = level === 'base' ? base : path.dirname(unsafeBinary);
+    const outside = path.join(directory, 'outside');
+    fs.mkdirSync(outside);
+    fs.mkdirSync(path.dirname(unsafe), { recursive: true });
+    fs.symlinkSync(outside, unsafe, 'junction');
+    await managedBinary(1);
+    const safe = fakeBinary(path.join(binDirectory, provider), provider === 'aforge');
+    const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+    const result = await new CodeafProvider().execute('task', {});
+    expect(result).toMatchObject({ provider, isError: false });
+    expect(result.messages[0].observed).toHaveProperty('binary', safe);
+    expect(console.warn).toHaveBeenCalledTimes(provider === 'aforge' ? 2 : 1);
+  });
+
   it('V1 uses CodeAF with no provider configuration and returns its canonical metrics', async () => {
     await managedBinary();
     const { HarnessRunner } = await import('../src/harness/runner.js');
@@ -298,7 +318,7 @@ describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake
       const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
       const result = await new CodeafProvider().execute('task', {});
       expect(result.isError).toBe(false);
-      const fallback = path.join(directory, 'temp', 'agentfield-codeaf', 'state');
+      const fallback = path.join(directory, 'temp', `agentfield-codeaf-${process.getuid!()}`, 'state');
       expect(result.messages[0].observed).toHaveProperty('home', fallback);
       expect(fs.statSync(fallback).mode & 0o777).toBe(0o700);
       fs.accessSync(fallback, fs.constants.W_OK);
@@ -316,7 +336,7 @@ describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake
     const result = await new CodeafProvider().execute('task', source === 'process' ? {} : { env: { CODEAF_HOME: explicit } });
     expect(result.isError).toBe(false);
     expect(result.messages[0].observed).toHaveProperty('home', explicit);
-    expect(fs.existsSync(path.join(directory, 'temp', 'agentfield-codeaf', 'state'))).toBe(false);
+    expect(fs.existsSync(path.join(directory, 'temp', `agentfield-codeaf-${process.getuid!()}`, 'state'))).toBe(false);
   });
 
   it('V8 removes inherited model panels in the real child and honors overlays', async () => {
