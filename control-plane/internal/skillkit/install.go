@@ -8,9 +8,11 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/aforge"
+	"github.com/Agent-Field/agentfield/control-plane/internal/codeaf"
 	"github.com/Agent-Field/agentfield/control-plane/internal/furrow"
 )
+
+var ensureCodeaf = codeaf.EnsureBestEffort
 
 // InstallOptions controls how a skill is installed across targets.
 type InstallOptions struct {
@@ -204,9 +206,9 @@ func InstallAll(opts InstallOptions) ([]*InstallReport, error) {
 	}
 	if !opts.DryRun {
 		// `af skill install --all` is the one call every fresh install makes;
-		// keeping this out of install() avoids provisioning a 35MB binary once
+		// keeping this out of install() avoids provisioning a 70MB binary once
 		// per catalog entry, and keeps --dry-run side-effect free.
-		_ = aforge.EnsureBestEffort(aforge.Options{}, os.Stderr)
+		_ = ensureCodeaf(codeaf.Options{}, os.Stderr)
 	}
 	return reports, errors.Join(failures...)
 }

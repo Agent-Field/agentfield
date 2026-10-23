@@ -46,9 +46,10 @@ func TestMain(m *testing.M) {
 	isolatedHome = dir
 
 	for key, value := range map[string]string{
-		"HOME":            dir,
-		"USERPROFILE":     dir,
-		"AGENTFIELD_HOME": filepath.Join(dir, ".agentfield"),
+		"AGENTFIELD_SKIP_CODEAF": "1",
+		"HOME":                   dir,
+		"USERPROFILE":            dir,
+		"AGENTFIELD_HOME":        filepath.Join(dir, ".agentfield"),
 	} {
 		if err := os.Setenv(key, value); err != nil {
 			fmt.Fprintf(os.Stderr, "skillkit tests: set %s: %v\n", key, err)
