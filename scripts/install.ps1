@@ -1,9 +1,17 @@
-param([switch]$NoAforge)
+<#
+.SYNOPSIS
+Install AgentField and its managed CodeAF coding harness.
+.PARAMETER NoCodeaf
+Skip CodeAF provisioning, including later af/skill/tray subprocesses.
+.PARAMETER NoAforge
+Legacy alias for NoCodeaf.
+#>
+param([switch]$NoCodeaf, [switch]$NoAforge)
 
 # AgentField CLI Installer for Windows
 # Usage: iwr -useb https://agentfield.ai/install.ps1 | iex
 # Version pinning: $env:VERSION="v1.0.0"; iwr -useb https://agentfield.ai/install.ps1 | iex
-# Skip aforge: $env:AFORGE_MODE="none"; iwr -useb https://agentfield.ai/install.ps1 | iex
+# Skip CodeAF: $env:CODEAF_MODE="none"; iwr -useb https://agentfield.ai/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
@@ -14,7 +22,13 @@ $Version = if ($env:VERSION) { $env:VERSION } else { "latest" }
 $Verbose = if ($env:VERBOSE -eq "1") { $true } else { $false }
 $SkipPathConfig = if ($env:SKIP_PATH_CONFIG -eq "1") { $true } else { $false }
 # Piped iwr | iex installs cannot pass switches, so retain an environment opt-out.
-$AforgeMode = if ($NoAforge -or $env:AFORGE_MODE -eq 'none') { 'none' } else { 'auto' }
+$CodeafMode = if ($NoCodeaf -or $NoAforge -or $env:CODEAF_MODE -eq 'none' -or $env:AFORGE_MODE -eq 'none') { 'none' } else { 'auto' }
+# Retain the legacy environment opt-out and normalize both for every child.
+if ($CodeafMode -eq 'none' -or $env:AGENTFIELD_SKIP_CODEAF -match '^(1|true|yes|on)$' -or $env:AGENTFIELD_SKIP_AFORGE -match '^(1|true|yes|on)$') {
+    $CodeafMode = 'none'
+    $env:AGENTFIELD_SKIP_CODEAF = '1'
+    $env:AGENTFIELD_SKIP_AFORGE = '1'
+}
 
 # Colors
 function Write-ColorOutput {
@@ -309,37 +323,37 @@ function Test-Installation {
     }
 }
 
-function Install-Aforge {
+function Install-Codeaf {
     param([string]$InstallDir)
 
-    if ($AforgeMode -eq 'none') {
-        Write-Info "Skipping aforge install (AFORGE_MODE=none)"
+    if ($CodeafMode -eq 'none') {
+        Write-Info "Skipping codeaf install (CODEAF_MODE=none)"
         return
     }
 
     try {
-        Write-Info "Installing the aforge coding harness..."
+        Write-Info "Installing the codeaf coding harness..."
         # agentfield.exe, not the af.exe alias: Install-Binary creates the alias
         # best-effort and warns when both the hardlink and the copy fail.
-        # aforge installs into AGENTFIELD_HOME\bin, so pin its home to the
-        # install directory's parent to keep aforge beside agentfield.exe.
+        # codeaf installs into AGENTFIELD_HOME\bin, so pin its home to the
+        # install directory's parent to keep codeaf beside agentfield.exe.
         $previousAgentFieldHome = $env:AGENTFIELD_HOME
         try {
             $env:AGENTFIELD_HOME = Split-Path -Parent $InstallDir
-            & (Join-Path $InstallDir 'agentfield.exe') aforge ensure
+            & (Join-Path $InstallDir 'agentfield.exe') codeaf ensure
         }
         finally {
             $env:AGENTFIELD_HOME = $previousAgentFieldHome
         }
         if ($LASTEXITCODE -eq 0) {
-            Write-Success "aforge coding harness installed"
+            Write-Success "codeaf coding harness installed"
         }
         else {
-            Write-Warning "aforge install reported an issue; the control plane is unaffected"
+            Write-Warning "codeaf install reported an issue; the control plane is unaffected"
         }
     }
     catch {
-        Write-Warning "aforge install reported an issue; the control plane is unaffected"
+        Write-Warning "codeaf install reported an issue; the control plane is unaffected"
     }
 }
 
@@ -423,7 +437,7 @@ function Main {
         # Verify installation
         Test-Installation -InstallDir $InstallDir
 
-        Install-Aforge -InstallDir $InstallDir
+        Install-Codeaf -InstallDir $InstallDir
 
         # Print success message
         Write-SuccessMessage
