@@ -434,3 +434,28 @@ func resetBestEffort() {
 	bestEffort.lastDownload = time.Time{}
 	bestEffort.Unlock()
 }
+
+// C1: CLI installation and read-only lookup never create a system-temp fallback.
+func TestUnwritableHomeDoesNotUseTemp(t *testing.T) {
+	home, temporary, searchPath := t.TempDir(), t.TempDir(), t.TempDir()
+	blocked := filepath.Join(home, "bin")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTFIELD_HOME", home)
+	t.Setenv("TMPDIR", temporary)
+	t.Setenv("PATH", searchPath)
+	t.Setenv("CODEAF_BIN", "")
+	t.Setenv("AGENTFIELD_SKIP_CODEAF", "0")
+	t.Setenv("AGENTFIELD_SKIP_AFORGE", "0")
+	if err := Ensure(Options{}); err == nil || !strings.Contains(err.Error(), blocked) {
+		t.Fatalf("install error=%v", err)
+	}
+	if _, err := Lookup(""); err == nil {
+		t.Fatal("found an unavailable binary")
+	}
+	entries, err := os.ReadDir(temporary)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("temp fallback entries=%v err=%v", entries, err)
+	}
+}

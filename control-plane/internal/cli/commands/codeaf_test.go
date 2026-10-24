@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli/framework"
@@ -17,18 +18,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestCodeafInstallAndRunHooks(t *testing.T) {
-	old, oldBackground := ensureCodeaf, ensureCodeafBackground
-	t.Cleanup(func() { ensureCodeaf = old; ensureCodeafBackground = oldBackground })
+func TestCodeafInstallHook(t *testing.T) {
+	old := ensureCodeaf
+	t.Cleanup(func() { ensureCodeaf = old })
 	for _, jsonOutput := range []bool{false, true} {
 		for _, succeeds := range []bool{false, true} {
 			install := &fakePackageService{}
-			run := &fakeAgentService{runningAgent: &domain.RunningAgent{PID: 1, Port: 1234}}
 			if !succeeds {
 				install.installErr = errors.New("install failed")
-				run.runErr = errors.New("run failed")
 			}
-			services := &framework.ServiceContainer{PackageService: install, AgentService: run}
+			services := &framework.ServiceContainer{PackageService: install}
 			calls := 0
 			ctx := context.WithValue(context.Background(), struct{}{}, "install-context")
 			ensureCodeaf = func(opts codeaf.Options, _ io.Writer) error {
@@ -56,24 +55,43 @@ func TestCodeafInstallAndRunHooks(t *testing.T) {
 			if calls != want {
 				t.Fatalf("install hook calls=%d want %d", calls, want)
 			}
-			calls = 0
-			ensureCodeafBackground = func() error {
-				calls++
-				if run.runCalls != 0 {
-					t.Error("ensure after node started")
-				}
-				return errors.New("background installer unavailable")
-			}
-			cmd = NewRunCommand(services).BuildCobraCommand()
-			cmd.SetArgs(args)
-			captureStdout(t, func() {
-				if err := cmd.Execute(); err != run.runErr {
-					t.Errorf("background error changed node result: %v", err)
-				}
-			})
-			if calls != 1 {
-				t.Fatalf("run hook calls=%d", calls)
-			}
 		}
+	}
+}
+
+func TestRunDoesNotProvisionCodeaf(t *testing.T) {
+	home, temporary := t.TempDir(), t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+	t.Setenv("TMPDIR", temporary)
+	t.Setenv("AGENTFIELD_SKIP_CODEAF", "0")
+	old := ensureCodeaf
+	t.Cleanup(func() { ensureCodeaf = old })
+	ensureCodeaf = func(codeaf.Options, io.Writer) error {
+		t.Fatal("af run attempted CodeAF provisioning")
+		return nil
+	}
+	run := &fakeAgentService{runningAgent: &domain.RunningAgent{PID: 1, Port: 1234}}
+	cmd := NewRunCommand(&framework.ServiceContainer{AgentService: run}).BuildCobraCommand()
+	cmd.SetArgs([]string{"fixture"})
+	captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if run.runCalls != 1 {
+		t.Fatalf("run calls=%d", run.runCalls)
+	}
+	for _, dir := range []string{home, temporary} {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("unexpected CodeAF files in %s: %v %v", dir, entries, err)
+		}
+	}
+	source, err := os.ReadFile("run.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(source)), "codeaf") {
+		t.Fatal("af run still references CodeAF")
 	}
 }

@@ -281,12 +281,6 @@ func Lookup(override string) (string, error) {
 			return path, nil
 		}
 	}
-	if dir, err := trustedTempDir(); err == nil {
-		path := filepath.Join(dir, BinaryName(runtime.GOOS))
-		if alreadyInstalled(path, filepath.Join(dir, versionMarker)) {
-			return path, nil
-		}
-	}
 	return exec.LookPath(BinaryName(runtime.GOOS))
 }
 
