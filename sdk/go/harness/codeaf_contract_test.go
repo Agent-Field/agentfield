@@ -223,6 +223,7 @@ func TestCodeAFF3cRemainingSubprocessBudget(t *testing.T) {
 		// The integer cap rounds up; ctx enforces the precise remainder.
 		assert.GreaterOrEqual(t, float64(timeout), remaining)
 		assert.LessOrEqual(t, timeout, 10)
+		require.Contains(t, cmd, "--timeout")
 		for i, arg := range cmd {
 			if arg == "--timeout" {
 				inner, err := time.ParseDuration(cmd[i+1])
