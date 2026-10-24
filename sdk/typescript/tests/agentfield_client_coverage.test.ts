@@ -407,7 +407,8 @@ describe('AgentFieldClient additional coverage', () => {
       {
         headers: expect.objectContaining({
           'Content-Type': 'application/json'
-        })
+        }),
+        timeout: 30000
       }
     );
   });

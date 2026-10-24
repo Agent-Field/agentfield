@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
@@ -209,5 +210,76 @@ describe('AgentFieldClient.reportExecutionResult', () => {
     const ok = await makeClient(base).reportExecutionResult('exec-1', { status: 'failed', error: 'x' }, 2);
     expect(ok).toBe(false);
     expect(recs.length).toBe(2);
+  });
+
+  it.each([400, 401, 403, 404, 409, 422])(
+    'does not retry a non-retryable %i response',
+    async (code) => {
+      const { base, recs } = await startServer((req, res) => res.status(code).json({ error: 'nope' }));
+      const ok = await makeClient(base).reportExecutionResult('exec-1', { status: 'succeeded' });
+      expect(ok).toBe(false);
+      expect(recs.length).toBe(1);
+    }
+  );
+
+  it.each([408, 429, 503])('retries a transient %i response', async (code) => {
+    const { base, recs } = await startServer((req, res, all) =>
+      all.length === 1 ? res.status(code).json({ error: 'busy' }) : res.status(200).json({ ok: true })
+    );
+    const ok = await makeClient(base).reportExecutionResult('exec-1', { status: 'succeeded' }, 2);
+    expect(ok).toBe(true);
+    expect(recs.length).toBe(2);
+  });
+
+  it('retries transport errors', async () => {
+    const { base } = await startServer((req, res) => res.status(200).json({ ok: true }));
+    const port = new URL(base).port;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const ok = await makeClient(`http://127.0.0.1:${port}`).reportExecutionResult(
+      'exec-1',
+      { status: 'succeeded' },
+      2
+    );
+    expect(ok).toBe(false);
+  });
+
+  it('signs each attempt with a fresh DID nonce', async () => {
+    const nonces: string[] = [];
+    const { base } = await startServer((req, res, all) => {
+      nonces.push(String(req.header('X-DID-Nonce')));
+      if (all.length === 1) res.status(503).json({ error: 'busy' });
+      else res.status(200).json({ ok: true });
+    });
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const client = new AgentFieldClient({
+      nodeId: 'node-1',
+      agentFieldUrl: base,
+      did: 'did:key:test',
+      privateKeyJwk: JSON.stringify(privateKey.export({ format: 'jwk' }))
+    });
+    const ok = await client.reportExecutionResult('exec-1', { status: 'succeeded' }, 2);
+    expect(ok).toBe(true);
+    expect(nonces).toHaveLength(2);
+    expect(nonces[0]).not.toBe('undefined');
+    expect(nonces[0]).not.toBe(nonces[1]);
+  });
+});
+
+describe('AgentFieldClient.updateExecutionStatus', () => {
+  it('retries a transient 503 progress update', async () => {
+    const { base, recs } = await startServer((req, res, all) =>
+      all.length === 1 ? res.status(503).json({ error: 'busy' }) : res.status(200).json({ ok: true })
+    );
+    await makeClient(base).updateExecutionStatus('exec-1', { status: 'running', progress: 40 }, 2);
+    expect(recs.length).toBe(2);
+    expect(recs[1].body).toMatchObject({ status: 'running', progress: 40 });
+  });
+
+  it('throws without retrying a 409 conflict', async () => {
+    const { base, recs } = await startServer((req, res) => res.status(409).json({ error: 'terminal' }));
+    await expect(
+      makeClient(base).updateExecutionStatus('exec-1', { status: 'running', progress: 40 })
+    ).rejects.toThrow(/409/);
+    expect(recs.length).toBe(1);
   });
 });
