@@ -52,6 +52,7 @@ interface ResolvedBinary {
 }
 
 let resolution: Promise<ResolvedBinary> | undefined;
+let downloadError: string | undefined;
 let aliasLogged = false;
 let invalidCommandLogged = false;
 
@@ -60,7 +61,6 @@ async function resolveAutomaticBinary(): Promise<ResolvedBinary> {
   if (managed) {
     return { provider: 'codeaf', binary: managed };
   }
-  let downloadError: string | undefined;
   try {
     const installed = await ensureCodeafInstalled();
     if (installed) {

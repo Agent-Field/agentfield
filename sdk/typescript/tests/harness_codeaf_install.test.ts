@@ -14,11 +14,6 @@ let handler: (request: http.IncomingMessage, response: http.ServerResponse) => v
 let limit: number | undefined;
 const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
 
-function expectedTempBase(): string {
-  const name = process.platform === 'win32' ? 'agentfield-codeaf' : `agentfield-codeaf-${process.getuid!()}`;
-  return path.join(directory, 'temp', name);
-}
-
 beforeEach(async () => {
   vi.resetModules();
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-codeaf-install-'));
@@ -52,136 +47,6 @@ beforeEach(async () => {
   });
 });
 
-describe('A5 trusted per-user temp fallbacks', () => {
-  it.each(['linux', 'win32'])('uses the required temp paths on %s', async (platform) => {
-    if (platform !== 'win32' && !process.getuid) return;
-    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
-    if (platform === 'win32') {
-      if (process.getuid) vi.spyOn(process, 'getuid').mockImplementation(() => { throw new Error('no Unix uid on Windows'); });
-      vi.spyOn(fs, 'chmodSync').mockImplementation(() => { throw new Error('no Unix modes on Windows'); });
-    }
-    fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'blocked');
-    const install = await import('../src/harness/codeafInstall.js');
-    const binary = path.join(expectedTempBase(), 'v0.8.2', platform === 'win32' ? 'codeaf.exe' : 'codeaf');
-    expect(install.codeafManagedPaths()[1]).toBe(binary);
-    expect(install.codeafStateHome(process.env)).toBe(path.join(expectedTempBase(), 'state'));
-    await expect(install.ensureCodeafInstalled()).resolves.toBe(binary);
-    expect(install.findManagedCodeaf()).toBe(binary);
-    if (platform !== 'win32') {
-      for (const name of [expectedTempBase(), path.dirname(binary), path.join(expectedTempBase(), 'state')]) {
-        const stats = fs.lstatSync(name);
-        expect(stats.uid).toBe(process.getuid!());
-        expect(stats.mode & 0o7777).toBe(0o700);
-      }
-    }
-  });
-
-  it.skipIf(process.platform === 'win32')('repairs existing owned directories before reading or writing', async () => {
-    fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'blocked');
-    const base = expectedTempBase();
-    const release = path.join(base, 'v0.8.2');
-    const state = path.join(base, 'state');
-    for (const name of [base, release, state]) {
-      fs.mkdirSync(name, { recursive: true });
-      fs.chmodSync(name, 0o777);
-    }
-    const binary = path.join(release, 'codeaf');
-    fs.writeFileSync(binary, bytes, { mode: 0o755 });
-    fs.writeFileSync(path.join(release, '.codeaf.version'), 'v0.8.2\n');
-    const read = fs.readFileSync.bind(fs);
-    vi.spyOn(fs, 'readFileSync').mockImplementation((name, ...args) => {
-      if (String(name) === path.join(release, '.codeaf.version')) {
-        expect(fs.lstatSync(base).mode & 0o7777).toBe(0o700);
-        expect(fs.lstatSync(release).mode & 0o7777).toBe(0o700);
-      }
-      return read(name, ...args);
-    });
-    const install = await import('../src/harness/codeafInstall.js');
-    expect(install.findManagedCodeaf()).toBe(binary);
-    expect(install.codeafStateHome(process.env)).toBe(state);
-    expect(fs.lstatSync(state).mode & 0o7777).toBe(0o700);
-    expect(requests).toEqual([]);
-    expect(console.warn).not.toHaveBeenCalled();
-  });
-
-  const invalidPaths = ['base', 'release', 'state'].flatMap((level) =>
-    ['symlink', 'file', 'owner', 'chmod', 'lstat', 'mkdir'].map((failure) => [level, failure] as const));
-
-  it.each(invalidPaths)('rejects a %s directory with invalid %s without using its contents', async (level, failure) => {
-    if ((failure === 'owner' || failure === 'chmod') && process.platform === 'win32') return;
-    fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'blocked');
-    const install = await import('../src/harness/codeafInstall.js');
-    const [, binary] = install.codeafManagedPaths();
-    const base = path.dirname(path.dirname(binary));
-    const unsafe = level === 'base' ? base : path.join(base, level === 'release' ? 'v0.8.2' : 'state');
-    const outside = path.join(directory, 'outside');
-    fs.mkdirSync(outside);
-    const outsideMode = fs.statSync(outside).mode;
-    fs.mkdirSync(path.dirname(unsafe), { recursive: true });
-    if (failure === 'symlink') fs.symlinkSync(outside, unsafe, 'junction');
-    else if (failure === 'file') fs.writeFileSync(unsafe, 'not a directory');
-    else fs.mkdirSync(unsafe);
-
-    if (level !== 'state' && !['file', 'mkdir'].includes(failure)) {
-      fs.mkdirSync(path.dirname(binary), { recursive: true });
-      fs.writeFileSync(binary, bytes, { mode: 0o755 });
-      fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.2\n');
-    }
-    const lstat = fs.lstatSync.bind(fs);
-    vi.spyOn(fs, 'lstatSync').mockImplementation((name, ...args) => {
-      if (String(name) === unsafe && failure === 'lstat') throw new Error('lstat denied');
-      const stats = lstat(name, ...args);
-      if (String(name) === unsafe && failure === 'owner') stats.uid = process.getuid!() + 1;
-      return stats;
-    });
-    if (failure === 'chmod') {
-      fs.chmodSync(unsafe, 0o777);
-      const chmod = fs.chmodSync.bind(fs);
-      vi.spyOn(fs, 'chmodSync').mockImplementation((name, mode) => {
-        if (String(name) === unsafe) throw new Error('chmod denied');
-        chmod(name, mode);
-      });
-    }
-    if (failure === 'mkdir') {
-      const mkdir = fs.mkdirSync.bind(fs);
-      vi.spyOn(fs, 'mkdirSync').mockImplementation((name, options) => {
-        if (String(name) === unsafe) throw new Error('mkdir denied');
-        return mkdir(name, options);
-      });
-    }
-    const read = vi.spyOn(fs, 'readFileSync');
-    if (level === 'state') {
-      expect(() => install.codeafStateHome(process.env)).toThrow();
-      expect(() => install.codeafStateHome(process.env)).toThrow();
-    } else {
-      expect(install.findManagedCodeaf()).toBeUndefined();
-      await expect(install.ensureCodeafInstalled()).rejects.toThrow();
-      expect(read.mock.calls.some(([name]) => String(name) === path.join(path.dirname(binary), '.codeaf.version'))).toBe(false);
-    }
-    expect(requests).toEqual([]);
-    expect(console.warn).toHaveBeenCalledTimes(1);
-    expect(fs.statSync(outside).mode).toBe(outsideMode);
-    expect(fs.readdirSync(outside).filter((name) => name.startsWith('.codeaf-'))).toEqual([]);
-  });
-
-  it.each(['base', 'release', 'state'])('rejects a Windows %s junction', async (level) => {
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'blocked');
-    const base = expectedTempBase();
-    const unsafe = level === 'base' ? base : path.join(base, level === 'release' ? 'v0.8.2' : 'state');
-    const outside = path.join(directory, 'outside');
-    fs.mkdirSync(outside);
-    fs.mkdirSync(path.dirname(unsafe), { recursive: true });
-    fs.symlinkSync(outside, unsafe, 'junction');
-    const install = await import('../src/harness/codeafInstall.js');
-    if (level === 'state') expect(() => install.codeafStateHome(process.env)).toThrow();
-    else await expect(install.ensureCodeafInstalled()).rejects.toThrow();
-    expect(fs.readdirSync(outside)).toEqual([]);
-    expect(requests).toEqual([]);
-    expect(console.warn).toHaveBeenCalledTimes(1);
-  });
-});
-
 afterEach(async () => {
   server.closeAllConnections();
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -194,6 +59,15 @@ afterEach(async () => {
 });
 
 describe('V6 pinned CodeAF installation', () => {
+  it.each(['mkdir', 'write', 'non-error'])('C1 reports %s failures without temp entries', async (failure) => {
+    const install = await import('../src/harness/codeafInstall.js');
+    if (failure === 'mkdir') fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'not a directory');
+    else vi.spyOn(fs.promises, 'open').mockRejectedValue(failure === 'write' ? new Error('read-only home') : 'read-only home');
+    await expect(install.ensureCodeafInstalled()).rejects.toThrow('cannot install CodeAF into');
+    expect(requests).toEqual([]);
+    expect(fs.existsSync(path.join(directory, 'temp'))).toBe(false);
+  });
+
   it('embeds exactly the six pinned raw release hashes', async () => {
     const release = await vi.importActual<typeof import('../src/harness/codeafRelease.js')>('../src/harness/codeafRelease.js');
     expect(release.CODEAF_VERSION).toBe('v0.8.2');
@@ -316,43 +190,6 @@ describe('V6 pinned CodeAF installation', () => {
     expect(requests).toHaveLength(1);
   });
 
-  it('uses a private temp cache when the home bin cannot be created', async () => {
-    fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'home is a file');
-    const install = await import('../src/harness/codeafInstall.js');
-    const [, fallback] = install.codeafManagedPaths();
-    await expect(install.ensureCodeafInstalled()).resolves.toBe(fallback);
-    expect(fallback).toBe(path.join(expectedTempBase(), 'v0.8.2', path.basename(fallback)));
-    expect(install.findManagedCodeaf()).toBe(fallback);
-  });
-
-  it.skipIf(process.platform === 'win32')('A2 downloads and executes with a read-only AgentField home', async () => {
-    const home = process.env.AGENTFIELD_HOME!;
-    fs.mkdirSync(home, { mode: 0o555 });
-    vi.stubEnv('CODEAF_HOME', undefined);
-    vi.stubEnv('CODEAF_BIN', undefined);
-    vi.stubEnv('PATH', '');
-    try {
-      const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
-      const result = await new CodeafProvider().execute('task', {});
-      expect(result).toMatchObject({ isError: false, result: 'installed answer' });
-      const install = await import('../src/harness/codeafInstall.js');
-      expect(install.findManagedCodeaf()).toBe(install.codeafManagedPaths()[1]);
-      const state = path.join(expectedTempBase(), 'state');
-      expect(fs.statSync(state).mode & 0o777).toBe(0o700);
-      expect(requests).toHaveLength(1);
-    } finally {
-      fs.chmodSync(home, 0o755);
-    }
-  });
-
-  it('reports an error when neither managed location is writable', async () => {
-    fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'blocked');
-    fs.writeFileSync(path.join(directory, 'temp'), 'blocked');
-    const { ensureCodeafInstalled } = await import('../src/harness/codeafInstall.js');
-    await expect(ensureCodeafInstalled()).rejects.toThrow();
-    expect(requests).toEqual([]);
-  });
-
   it.each(['AGENTFIELD_SKIP_CODEAF', 'AGENTFIELD_SKIP_AFORGE'])('honors %s truthy spellings', async (key) => {
     const install = await import('../src/harness/codeafInstall.js');
     for (const value of ['1', 'TRUE', 'Yes', 'on', ' ON ']) {
@@ -372,7 +209,7 @@ describe('V6 pinned CodeAF installation', () => {
 
   it('requires a regular executable plus an exact, trimmed version marker', async () => {
     const install = await import('../src/harness/codeafInstall.js');
-    const [binary, fallback] = install.codeafManagedPaths();
+    const [binary] = install.codeafManagedPaths();
     fs.mkdirSync(path.dirname(binary), { recursive: true });
     fs.mkdirSync(binary);
     fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.2\n');
@@ -384,10 +221,6 @@ describe('V6 pinned CodeAF installation', () => {
     expect(install.isCodeafInstalled(binary)).toBe(true);
     fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.1');
     expect(install.isCodeafInstalled(binary)).toBe(false);
-    fs.mkdirSync(path.dirname(fallback), { recursive: true });
-    fs.writeFileSync(fallback, bytes, { mode: 0o755 });
-    fs.writeFileSync(path.join(path.dirname(fallback), '.codeaf.version'), ' v0.8.2\n');
-    expect(install.findManagedCodeaf()).toBe(fallback);
     fs.writeFileSync(path.join(path.dirname(binary), '.codeaf.version'), 'v0.8.2');
     expect(install.findManagedCodeaf()).toBe(binary);
   });

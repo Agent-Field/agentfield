@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import http from 'node:http';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -64,7 +65,7 @@ beforeEach(() => {
     'AGENTFIELD_HARNESS_PROVIDER', 'CODEAF_BIN', 'AFORGE_BIN', 'AGENTFIELD_CODEAF_COMMAND',
     'AGENTFIELD_AFORGE_COMMAND', 'AGENTFIELD_HARNESS_TIMEOUT_SECONDS', 'CODEAF_HOME',
     'CODEAF_NO_UPDATE_CHECK', 'CODEAF_TELEMETRY', 'CODEAF_EXEC_REASONING', 'CODEAF_MODELS',
-    'AFORGE_MODELS', 'CI', 'DO_NOT_TRACK', 'AGENTFIELD_TELEMETRY_ENABLED',
+    'AFORGE_MODELS', 'CI', 'DO_NOT_TRACK', 'AGENTFIELD_TELEMETRY_ENABLED', 'HTTPS_PROXY', 'https_proxy',
   ]) vi.stubEnv(name, undefined);
   vi.stubEnv('AGENTFIELD_HOME', path.join(directory, 'home'));
   vi.stubEnv('PATH', binDirectory);
@@ -85,24 +86,46 @@ afterEach(() => {
 
 // Executable Node scripts exercise the real subprocess transport on Unix.
 describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake CLIs', () => {
-  it.each([
-    ['base', 'codeaf'], ['release', 'codeaf'], ['base', 'aforge'], ['release', 'aforge'],
-  ])('A5 skips an unsafe temp %s and continues to %s on PATH', async (level, provider) => {
-    const { codeafManagedPaths } = await import('../src/harness/codeafInstall.js');
-    const [, unsafeBinary] = codeafManagedPaths();
-    const base = path.dirname(path.dirname(unsafeBinary));
-    const unsafe = level === 'base' ? base : path.dirname(unsafeBinary);
-    const outside = path.join(directory, 'outside');
-    fs.mkdirSync(outside);
-    fs.mkdirSync(path.dirname(unsafe), { recursive: true });
-    fs.symlinkSync(outside, unsafe, 'junction');
-    await managedBinary(1);
-    const safe = fakeBinary(path.join(binDirectory, provider), provider === 'aforge');
+  it('C1 preserves the home install error and hint through retry throttling', async () => {
+    vi.stubEnv('AGENTFIELD_SKIP_CODEAF', '');
+    fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'not a directory');
+    const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(new CodeafProvider().execute('task', {})).rejects.toThrow('cannot install CodeAF into');
+      await expect(new CodeafProvider().execute('task', {})).rejects.toThrow('af codeaf ensure');
+    }
+    expect(fs.existsSync(path.join(directory, 'temp'))).toBe(false);
+  });
+
+  it('C2 executes CODEAF_BIN with the default state path even when mkdir fails', async () => {
+    vi.stubEnv('CODEAF_BIN', fakeBinary(path.join(directory, 'explicit-codeaf')));
+    fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'not a directory');
     const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
     const result = await new CodeafProvider().execute('task', {});
-    expect(result).toMatchObject({ provider, isError: false });
-    expect(result.messages[0].observed).toHaveProperty('binary', safe);
-    expect(console.warn).toHaveBeenCalledTimes(provider === 'aforge' ? 2 : 1);
+    expect(result.isError).toBe(false);
+    expect(result.messages[0].observed).toHaveProperty('home', path.join(process.env.AGENTFIELD_HOME!, 'codeaf'));
+    expect(fs.existsSync(path.join(directory, 'temp'))).toBe(false);
+  });
+
+  it.each(['HTTPS_PROXY', 'https_proxy'])('C3 skips downloads with %s and falls through to PATH, legacy or unavailable', async (key) => {
+    vi.stubEnv('AGENTFIELD_SKIP_CODEAF', '');
+    vi.stubEnv(key, 'http://proxy.invalid');
+    const get = vi.spyOn(http, 'get').mockImplementation(() => { throw new Error('unexpected network request'); });
+    const secureGet = vi.spyOn(https, 'get').mockImplementation(() => { throw new Error('unexpected network request'); });
+    const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+    const provider = new CodeafProvider();
+    await expect(provider.execute('task', {})).rejects.toThrow('CodeAF download skipped: HTTPS_PROXY is set and the TypeScript SDK does not use proxies; run `af codeaf ensure`');
+    const legacy = fakeBinary(path.join(binDirectory, 'aforge'), true);
+    expect(await provider.execute('task', {})).toMatchObject({ provider: 'aforge' });
+    expect(get).not.toHaveBeenCalled();
+    expect(secureGet).not.toHaveBeenCalled();
+    fs.unlinkSync(legacy);
+    vi.resetModules();
+    fakeBinary(path.join(binDirectory, 'codeaf'));
+    const { CodeafProvider: FreshProvider } = await import('../src/harness/providers/codeaf.js');
+    expect(await new FreshProvider().execute('task', {})).toMatchObject({ provider: 'codeaf' });
+    expect(get).not.toHaveBeenCalled();
+    expect(secureGet).not.toHaveBeenCalled();
   });
 
   it('V1 uses CodeAF with no provider configuration and returns its canonical metrics', async () => {
@@ -169,7 +192,7 @@ describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake
     expect(await provider.execute('task', {})).toMatchObject({ provider: 'codeaf', result: 'codeaf answer' });
   });
 
-  it.each([0, 1])('V5 finds managed location %s ahead of PATH without installing', async (location) => {
+  it.each([0])('V5 finds managed location %s ahead of PATH without installing', async (location) => {
     const managed = await managedBinary(location);
     fakeBinary(path.join(binDirectory, 'codeaf'));
     const install = await import('../src/harness/codeafInstall.js');
@@ -249,12 +272,12 @@ describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake
     expect(console.info).not.toHaveBeenCalled();
   });
 
-  it.each(['home', 'temp', 'path', 'legacy', 'override'])('A1 recovers from failed resolution via %s without resetting caches', async (repair) => {
+  it.each(['home', 'path', 'legacy', 'override'])('A1 recovers from failed resolution via %s without resetting caches', async (repair) => {
     const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
     const provider = new CodeafProvider();
     await expect(provider.execute('task', {})).rejects.toThrow('af codeaf ensure');
     let binary: string;
-    if (repair === 'home' || repair === 'temp') binary = await managedBinary(repair === 'home' ? 0 : 1);
+    if (repair === 'home') binary = await managedBinary();
     else if (repair === 'path') binary = fakeBinary(path.join(binDirectory, 'codeaf'));
     else if (repair === 'legacy') binary = fakeBinary(path.join(binDirectory, 'aforge'), true);
     else {
@@ -305,30 +328,8 @@ describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake
     }
   });
 
-  it.each(['create', 'write'])('A2 executes a temp-managed CLI when default state cannot %s', async (failure) => {
-    await managedBinary(1);
-    const home = process.env.AGENTFIELD_HOME!;
-    if (failure === 'create') fs.writeFileSync(home, 'home is a file');
-    else {
-      fs.mkdirSync(home);
-      fs.mkdirSync(path.join(home, 'codeaf'));
-      fs.chmodSync(path.join(home, 'codeaf'), 0o555);
-    }
-    try {
-      const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
-      const result = await new CodeafProvider().execute('task', {});
-      expect(result.isError).toBe(false);
-      const fallback = path.join(directory, 'temp', `agentfield-codeaf-${process.getuid!()}`, 'state');
-      expect(result.messages[0].observed).toHaveProperty('home', fallback);
-      expect(fs.statSync(fallback).mode & 0o777).toBe(0o700);
-      fs.accessSync(fallback, fs.constants.W_OK);
-    } finally {
-      if (failure === 'write') fs.chmodSync(path.join(home, 'codeaf'), 0o755);
-    }
-  });
-
   it.each(['process', 'overlay', 'empty'])('A2 preserves explicit %s CODEAF_HOME as-is', async (source) => {
-    await managedBinary(1);
+    vi.stubEnv('CODEAF_BIN', fakeBinary(path.join(directory, 'explicit-codeaf')));
     fs.writeFileSync(process.env.AGENTFIELD_HOME!, 'home is a file');
     const explicit = source === 'empty' ? '' : path.join(directory, 'explicit');
     if (source === 'process') vi.stubEnv('CODEAF_HOME', explicit);
@@ -336,7 +337,7 @@ describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake
     const result = await new CodeafProvider().execute('task', source === 'process' ? {} : { env: { CODEAF_HOME: explicit } });
     expect(result.isError).toBe(false);
     expect(result.messages[0].observed).toHaveProperty('home', explicit);
-    expect(fs.existsSync(path.join(directory, 'temp', `agentfield-codeaf-${process.getuid!()}`, 'state'))).toBe(false);
+    expect(fs.existsSync(path.join(directory, 'temp'))).toBe(false);
   });
 
   it('V8 removes inherited model panels in the real child and honors overlays', async () => {

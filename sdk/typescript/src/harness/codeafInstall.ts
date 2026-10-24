@@ -11,58 +11,20 @@ export function agentfieldHome(env: Environment = process.env): string {
   return env.AGENTFIELD_HOME || path.join(os.homedir(), '.agentfield');
 }
 
-function codeafTempBase(): string {
-  const name = process.platform === 'win32' ? 'agentfield-codeaf' : `agentfield-codeaf-${process.getuid!()}`;
-  return path.join(os.tmpdir(), name);
-}
-
-let tempWarningLogged = false;
-
-function codeafTempDirectory(name: string): string | undefined {
-  const base = codeafTempBase();
-  const directory = path.join(base, name);
-  try {
-    for (const candidate of [base, directory]) {
-      fs.mkdirSync(candidate, { recursive: true, mode: 0o700 });
-      const stats = fs.lstatSync(candidate);
-      if (stats.isSymbolicLink() || !stats.isDirectory()) {
-        throw new Error(`${candidate} is not a real directory`);
-      }
-      if (process.platform !== 'win32') {
-        if (stats.uid !== process.getuid!()) {
-          throw new Error(`${candidate} is not owned by the current user`);
-        }
-        if ((stats.mode & 0o7777) !== 0o700) fs.chmodSync(candidate, 0o700);
-      }
-    }
-    return directory;
-  } catch (error) {
-    if (!tempWarningLogged) {
-      tempWarningLogged = true;
-      console.warn(`Skipping CodeAF temp fallback at ${base}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    return undefined;
-  }
-}
-
 export function codeafStateHome(env: Environment): string {
   const preferred = path.join(agentfieldHome(env), 'codeaf');
   try {
     fs.mkdirSync(preferred, { recursive: true });
-    fs.accessSync(preferred, fs.constants.W_OK);
-    return preferred;
   } catch {
-    const fallback = codeafTempDirectory('state');
-    if (!fallback) throw new Error('CodeAF temp state fallback is unusable');
-    return fallback;
+    // CodeAF reports state write failures in its result.
   }
+  return preferred;
 }
 
 export function codeafManagedPaths(env: Environment = process.env): string[] {
   const name = process.platform === 'win32' ? 'codeaf.exe' : 'codeaf';
   return [
     path.join(agentfieldHome(env), 'bin', name),
-    path.join(codeafTempBase(), CODEAF_VERSION, name),
   ];
 }
 
@@ -71,7 +33,6 @@ function versionMarker(binary: string): string {
 }
 
 export function isCodeafInstalled(binary: string): boolean {
-  if (binary === codeafManagedPaths()[1] && !codeafTempDirectory(CODEAF_VERSION)) return false;
   try {
     if (!fs.statSync(binary).isFile()) {
       return false;
@@ -133,24 +94,18 @@ async function installCodeaf(): Promise<string> {
     throw new Error(`CodeAF is not installable on ${process.platform}/${process.arch}`);
   }
 
-  let target: { binary: string; temporary: string; file: promises.FileHandle } | undefined;
-  for (const [index, binary] of codeafManagedPaths().entries()) {
-    if (index === 1 && !codeafTempDirectory(CODEAF_VERSION)) {
-      throw new Error('CodeAF temp binary fallback is unusable');
-    }
-    const temporary = path.join(path.dirname(binary), `.codeaf-${randomUUID()}.tmp`);
-    try {
-      if (index === 0) await fs.promises.mkdir(path.dirname(binary), { recursive: true });
-      const file = await fs.promises.open(temporary, 'wx', 0o600);
-      target = { binary, temporary, file };
-      break;
-    } catch (error) {
-      if (index === 1) {
-        throw error;
-      }
-    }
+  if (process.env.HTTPS_PROXY || process.env.https_proxy) {
+    throw new Error('CodeAF download skipped: HTTPS_PROXY is set and the TypeScript SDK does not use proxies; run `af codeaf ensure`');
   }
-  const { binary, temporary, file } = target!;
+  const [binary] = codeafManagedPaths();
+  const temporary = path.join(path.dirname(binary), `.codeaf-${randomUUID()}.tmp`);
+  let file: promises.FileHandle;
+  try {
+    await fs.promises.mkdir(path.dirname(binary), { recursive: true });
+    file = await fs.promises.open(temporary, 'wx', 0o600);
+  } catch (error) {
+    throw new Error(`cannot install CodeAF into ${path.dirname(binary)}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   console.info(`downloading CodeAF ${CODEAF_VERSION} (~70 MB) to ${binary}`);
   try {
     const base = (process.env.AGENTFIELD_CODEAF_BASE_URL || CODEAF_BASE_URL).replace(/\/+$/, '');
