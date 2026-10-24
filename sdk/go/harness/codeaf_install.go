@@ -40,9 +40,16 @@ type codeAFBinary struct {
 	legacy bool
 }
 
-// Overrides have separate cache entries so explicit per-call paths always win.
+type codeAFResolution struct {
+	done   chan struct{}
+	binary codeAFBinary
+	err    error
+}
+
+// Only automatic resolution is shared. Explicit binaries bypass synchronization.
 var codeAFResolver = struct {
 	sync.Mutex
+	inflight            *codeAFResolution
 	cache               map[string]codeAFBinary
 	lastDownloadAttempt time.Time
 	lastDownloadError   error
@@ -121,17 +128,38 @@ func resolveCodeAF(ctx context.Context, override string) (codeAFBinary, error) {
 	if override == "" {
 		override = strings.TrimSpace(os.Getenv("CODEAF_BIN"))
 	}
+	if override != "" {
+		return findCodeAF(ctx, override)
+	}
 	codeAFResolver.Lock()
-	defer codeAFResolver.Unlock()
-	if cached, ok := codeAFResolver.cache[override]; ok {
+	if cached, ok := codeAFResolver.cache[""]; ok {
+		codeAFResolver.Unlock()
 		return cached, nil
 	}
-	binary, err := findCodeAF(ctx, override)
-	// Failed lookups must recheck every location on the next call.
-	if err == nil && ctx.Err() == nil {
-		codeAFResolver.cache[override] = binary
+	pending := codeAFResolver.inflight
+	if pending == nil {
+		pending = &codeAFResolution{done: make(chan struct{})}
+		codeAFResolver.inflight = pending
+		go func() {
+			// The installation outlives individual callers and their deadlines.
+			binary, err := findCodeAF(context.Background(), "")
+			codeAFResolver.Lock()
+			pending.binary, pending.err = binary, err
+			if err == nil {
+				codeAFResolver.cache[""] = binary
+			}
+			codeAFResolver.inflight = nil
+			close(pending.done)
+			codeAFResolver.Unlock()
+		}()
 	}
-	return binary, err
+	codeAFResolver.Unlock()
+	select {
+	case <-ctx.Done():
+		return codeAFBinary{}, ctx.Err()
+	case <-pending.done:
+		return pending.binary, pending.err
+	}
 }
 
 func findCodeAF(ctx context.Context, override string) (codeAFBinary, error) {
@@ -147,16 +175,22 @@ func findCodeAF(ctx context.Context, override string) (codeAFBinary, error) {
 	}
 	var downloadErr error
 	if !codeAFSkipped() {
-		if time.Since(codeAFResolver.lastDownloadAttempt) >= codeAFDownloadRetry {
+		codeAFResolver.Lock()
+		attempt := time.Since(codeAFResolver.lastDownloadAttempt) >= codeAFDownloadRetry
+		downloadErr = codeAFResolver.lastDownloadError
+		if attempt {
 			codeAFResolver.lastDownloadAttempt = time.Now()
+		}
+		codeAFResolver.Unlock()
+		if attempt {
 			path, err := downloadManagedCodeAF(ctx)
+			codeAFResolver.Lock()
 			codeAFResolver.lastDownloadError = err
+			codeAFResolver.Unlock()
 			if err == nil {
 				return codeAFBinary{path: path}, nil
 			}
 			downloadErr = err
-		} else {
-			downloadErr = codeAFResolver.lastDownloadError
 		}
 	}
 	if path, err := exec.LookPath("codeaf"); err == nil {

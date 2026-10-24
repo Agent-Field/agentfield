@@ -39,7 +39,9 @@ func TestRunner_Run_NoSchema(t *testing.T) {
 	// We can't easily test with real providers, so test the merge/validation logic
 	t.Run("empty provider defaults to codeaf", func(t *testing.T) {
 		t.Setenv(ProviderEnvVar, "")
-		r := NewRunner(Options{BinPath: filepath.Join(t.TempDir(), "missing-codeaf")})
+		t.Setenv("AFORGE_BIN", "")
+		t.Setenv("CODEAF_BIN", filepath.Join(t.TempDir(), "missing-codeaf"))
+		r := NewRunner(Options{})
 		result, err := r.Run(context.Background(), "test", nil, nil, Options{})
 		assert.Nil(t, result)
 		require.ErrorIs(t, err, ErrProviderUnavailable)

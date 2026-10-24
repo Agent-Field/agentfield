@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -62,6 +63,9 @@ func getCodeAFSemaphore() chan struct{} {
 
 func codeAFCommand() string {
 	command := strings.TrimSpace(os.Getenv("AGENTFIELD_CODEAF_COMMAND"))
+	if command == "" {
+		command = strings.TrimSpace(os.Getenv("AGENTFIELD_AFORGE_COMMAND"))
+	}
 	if command == "do" || command == "exec" {
 		return command
 	}
@@ -167,11 +171,23 @@ func codeAFErrorMessage(code int, stop, detail, blockedOn, stderr string) string
 }
 
 func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
+	started := time.Now()
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(aforgeTimeout(options))*time.Second)
+	defer cancel()
+	deadline, _ := runCtx.Deadline()
+	timeoutResult := func(message string) (*RawResult, error) {
+		elapsed := int(time.Since(started).Milliseconds())
+		return &RawResult{Provider: ProviderCodeAF, IsError: true, FailureType: FailureTimeout,
+			ErrorMessage: message, Metrics: Metrics{DurationMS: elapsed, DurationAPIMS: elapsed}}, nil
+	}
 	override := p.BinPath
 	if options.BinPath != "" {
 		override = options.BinPath
 	}
-	binary, err := p.resolveBinary(ctx, override)
+	binary, err := p.resolveBinary(runCtx, override)
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		return timeoutResult("Timed out while provisioning CodeAF")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +199,7 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 		if p.runCLI != nil {
 			legacy.runCLI = p.runCLI
 		}
-		raw, err := legacy.Execute(ctx, prompt, options)
+		raw, err := legacy.Execute(runCtx, prompt, options)
 		if raw != nil {
 			raw.Provider = ProviderAforge
 		}
@@ -198,14 +214,27 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	select {
 	case sem <- struct{}{}:
 		defer func() { <-sem }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-runCtx.Done():
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return timeoutResult("CodeAF timed out")
+		}
+		return nil, runCtx.Err()
 	}
 
 	root := firstNonEmpty(options.ProjectDir, options.Cwd, ".")
-	outerTimeout := aforgeTimeout(options)
 	model, variant := options.resolveModelAndVariant()
 	model = stripOpenRouterPrefix(model)
+	if model == "" {
+		for _, key := range []string{"CODEAF_MODEL", "AFORGE_MODEL"} {
+			value, present := options.Env[key]
+			if !present {
+				value = os.Getenv(key)
+			}
+			if model = stripOpenRouterPrefix(strings.TrimSpace(value)); model != "" {
+				break
+			}
+		}
+	}
 	if model == "" {
 		model = DefaultCodeAFModel
 	}
@@ -216,7 +245,8 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	} else {
 		cmd = append(cmd, "--model", model)
 	}
-	cmd = append(cmd, "--timeout", strconv.Itoa(aforgeInnerTimeout(outerTimeout))+"s")
+	remaining := time.Until(deadline)
+	cmd = append(cmd, "--timeout", strings.TrimRight(strings.TrimRight(strconv.FormatFloat(math.Max(1, remaining.Seconds()-5), 'f', 3, 64), "0"), ".")+"s")
 	input := []byte(prompt)
 	if command == "exec" {
 		if options.MaxTurns > 0 {
@@ -233,13 +263,12 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	if err != nil {
 		return nil, err
 	}
-	started := time.Now()
-	runCtx, cancel := context.WithTimeout(ctx, time.Duration(outerTimeout)*time.Second)
-	defer cancel()
 	runCLI := p.runCLI
 	if runCLI == nil {
 		runCLI = runCodeAFCLI
 	}
+	// The context is the exact deadline; the integer CLI cap rounds up so it cannot shorten it.
+	outerTimeout := int(math.Ceil(time.Until(deadline).Seconds()))
 	cli, err := runCLI(runCtx, cmd, env, "", outerTimeout, 0, input)
 	elapsed := int(time.Since(started).Milliseconds())
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {

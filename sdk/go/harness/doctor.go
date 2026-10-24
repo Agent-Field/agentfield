@@ -131,6 +131,24 @@ func Doctor(ctx context.Context, opts DoctorOptions) ([]ProviderHealth, error) {
 		}
 
 		binary := spec.Binary
+		codeAFAlias := false
+		if provider == ProviderAforge {
+			if pin := strings.TrimSpace(getenv("AFORGE_BIN")); pin != "" {
+				binary = pin
+			} else {
+				candidate := strings.TrimSpace(getenv("CODEAF_BIN"))
+				if candidate == "" {
+					candidate = findManagedCodeAF()
+				}
+				if candidate == "" {
+					candidate = "codeaf"
+				}
+				if resolved, err := lookPath(candidate); err == nil {
+					binary = resolved
+					codeAFAlias = true
+				}
+			}
+		}
 		if provider == ProviderCodeAF {
 			if override := strings.TrimSpace(getenv("CODEAF_BIN")); override != "" {
 				binary = override
@@ -147,6 +165,9 @@ func Doctor(ctx context.Context, opts DoctorOptions) ([]ProviderHealth, error) {
 
 		if health.Installed && opts.Probe {
 			command := append([]string{health.Binary}, spec.VersionArgs...)
+			if codeAFAlias {
+				command = []string{health.Binary, "version"}
+			}
 			version, err := probe(ctx, command)
 			if err != nil {
 				health.Issues = append(health.Issues, IssueVersionProbeFailed)

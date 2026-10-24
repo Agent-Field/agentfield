@@ -2,8 +2,10 @@ package harness
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
+	"sync"
 )
 
 // ResolveProviderName applies harness provider precedence: an explicit name
@@ -19,11 +21,24 @@ func ResolveProviderName(name string) string {
 	return DefaultProvider
 }
 
+var legacyPinOnce sync.Once
+
+func resolveExecutionProvider(name, binPath string) string {
+	if strings.TrimSpace(name) == "" && strings.TrimSpace(os.Getenv(ProviderEnvVar)) == "" &&
+		(binPath != "" || strings.TrimSpace(os.Getenv("AFORGE_BIN")) != "") {
+		legacyPinOnce.Do(func() {
+			log.Print(`INFO Legacy aforge pin in effect; unset it or select provider "codeaf" to use CodeAF`)
+		})
+		return ProviderAforge
+	}
+	return ResolveProviderName(name)
+}
+
 // BuildProvider creates a Provider instance for the given provider name.
 // Supported providers: "codeaf", "aforge", "claude-code", "codex", "gemini",
 // "opencode", "pi", "omp", "cursor".
 func BuildProvider(name string, binPath string) (Provider, error) {
-	name = ResolveProviderName(name)
+	name = resolveExecutionProvider(name, binPath)
 	switch name {
 	case ProviderCodeAF:
 		return NewCodeAFProvider(binPath), nil

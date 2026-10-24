@@ -121,7 +121,9 @@ func TestHarness_ErrorWithoutProvider(t *testing.T) {
 	a := newTestAgentForHarness(t)
 
 	missingCodeAF := filepath.Join(t.TempDir(), "missing-codeaf")
-	result, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{BinPath: missingCodeAF})
+	t.Setenv("AFORGE_BIN", "")
+	t.Setenv("CODEAF_BIN", missingCodeAF)
+	result, err := a.Harness(context.Background(), "do something", nil, nil, harness.Options{})
 	assert.Nil(t, result)
 	require.ErrorIs(t, err, harness.ErrProviderUnavailable)
 	assert.Contains(t, err.Error(), "missing-codeaf")
@@ -230,4 +232,40 @@ printf '%s\n' '{"ok":true,"stop":"done","answer":"ok","spend_usd":0,"tokens":{"i
 	assert.Equal(t, 10, entries[0]["input_tokens"])
 	assert.Equal(t, 5, entries[0]["output_tokens"])
 	assert.Equal(t, 0.0, entries[0]["cost_usd"])
+}
+
+// F1a/d: agent-level defaults and per-call BinPath pins keep the legacy adapter and usage.
+func TestHarnessF1ImplicitLegacyPinRecordsUsage(t *testing.T) {
+	for _, source := range []string{"env", "config", "call"} {
+		t.Run(source, func(t *testing.T) {
+			t.Setenv(harness.ProviderEnvVar, " ")
+			t.Setenv("AFORGE_BIN", "")
+			t.Setenv("AGENTFIELD_AFORGE_COMMAND", "exec")
+			path := filepath.Join(t.TempDir(), "legacy")
+			require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+printf '%s\n' '{"text":"legacy","stop":"done","turns":2,"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.1}}'
+`), 0o755))
+			a := newTestAgentForHarness(t)
+			opts := harness.Options{}
+			if source == "env" {
+				t.Setenv("AFORGE_BIN", path)
+			}
+			if source == "config" {
+				a.cfg.HarnessConfig = &HarnessConfig{BinPath: path}
+			}
+			if source == "call" {
+				opts.BinPath = path
+			}
+			tracker := NewCostTracker()
+			ctx := contextWithCostTracker(context.Background(), tracker)
+			result, err := a.Harness(ctx, "p", nil, nil, opts)
+			require.NoError(t, err)
+			require.False(t, result.IsError, result.ErrorMessage)
+			assert.Equal(t, "legacy", result.Result)
+			assert.Equal(t, harness.ProviderAforge, result.Provider)
+			entries := tracker.Serialize()["entries"].([]map[string]any)
+			require.Len(t, entries, 1)
+			assert.Equal(t, "aforge", entries[0]["harness"])
+		})
+	}
 }

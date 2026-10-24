@@ -73,7 +73,7 @@ func TestCodeAFInvocation(t *testing.T) {
 					want = append(want, "--yes-spend", "--model", "vendor/model", "--plan-model", "vendor/model", "--check-model", "vendor/model", "--timeout", "85s", "-")
 					assert.Equal(t, "be precise\n\nTask:\nprivate task", string(input))
 				}
-				assert.Equal(t, want, cmd)
+				assert.Equal(t, want, normalizeCodeAFTimeout(t, cmd, want))
 				assert.Equal(t, "high", env["CODEAF_EXEC_REASONING"])
 				assert.NotContains(t, env, "AFORGE_EXEC_REASONING")
 				assert.NotContains(t, env, "AFORGE_MODEL")
@@ -111,7 +111,8 @@ func TestCodeAFDefaultModelTimeoutAndCommand(t *testing.T) {
 			t.Setenv("AGENTFIELD_CODEAF_COMMAND", tc.command)
 			p := stubCodeAF()
 			p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, timeout, _ int, input []byte) (*CLIResult, error) {
-				assert.Equal(t, []string{"/opt/codeaf", "exec", "--json", "--dir", ".", "--model", tc.wantModel, "--timeout", tc.wantInner}, cmd)
+				want := []string{"/opt/codeaf", "exec", "--json", "--dir", ".", "--model", tc.wantModel, "--timeout", tc.wantInner}
+				assert.Equal(t, want, normalizeCodeAFTimeout(t, cmd, want))
 				assert.Equal(t, tc.wantOuter, timeout)
 				assert.Equal(t, "task", string(input))
 				return &CLIResult{Stdout: `{"ok":true,"stop":"done","answer":"ok"}`}, nil
@@ -402,7 +403,7 @@ func TestCodeAFSchemaUsesExistingRunnerPath(t *testing.T) {
 		Value string `json:"value"`
 	}
 	schema := map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}}, "required": []string{"value"}}
-	result, err := NewRunner(Options{BinPath: path, ProjectDir: t.TempDir()}).Run(context.Background(), "task", schema, &dest, Options{})
+	result, err := NewRunner(Options{Provider: ProviderCodeAF, BinPath: path, ProjectDir: t.TempDir()}).Run(context.Background(), "task", schema, &dest, Options{})
 	require.NoError(t, err)
 	assert.False(t, result.IsError, result.ErrorMessage)
 	assert.Equal(t, "ok", dest.Value)
