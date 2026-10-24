@@ -137,6 +137,9 @@ func Doctor(ctx context.Context, opts DoctorOptions) ([]ProviderHealth, error) {
 				binary = pin
 			} else {
 				candidate := strings.TrimSpace(getenv("CODEAF_BIN"))
+				if candidate != "" {
+					binary = candidate
+				}
 				if candidate == "" {
 					candidate = findManagedCodeAF()
 				}

@@ -62,9 +62,9 @@ func getCodeAFSemaphore() chan struct{} {
 }
 
 func codeAFCommand() string {
-	command := strings.TrimSpace(os.Getenv("AGENTFIELD_CODEAF_COMMAND"))
+	command := strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFIELD_CODEAF_COMMAND")))
 	if command == "" {
-		command = strings.TrimSpace(os.Getenv("AGENTFIELD_AFORGE_COMMAND"))
+		command = strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFIELD_AFORGE_COMMAND")))
 	}
 	if command == "do" || command == "exec" {
 		return command
@@ -200,6 +200,12 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 			legacy.runCLI = p.runCLI
 		}
 		raw, err := legacy.Execute(runCtx, prompt, options)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			raw, err = timeoutResult("aforge timed out")
+		}
 		if raw != nil {
 			raw.Provider = ProviderAforge
 		}

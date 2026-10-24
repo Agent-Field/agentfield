@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,6 +59,8 @@ func TestCodeAFF2CommandAndModelFallbacks(t *testing.T) {
 	}{
 		{name: "F2a", legacyCommand: "do", wantCommand: "do", wantModel: DefaultCodeAFModel},
 		{name: "F2b", command: "exec", legacyCommand: "do", wantCommand: "exec", wantModel: DefaultCodeAFModel},
+		{name: "R3a", legacyCommand: " DO ", wantCommand: "do", wantModel: DefaultCodeAFModel},
+		{name: "R3b", command: "Exec", legacyCommand: "do", wantCommand: "exec", wantModel: DefaultCodeAFModel},
 		{name: "F2c ambient", oldModel: "openrouter/old", wantCommand: "exec", wantModel: "old"},
 		{name: "F2c overlay", oldModel: "old", env: map[string]string{"AFORGE_MODEL": "overlay"}, wantCommand: "exec", wantModel: "overlay"},
 		{name: "F2d", newModel: "openrouter/new", oldModel: "old", wantCommand: "exec", wantModel: "new"},
@@ -84,6 +87,59 @@ func TestCodeAFF2CommandAndModelFallbacks(t *testing.T) {
 			raw, err := p.Execute(context.Background(), "p", Options{Model: tc.model, Env: tc.env})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantModel, raw.Metrics.Model)
+		})
+	}
+}
+
+func TestCodeAFR2LegacyFallbackQueue(t *testing.T) {
+	for _, contract := range []string{"R2a", "R2b", "R2b caller deadline"} {
+		t.Run(contract, func(t *testing.T) {
+			isolateCodeAF(t)
+			t.Setenv("AFORGE_MAX_CONCURRENT", "1")
+			aforgeSemaphore, aforgeSemOnce = nil, sync.Once{}
+			sem := getAforgeSemaphore()
+			sem <- struct{}{}
+			t.Cleanup(func() {
+				<-sem
+				aforgeSemaphore, aforgeSemOnce = nil, sync.Once{}
+			})
+			p := NewCodeAFProvider("")
+			p.resolveBinary = func(context.Context, string) (codeAFBinary, error) {
+				return codeAFBinary{path: "/legacy/aforge", legacy: true}, nil
+			}
+			p.runCLI = func(context.Context, []string, map[string]string, string, int, int, []byte) (*CLIResult, error) {
+				t.Fatal("queued fallback must not launch a process")
+				return nil, nil
+			}
+			ctx := context.Background()
+			if contract == "R2b" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				defer cancel()
+				timer := time.AfterFunc(20*time.Millisecond, cancel)
+				defer timer.Stop()
+			} else if contract == "R2b caller deadline" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 20*time.Millisecond)
+				defer cancel()
+			}
+			started := time.Now()
+			raw, err := p.Execute(ctx, "p", Options{Timeout: 1})
+			if contract != "R2a" {
+				require.ErrorIs(t, err, ctx.Err())
+				assert.Nil(t, raw)
+				assert.Less(t, time.Since(started), time.Second)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, raw)
+			assert.NoError(t, ctx.Err())
+			assert.Equal(t, ProviderAforge, raw.Provider)
+			assert.True(t, raw.IsError)
+			assert.Equal(t, FailureTimeout, raw.FailureType)
+			assert.Contains(t, raw.ErrorMessage, "timed out")
+			assert.GreaterOrEqual(t, raw.Metrics.DurationMS, 900)
+			assert.Less(t, time.Since(started), 2*time.Second)
 		})
 	}
 }
@@ -213,6 +269,53 @@ func TestCodeAFF5AliasDoctor(t *testing.T) {
 			}
 			if !reports[0].Usable {
 				assert.Contains(t, reports[0].InstallCommand, "af aforge ensure")
+			}
+		})
+	}
+}
+
+func TestCodeAFR4AliasDoctorOverride(t *testing.T) {
+	for _, contract := range []string{"R4a", "R4b", "R4c"} {
+		t.Run(contract, func(t *testing.T) {
+			isolateCodeAF(t)
+			dir := t.TempDir()
+			t.Setenv("PATH", dir)
+			legacy := filepath.Join(dir, "aforge")
+			writeCodeAFCLI(t, legacy, "{}", 0)
+			target := filepath.Join(t.TempDir(), "override")
+			if contract != "R4b" {
+				t.Setenv("CODEAF_BIN", target)
+			}
+			if contract == "R4c" {
+				writeCodeAFCLI(t, target, "{}", 0)
+			}
+			calls := 0
+			reports, err := Doctor(context.Background(), DoctorOptions{
+				Providers: []string{"aforge"}, Probe: true,
+				VersionProbe: func(_ context.Context, cmd []string) (string, error) {
+					calls++
+					if contract == "R4b" {
+						assert.Equal(t, []string{legacy, "version"}, cmd)
+						return "aforge v0.1.0", nil
+					}
+					assert.Equal(t, []string{target, "version"}, cmd)
+					return "codeaf v0.8.2", nil
+				},
+			})
+			require.NoError(t, err)
+			require.Len(t, reports, 1)
+			report := reports[0]
+			assert.Equal(t, contract != "R4a", report.Usable)
+			assert.Equal(t, report.Usable, report.Installed)
+			if contract == "R4a" {
+				assert.Empty(t, report.Binary)
+				assert.Equal(t, []string{IssueBinaryNotFound}, report.Issues)
+				assert.Zero(t, calls)
+			} else {
+				assert.Equal(t, 1, calls)
+				if contract == "R4c" {
+					assert.Equal(t, "codeaf v0.8.2", report.Version)
+				}
 			}
 		})
 	}
