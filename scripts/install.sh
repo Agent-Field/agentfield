@@ -651,8 +651,24 @@ install_codeaf() {
     return 0
   fi
 
-  local ensure_args=(codeaf ensure --lock-wait 30s)
-  if "$af_bin" "${ensure_args[@]}"; then
+  printf "\n"
+  # This script is served from main but installs the latest stable af, which
+  # can predate `af codeaf`. Such an af's SDKs still default to aforge, so
+  # provision aforge exactly as earlier installers did.
+  local af_help
+  af_help="$("$af_bin" --help 2>/dev/null || true)"
+  if ! grep -Eq '^[[:space:]]+codeaf[[:space:]]' <<<"$af_help"; then
+    print_info "Installing the aforge coding harness..."
+    if AGENTFIELD_HOME="${install_dir%/bin}" "$af_bin" aforge ensure; then
+      print_success "aforge coding harness installed"
+    else
+      print_warning "aforge install reported an issue; the control plane is unaffected"
+    fi
+    return 0
+  fi
+
+  print_info "Installing the codeaf coding harness..."
+  if "$af_bin" codeaf ensure --lock-wait 30s; then
     print_success "codeaf coding harness installed"
   else
     print_warning "codeaf install reported an issue; the control plane is unaffected"

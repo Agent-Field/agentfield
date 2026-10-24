@@ -1,38 +1,21 @@
-<#
-.SYNOPSIS
-Install AgentField and its managed CodeAF coding harness.
-.PARAMETER NoCodeaf
-Skip CodeAF provisioning, including later af/skill/tray subprocesses.
-.PARAMETER NoAforge
-Legacy alias for NoCodeaf.
-.PARAMETER Staging
-Use the separate .agentfield-staging managed home.
-#>
-param([switch]$NoCodeaf, [switch]$NoAforge, [switch]$Staging)
+param([switch]$NoCodeaf, [switch]$NoAforge)
 
 # AgentField CLI Installer for Windows
 # Usage: iwr -useb https://agentfield.ai/install.ps1 | iex
 # Version pinning: $env:VERSION="v1.0.0"; iwr -useb https://agentfield.ai/install.ps1 | iex
 # Skip CodeAF: $env:CODEAF_MODE="none"; iwr -useb https://agentfield.ai/install.ps1 | iex
+# (-NoAforge and AFORGE_MODE=none are accepted as legacy aliases)
 
 $ErrorActionPreference = "Stop"
 
 # Configuration
 $Repo = "Agent-Field/agentfield"
-$ManagedHome = if ($Staging) { Join-Path $env:USERPROFILE '.agentfield-staging' } elseif ($env:AGENTFIELD_HOME) { $env:AGENTFIELD_HOME } else { Join-Path $env:USERPROFILE '.agentfield' }
-$env:AGENTFIELD_HOME = $ManagedHome
-$InstallDir = if ($env:AGENTFIELD_INSTALL_DIR) { $env:AGENTFIELD_INSTALL_DIR } else { Join-Path $ManagedHome 'bin' }
+$InstallDir = if ($env:AGENTFIELD_INSTALL_DIR) { $env:AGENTFIELD_INSTALL_DIR } else { "$env:USERPROFILE\.agentfield\bin" }
 $Version = if ($env:VERSION) { $env:VERSION } else { "latest" }
 $Verbose = if ($env:VERBOSE -eq "1") { $true } else { $false }
 $SkipPathConfig = if ($env:SKIP_PATH_CONFIG -eq "1") { $true } else { $false }
 # Piped iwr | iex installs cannot pass switches, so retain an environment opt-out.
 $CodeafMode = if ($NoCodeaf -or $NoAforge -or $env:CODEAF_MODE -eq 'none' -or $env:AFORGE_MODE -eq 'none') { 'none' } else { 'auto' }
-# Retain the legacy environment opt-out and normalize both for every child.
-if ($CodeafMode -eq 'none' -or $env:AGENTFIELD_SKIP_CODEAF -match '^(1|true|yes|on)$' -or $env:AGENTFIELD_SKIP_AFORGE -match '^(1|true|yes|on)$') {
-    $CodeafMode = 'none'
-    $env:AGENTFIELD_SKIP_CODEAF = '1'
-    $env:AGENTFIELD_SKIP_AFORGE = '1'
-}
 
 # Colors
 function Write-ColorOutput {
@@ -335,10 +318,37 @@ function Install-Codeaf {
         return
     }
 
+    # agentfield.exe, not the af.exe alias: Install-Binary creates the alias
+    # best-effort and warns when both the hardlink and the copy fail.
+    $AgentField = Join-Path $InstallDir 'agentfield.exe'
     try {
-        # agentfield.exe is always installed; the af.exe alias is best-effort.
-        $ensureArgs = @('codeaf', 'ensure', '--lock-wait', '30s')
-        & (Join-Path $InstallDir 'agentfield.exe') @ensureArgs
+        # This script is served from main but installs the latest stable af,
+        # which can predate `af codeaf`. Such an af's SDKs still default to
+        # aforge, so provision aforge exactly as earlier installers did.
+        $AfHelp = (& $AgentField --help) -join "`n"
+        if ($AfHelp -notmatch '(?m)^\s+codeaf\s') {
+            Write-Info "Installing the aforge coding harness..."
+            # aforge installs into AGENTFIELD_HOME\bin, so pin its home to the
+            # install directory's parent to keep aforge beside agentfield.exe.
+            $previousAgentFieldHome = $env:AGENTFIELD_HOME
+            try {
+                $env:AGENTFIELD_HOME = Split-Path -Parent $InstallDir
+                & $AgentField aforge ensure
+            }
+            finally {
+                $env:AGENTFIELD_HOME = $previousAgentFieldHome
+            }
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "aforge coding harness installed"
+            }
+            else {
+                Write-Warning "aforge install reported an issue; the control plane is unaffected"
+            }
+            return
+        }
+
+        Write-Info "Installing the codeaf coding harness..."
+        & $AgentField codeaf ensure --lock-wait 30s
         if ($LASTEXITCODE -eq 0) {
             Write-Success "codeaf coding harness installed"
         }
