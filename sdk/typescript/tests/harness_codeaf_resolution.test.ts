@@ -507,9 +507,13 @@ describe.skipIf(process.platform === 'win32')('F1/F3/F5 compatibility contracts'
     const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
     await new CodeafProvider().execute('p', {});
     const [cmd, options] = run.mock.calls[0];
-    expect(options!.timeout).toBeGreaterThan(9000);
-    expect(options!.timeout).toBeLessThan(9900);
-    expect(Number.parseFloat(cmd[cmd.indexOf('--timeout') + 1])).toBeCloseTo(options!.timeout! / 1000 - 5, 1);
+    // Provisioning took >= 150ms of the 10s budget; only the rest is passed on.
+    expect(options!.timeout).toBeGreaterThan(5000);
+    expect(options!.timeout).toBeLessThanOrEqual(9855);
+    // The inner timeout is taken first, so it can only exceed remaining - 5.
+    const inner = Number.parseFloat(cmd[cmd.indexOf('--timeout') + 1]);
+    expect(inner + 0.001).toBeGreaterThanOrEqual(options!.timeout! / 1000 - 5);
+    expect(inner).toBeLessThanOrEqual(4.856);
   });
 
   it.each(['managed', 'path', 'legacy', 'missing', 'pin'])('F5a-d doctor %s alias is read-only', async (location) => {

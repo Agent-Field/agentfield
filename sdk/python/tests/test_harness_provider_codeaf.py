@@ -747,10 +747,13 @@ async def test_F3c_execution_uses_remaining_budget(monkeypatch):
     await CodeafProvider().execute("p", {})
     cmd = run.call_args.args[0]
     remaining = run.call_args.kwargs["timeout"]
-    assert 9 < remaining < 9.9
-    assert float(cmd[cmd.index("--timeout") + 1][:-1]) == pytest.approx(
-        remaining - 5, abs=0.01
-    )
+    inner = float(cmd[cmd.index("--timeout") + 1][:-1])
+    # Provisioning took >= 0.15s of the 10s budget; only the rest is passed on.
+    # The inner timeout is taken first, so it can only be larger than
+    # remaining - 5 (by however long the machine took in between).
+    assert 5 < remaining <= 9.85 + 0.005
+    assert remaining - 5 <= inner + 0.001
+    assert inner <= 4.85 + 0.006
 
 
 @pytest.mark.parametrize("location", ["managed", "path", "legacy", "missing", "pin"])

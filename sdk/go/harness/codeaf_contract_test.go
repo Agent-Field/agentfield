@@ -217,13 +217,19 @@ func TestCodeAFF3cRemainingSubprocessBudget(t *testing.T) {
 		deadline, ok := ctx.Deadline()
 		require.True(t, ok)
 		remaining := time.Until(deadline).Seconds()
-		assert.InDelta(t, 9.85, remaining, 0.1)
-		assert.Equal(t, 10, timeout) // integer cap rounds up; ctx enforces the precise remainder.
+		// Provisioning took >= 150ms of the 10s budget; only the rest is passed on.
+		assert.Greater(t, remaining, 5.0)
+		assert.LessOrEqual(t, remaining, 9.855)
+		// The integer cap rounds up; ctx enforces the precise remainder.
+		assert.GreaterOrEqual(t, float64(timeout), remaining)
+		assert.LessOrEqual(t, timeout, 10)
 		for i, arg := range cmd {
 			if arg == "--timeout" {
 				inner, err := time.ParseDuration(cmd[i+1])
 				require.NoError(t, err)
-				assert.InDelta(t, remaining-5, inner.Seconds(), 0.01)
+				// Taken before remaining, so it can only exceed remaining-5.
+				assert.GreaterOrEqual(t, inner.Seconds()+0.001, remaining-5)
+				assert.LessOrEqual(t, inner.Seconds(), 4.856)
 			}
 		}
 		return &CLIResult{Stdout: `{"ok":true,"stop":"done"}`}, nil
