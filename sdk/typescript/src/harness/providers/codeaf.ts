@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
 import { AforgeProvider } from './aforge.js';
@@ -96,6 +97,20 @@ function resolveBinary(explicit?: string): Promise<ResolvedBinary> {
   return resolution;
 }
 
+async function withinDeadline<T>(operation: Promise<T>, deadline: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), Math.max(0, deadline - performance.now()));
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function parseEnvelope(stdout: string): Record<string, unknown> | undefined {
   const parse = (text: string): Record<string, unknown> | undefined => {
     try {
@@ -185,35 +200,64 @@ export class CodeafProvider implements HarnessProvider {
     if (legacyPin) {
       return { ...await new AforgeProvider(legacyPin).execute(prompt, options), provider: 'aforge' };
     }
-    const resolved = await resolveBinary(this.bin);
+    const started = performance.now();
+    const parsedTimeout = Number.parseInt(process.env.AGENTFIELD_HARNESS_TIMEOUT_SECONDS ?? '', 10);
+    const timeout = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 1800;
+    const deadline = started + timeout * 1000;
+    let resolved: ResolvedBinary;
+    try {
+      resolved = await withinDeadline(resolveBinary(this.bin), deadline, 'Timed out while provisioning CodeAF');
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('Timed out while provisioning')) throw error;
+      return createRawResult({ provider: 'codeaf', isError: true, failureType: 'timeout',
+        errorMessage: error.message, metrics: createMetrics({ durationApiMs: performance.now() - started }) });
+    }
     if (resolved.provider === 'aforge') {
-      return { ...await new AforgeProvider(resolved.binary).execute(prompt, options), provider: 'aforge' };
+      try {
+        return { ...await withinDeadline(new AforgeProvider(resolved.binary, deadline).execute(prompt, options), deadline,
+          'CodeAF fallback timed out'), provider: 'aforge' };
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes('timed out')) throw error;
+        return createRawResult({ provider: 'aforge', isError: true, failureType: 'timeout', errorMessage: error.message });
+      }
     }
     if (this.alias && !aliasLogged) {
       aliasLogged = true;
       console.info("provider 'aforge' now runs CodeAF; set AFORGE_BIN to pin the legacy binary");
     }
-    return codeafSemaphore.use(() => this.executeImpl(resolved.binary, prompt, options));
+    try {
+      return await withinDeadline(codeafSemaphore.use(() => this.executeImpl(resolved.binary, prompt, options, deadline)),
+        deadline, 'CodeAF timed out');
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('timed out')) throw error;
+      return createRawResult({ provider: 'codeaf', isError: true, failureType: 'timeout', errorMessage: error.message });
+    }
   }
 
-  private async executeImpl(binary: string, prompt: string, options: Record<string, unknown>): Promise<RawResult> {
+  private async executeImpl(binary: string, prompt: string, options: Record<string, unknown>, deadline: number): Promise<RawResult> {
+    if (performance.now() >= deadline) {
+      return createRawResult({ provider: 'codeaf', isError: true, failureType: 'timeout', errorMessage: 'CodeAF timed out' });
+    }
     const root = resolveRoot(options) ?? '.';
-    const parsedTimeout = Number.parseInt(process.env.AGENTFIELD_HARNESS_TIMEOUT_SECONDS ?? '', 10);
-    const outerTimeout = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 1800;
-    const requestedCommand = process.env.AGENTFIELD_CODEAF_COMMAND ?? 'exec';
+    const outerTimeout = Math.max(0, deadline - performance.now());
+    const requestedCommand = process.env.AGENTFIELD_CODEAF_COMMAND?.trim()
+      || process.env.AGENTFIELD_AFORGE_COMMAND?.trim() || 'exec';
     const command = requestedCommand === 'do' ? 'do' : 'exec';
     if (!['exec', 'do'].includes(requestedCommand) && !invalidCommandLogged) {
       invalidCommandLogged = true;
       console.warn(`Invalid AGENTFIELD_CODEAF_COMMAND ${JSON.stringify(requestedCommand)}; using exec`);
     }
     const { model, variant } = resolveModelAndVariant(options);
-    const effectiveModel = model?.replace(/^openrouter\//, '') || CODEAF_DEFAULT_MODEL;
+    const overlay = typeof options.env === 'object' && options.env !== null ? options.env : {};
+    const environment = { ...process.env, ...overlay } as NodeJS.ProcessEnv;
+    const effectiveModel = (model || environment.CODEAF_MODEL?.trim() || environment.AFORGE_MODEL?.trim()
+      || CODEAF_DEFAULT_MODEL).replace(/^openrouter\//, '');
     const systemPrompt = text(options.systemPrompt ?? options.system_prompt);
     const cmd = [binary, command, '--json', '--dir', root];
     if (command === 'do') cmd.push('--yes-spend');
     cmd.push('--model', effectiveModel);
     if (command === 'do') cmd.push('--plan-model', effectiveModel, '--check-model', effectiveModel);
-    cmd.push('--timeout', `${Math.max(1, outerTimeout - 5)}s`);
+    cmd.push('--timeout', `${Number(Math.max(1, outerTimeout / 1000 - 5).toFixed(3))}s`);
     if (command === 'exec') {
       if (typeof options.maxTurns === 'number' && Number.isFinite(options.maxTurns) && options.maxTurns > 0) {
         cmd.push('--max-turns', String(Math.trunc(options.maxTurns)));
@@ -225,10 +269,13 @@ export class CodeafProvider implements HarnessProvider {
 
     const startApi = Date.now();
     try {
+      const env = childEnvironment(options, variant);
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new Error('CodeAF timed out');
       const { stdout, stderr, exitCode } = await runCli(markProviderCommand('codeaf', cmd), {
-        env: childEnvironment(options, variant),
+        env,
         cwd: undefined,
-        timeout: outerTimeout * 1000,
+        timeout: remaining,
         idleSeconds: 0,
         inputText: command === 'do' && systemPrompt ? `${systemPrompt}\n\nTask:\n${prompt}` : prompt,
       });

@@ -103,7 +103,7 @@ describe('harness provider availability', () => {
     }
   });
 
-  it('V11 discovers the managed home binary while retaining the legacy aforge doctor row', async () => {
+  it('F5a discovers the managed home binary for the aforge alias', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-doctor-codeaf-home-'));
     const binary = path.join(directory, 'home', 'bin', process.platform === 'win32' ? 'codeaf.exe' : 'codeaf');
     fs.mkdirSync(path.dirname(binary), { recursive: true });
@@ -113,10 +113,10 @@ describe('harness provider availability', () => {
       const [codeaf, aforge] = await harnessDoctor(['codeaf', 'aforge'], {
         env: { AGENTFIELD_HOME: path.join(directory, 'home') },
         resolveBinary: (name) => name === 'aforge' ? '/legacy/aforge' : undefined,
-        versionProbe: async () => 'aforge v0.1.0',
+        versionProbe: async () => 'codeaf v0.8.2',
       });
       expect(codeaf).toMatchObject({ binary, installed: true });
-      expect(aforge).toMatchObject({ binary: '/legacy/aforge', version: 'aforge v0.1.0',
+      expect(aforge).toMatchObject({ binary, version: 'codeaf v0.8.2',
         installCommand: 'af aforge ensure', authEnvVars: ['OPENROUTER_API_KEY'] });
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

@@ -22,7 +22,7 @@ beforeEach(() => {
     'AGENTFIELD_CODEAF_COMMAND', 'AGENTFIELD_HARNESS_TIMEOUT_SECONDS', 'CODEAF_HOME',
     'CODEAF_NO_UPDATE_CHECK', 'CODEAF_TELEMETRY', 'CODEAF_EXEC_REASONING', 'CODEAF_MODELS',
     'AFORGE_MODELS', 'CI', 'DO_NOT_TRACK', 'AGENTFIELD_TELEMETRY_ENABLED', 'CODEAF_MAX_CONCURRENT',
-    'AFORGE_MAX_CONCURRENT',
+    'AFORGE_MAX_CONCURRENT', 'AFORGE_MODEL', 'CODEAF_MODEL', 'AGENTFIELD_AFORGE_COMMAND',
   ]) vi.stubEnv(name, undefined);
   vi.stubEnv('AGENTFIELD_HOME', directory);
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -43,11 +43,11 @@ describe('V7 CodeAF invocation', () => {
     });
     expect(cli.runCli).toHaveBeenCalledWith([
       '/explicit/codeaf', 'exec', '--json', '--dir', '/project', '--model', 'vendor/model',
-      '--timeout', '1795s', '--max-turns', '7', '--system', 'be precise',
+      '--timeout', expect.any(String), '--max-turns', '7', '--system', 'be precise',
     ], {
       env: { CODEAF_HOME: path.join(directory, 'codeaf'), CODEAF_NO_UPDATE_CHECK: '1',
         CODEAF_MODELS: undefined, AFORGE_MODELS: undefined, CODEAF_EXEC_REASONING: 'high' },
-      cwd: undefined, timeout: 1_800_000, idleSeconds: 0, inputText: 'private task',
+      cwd: undefined, timeout: expect.any(Number), idleSeconds: 0, inputText: 'private task',
     });
     expect(result.provider).toBe('codeaf');
     expect(fs.statSync(path.join(directory, 'codeaf')).isDirectory()).toBe(true);
@@ -61,7 +61,7 @@ describe('V7 CodeAF invocation', () => {
     expect(cli.runCli).toHaveBeenCalledWith([
       '/explicit/codeaf', 'do', '--json', '--dir', '/cwd', '--yes-spend',
       '--model', 'openrouter/vendor/model', '--plan-model', 'openrouter/vendor/model',
-      '--check-model', 'openrouter/vendor/model', '--timeout', '1795s', '-',
+      '--check-model', 'openrouter/vendor/model', '--timeout', expect.any(String), '-',
     ], expect.objectContaining({ inputText: 'system\n\nTask:\nprivate task', idleSeconds: 0 }));
   });
 
@@ -93,8 +93,10 @@ describe('V7 CodeAF invocation', () => {
   ])('keeps the landing window for outer timeout %s', async (value, inner, timeout) => {
     vi.stubEnv('AGENTFIELD_HARNESS_TIMEOUT_SECONDS', value);
     await new CodeafProvider('/explicit/codeaf').execute('task', {});
-    expect(vi.mocked(cli.runCli).mock.calls[0][0]).toContain(inner);
-    expect(vi.mocked(cli.runCli).mock.calls[0][1]?.timeout).toBe(timeout);
+    const [cmd, options] = vi.mocked(cli.runCli).mock.calls[0];
+    expect(Number.parseFloat(cmd[cmd.indexOf('--timeout') + 1])).toBeCloseTo(Number.parseFloat(inner), 1);
+    expect(options!.timeout).toBeGreaterThan(timeout - 100);
+    expect(options!.timeout).toBeLessThanOrEqual(timeout);
   });
 
   it.each([0, -1, NaN, Infinity])('omits invalid maxTurns %s', async (maxTurns) => {
@@ -276,5 +278,33 @@ describe('V12 CodeAF concurrency parsing', () => {
     expect(resolveCodeafMaxConcurrent()).toBe(2);
     vi.stubEnv('CODEAF_MAX_CONCURRENT', 'bad');
     expect(resolveCodeafMaxConcurrent()).toBe(8);
+  });
+});
+
+describe('F2 legacy command and model fallbacks', () => {
+  it.each([
+    ['', 'do', 'do'], ['exec', 'do', 'exec'], [' ', 'do', 'do'], ['bad', 'do', 'exec'],
+  ])('F2a/b command precedence %s / %s', async (current, legacy, want) => {
+    vi.stubEnv('AGENTFIELD_CODEAF_COMMAND', current);
+    vi.stubEnv('AGENTFIELD_AFORGE_COMMAND', legacy);
+    await new CodeafProvider('/fixture').execute('p', {});
+    expect(vi.mocked(cli.runCli).mock.calls[0][0][1]).toBe(want);
+  });
+  it.each([
+    [undefined, '', 'openrouter/old', {}, 'old'],
+    [undefined, 'new', 'old', {}, 'new'],
+    ['openrouter/explicit#high', 'new', 'old', {}, 'explicit'],
+    [undefined, 'ambient', 'old', { CODEAF_MODEL: ' ', AFORGE_MODEL: 'openrouter/overlay' }, 'overlay'],
+    [undefined, '', 'old', { AFORGE_MODEL: 'overlay' }, 'overlay'],
+    [undefined, '', '', {}, CODEAF_DEFAULT_MODEL],
+  ])('F2c-f model precedence', async (model, current, legacy, env, want) => {
+    vi.stubEnv('CODEAF_MODEL', current);
+    vi.stubEnv('AFORGE_MODEL', legacy);
+    vi.stubEnv('AGENTFIELD_AFORGE_COMMAND', 'do');
+    vi.mocked(cli.runCli).mockResolvedValue({ stdout: envelope({ model: '' }), stderr: '', exitCode: 0 });
+    const result = await new CodeafProvider('/fixture').execute('p', { model, env });
+    const cmd = vi.mocked(cli.runCli).mock.calls[0][0];
+    for (const flag of ['--model', '--plan-model', '--check-model']) expect(cmd[cmd.indexOf(flag) + 1]).toBe(want);
+    expect(result.metrics.model).toBe(want);
   });
 });

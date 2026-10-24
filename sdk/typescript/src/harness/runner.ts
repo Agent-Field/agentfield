@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildPromptSuffix, cleanupTempFiles, getOutputPath, parseAndValidate } from './schema.js';
-import { buildProvider, resolveProviderName } from './providers/factory.js';
+import { buildProvider, resolveExecutionProvider } from './providers/factory.js';
 import { resolveRoot, type HarnessProvider } from './providers/base.js';
 import {
   createHarnessResult,
@@ -59,7 +59,7 @@ export class HarnessRunner {
   public async run(prompt: string, options: HarnessOptions = {}) {
     const { schema, ...rest } = options;
     const resolved = this.resolveOptions(this.config, rest);
-    resolved.provider = resolveProviderName(resolved.provider);
+    resolved.provider = resolveExecutionProvider(resolved);
 
     const provider = await this.buildProvider(resolved.provider, resolved);
     const outputRoot = resolveRoot(resolved as Record<string, unknown>) ?? '.';

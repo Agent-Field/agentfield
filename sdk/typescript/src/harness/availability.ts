@@ -353,17 +353,21 @@ export async function harnessDoctor(
     }
 
     const binaryName = spec.binary as string;
-    const override = provider === 'codeaf' ? env.CODEAF_BIN?.trim() : undefined;
-    const binary = override ? resolveBinary(override, env) ?? null
-      : (provider === 'codeaf' ? findManagedCodeaf(env) : undefined)
-        ?? resolveBinary(binaryName, env) ?? null;
+    const legacyPin = provider === 'aforge' ? env.AFORGE_BIN?.trim() : undefined;
+    const lookupCodeaf = provider === 'codeaf' || (provider === 'aforge' && !legacyPin);
+    const override = lookupCodeaf ? env.CODEAF_BIN?.trim() : undefined;
+    const codeaf = lookupCodeaf ? (override ? resolveBinary(override, env)
+      : findManagedCodeaf(env) ?? resolveBinary('codeaf', env)) : undefined;
+    const codeafAlias = provider === 'aforge' && !!codeaf;
+    const binary = provider === 'codeaf' ? codeaf ?? null
+      : legacyPin ? resolveBinary(legacyPin, env) ?? null : codeaf ?? resolveBinary(binaryName, env) ?? null;
     const issues: string[] = [];
     let version: string | null = null;
     if (binary === null) {
       issues.push('binary_not_found');
     } else {
       try {
-        const output = (await versionProbe([binary, ...spec.versionArgs])).trim();
+        const output = (await versionProbe([binary, ...(codeafAlias ? ['version'] : spec.versionArgs)])).trim();
         version = output ? output.split(/\r?\n/, 1)[0] : 'unknown';
         if (provider === 'codeaf') {
           version = version.match(/^codeaf\s+(v\S+)/)?.[1] ?? version;

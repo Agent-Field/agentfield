@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
 import type { RawResult } from '../types.js';
@@ -141,7 +142,7 @@ function stringOptions(value: unknown): Record<string, string> {
 export class AforgeProvider implements HarnessProvider {
   private readonly bin: string;
 
-  public constructor(bin = 'aforge') {
+  public constructor(bin = 'aforge', private readonly deadline?: number) {
     this.bin = bin === 'aforge' ? (process.env.AFORGE_BIN?.trim() || bin) : bin;
   }
 
@@ -151,7 +152,11 @@ export class AforgeProvider implements HarnessProvider {
 
   private async executeImpl(prompt: string, options: Record<string, unknown>): Promise<RawResult> {
     const root = resolveRoot(options) ?? '.';
-    const outerTimeout = timeoutSeconds();
+    const remaining = this.deadline === undefined ? undefined : this.deadline - performance.now();
+    if (remaining !== undefined && remaining <= 0) {
+      return createRawResult({ isError: true, failureType: 'timeout', errorMessage: 'CodeAF fallback timed out' });
+    }
+    const outerTimeout = remaining === undefined ? timeoutSeconds() : remaining / 1000;
     const command = (process.env.AGENTFIELD_AFORGE_COMMAND ?? 'exec').trim().toLowerCase();
     if (command !== 'do' && command !== 'exec') {
       return createRawResult({
@@ -170,7 +175,7 @@ export class AforgeProvider implements HarnessProvider {
           '-w',
           root,
           '--timeout',
-          String(innerTimeout(outerTimeout)),
+          String(Math.max(1, Math.floor(innerTimeout(outerTimeout)))),
         ]
       : [
           this.bin,
@@ -180,7 +185,7 @@ export class AforgeProvider implements HarnessProvider {
           '-w',
           root,
           '--timeout',
-          String(innerTimeout(outerTimeout)),
+          String(Math.max(1, Math.floor(innerTimeout(outerTimeout)))),
         ];
     // --turns exists only on exec, not do. Aforge's --budget is a token budget,
     // not a USD cap, so maxBudgetUsd has no honest mapping.

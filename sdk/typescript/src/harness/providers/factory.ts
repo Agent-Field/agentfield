@@ -21,14 +21,28 @@ export function resolveProviderName(explicit?: string): string {
   return envName || DEFAULT_HARNESS_PROVIDER;
 }
 
+let legacyPinLogged = false;
+
+export function resolveExecutionProvider(config: { provider?: string; aforgeBin?: string }): string {
+  if (!config.provider?.trim() && !process.env[HARNESS_PROVIDER_ENV_VAR]?.trim()
+    && (config.aforgeBin !== undefined || process.env.AFORGE_BIN?.trim())) {
+    if (!legacyPinLogged) {
+      legacyPinLogged = true;
+      console.info('Legacy aforge pin in effect; unset it or select provider "codeaf" to use CodeAF');
+    }
+    return 'aforge';
+  }
+  return resolveProviderName(config.provider);
+}
+
 export async function buildProvider(config: HarnessConfig): Promise<HarnessProvider> {
-  const provider = resolveProviderName(config.provider);
+  const provider = resolveExecutionProvider(config);
   if (!SUPPORTED_PROVIDERS.has(provider)) {
     throw new Error(
       `Unknown harness provider: "${provider}". Supported: ${[...SUPPORTED_PROVIDERS].sort().join(', ')}`
     );
   }
-  if (provider === 'aforge' && config.aforgeBin !== undefined) {
+  if (provider === 'aforge' && (config.aforgeBin !== undefined || process.env.AFORGE_BIN?.trim())) {
     const { AforgeProvider } = await import('./aforge.js');
     return new AforgeProvider(config.aforgeBin);
   }

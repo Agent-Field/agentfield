@@ -65,7 +65,7 @@ beforeEach(() => {
     'AGENTFIELD_HARNESS_PROVIDER', 'CODEAF_BIN', 'AFORGE_BIN', 'AGENTFIELD_CODEAF_COMMAND',
     'AGENTFIELD_AFORGE_COMMAND', 'AGENTFIELD_HARNESS_TIMEOUT_SECONDS', 'CODEAF_HOME',
     'CODEAF_NO_UPDATE_CHECK', 'CODEAF_TELEMETRY', 'CODEAF_EXEC_REASONING', 'CODEAF_MODELS',
-    'AFORGE_MODELS', 'CI', 'DO_NOT_TRACK', 'AGENTFIELD_TELEMETRY_ENABLED', 'HTTPS_PROXY', 'https_proxy',
+    'AFORGE_MODELS', 'AFORGE_MODEL', 'CODEAF_MODEL', 'CI', 'DO_NOT_TRACK', 'AGENTFIELD_TELEMETRY_ENABLED', 'HTTPS_PROXY', 'https_proxy',
   ]) vi.stubEnv(name, undefined);
   vi.stubEnv('AGENTFIELD_HOME', path.join(directory, 'home'));
   vi.stubEnv('PATH', binDirectory);
@@ -135,7 +135,7 @@ describe.skipIf(process.platform === 'win32')('V1–V6 CodeAF dispatch with fake
     expect(result).toMatchObject({ provider: 'codeaf', result: 'codeaf answer', costUsd: 0,
       inputTokens: 5, outputTokens: 3, numTurns: 2, model: 'reported/model', failureType: 'none' });
     expect(result.messages[0].observed).toMatchObject({ input: 'task', argv: [
-      'exec', '--json', '--dir', '.', '--model', '~deepseek/deepseek-v4-flash-latest', '--timeout', '1795s',
+      'exec', '--json', '--dir', '.', '--model', '~deepseek/deepseek-v4-flash-latest', '--timeout', expect.any(String),
     ] });
   });
 
@@ -433,5 +433,97 @@ describe('V12 CodeAF semaphore', () => {
     const results = await Promise.all(Array.from({ length: 11 }, () => new CodeafProvider('/fixture/codeaf').execute('task', {})));
     expect(results.every((result) => result.result === 'ok')).toBe(true);
     expect(maximum).toBe(2);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('F1/F3/F5 compatibility contracts', () => {
+  it.each(['env', 'config', 'call'])('F1a-c retains an implicit %s pin and honors explicit CodeAF', async (pin) => {
+    const legacy = fakeBinary(path.join(directory, 'legacy'), true);
+    const canonical = await managedBinary();
+    if (pin === 'env') vi.stubEnv('AFORGE_BIN', legacy);
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const { buildProvider } = await import('../src/harness/providers/factory.js');
+    const { AforgeProvider } = await import('../src/harness/providers/aforge.js');
+    const config = pin === 'config' ? { aforgeBin: legacy } : {};
+    const options = pin === 'call' ? { aforgeBin: legacy } : {};
+    expect((await new HarnessRunner(config).run('p', options)).provider).toBe('aforge');
+    if (pin !== 'call') expect(await buildProvider(config)).toBeInstanceOf(AforgeProvider);
+    const result = await new HarnessRunner({ ...config, provider: 'codeaf' }).run('p', options);
+    expect(result.provider).toBe('codeaf');
+    expect(result.messages[0].observed).toHaveProperty('binary', canonical);
+    vi.stubEnv('AGENTFIELD_HARNESS_PROVIDER', 'codeaf');
+    expect((await new HarnessRunner(config).run('p', options)).provider).toBe('codeaf');
+  });
+
+  it('F3a/b bounds all waiters without canceling the shared download', async () => {
+    vi.stubEnv('AGENTFIELD_SKIP_CODEAF', '');
+    vi.stubEnv('AGENTFIELD_HARNESS_TIMEOUT_SECONDS', '1');
+    const source = fakeBinary(path.join(directory, 'source'));
+    const bytes = fs.readFileSync(source);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    vi.doMock('../src/harness/codeafRelease.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/harness/codeafRelease.js')>();
+      return { ...actual, CODEAF_SHA256: Object.fromEntries(Object.keys(actual.CODEAF_SHA256).map((asset) => [asset, digest])) };
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let requests = 0;
+    const server = http.createServer(async (_request, response) => {
+      requests += 1;
+      await blocked;
+      response.end(bytes);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    vi.stubEnv('AGENTFIELD_CODEAF_BASE_URL', `http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    try {
+      const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+      const started = performance.now();
+      const results = await Promise.all([new CodeafProvider().execute('p', {}), new CodeafProvider().execute('p', {})]);
+      expect(performance.now() - started).toBeLessThan(1500);
+      expect(results.every((r) => r.failureType === 'timeout' && r.errorMessage?.includes('provisioning CodeAF'))).toBe(true);
+      expect(requests).toBe(1);
+      // Explicit binaries do not wait on the still-running installation.
+      expect((await new CodeafProvider(source).execute('p', {})).isError).toBe(false);
+      release();
+      expect((await new CodeafProvider().execute('p', {})).result).toBe('codeaf answer');
+      expect(requests).toBe(1);
+    } finally {
+      release();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('F3c passes the remaining budget to the subprocess', async () => {
+    const installer = await import('../src/harness/codeafInstall.js');
+    const source = fakeBinary(path.join(directory, 'source'));
+    vi.spyOn(installer, 'ensureCodeafInstalled').mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return source;
+    });
+    vi.stubEnv('AGENTFIELD_HARNESS_TIMEOUT_SECONDS', '10');
+    const transport = await import('../src/harness/cli.js');
+    const run = vi.spyOn(transport, 'runCli').mockResolvedValue({ stdout: '{"ok":true,"stop":"done"}', stderr: '', exitCode: 0 });
+    const { CodeafProvider } = await import('../src/harness/providers/codeaf.js');
+    await new CodeafProvider().execute('p', {});
+    const [cmd, options] = run.mock.calls[0];
+    expect(options!.timeout).toBeGreaterThan(9000);
+    expect(options!.timeout).toBeLessThan(9900);
+    expect(Number.parseFloat(cmd[cmd.indexOf('--timeout') + 1])).toBeCloseTo(options!.timeout! / 1000 - 5, 1);
+  });
+
+  it.each(['managed', 'path', 'legacy', 'missing', 'pin'])('F5a-d doctor %s alias is read-only', async (location) => {
+    const target = location === 'managed' ? await managedBinary()
+      : location === 'missing' ? '' : fakeBinary(path.join(binDirectory, location === 'legacy' ? 'aforge' : 'codeaf'), location === 'legacy');
+    if (location === 'pin') vi.stubEnv('AFORGE_BIN', path.join(directory, 'missing'));
+    const { harnessDoctor } = await import('../src/harness/availability.js');
+    const versionProbe = vi.fn().mockResolvedValue(location === 'legacy' ? 'aforge v0.1.0' : 'codeaf v0.8.2');
+    const [report] = await harnessDoctor(['aforge'], { versionProbe });
+    expect(report.usable).toBe(!['missing', 'pin'].includes(location));
+    if (['managed', 'path'].includes(location)) {
+      expect(report.version).toBe('codeaf v0.8.2');
+      expect(versionProbe).toHaveBeenCalledWith([target, 'version']);
+    }
+    if (!report.usable) expect(report.installCommand).toBe('af aforge ensure');
   });
 });
