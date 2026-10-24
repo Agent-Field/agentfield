@@ -154,12 +154,23 @@ func buildHarnessDoctorReports(requested []string) ([]HarnessProviderHealth, err
 func probeHarnessBinary(spec harnessProviderSpec) ToolStatus {
 	var path string
 	var err error
+	if spec.Name == "aforge" {
+		if pin := strings.TrimSpace(os.Getenv("AFORGE_BIN")); pin != "" {
+			path, err = exec.LookPath(pin)
+			if err != nil {
+				return ToolStatus{}
+			}
+		} else if resolved, lookupErr := codeaf.Lookup(""); lookupErr == nil {
+			path = resolved
+			spec.VersionArgs = [][]string{{"version"}}
+		}
+	}
 	if spec.Name == "codeaf" {
 		path, err = codeaf.Lookup("")
 		if err != nil {
 			return ToolStatus{}
 		}
-	} else {
+	} else if path == "" {
 		path, err = exec.LookPath(spec.Binary)
 	}
 	if err != nil {
