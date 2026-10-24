@@ -80,7 +80,7 @@ describe('V7 CodeAF invocation', () => {
     const provider = new CodeafProvider('/explicit/codeaf');
     await provider.execute('task', {});
     await provider.execute('task', {});
-    vi.stubEnv('AGENTFIELD_CODEAF_COMMAND', 'DO');
+    vi.stubEnv('AGENTFIELD_CODEAF_COMMAND', 'RUN');
     await provider.execute('task', {});
     expect(vi.mocked(cli.runCli).mock.calls[0][0][1]).toBe('exec');
     expect(vi.mocked(cli.runCli).mock.calls[2][0][1]).toBe('exec');
@@ -282,6 +282,17 @@ describe('V12 CodeAF concurrency parsing', () => {
 });
 
 describe('F2 legacy command and model fallbacks', () => {
+  it.each([
+    ['R3a', '', ' DO ', 'do'],
+    ['R3b', 'Exec', 'do', 'exec'],
+  ])('%s normalizes command casing while retaining precedence', async (_contract, current, legacy, want) => {
+    vi.stubEnv('AGENTFIELD_CODEAF_COMMAND', current);
+    vi.stubEnv('AGENTFIELD_AFORGE_COMMAND', legacy);
+    await new CodeafProvider('/fixture').execute('p', {});
+    expect(vi.mocked(cli.runCli).mock.calls[0][0][1]).toBe(want);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['', 'do', 'do'], ['exec', 'do', 'exec'], [' ', 'do', 'do'], ['bad', 'do', 'exec'],
   ])('F2a/b command precedence %s / %s', async (current, legacy, want) => {

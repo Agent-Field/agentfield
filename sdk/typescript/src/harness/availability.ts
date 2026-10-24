@@ -359,7 +359,7 @@ export async function harnessDoctor(
     const codeaf = lookupCodeaf ? (override ? resolveBinary(override, env)
       : findManagedCodeaf(env) ?? resolveBinary('codeaf', env)) : undefined;
     const codeafAlias = provider === 'aforge' && !!codeaf;
-    const binary = provider === 'codeaf' ? codeaf ?? null
+    const binary = provider === 'codeaf' || override ? codeaf ?? null
       : legacyPin ? resolveBinary(legacyPin, env) ?? null : codeaf ?? resolveBinary(binaryName, env) ?? null;
     const issues: string[] = [];
     let version: string | null = null;

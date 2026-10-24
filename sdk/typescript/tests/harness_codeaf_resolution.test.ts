@@ -526,4 +526,25 @@ describe.skipIf(process.platform === 'win32')('F1/F3/F5 compatibility contracts'
     }
     if (!report.usable) expect(report.installCommand).toBe('af aforge ensure');
   });
+
+  it.each(['R4a', 'R4b', 'R4c'])('%s doctor honors an authoritative CodeAF override', async (contract) => {
+    const legacy = fakeBinary(path.join(binDirectory, 'aforge'), true);
+    const target = path.join(directory, 'override');
+    if (contract !== 'R4b') vi.stubEnv('CODEAF_BIN', target);
+    if (contract === 'R4c') fakeBinary(target);
+    const { harnessDoctor } = await import('../src/harness/availability.js');
+    const version = contract === 'R4b' ? 'aforge v0.1.0' : 'codeaf v0.8.2';
+    const versionProbe = vi.fn().mockResolvedValue(version);
+    const [report] = await harnessDoctor(['aforge'], { versionProbe });
+    expect(report.usable).toBe(contract !== 'R4a');
+    expect(report.installed).toBe(report.usable);
+    if (contract === 'R4a') {
+      expect(report.binary).toBeNull();
+      expect(report.issues).toEqual(['binary_not_found']);
+      expect(versionProbe).not.toHaveBeenCalled();
+    } else {
+      expect(report.version).toBe(version);
+      expect(versionProbe).toHaveBeenCalledExactlyOnceWith([contract === 'R4b' ? legacy : target, 'version']);
+    }
+  });
 });

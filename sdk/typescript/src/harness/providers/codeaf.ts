@@ -240,8 +240,8 @@ export class CodeafProvider implements HarnessProvider {
     }
     const root = resolveRoot(options) ?? '.';
     const outerTimeout = Math.max(0, deadline - performance.now());
-    const requestedCommand = process.env.AGENTFIELD_CODEAF_COMMAND?.trim()
-      || process.env.AGENTFIELD_AFORGE_COMMAND?.trim() || 'exec';
+    const requestedCommand = process.env.AGENTFIELD_CODEAF_COMMAND?.trim().toLowerCase()
+      || process.env.AGENTFIELD_AFORGE_COMMAND?.trim().toLowerCase() || 'exec';
     const command = requestedCommand === 'do' ? 'do' : 'exec';
     if (!['exec', 'do'].includes(requestedCommand) && !invalidCommandLogged) {
       invalidCommandLogged = true;
