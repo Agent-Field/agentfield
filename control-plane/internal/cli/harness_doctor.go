@@ -163,6 +163,8 @@ func probeHarnessBinary(spec harnessProviderSpec) ToolStatus {
 		} else if resolved, lookupErr := codeaf.Lookup(""); lookupErr == nil {
 			path = resolved
 			spec.VersionArgs = [][]string{{"version"}}
+		} else if strings.TrimSpace(os.Getenv("CODEAF_BIN")) != "" {
+			return ToolStatus{}
 		}
 	}
 	if spec.Name == "codeaf" {
