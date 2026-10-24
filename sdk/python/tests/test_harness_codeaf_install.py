@@ -148,8 +148,8 @@ def test_rejected_download_leaves_no_binary_marker_or_temp(
 
 
 @pytest.mark.parametrize("failure", ["mkdir", "write"])
-def test_temp_fallback_for_unwritable_home(local_release, monkeypatch, failure):
-    home, temp = install.managed_paths()
+async def test_unwritable_home_reports_install_error_without_temp(local_release, monkeypatch, failure):
+    (home,) = install.managed_paths()
     mkstemp = install.tempfile.mkstemp
     mkdir = Path.mkdir
 
@@ -165,10 +165,18 @@ def test_temp_fallback_for_unwritable_home(local_release, monkeypatch, failure):
 
     monkeypatch.setattr(install.tempfile, "mkstemp", create)
     monkeypatch.setattr(Path, "mkdir", create_directory)
-    assert install.install_codeaf() == str(temp)
+    monkeypatch.setenv("PATH", "")
+    from agentfield.exceptions import HarnessProviderUnavailable
+
+    for _ in range(2):
+        with pytest.raises(HarnessProviderUnavailable, match="read-only home") as error:
+            await CodeafProvider().execute("p", {})
+        assert "cannot install CodeAF into" in str(error.value)
+        assert "af codeaf ensure" in str(error.value)
     assert not home.exists()
-    assert install.find_managed_binary() == str(temp)
-    assert install.is_installed(temp)
+    assert not (home.parents[2] / "temp").exists()
+    assert install.find_managed_binary() is None
+    assert local_release[1] == []
 
 
 @pytest.mark.parametrize("key", ["AGENTFIELD_SKIP_CODEAF", "AGENTFIELD_SKIP_AFORGE"])
@@ -206,15 +214,13 @@ async def test_concurrent_first_calls_download_once(local_release, caplog):
 
 
 def test_managed_lookup_requires_executable_and_matching_marker(local_release):
-    home, temp = install.managed_paths()
-    for path in (home, temp):
+    (home,) = install.managed_paths()
+    for path in (home,):
         path.parent.mkdir(parents=True)
         path.write_text("binary")
         path.chmod(0o755)
         (path.parent / ".codeaf.version").write_text("v0.1.0")
     assert install.find_managed_binary() is None
-    (temp.parent / ".codeaf.version").write_text(" v0.8.2\n")
-    assert install.find_managed_binary() == str(temp)
     (home.parent / ".codeaf.version").write_text("v0.8.2\n")
     home.chmod(0o644)
     assert not install.is_installed(home)

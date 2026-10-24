@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import json
 import os
-import stat
 import sys
 import threading
 import urllib.error
@@ -130,7 +129,7 @@ def release(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "location", ["managed", "temp", "path", "legacy", "override", "env"]
+    "location", ["managed", "path", "legacy", "override", "env"]
 )
 async def test_failed_resolution_recovers_without_cache_reset(
     release, monkeypatch, tmp_path, location
@@ -140,15 +139,15 @@ async def test_failed_resolution_recovers_without_cache_reset(
     provider = CodeafProvider()
     with pytest.raises(HarnessProviderUnavailable, match="503"):
         await provider.execute("p", {})
-    home, temp = install.managed_paths()
-    target = {"managed": home, "temp": temp, "legacy": home.with_name("aforge")}.get(
+    (home,) = install.managed_paths()
+    target = {"managed": home, "legacy": home.with_name("aforge")}.get(
         location, tmp_path / "path" / "codeaf"
     )
     binary = await asyncio.to_thread(
         write_cli,
         target,
         legacy=location == "legacy",
-        managed=location in {"managed", "temp"},
+        managed=location == "managed",
     )
     if location == "path":
         monkeypatch.setenv("PATH", str(target.parent))
@@ -230,37 +229,6 @@ async def test_cancelled_caller_keeps_one_install_in_flight(release, monkeypatch
         )
 
 
-@pytest.mark.parametrize("failure", ["mkdir", "write"])
-async def test_unwritable_home_installs_and_executes_using_temp_state(
-    release, monkeypatch, failure
-):
-    """#2/A2: exercise the download through the actual child environment."""
-    home = install.agentfield_home()
-    mkdir, mkstemp = Path.mkdir, install.tempfile.mkstemp
-
-    def create_directory(path, *args, **kwargs):
-        if failure == "mkdir" and home in (path, *path.parents):
-            raise PermissionError("read-only home")
-        return mkdir(path, *args, **kwargs)
-
-    def create_file(*args, **kwargs):
-        directory = Path(kwargs["dir"])
-        if failure == "write" and home in (directory, *directory.parents):
-            raise PermissionError("read-only home")
-        return mkstemp(*args, **kwargs)
-
-    monkeypatch.setattr(Path, "mkdir", create_directory)
-    monkeypatch.setattr(install.tempfile, "mkstemp", create_file)
-    result = await CodeafProvider().execute("p", {})
-    assert not result.is_error
-    environment = json.loads(result.result)
-    state = install.managed_paths()[1].parent.parent / "state"
-    assert environment["CODEAF_HOME"] == str(state)
-    assert await asyncio.to_thread(install.is_installed, install.managed_paths()[1])
-    assert stat.S_IMODE((await asyncio.to_thread(state.stat)).st_mode) == 0o700
-    assert len(release.requests) == 1
-
-
 @pytest.mark.parametrize("source", ["caller", "overlay"])
 @pytest.mark.parametrize("value", ["", "/explicit/readonly"])
 async def test_explicit_state_directory_is_used_as_is(monkeypatch, source, value):
@@ -276,32 +244,8 @@ async def test_explicit_state_directory_is_used_as_is(monkeypatch, source, value
     assert {**os.environ, **overlay}["CODEAF_HOME"] == value
 
 
-@pytest.mark.skipif(
-    os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() == 0,
-    reason="requires Unix permissions",
-)
-async def test_temp_binary_executes_with_a_real_mode_0555_home(monkeypatch):
-    home = install.agentfield_home()
-    temp = install.managed_paths()[1]
-    state = temp.parent.parent / "state"
-
-    def prepare():
-        home.mkdir(mode=0o555)
-        write_cli(temp, managed=True)
-        state.mkdir(mode=0o755)
-
-    await asyncio.to_thread(prepare)
-    monkeypatch.setenv("AGENTFIELD_SKIP_CODEAF", "1")
-    try:
-        result = await CodeafProvider().execute("p", {})
-        assert result.result == "recovered"
-        assert stat.S_IMODE((await asyncio.to_thread(state.stat)).st_mode) == 0o700
-    finally:
-        await asyncio.to_thread(home.chmod, 0o700)
-
-
 @pytest.mark.parametrize(
-    "level", ["override", "managed", "temp", "path", "missing", "bad-override"]
+    "level", ["override", "managed", "path", "missing", "bad-override"]
 )
 async def test_doctor_uses_execution_lookup_order_without_downloading(
     monkeypatch, tmp_path, level
@@ -315,17 +259,16 @@ async def test_doctor_uses_execution_lookup_order_without_downloading(
     index = {
         "override": 0,
         "managed": 1,
-        "temp": 2,
-        "path": 3,
-        "missing": 4,
+        "path": 2,
+        "missing": 3,
         "bad-override": 1,
     }[level]
     for i, path in enumerate(paths):
         if i >= index:
-            await asyncio.to_thread(write_cli, path, managed=i in {1, 2})
+            await asyncio.to_thread(write_cli, path, managed=i == 1)
     environment = {
         "AGENTFIELD_HOME": str(install.agentfield_home()),
-        "PATH": str(paths[3].parent),
+        "PATH": str(paths[2].parent),
     }
     if level in {"override", "bad-override"}:
         environment["CODEAF_BIN"] = str(paths[0])
@@ -428,3 +371,20 @@ def test_no_proxy_change_is_honored_after_an_earlier_download(
     assert install.install_codeaf() == str(install.managed_paths()[0])
     assert len(release.requests) == 3
     assert release.requests[-1] == "/codeaf-linux-amd64"
+
+
+async def test_codeaf_bin_runs_with_unwritable_default_state(monkeypatch, tmp_path):
+    """C2: state creation failure must reach the explicitly selected child."""
+    binary = tmp_path / "explicit-codeaf"
+    binary.write_text(
+        f"#!{sys.executable}\nimport json,os\n"
+        "print(json.dumps(dict(ok=True,stop='done',answer=os.environ['CODEAF_HOME'])))\n"
+    )
+    binary.chmod(0o755)
+    home = install.agentfield_home()
+    home.write_text("not a directory")
+    monkeypatch.setenv("CODEAF_BIN", str(binary))
+    result = await CodeafProvider().execute("p", {})
+    assert not result.is_error
+    assert result.result == str(home / "codeaf")
+    assert not (tmp_path / "temp").exists()
