@@ -71,10 +71,15 @@ async def harness_doctor(
             continue
 
         spec = PROVIDER_SPECS[provider]
-        if provider == "codeaf":
+        legacy_pin = environment.get("AFORGE_BIN", "").strip() if provider == "aforge" else ""
+        codeaf_alias = False
+        if provider == "codeaf" or (provider == "aforge" and not legacy_pin):
             binary = await asyncio.to_thread(find_codeaf_binary, environment)
+            codeaf_alias = provider == "aforge" and binary is not None
+            if binary is None and provider == "aforge":
+                binary = shutil.which(spec.binary)
         else:
-            binary = shutil.which(spec.binary)
+            binary = shutil.which(legacy_pin or spec.binary)
         issues: list[str] = []
         version: str | None = None
         if binary is None:
@@ -83,8 +88,8 @@ async def harness_doctor(
             try:
                 version = await probe(
                     [
-                        binary if provider == "codeaf" else spec.binary,
-                        *spec.version_args,
+                        binary if provider == "codeaf" or codeaf_alias or legacy_pin else spec.binary,
+                        *(("version",) if codeaf_alias else spec.version_args),
                     ]
                 )
                 if provider == "codeaf":

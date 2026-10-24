@@ -186,12 +186,15 @@ async def test_argv_stdin_and_timeouts(tmp_path, monkeypatch, caplog, command):
             "--system",
             "system",
         ]
+    timeout_index = args[0].index("--timeout") + 1
+    assert float(args[0][timeout_index][:-1]) == pytest.approx(85, abs=0.1)
+    expected[timeout_index] = args[0][timeout_index]
     assert args[0] == expected
     assert kw["input_text"] == (
         "system\n\nTask:\nprompt" if selected == "do" else "prompt"
     )
     assert kw["idle_seconds"] == 0
-    assert kw["timeout"] == 90
+    assert 89.9 < kw["timeout"] <= 90
     assert kw["cwd"] is None
     assert kw["env"]["CODEAF_EXEC_REASONING"] == "high"
     assert not any(key.startswith("AFORGE_") for key in kw["env"])
@@ -571,3 +574,174 @@ def test_factory_codeaf_protocol_and_legacy_simple_namespace():
     assert isinstance(
         build_provider(SimpleNamespace(provider="aforge")), CodeafProvider
     )
+
+
+@pytest.mark.parametrize("pin", ["env", "config", "call"])
+@pytest.mark.parametrize("provider", [None, "codeaf", "aforge"])
+async def test_F1_implicit_legacy_pin_all_runner_paths(
+    monkeypatch, tmp_path, pin, provider
+):
+    """F1a/b/c/e: explicit CodeAF wins; omitted provider retains legacy pins."""
+    binary = fake_cli(tmp_path, payload={"text": "legacy", "usage": {"cost": 0.1}})
+    if pin == "env":
+        monkeypatch.setenv("AFORGE_BIN", binary)
+    kwargs = {"aforge_bin": binary} if pin == "config" else {}
+    if provider is not None:
+        kwargs["provider"] = provider
+    config = HarnessConfig(**kwargs)
+    call = {"aforge_bin": binary} if pin == "call" else {}
+    if provider == "codeaf":
+        run = AsyncMock(
+            return_value=('{"ok":true,"stop":"done","answer":"codeaf"}', "", 0)
+        )
+        monkeypatch.setattr(codeaf, "run_cli", run)
+        call["codeaf_bin"] = sys.executable
+    result = await HarnessRunner(config).run("p", **call)
+    assert result.provider == ("codeaf" if provider == "codeaf" else "aforge")
+    if provider is None and pin != "call":
+        assert isinstance(build_provider(config), AforgeProvider)
+
+
+async def test_F1c_env_provider_beats_legacy_pin(monkeypatch):
+    monkeypatch.setenv("AFORGE_BIN", "/legacy")
+    monkeypatch.setenv("AGENTFIELD_HARNESS_PROVIDER", "codeaf")
+    assert isinstance(build_provider(HarnessConfig()), CodeafProvider)
+
+
+@pytest.mark.parametrize(
+    "new,old,want",
+    [
+        ("", "do", "do"),
+        ("exec", "do", "exec"),
+        (" ", "do", "do"),
+        ("bad", "do", "exec"),
+    ],
+)
+async def test_F2ab_command_fallback(monkeypatch, new, old, want):
+    monkeypatch.setenv("AGENTFIELD_CODEAF_COMMAND", new)
+    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", old)
+    run = AsyncMock(return_value=('{"ok":true,"stop":"done"}', "", 0))
+    monkeypatch.setattr(codeaf, "run_cli", run)
+    await CodeafProvider(sys.executable).execute("p", {})
+    assert run.call_args.args[0][1] == want
+
+
+@pytest.mark.parametrize(
+    "explicit,new,old,overlay,want",
+    [
+        (None, "", "openrouter/old", {}, "old"),
+        (None, "new", "old", {}, "new"),
+        ("openrouter/explicit#high", "new", "old", {}, "explicit"),
+        (
+            None,
+            "new",
+            "old",
+            {"CODEAF_MODEL": " ", "AFORGE_MODEL": "openrouter/overlay"},
+            "overlay",
+        ),
+        (None, "", "ambient", {"AFORGE_MODEL": "overlay"}, "overlay"),
+        (None, "", "", {}, CODEAF_DEFAULT_MODEL),
+    ],
+)
+async def test_F2cdef_model_precedence(monkeypatch, explicit, new, old, overlay, want):
+    monkeypatch.setenv("CODEAF_MODEL", new)
+    monkeypatch.setenv("AFORGE_MODEL", old)
+    monkeypatch.setenv("AGENTFIELD_AFORGE_COMMAND", "do")
+    run = AsyncMock(return_value=('{"ok":true,"stop":"done"}', "", 0))
+    monkeypatch.setattr(codeaf, "run_cli", run)
+    result = await CodeafProvider(sys.executable).execute(
+        "p", {"model": explicit, "env": overlay}
+    )
+    cmd = run.call_args.args[0]
+    for flag in ("--model", "--plan-model", "--check-model"):
+        assert cmd[cmd.index(flag) + 1] == want
+    assert result.metrics.model == want
+
+
+async def test_F3ab_provisioning_timeout_preserves_shared_resolution(monkeypatch):
+    import threading
+    import time
+
+    release = threading.Event()
+    calls = 0
+
+    def resolve():
+        nonlocal calls
+        calls += 1
+        release.wait(5)
+        return sys.executable, "codeaf", None
+
+    monkeypatch.setattr(codeaf, "_resolve_binary", resolve)
+    monkeypatch.setenv("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1")
+    run = AsyncMock(return_value=('{"ok":true,"stop":"done"}', "", 0))
+    monkeypatch.setattr(codeaf, "run_cli", run)
+    started = time.monotonic()
+    try:
+        results = await asyncio.gather(
+            *(CodeafProvider().execute("p", {}) for _ in range(2))
+        )
+        assert time.monotonic() - started < 1.5
+        assert all(r.failure_type == FailureType.TIMEOUT for r in results)
+        assert all("provisioning CodeAF" in r.error_message for r in results)
+        assert calls == 1
+        # Explicit paths bypass the still-running shared resolution.
+        assert not (await CodeafProvider(sys.executable).execute("p", {})).is_error
+        pending = CodeafProvider._resolution_task
+        assert pending is not None and not pending.cancelled()
+    finally:
+        release.set()
+    await pending
+    assert not (await CodeafProvider().execute("p", {})).is_error
+    assert calls == 1
+
+
+async def test_F3c_execution_uses_remaining_budget(monkeypatch):
+    import time
+
+    def resolve():
+        time.sleep(0.15)
+        return sys.executable, "codeaf", None
+
+    monkeypatch.setattr(codeaf, "_resolve_binary", resolve)
+    monkeypatch.setenv("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "10")
+    run = AsyncMock(return_value=('{"ok":true,"stop":"done"}', "", 0))
+    monkeypatch.setattr(codeaf, "run_cli", run)
+    await CodeafProvider().execute("p", {})
+    cmd = run.call_args.args[0]
+    remaining = run.call_args.kwargs["timeout"]
+    assert 9 < remaining < 9.9
+    assert float(cmd[cmd.index("--timeout") + 1][:-1]) == pytest.approx(
+        remaining - 5, abs=0.01
+    )
+
+
+@pytest.mark.parametrize("location", ["managed", "path", "legacy", "missing", "pin"])
+async def test_F5_alias_doctor_read_only(monkeypatch, tmp_path, location):
+    """F5a-d: CodeAF alias, legacy fallback and strict pin checks never install."""
+    pathdir = tmp_path / "path"
+    pathdir.mkdir()
+    monkeypatch.setenv("PATH", str(pathdir))
+    if location == "managed":
+        target = tmp_path / "af-home/bin/codeaf"
+        target.parent.mkdir(parents=True)
+        (target.parent / ".codeaf.version").write_text("v0.8.2\n")
+    else:
+        target = pathdir / ("aforge" if location == "legacy" else "codeaf")
+    if location != "missing":
+        target.write_text("#!/bin/sh\nexit 0\n")
+        target.chmod(0o755)
+    if location == "pin":
+        monkeypatch.setenv("AFORGE_BIN", str(tmp_path / "missing"))
+    install = Mock(side_effect=AssertionError("doctor must not download"))
+    monkeypatch.setattr(codeaf, "install_codeaf", install)
+    probe = AsyncMock(
+        return_value="aforge v0.1.0" if location == "legacy" else "codeaf v0.8.2"
+    )
+    report = (await harness_doctor(["aforge"], version_probe=probe))[0]
+    assert report.usable == (location not in {"missing", "pin"})
+    if location in {"managed", "path"}:
+        assert report.version == "codeaf v0.8.2"
+        assert probe.call_args.args[0] == [str(target), "version"]
+    if not report.usable:
+        assert report.install_command == "af aforge ensure"
+    install.assert_not_called()

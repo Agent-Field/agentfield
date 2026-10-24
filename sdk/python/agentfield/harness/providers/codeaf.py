@@ -159,8 +159,11 @@ class CodeafProvider:
             cls._resolution_task = None
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
+        started = time.monotonic()
+        timeout = int(os.environ.get("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1800"))
+        deadline = started + timeout
         cls = type(self)
-        legacy_pin = os.environ.get("AFORGE_BIN") if self._alias else None
+        legacy_pin = os.environ.get("AFORGE_BIN", "").strip() if self._alias else None
         if legacy_pin:
             return await AforgeProvider(legacy_pin).execute(prompt, options)
         override = self._bin or os.environ.get("CODEAF_BIN")
@@ -178,10 +181,21 @@ class CodeafProvider:
                         cls._resolution_task = asyncio.create_task(
                             cls._resolve_automatic()
                         )
-                    resolved = await asyncio.shield(cls._resolution_task)
+                    task = cls._resolution_task
                 else:
-                    resolved = cls._resolution_cache
-                binary, provider, download_error = resolved
+                    task = None
+                resolved = cls._resolution_cache
+            if task is not None:
+                try:
+                    resolved = await asyncio.wait_for(
+                        asyncio.shield(task), max(0, deadline - time.monotonic())
+                    )
+                except asyncio.TimeoutError:
+                    return self._timeout_result(
+                        started, "Timed out while provisioning CodeAF"
+                    )
+            assert resolved is not None
+            binary, provider, download_error = resolved
             if binary is None:
                 raise provider_unavailable("codeaf", "codeaf", detail=download_error)
         if provider == "aforge":
@@ -191,27 +205,62 @@ class CodeafProvider:
                     binary,
                 )
                 cls._fallback_logged = True
-            return await AforgeProvider(binary).execute(prompt, options)
+            try:
+                return await asyncio.wait_for(
+                    AforgeProvider(binary).execute(prompt, options),
+                    max(0, deadline - time.monotonic()),
+                )
+            except asyncio.TimeoutError:
+                return self._timeout_result(
+                    started, "CodeAF fallback timed out", "aforge"
+                )
         if self._alias and not cls._alias_logged:
             logger.info(
                 "provider 'aforge' now runs CodeAF; set AFORGE_BIN to pin the legacy binary"
             )
             cls._alias_logged = True
-        async with self._get_semaphore():
-            return await self._execute_impl(binary, prompt, options)
+
+        async def execute_remaining() -> RawResult:
+            async with self._get_semaphore():
+                return await self._execute_impl(binary, prompt, options, deadline)
+
+        try:
+            return await asyncio.wait_for(
+                execute_remaining(), max(0, deadline - time.monotonic())
+            )
+        except asyncio.TimeoutError:
+            return self._timeout_result(started, "CodeAF timed out")
+
+    @staticmethod
+    def _timeout_result(
+        started: float, message: str, provider: str = "codeaf"
+    ) -> RawResult:
+        return RawResult(
+            provider=provider,
+            is_error=True,
+            failure_type=FailureType.TIMEOUT,
+            error_message=message,
+            metrics=Metrics(duration_api_ms=int((time.monotonic() - started) * 1000)),
+        )
 
     async def _execute_impl(
-        self, binary: str, prompt: str, options: dict[str, object]
+        self, binary: str, prompt: str, options: dict[str, object], deadline: float
     ) -> RawResult:
         root = str(options.get("project_dir") or options.get("cwd") or ".")
-        timeout = int(os.environ.get("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1800"))
         model_value, variant = resolve_model_and_variant(options)
-        model = (
-            _strip_openrouter_prefix(model_value)
-            if model_value
-            else CODEAF_DEFAULT_MODEL
+        overlay = options.get("env")
+        environment = {**os.environ, **(overlay if isinstance(overlay, dict) else {})}
+        model = _strip_openrouter_prefix(
+            model_value
+            or str(environment.get("CODEAF_MODEL") or "").strip()
+            or str(environment.get("AFORGE_MODEL") or "").strip()
+            or CODEAF_DEFAULT_MODEL
         )
-        command = os.environ.get("AGENTFIELD_CODEAF_COMMAND", "exec").strip().lower()
+        command = (
+            os.environ.get("AGENTFIELD_CODEAF_COMMAND", "").strip()
+            or os.environ.get("AGENTFIELD_AFORGE_COMMAND", "").strip()
+            or "exec"
+        ).lower()
         if command not in {"exec", "do"}:
             if not type(self)._command_warning_logged:
                 logger.warning(
@@ -225,7 +274,10 @@ class CodeafProvider:
         cmd.extend(["--model", model])
         if command == "do":
             cmd.extend(["--plan-model", model, "--check-model", model])
-        cmd.extend(["--timeout", f"{max(1, timeout - 5)}s"])
+        timeout = max(0, deadline - time.monotonic())
+        cmd.extend(
+            ["--timeout", f"{max(1, timeout - 5):.3f}".rstrip("0").rstrip(".") + "s"]
+        )
         if command == "exec":
             turns = options.get("max_turns")
             if isinstance(turns, int) and not isinstance(turns, bool) and turns > 0:
@@ -245,7 +297,7 @@ class CodeafProvider:
                 env=env,
                 unset_env=("CODEAF_MODELS", "AFORGE_MODELS"),
                 cwd=None,
-                timeout=timeout,
+                timeout=max(0, deadline - time.monotonic()),
                 idle_seconds=0,
                 input_text=input_text,
             )
