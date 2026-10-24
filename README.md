@@ -48,11 +48,6 @@ work out of the box; skip it with `--no-codeaf` (`--no-aforge` remains an alias)
 `~/.agentfield-staging`; an explicit `AGENTFIELD_HOME` selects the production
 managed home. `AGENTFIELD_INSTALL_DIR` selects the `af` directory; CodeAF
 always uses the managed home's `bin`. Repair it with `af codeaf ensure`.
-`af run` provisions a missing harness in a detached process and continues
-immediately. Launches share a 15-minute background lease
-and wait 10 minutes before retrying a failed attempt; explicit ensure bypasses
-these guards. The installer log is
-`$AGENTFIELD_HOME/logs/codeaf-ensure.log`.
 The provider name `aforge` remains an alias; set `AFORGE_BIN` and select
 `provider="aforge"` to pin the legacy adapter. CodeAF state stays isolated in
 `$AGENTFIELD_HOME/codeaf`. See [harness providers](docs/harness-providers.md)

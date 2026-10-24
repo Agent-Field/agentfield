@@ -57,13 +57,9 @@ The Python-agent, Go-agent and cloud control-plane images ship CodeAF at
 - `AGENTFIELD_AFORGE_BASE_URL`: Retained for legacy `af aforge ensure`, default
   `https://agentfield.ai/downloads/aforge/v0.1.0`; serves gzip assets and checksums.
 
-SDK managed lookup checks the home installation first, then its fallback at
-`<os temp dir>/agentfield-codeaf-<uid>/v0.8.2/codeaf[.exe]` on Unix or
-`<os temp dir>/agentfield-codeaf/v0.8.2/codeaf.exe` on Windows when home is
-unwritable. The default state fallback is `state` under that base. Before using
-either fallback, the base and selected subdirectory must be real directories;
-Unix also requires current-user ownership and enforces mode 0700. Untrusted
-fallbacks are skipped with one warning.
+SDK managed lookup uses only `$AGENTFIELD_HOME/bin/codeaf[.exe]`; an unwritable
+location is reported as a download failure. State creation at
+`$AGENTFIELD_HOME/codeaf` is best effort; the child still receives that path.
 A user-installed CodeAF on PATH is a late fallback and is never modified.
 
 Shell-installer equivalents: `--no-codeaf` / `CODEAF_MODE=none` (default `auto`),

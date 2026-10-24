@@ -13,15 +13,9 @@ reasoner.
 AgentField provisions CodeAF **v0.8.2** in its own managed directory,
 `$AGENTFIELD_HOME/bin/codeaf` (`~/.agentfield/bin/codeaf` by default, `.exe` on
 Windows). The curl installer, `af skill install --all`, successful `af install`,
-and Desktop launch ensure it best-effort. `af run` immediately continues agent
-launch; if CodeAF is missing, it starts a detached `af codeaf ensure` process
-whose output goes to `$AGENTFIELD_HOME/logs/codeaf-ensure.log` and which survives
-`af run` exiting. A cross-process lease at `$AGENTFIELD_HOME/bin/.codeaf.background`
-suppresses further background spawns for up to 15 minutes. The child removes
-the lease on completion; failures record `.codeaf.lastfail` in the same directory
-and suppress automatic attempts for 10 minutes. Explicit ensure ignores these
-guards. Install and skill hooks honor the command context and wait
-at most 30 seconds for an installer lock, warning once if that wait expires.
+and Desktop launch ensure it best-effort. Install and skill hooks honor the
+command context and wait at most 30 seconds for an installer lock, warning once
+if that wait expires.
 A progress line appears only when a download starts. Explicit `af codeaf ensure`
 can wait for another installer until canceled; `--lock-wait 30s` bounds that wait.
 The Python-agent,
@@ -126,24 +120,21 @@ is never modified.
 
 The SDK resolves the binary lazily at the first execution: explicit CodeAF
 binary option, then `CODEAF_BIN`, then the managed installation, then a managed
-download, then `codeaf` on PATH. When the home bin directory is unwritable, SDK
-downloads use `<os temp dir>/agentfield-codeaf-<uid>/v0.8.2/codeaf[.exe]`
-on Unix or `<os temp dir>/agentfield-codeaf/v0.8.2/codeaf.exe` on Windows.
-The default state fallback is `state` under the same base. Before use, the base
-and selected subdirectory must be real directories, owned by the current Unix
-user, with mode 0700 enforced. Windows skips uid/mode checks. An untrusted
-fallback is skipped with one warning. If CodeAF still cannot be found, a managed
+download, then `codeaf` on PATH. An unwritable home bin directory is reported
+as a download failure. If CodeAF still cannot be found, a managed
 or PATH `aforge` binary is a warned legacy
 fallback. Otherwise the unavailable error includes `af codeaf ensure` and any
 download failure. Results and usage identify the adapter that actually ran.
 Both CLI doctors use the same read-only order: `CODEAF_BIN`, home-managed,
-temp-managed, then PATH. Managed binaries require the matching version marker.
+then PATH. Managed binaries require the matching version marker.
 Doctors never download CodeAF.
 
 Set `AGENTFIELD_CODEAF_BASE_URL` to a full release directory URL (including the
 version) to use a mirror. Embedded pins still apply; no downloaded checksum
 file is trusted. CLI downloads follow redirects and honor `HTTP_PROXY`,
-`HTTPS_PROXY`, `NO_PROXY` and their lowercase forms. `AGENTFIELD_SKIP_CODEAF` or the legacy `AGENTFIELD_SKIP_AFORGE`
+`HTTPS_PROXY`, `NO_PROXY` and their lowercase forms.
+The TypeScript SDK skips downloads when `HTTPS_PROXY` or `https_proxy` is set; run `af codeaf ensure` to install through a proxy.
+`AGENTFIELD_SKIP_CODEAF` or the legacy `AGENTFIELD_SKIP_AFORGE`
 opts out of every CodeAF download, including explicit ensure and SDK lazy
 provisioning. Truthy values are `1`, `true`, `yes`, and `on`, case-insensitive.
 The shell installers accept `--no-codeaf` / `CODEAF_MODE=none` and PowerShell
@@ -172,7 +163,8 @@ watchdog; the inner timeout is five seconds shorter, with a one-second minimum.
 An idle watchdog is disabled because CodeAF can stay quiet for minutes.
 
 Each child defaults `CODEAF_HOME` to `$AGENTFIELD_HOME/codeaf`, isolating state
-from the user's `~/.codeaf`, and defaults `CODEAF_NO_UPDATE_CHECK=1`.
+from the user's `~/.codeaf` (directory creation is best effort), and defaults
+`CODEAF_NO_UPDATE_CHECK=1`.
 `CODEAF_TELEMETRY=off` is supplied when `CI` or `DO_NOT_TRACK` is truthy, or
 `AGENTFIELD_TELEMETRY_ENABLED` is explicitly false (`0`, `false`, `no`, `off`).
 Explicit caller and per-call environment values win over these defaults.
