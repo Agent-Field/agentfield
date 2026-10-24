@@ -15,7 +15,10 @@ $Version = if ($env:VERSION) { $env:VERSION } else { "latest" }
 $Verbose = if ($env:VERBOSE -eq "1") { $true } else { $false }
 $SkipPathConfig = if ($env:SKIP_PATH_CONFIG -eq "1") { $true } else { $false }
 # Piped iwr | iex installs cannot pass switches, so retain an environment opt-out.
-$CodeafMode = if ($NoCodeaf -or $NoAforge -or $env:CODEAF_MODE -eq 'none' -or $env:AFORGE_MODE -eq 'none') { 'none' } else { 'auto' }
+# The skip variables count too: an older af's `aforge ensure` fallback only
+# honors AGENTFIELD_SKIP_AFORGE, so decide here instead of relying on af.
+$CodeafMode = if ($NoCodeaf -or $NoAforge -or $env:CODEAF_MODE -eq 'none' -or $env:AFORGE_MODE -eq 'none' -or
+    $env:AGENTFIELD_SKIP_CODEAF -match '^\s*(1|true|yes|on)\s*$' -or $env:AGENTFIELD_SKIP_AFORGE -match '^\s*(1|true|yes|on)\s*$') { 'none' } else { 'auto' }
 
 # Colors
 function Write-ColorOutput {
