@@ -76,7 +76,11 @@ async def harness_doctor(
         if provider == "codeaf" or (provider == "aforge" and not legacy_pin):
             binary = await asyncio.to_thread(find_codeaf_binary, environment)
             codeaf_alias = provider == "aforge" and binary is not None
-            if binary is None and provider == "aforge":
+            if (
+                binary is None
+                and provider == "aforge"
+                and not environment.get("CODEAF_BIN", "").strip()
+            ):
                 binary = shutil.which(spec.binary)
         else:
             binary = shutil.which(legacy_pin or spec.binary)

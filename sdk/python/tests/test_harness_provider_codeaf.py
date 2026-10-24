@@ -608,6 +608,44 @@ async def test_F1c_env_provider_beats_legacy_pin(monkeypatch):
     assert isinstance(build_provider(HarnessConfig()), CodeafProvider)
 
 
+@pytest.mark.parametrize("contract", ["R1a", "R1b", "R1c"])
+async def test_R1_captured_provider_all_execution_paths(monkeypatch, contract):
+    from agentfield.harness._result import RawResult
+    from agentfield.harness.providers.codex import CodexProvider
+
+    if contract == "R1a":
+        monkeypatch.setenv("AGENTFIELD_HARNESS_PROVIDER", "codex")
+        config = HarnessConfig(aforge_bin="/legacy")
+        monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER")
+        assert "provider" not in config.model_fields_set
+        expected, name = CodexProvider, "codex"
+    else:
+        config = (
+            HarnessConfig() if contract == "R1b" else HarnessConfig(provider="codeaf")
+        )
+        monkeypatch.setenv("AFORGE_BIN", "/legacy")
+        expected, name = (
+            (AforgeProvider, "aforge")
+            if contract == "R1b"
+            else (CodeafProvider, "codeaf")
+        )
+    assert isinstance(build_provider(config), expected)
+    execute = AsyncMock(return_value=RawResult(result="done", provider=name))
+    monkeypatch.setattr(expected, "execute", execute)
+    assert (await HarnessRunner(config).run("p")).provider == name
+    app = object.__new__(Agent)
+    app.harness_config = config
+    app._harness_runner = None
+    assert (await app.harness("p")).provider == name
+    assert execute.await_count == 2
+    monkeypatch.setattr(
+        CodeafProvider,
+        "execute",
+        AsyncMock(return_value=RawResult(result="override", provider="codeaf")),
+    )
+    assert (await HarnessRunner(config).run("p", provider="codeaf")).provider == "codeaf"
+
+
 @pytest.mark.parametrize(
     "new,old,want",
     [
@@ -744,4 +782,40 @@ async def test_F5_alias_doctor_read_only(monkeypatch, tmp_path, location):
         assert probe.call_args.args[0] == [str(target), "version"]
     if not report.usable:
         assert report.install_command == "af aforge ensure"
+    install.assert_not_called()
+
+
+@pytest.mark.parametrize("contract", ["R4a", "R4b", "R4c"])
+async def test_R4_alias_doctor_authoritative_codeaf_override(
+    monkeypatch, tmp_path, contract
+):
+    pathdir = tmp_path / "path"
+    pathdir.mkdir()
+    legacy = pathdir / "aforge"
+    legacy.write_text("#!/bin/sh\nexit 0\n")
+    legacy.chmod(0o755)
+    monkeypatch.setenv("PATH", str(pathdir))
+    target = tmp_path / "override"
+    if contract != "R4b":
+        monkeypatch.setenv("CODEAF_BIN", str(target))
+    if contract == "R4c":
+        target.write_text("#!/bin/sh\nexit 0\n")
+        target.chmod(0o755)
+    install = Mock(side_effect=AssertionError("doctor must not download"))
+    monkeypatch.setattr(codeaf, "install_codeaf", install)
+    version = "aforge v0.1.0" if contract == "R4b" else "codeaf v0.8.2"
+    probe = AsyncMock(return_value=version)
+    report = (await harness_doctor(["aforge"], version_probe=probe))[0]
+    assert report.usable == (contract != "R4a")
+    assert report.installed == report.usable
+    if contract == "R4a":
+        assert report.binary is None
+        assert report.issues == ("binary_not_found",)
+        probe.assert_not_called()
+    else:
+        assert report.version == version
+        assert report.binary == str(legacy if contract == "R4b" else target)
+        probe.assert_awaited_once_with(
+            ["aforge" if contract == "R4b" else str(target), "version"]
+        )
     install.assert_not_called()

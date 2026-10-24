@@ -4,7 +4,10 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from agentfield.harness._defaults import resolve_harness_provider
+from agentfield.harness._defaults import (
+    DEFAULT_HARNESS_PROVIDER,
+    resolve_harness_provider,
+)
 
 _legacy_pin_logged = False
 
@@ -28,7 +31,10 @@ SUPPORTED_PROVIDERS = {
 def resolve_execution_provider(config: "HarnessConfig") -> str:
     global _legacy_pin_logged
     explicit = getattr(config, "provider", None)
-    if "provider" not in getattr(config, "model_fields_set", {"provider"}):
+    if (
+        "provider" not in getattr(config, "model_fields_set", {"provider"})
+        and explicit == DEFAULT_HARNESS_PROVIDER
+    ):
         explicit = None
     legacy_bin = getattr(config, "aforge_bin", None)
     pinned = legacy_bin not in (None, "aforge") or bool(

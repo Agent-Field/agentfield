@@ -10,6 +10,7 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
+from agentfield.harness._defaults import DEFAULT_HARNESS_PROVIDER
 from agentfield.harness._result import FailureType, HarnessResult, RawResult
 from agentfield.harness._schema import (
     build_followup_prompt,
@@ -186,8 +187,10 @@ def _resolve_options(
             "schema_max_retries",
             "schema_mode",
         ]:
-            if field_name == "provider" and "provider" not in getattr(
-                config, "model_fields_set", {"provider"}
+            if (
+                field_name == "provider"
+                and "provider" not in getattr(config, "model_fields_set", {"provider"})
+                and getattr(config, "provider", None) == DEFAULT_HARNESS_PROVIDER
             ):
                 continue
             val = getattr(config, field_name, None)
