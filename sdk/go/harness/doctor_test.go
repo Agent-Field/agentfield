@@ -368,7 +368,7 @@ func TestDoctorCodeAFManagedAndVersion(t *testing.T) {
 	isolateCodeAF(t)
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("OPENROUTER_API_KEY", "fixture-key")
-	home, _ := codeAFManagedPaths()
+	home := codeAFManagedPaths()
 	writeManagedCodeAF(t, home, "codeaf v0.8.2 built 2026-10-23 11:39 · go1.26.5 linux/amd64")
 	reports, err := Doctor(context.Background(), DoctorOptions{Providers: []string{ProviderCodeAF}, Probe: true})
 	require.NoError(t, err)
@@ -411,18 +411,18 @@ func TestDoctorCodeAFOverrideAndMissing(t *testing.T) {
 
 // A3 / V11: doctor follows execution's read-only order, even with downloads enabled.
 func TestDoctorCodeAFReadOnlyResolutionOrder(t *testing.T) {
-	for _, location := range []string{"override", "home", "temp", "path", "missing"} {
+	for _, location := range []string{"override", "home", "path", "missing"} {
 		t.Run(location, func(t *testing.T) {
 			isolateCodeAF(t)
 			t.Setenv("AGENTFIELD_SKIP_CODEAF", "0")
 			t.Setenv("OPENROUTER_API_KEY", "fixture-key")
 			dir := t.TempDir()
 			t.Setenv("PATH", dir)
-			home, temp := codeAFManagedPaths()
-			paths := []string{filepath.Join(t.TempDir(), "override"), home, temp, filepath.Join(dir, "codeaf")}
-			start := map[string]int{"override": 0, "home": 1, "temp": 2, "path": 3, "missing": 4}[location]
+			home := codeAFManagedPaths()
+			paths := []string{filepath.Join(t.TempDir(), "override"), home, filepath.Join(dir, "codeaf")}
+			start := map[string]int{"override": 0, "home": 1, "path": 2, "missing": 3}[location]
 			for i := start; i < len(paths); i++ {
-				if i == 1 || i == 2 {
+				if i == 1 {
 					writeManagedCodeAF(t, paths[i], "codeaf v0.8.2 built fixture")
 				} else {
 					writeCodeAFCLI(t, paths[i], "codeaf v0.8.2 built fixture", 0)

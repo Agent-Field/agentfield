@@ -18,7 +18,7 @@ import (
 
 // Finding 1 / A1 / V5-V6: repair is visible without resetting process state.
 func TestCodeAFResolutionRecoversAfterFailure(t *testing.T) {
-	for _, location := range []string{"home", "temp", "path", "legacy home", "legacy path", "option", "env"} {
+	for _, location := range []string{"home", "path", "legacy home", "legacy path", "option", "env"} {
 		t.Run(location, func(t *testing.T) {
 			isolateCodeAF(t)
 			t.Setenv("AGENTFIELD_SKIP_CODEAF", "0")
@@ -31,9 +31,9 @@ func TestCodeAFResolutionRecoversAfterFailure(t *testing.T) {
 			}))
 			defer server.Close()
 			t.Setenv("AGENTFIELD_CODEAF_BASE_URL", server.URL)
-			home, temp := codeAFManagedPaths()
+			home := codeAFManagedPaths()
 			paths := map[string]string{
-				"home": home, "temp": temp, "path": filepath.Join(pathDir, "codeaf"),
+				"home": home, "path": filepath.Join(pathDir, "codeaf"),
 				"legacy home": filepath.Join(filepath.Dir(home), "aforge"), "legacy path": filepath.Join(pathDir, "aforge"),
 				"option": filepath.Join(t.TempDir(), "explicit"), "env": filepath.Join(t.TempDir(), "explicit"),
 			}
@@ -45,7 +45,7 @@ func TestCodeAFResolutionRecoversAfterFailure(t *testing.T) {
 			}
 			_, err := resolveCodeAF(context.Background(), override)
 			require.ErrorIs(t, err, ErrProviderUnavailable)
-			if location == "home" || location == "temp" {
+			if location == "home" {
 				writeManagedCodeAF(t, paths[location], "{}")
 			} else {
 				writeCodeAFCLI(t, paths[location], "{}", 0)
@@ -86,7 +86,7 @@ func TestCodeAFFailedConcurrentDownloadIsThrottled(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Equal(t, int32(1), requests.Load())
-	home, _ := codeAFManagedPaths()
+	home := codeAFManagedPaths()
 	writeManagedCodeAF(t, home, `{"ok":true,"stop":"done","answer":"repaired"}`)
 	raw, err := NewCodeAFProvider("").Execute(context.Background(), "fixture only", Options{})
 	require.NoError(t, err)
@@ -130,72 +130,6 @@ func TestCodeAFDownloadRetriesAfterCooldown(t *testing.T) {
 	assert.Equal(t, int32(2), requests.Load(), "successful resolution is cached")
 }
 
-// Finding 2 / A2 / V6-V8: the temp install must be usable through execution.
-func TestCodeAFDownloadExecutesWithUnwritableHome(t *testing.T) {
-	for _, blocked := range []string{"home is a file", "home is read-only", "existing state is read-only", "overlay home is a file"} {
-		t.Run(blocked, func(t *testing.T) {
-			isolateCodeAF(t)
-			t.Setenv("PATH", t.TempDir())
-			t.Setenv("AGENTFIELD_SKIP_CODEAF", "0")
-			home := os.Getenv("AGENTFIELD_HOME")
-			opts := Options{}
-			switch blocked {
-			case "home is a file", "overlay home is a file":
-				home = filepath.Join(t.TempDir(), "file")
-				require.NoError(t, os.WriteFile(home, []byte("blocked"), 0o600))
-				if blocked == "overlay home is a file" {
-					opts.Env = map[string]string{"AGENTFIELD_HOME": home}
-				} else {
-					t.Setenv("AGENTFIELD_HOME", home)
-				}
-			case "home is read-only":
-				require.NoError(t, os.Chmod(home, 0o555))
-				t.Cleanup(func() { _ = os.Chmod(home, 0o755) })
-				requireCodeAFReadOnlyDirectory(t, home)
-			case "existing state is read-only":
-				state := filepath.Join(home, "codeaf")
-				require.NoError(t, os.Mkdir(state, 0o555))
-				t.Cleanup(func() { _ = os.Chmod(state, 0o755) })
-				requireCodeAFReadOnlyDirectory(t, state)
-			}
-			data := `#!/bin/sh
-if [ "$CODEAF_HOME" != "$EXPECTED_STATE" ]; then exit 10; fi
-if ! ( : > "$CODEAF_HOME/child-write" ); then exit 11; fi
-printf '%s\n' '{"ok":true,"stop":"done","answer":"temp state works"}'
-`
-			useCodeAFTestHash(t, data)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, data) }))
-			defer server.Close()
-			t.Setenv("AGENTFIELD_CODEAF_BASE_URL", server.URL)
-			state := filepath.Join(expectedCodeAFTempBase(), "state")
-			t.Setenv("EXPECTED_STATE", state)
-			raw, err := NewCodeAFProvider("").Execute(context.Background(), "fixture only", opts)
-			require.NoError(t, err)
-			require.False(t, raw.IsError, raw.ErrorMessage)
-			assert.Equal(t, "temp state works", raw.Result)
-			info, err := os.Stat(state)
-			require.NoError(t, err)
-			assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
-			assert.FileExists(t, filepath.Join(state, "child-write"))
-			if blocked == "home is a file" || blocked == "home is read-only" {
-				_, temp := codeAFManagedPaths()
-				assert.True(t, codeAFInstalled(temp))
-			}
-		})
-	}
-}
-
-func requireCodeAFReadOnlyDirectory(t *testing.T, path string) {
-	t.Helper()
-	probe, err := os.CreateTemp(path, ".permission-probe-*")
-	if err == nil {
-		_ = probe.Close()
-		_ = os.Remove(probe.Name())
-		t.Skip("current user can write to mode-0555 directories")
-	}
-	require.ErrorIs(t, err, os.ErrPermission)
-}
-
 func TestCodeAFExplicitStateHomeIsPreserved(t *testing.T) {
 	for _, source := range []string{"inherited", "overlay"} {
 		t.Run(source, func(t *testing.T) {
@@ -217,7 +151,9 @@ func TestCodeAFExplicitStateHomeIsPreserved(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, explicit, raw.Result)
 			assert.DirExists(t, explicit)
-			assert.NoDirExists(t, filepath.Join(expectedCodeAFTempBase(), "state"))
+			entries, err := os.ReadDir(os.TempDir())
+			require.NoError(t, err)
+			assert.Empty(t, entries)
 		})
 	}
 }
@@ -264,4 +200,48 @@ printf '%s\n' '{"text":"legacy unset preserved","stop":"done"}'
 	require.NoError(t, err)
 	assert.Equal(t, ProviderAforge, raw.Provider)
 	assert.Equal(t, "legacy unset preserved", raw.Result)
+}
+
+// C1: failed installation never creates a temp fallback, and the throttle retains its error.
+func TestCodeAFUnwritableHomeResolution(t *testing.T) {
+	isolateCodeAF(t)
+	t.Setenv("AGENTFIELD_SKIP_CODEAF", "0")
+	t.Setenv("PATH", t.TempDir())
+	blocked := filepath.Join(t.TempDir(), "home-file")
+	require.NoError(t, os.WriteFile(blocked, []byte("blocked"), 0600))
+	t.Setenv("AGENTFIELD_HOME", blocked)
+	for i := 0; i < 2; i++ {
+		_, err := resolveCodeAF(context.Background(), "")
+		require.ErrorIs(t, err, ErrProviderUnavailable)
+		require.ErrorContains(t, err, "cannot install CodeAF into")
+		require.ErrorContains(t, err, "af codeaf ensure")
+	}
+	first := codeAFResolver.lastDownloadAttempt
+	require.False(t, first.IsZero())
+	codeAFResolver.lastDownloadAttempt = time.Now().Add(-61 * time.Second)
+	_, err := resolveCodeAF(context.Background(), "")
+	require.ErrorContains(t, err, "cannot install CodeAF into")
+	require.True(t, codeAFResolver.lastDownloadAttempt.After(first))
+	entries, err := os.ReadDir(os.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+// C2: an explicit binary still runs when the default state cannot be created.
+func TestCodeAFExplicitBinaryWithUnwritableHome(t *testing.T) {
+	isolateCodeAF(t)
+	blocked := filepath.Join(t.TempDir(), "home-file")
+	require.NoError(t, os.WriteFile(blocked, []byte("blocked"), 0600))
+	t.Setenv("AGENTFIELD_HOME", blocked)
+	binary := filepath.Join(t.TempDir(), "codeaf")
+	script := "#!/bin/sh\nprintf '{\"ok\":true,\"stop\":\"done\",\"answer\":\"%s\"}\\n' \"$CODEAF_HOME\"\n"
+	require.NoError(t, os.WriteFile(binary, []byte(script), 0755))
+	t.Setenv("CODEAF_BIN", binary)
+	raw, err := NewCodeAFProvider("").Execute(context.Background(), "fixture", Options{})
+	require.NoError(t, err)
+	require.False(t, raw.IsError, raw.ErrorMessage)
+	assert.Equal(t, filepath.Join(blocked, "codeaf"), raw.Result)
+	entries, err := os.ReadDir(os.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }

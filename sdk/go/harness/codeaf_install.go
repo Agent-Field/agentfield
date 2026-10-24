@@ -93,12 +93,11 @@ func codeAFAsset(goos, goarch string) (string, string) {
 	return asset, codeAFHashes[asset]
 }
 
-func codeAFManagedPaths() (homePath, tempPath string) {
+func codeAFManagedPaths() string {
 	if home, err := agentFieldHome(); err == nil {
-		homePath = filepath.Join(home, "bin", codeAFExecutable(runtime.GOOS))
+		return filepath.Join(home, "bin", codeAFExecutable(runtime.GOOS))
 	}
-	tempPath = filepath.Join(codeAFTempBase(), CodeAFVersion, codeAFExecutable(runtime.GOOS))
-	return
+	return ""
 }
 
 func codeAFInstalled(path string) bool {
@@ -111,12 +110,9 @@ func codeAFInstalled(path string) bool {
 }
 
 func findManagedCodeAF() string {
-	homePath, tempPath := codeAFManagedPaths()
+	homePath := codeAFManagedPaths()
 	if homePath != "" && codeAFInstalled(homePath) {
 		return homePath
-	}
-	if _, err := prepareCodeAFTempDirectory(CodeAFVersion); err == nil && codeAFInstalled(tempPath) {
-		return tempPath
 	}
 	return ""
 }
@@ -128,14 +124,7 @@ func resolveCodeAF(ctx context.Context, override string) (codeAFBinary, error) {
 	codeAFResolver.Lock()
 	defer codeAFResolver.Unlock()
 	if cached, ok := codeAFResolver.cache[override]; ok {
-		_, tempPath := codeAFManagedPaths()
-		if cached.path != tempPath {
-			return cached, nil
-		}
-		if _, err := prepareCodeAFTempDirectory(CodeAFVersion); err == nil {
-			return cached, nil
-		}
-		delete(codeAFResolver.cache, override)
+		return cached, nil
 	}
 	binary, err := findCodeAF(ctx, override)
 	// Failed lookups must recheck every location on the next call.
@@ -195,21 +184,17 @@ func downloadManagedCodeAF(ctx context.Context) (string, error) {
 	if hash == "" {
 		return "", fmt.Errorf("CodeAF %s is not installable on %s/%s", CodeAFVersion, runtime.GOOS, runtime.GOARCH)
 	}
-	homePath, tempPath := codeAFManagedPaths()
-	return installCodeAF(ctx, homePath, tempPath, asset, hash)
+	homePath := codeAFManagedPaths()
+	return installCodeAF(ctx, homePath, asset, hash)
 }
 
 // installCodeAF accepts a hash explicitly for offline fixture tests. Production
 // only calls it with the embedded pin selected by downloadManagedCodeAF.
-func installCodeAF(ctx context.Context, homePath, tempPath, asset, expectedHash string) (string, error) {
+func installCodeAF(ctx context.Context, homePath, asset, expectedHash string) (string, error) {
 	target := homePath
 	temp, err := prepareCodeAFDownload(target)
 	if err != nil {
-		target = tempPath
-		temp, err = prepareCodeAFTempDownload(target)
-	}
-	if err != nil {
-		return "", fmt.Errorf("prepare CodeAF download: %w", err)
+		return "", fmt.Errorf("cannot install CodeAF into %s: %w", filepath.Dir(target), err)
 	}
 	defer os.Remove(temp.Name())
 	defer temp.Close()
@@ -274,16 +259,4 @@ func prepareCodeAFDownload(target string) (*os.File, error) {
 		return nil, err
 	}
 	return os.CreateTemp(filepath.Dir(target), ".codeaf-download-*")
-}
-
-func prepareCodeAFTempDownload(target string) (*os.File, error) {
-	_, tempPath := codeAFManagedPaths()
-	if target != tempPath {
-		return nil, fmt.Errorf("CodeAF temp path unavailable")
-	}
-	dir, err := prepareCodeAFTempDirectory(CodeAFVersion)
-	if err != nil {
-		return nil, err
-	}
-	return os.CreateTemp(dir, ".codeaf-download-*")
 }

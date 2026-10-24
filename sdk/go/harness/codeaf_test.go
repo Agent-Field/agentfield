@@ -29,7 +29,6 @@ func isolateCodeAF(t *testing.T) {
 	t.Setenv("AGENTFIELD_SKIP_CODEAF", "1")
 	resetCodeAFResolution()
 	codeAFAliasOnce, codeAFLegacyOnce, codeAFCommandOnce = sync.Once{}, sync.Once{}, sync.Once{}
-	codeAFTempWarningOnce = sync.Once{}
 	t.Cleanup(resetCodeAFResolution)
 }
 
@@ -420,12 +419,6 @@ func TestCodeAFEnvironmentErrorsAndOverlayHome(t *testing.T) {
 	assert.Equal(t, filepath.Join(childHome, "codeaf"), env["CODEAF_HOME"])
 	blocked := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(blocked, []byte("file"), 0o644))
-	p := stubCodeAF()
-	_, err = p.Execute(context.Background(), "task", Options{Env: map[string]string{"CODEAF_HOME": filepath.Join(blocked, "home")}})
-	require.ErrorContains(t, err, "create CODEAF_HOME")
-	t.Setenv("AGENTFIELD_HOME", "")
-	t.Setenv("HOME", "")
-	env, err = codeAFEnvironment(Options{}, "")
+	env, err = codeAFEnvironment(Options{Env: map[string]string{"CODEAF_HOME": filepath.Join(blocked, "home")}}, "")
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(expectedCodeAFTempBase(), "state"), env["CODEAF_HOME"])
 }

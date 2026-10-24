@@ -49,7 +49,7 @@ func TestCodeAFDefaultAliasAndLegacy(t *testing.T) {
 	isolateCodeAF(t)
 	t.Setenv(ProviderEnvVar, "")
 	logs := captureCodeAFLogs(t)
-	home, _ := codeAFManagedPaths()
+	home := codeAFManagedPaths()
 	writeManagedCodeAF(t, home, `{"ok":true,"stop":"done","answer":"canonical","spend_usd":0,"tokens":{"in":10,"out":5}}`)
 	runner := NewRunner(Options{})
 	result, err := runner.Run(context.Background(), "task", nil, nil, Options{})
@@ -90,14 +90,13 @@ func TestCodeAFDefaultAliasAndLegacy(t *testing.T) {
 // V5: the resolution matrix includes all managed and unmanaged fallbacks.
 func TestCodeAFResolutionOrder(t *testing.T) {
 	for _, tc := range []struct {
-		name, want                                                        string
-		override, env, home, temp, download, path, legacyHome, legacyPath bool
-		requests                                                          int32
+		name, want                                                  string
+		override, env, home, download, path, legacyHome, legacyPath bool
+		requests                                                    int32
 	}{
 		{name: "override", want: "override", override: true, env: true, home: true, path: true},
 		{name: "env", want: "env", env: true, home: true, path: true},
-		{name: "home", want: "home", home: true, temp: true, download: true, path: true},
-		{name: "temp", want: "temp", temp: true, download: true, path: true},
+		{name: "home", want: "home", home: true, download: true, path: true},
 		{name: "download", want: "home", download: true, path: true, requests: 1},
 		{name: "path", want: "path", path: true, legacyHome: true, legacyPath: true},
 		{name: "legacy home", want: "legacyHome", legacyHome: true, legacyPath: true},
@@ -106,7 +105,7 @@ func TestCodeAFResolutionOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateCodeAF(t)
 			paths := map[string]string{}
-			paths["home"], paths["temp"] = codeAFManagedPaths()
+			paths["home"] = codeAFManagedPaths()
 			dir := t.TempDir()
 			t.Setenv("PATH", dir)
 			paths["path"] = filepath.Join(dir, "codeaf")
@@ -114,11 +113,11 @@ func TestCodeAFResolutionOrder(t *testing.T) {
 			paths["legacyPath"] = filepath.Join(dir, "aforge")
 			paths["override"] = filepath.Join(t.TempDir(), "override")
 			paths["env"] = filepath.Join(t.TempDir(), "env")
-			for name, enabled := range map[string]bool{"override": tc.override, "env": tc.env, "home": tc.home, "temp": tc.temp, "path": tc.path, "legacyHome": tc.legacyHome, "legacyPath": tc.legacyPath} {
+			for name, enabled := range map[string]bool{"override": tc.override, "env": tc.env, "home": tc.home, "path": tc.path, "legacyHome": tc.legacyHome, "legacyPath": tc.legacyPath} {
 				if !enabled {
 					continue
 				}
-				if name == "home" || name == "temp" {
+				if name == "home" {
 					writeManagedCodeAF(t, paths[name], "{}")
 				} else {
 					writeCodeAFCLI(t, paths[name], "{}", 0)
@@ -199,7 +198,7 @@ func TestCodeAFManagedDownload(t *testing.T) {
 	isolateCodeAF(t)
 	data := "plain executable bytes"
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(data)))
-	home, fallback := codeAFManagedPaths()
+	home := codeAFManagedPaths()
 	asset, _ := codeAFAsset(runtime.GOOS, runtime.GOARCH)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/release/"+asset, r.URL.Path)
@@ -209,7 +208,7 @@ func TestCodeAFManagedDownload(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("AGENTFIELD_CODEAF_BASE_URL", server.URL+"/release///")
-	path, err := installCodeAF(context.Background(), home, fallback, asset, hash)
+	path, err := installCodeAF(context.Background(), home, asset, hash)
 	require.NoError(t, err)
 	assert.Equal(t, home, path)
 	assert.True(t, codeAFInstalled(path))
@@ -236,7 +235,7 @@ func TestCodeAFDownloadRejections(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateCodeAF(t)
-			home, fallback := codeAFManagedPaths()
+			home := codeAFManagedPaths()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch tc.name {
 				case "status":
@@ -255,7 +254,7 @@ func TestCodeAFDownloadRejections(t *testing.T) {
 			}))
 			defer server.Close()
 			t.Setenv("AGENTFIELD_CODEAF_BASE_URL", server.URL)
-			_, err := installCodeAF(context.Background(), home, fallback, "codeaf-linux-amd64", strings.Repeat("0", 64))
+			_, err := installCodeAF(context.Background(), home, "codeaf-linux-amd64", strings.Repeat("0", 64))
 			require.ErrorContains(t, err, tc.want)
 			assert.NoFileExists(t, home)
 			assert.NoFileExists(t, filepath.Join(filepath.Dir(home), codeAFVersionFilename))
@@ -265,7 +264,7 @@ func TestCodeAFDownloadRejections(t *testing.T) {
 	}
 }
 
-func TestCodeAFDownloadFallbackAndFilesystemErrors(t *testing.T) {
+func TestCodeAFDownloadFilesystemErrors(t *testing.T) {
 	isolateCodeAF(t)
 	data := "fixture"
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(data)))
@@ -275,22 +274,18 @@ func TestCodeAFDownloadFallbackAndFilesystemErrors(t *testing.T) {
 	blocked := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(blocked, []byte("not a directory"), 0o644))
 	t.Setenv("AGENTFIELD_HOME", blocked)
-	home, fallback := codeAFManagedPaths()
-	path, err := installCodeAF(context.Background(), home, fallback, "asset", hash)
-	require.NoError(t, err)
-	assert.Equal(t, fallback, path)
-	assert.True(t, codeAFInstalled(path))
-	assert.Equal(t, fallback, findManagedCodeAF())
-	_, err = installCodeAF(context.Background(), home, filepath.Join(blocked, "nope"), "asset", hash)
-	require.ErrorContains(t, err, "prepare CodeAF download")
+	home := codeAFManagedPaths()
+	_, err := installCodeAF(context.Background(), home, "asset", hash)
+	require.ErrorContains(t, err, "cannot install CodeAF into")
+	assert.Empty(t, findManagedCodeAF())
 	target := filepath.Join(t.TempDir(), "directory")
 	require.NoError(t, os.Mkdir(target, 0o755))
-	_, err = installCodeAF(context.Background(), target, "", "asset", hash)
+	_, err = installCodeAF(context.Background(), target, "asset", hash)
 	require.Error(t, err)
 	assert.NoFileExists(t, filepath.Join(filepath.Dir(target), codeAFVersionFilename))
 	target = filepath.Join(t.TempDir(), "codeaf")
 	require.NoError(t, os.Mkdir(filepath.Join(filepath.Dir(target), codeAFVersionFilename), 0o755))
-	_, err = installCodeAF(context.Background(), target, "", "asset", hash)
+	_, err = installCodeAF(context.Background(), target, "asset", hash)
 	require.Error(t, err)
 	assert.False(t, codeAFInstalled(target))
 }
@@ -346,7 +341,7 @@ func TestCodeAFSkipSwitches(t *testing.T) {
 
 func TestCodeAFInstalledRequiresExecutableAndMarker(t *testing.T) {
 	isolateCodeAF(t)
-	home, fallback := codeAFManagedPaths()
+	home := codeAFManagedPaths()
 	assert.False(t, codeAFInstalled(home))
 	require.NoError(t, os.MkdirAll(filepath.Dir(home), 0o755))
 	require.NoError(t, os.WriteFile(home, []byte("binary"), 0o644))
@@ -357,8 +352,7 @@ func TestCodeAFInstalledRequiresExecutableAndMarker(t *testing.T) {
 	assert.True(t, codeAFInstalled(home))
 	require.NoError(t, os.WriteFile(marker, []byte("old-version"), 0o644))
 	assert.False(t, codeAFInstalled(home))
-	writeManagedCodeAF(t, fallback, "{}")
-	assert.Equal(t, fallback, findManagedCodeAF())
+	assert.Empty(t, findManagedCodeAF())
 	require.NoError(t, os.Remove(home))
 	require.NoError(t, os.Mkdir(home, 0o755))
 	assert.False(t, codeAFInstalled(home))
@@ -398,14 +392,15 @@ func TestCodeAFPlatformPinsAndHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	_, err = agentFieldHome()
 	require.Error(t, err)
+	assert.Empty(t, codeAFManagedPaths())
 }
 
 func TestCodeAFDownloadTransportErrors(t *testing.T) {
 	isolateCodeAF(t)
-	home, fallback := codeAFManagedPaths()
+	home := codeAFManagedPaths()
 	for _, base := range []string{"http://[::1", "http://127.0.0.1:1"} {
 		t.Setenv("AGENTFIELD_CODEAF_BASE_URL", base)
-		_, err := installCodeAF(context.Background(), home, fallback, "asset", "hash")
+		_, err := installCodeAF(context.Background(), home, "asset", "hash")
 		require.Error(t, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -418,7 +413,7 @@ func TestCodeAFDownloadTransportErrors(t *testing.T) {
 
 func TestCodeAFExplicitBareNameOverridesManaged(t *testing.T) {
 	isolateCodeAF(t)
-	home, _ := codeAFManagedPaths()
+	home := codeAFManagedPaths()
 	writeManagedCodeAF(t, home, `{"ok":true,"stop":"done","answer":"managed"}`)
 	dir := t.TempDir()
 	path := writeCodeAFCLI(t, filepath.Join(dir, "codeaf"), "{}", 0)

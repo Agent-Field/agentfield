@@ -93,18 +93,13 @@ func codeAFEnvironment(options Options, variant string) (map[string]string, erro
 		if home == "" {
 			home, _ = agentFieldHome()
 		}
-		state := filepath.Join(home, "codeaf")
-		if home == "" || prepareCodeAFState(state) != nil {
-			var err error
-			state, err = prepareCodeAFTempDirectory("state")
-			if err != nil {
-				return nil, fmt.Errorf("create CODEAF_HOME: %w", err)
-			}
-			if err := prepareCodeAFState(state); err != nil {
-				return nil, fmt.Errorf("create CODEAF_HOME: %w", err)
-			}
+		// Without any home directory there is no isolated location; leave
+		// CodeAF on its own default rather than a cwd-relative directory.
+		if home != "" {
+			state := filepath.Join(home, "codeaf")
+			_ = os.MkdirAll(state, 0o700)
+			env["CODEAF_HOME"] = state
 		}
-		env["CODEAF_HOME"] = state
 	}
 	if !present("CODEAF_NO_UPDATE_CHECK") {
 		env["CODEAF_NO_UPDATE_CHECK"] = "1"
@@ -128,23 +123,9 @@ func codeAFEnvironment(options Options, variant string) (map[string]string, erro
 		home = value("CODEAF_HOME")
 	}
 	if present("CODEAF_HOME") && home != "" {
-		if err := os.MkdirAll(home, 0o755); err != nil {
-			return nil, fmt.Errorf("create CODEAF_HOME: %w", err)
-		}
+		_ = os.MkdirAll(home, 0o755)
 	}
 	return env, nil
-}
-
-func prepareCodeAFState(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-	probe, err := os.CreateTemp(path, ".codeaf-write-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(probe.Name())
-	return probe.Close()
 }
 
 func parseCodeAFEnvelope(stdout string) map[string]any {

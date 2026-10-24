@@ -129,10 +129,10 @@ func runCodeAFProxyFixture(t *testing.T, fixture string) {
 	previous := http.DefaultTransport
 	http.DefaultTransport = transport
 	defer func() { http.DefaultTransport = previous }()
-	home, fallback := codeAFManagedPaths()
+	home := codeAFManagedPaths()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	path, err := installCodeAF(ctx, home, fallback, "asset", hash)
+	path, err := installCodeAF(ctx, home, "asset", hash)
 	require.NoError(t, err)
 	assert.True(t, codeAFInstalled(path))
 	if strings.Contains(fixture, "bypass") {
@@ -142,7 +142,7 @@ func runCodeAFProxyFixture(t *testing.T, fixture string) {
 	}
 	assert.Equal(t, int32(2), assetRequests.Load(), "redirect must reach the verified asset")
 	badPath := filepath.Join(t.TempDir(), "codeaf")
-	_, err = installCodeAF(ctx, badPath, "", "asset", strings.Repeat("0", 64))
+	_, err = installCodeAF(ctx, badPath, "asset", strings.Repeat("0", 64))
 	require.ErrorContains(t, err, "sha256 mismatch")
 	assert.NoFileExists(t, badPath)
 	assert.NoFileExists(t, filepath.Join(filepath.Dir(badPath), codeAFVersionFilename))
