@@ -35,11 +35,17 @@ The Python-agent, Go-agent and cloud control-plane images ship CodeAF at
   values. The legacy `af aforge ensure` command retains its original behavior.
 - `CODEAF_BIN`: Explicit CodeAF executable override, after the SDK's per-call or
   configured binary option, before managed lookup/download and PATH fallback.
-- `AFORGE_BIN`: Select `provider="aforge"` and set this to pin the legacy AForge
-  adapter. Without a legacy pin the `aforge` provider name runs CodeAF.
+- `AFORGE_BIN`: Pins the legacy adapter for `aforge` or an implicit default
+  provider. Explicit `codeaf` overrides it. Without a pin, `aforge` runs CodeAF;
+  doctor checks CodeAF read-only, then legacy aforge, and reports its version.
 - `AGENTFIELD_CODEAF_COMMAND`: `exec` (default) or `do`; invalid values warn and
   fall back to `exec`. `do` is unattended with `--yes-spend` and explicit worker,
   plan and check models; its own per-task spending limit still applies.
+- `AGENTFIELD_AFORGE_COMMAND`: Fallback when `AGENTFIELD_CODEAF_COMMAND` is blank
+  or unset; otherwise defaults to `exec`.
+- `CODEAF_MODEL` / `AFORGE_MODEL`: Model fallbacks after the explicit option, in
+  that order, then `~deepseek/deepseek-v4-flash-latest`. Per-call environment values
+  override process values; blank is unset. One leading `openrouter/` is stripped.
 - `CODEAF_MAX_CONCURRENT`: Positive integer subprocess cap, default `8`;
   when unset, use `AFORGE_MAX_CONCURRENT`. Invalid or non-positive values use `8`.
 - `CODEAF_EXEC_REASONING`: CodeAF reasoning setting (`off`, `low`, `medium`, `high`);
@@ -53,7 +59,9 @@ The Python-agent, Go-agent and cloud control-plane images ship CodeAF at
 - `CODEAF_MODELS` / `AFORGE_MODELS`: Inherited model-panel settings are removed
   from CodeAF children unless explicitly supplied by the per-call overlay.
 - `AGENTFIELD_HARNESS_TIMEOUT_SECONDS`: Outer timeout, default `1800` seconds.
-  CodeAF gets an inner timeout five seconds shorter (minimum one second).
+  Includes first-use provisioning and waiting on shared downloads. Execution gets
+  the remaining time, with an inner timeout five seconds shorter (minimum one
+  second). A provisioning timeout leaves the shared download running.
 - `AGENTFIELD_AFORGE_BASE_URL`: Retained for legacy `af aforge ensure`, default
   `https://agentfield.ai/downloads/aforge/v0.1.0`; serves gzip assets and checksums.
 

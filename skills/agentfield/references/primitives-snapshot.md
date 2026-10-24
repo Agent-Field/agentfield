@@ -180,7 +180,14 @@ hashes still apply. `AGENTFIELD_SKIP_CODEAF` or `AGENTFIELD_SKIP_AFORGE` set to
 `exec` (default) or `do`. SDK children isolate `CODEAF_HOME` under
 `$AGENTFIELD_HOME/codeaf` and disable telemetry for truthy `CI`/`DO_NOT_TRACK`
 or explicitly false `AGENTFIELD_TELEMETRY_ENABLED`, unless overridden by the
-caller. Select `aforge` with `AFORGE_BIN` to retain the legacy adapter.
+caller. An implicit provider with `AFORGE_BIN` or an SDK legacy binary option
+retains aforge; explicit `codeaf` overrides that pin. Legacy
+`AGENTFIELD_AFORGE_COMMAND` and `AFORGE_MODEL` remain fallbacks after the new
+command/model variables (an explicit model wins, and per-call env overrides
+process env). The harness timeout includes first-use provisioning; a timed-out
+caller leaves the shared download running. Doctor checks unpinned `aforge`
+against CodeAF read-only, including its version, then falls back to legacy
+aforge; a pin checks only the pinned binary.
 
 **Harness availability gate** — DO NOT use unless ALL true:
 

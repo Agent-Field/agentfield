@@ -3,7 +3,7 @@
 `app.harness()` hands a task to a coding agent — a multi-turn worker that reads,
 writes, and edits files, then reports back through the same structured-output
 contract as `app.ai()`. AgentField ships its own harness, **CodeAF**, and it is
-the default: a call with no provider set runs `codeaf`. Naming a different
+the default: a call with no provider or legacy binary pin runs `codeaf`. Naming a different
 provider swaps the worker without changing the surrounding loop, which is how
 you orchestrate Claude Code, Codex, Gemini CLI, OpenCode, Pi, or OMP from a
 reasoner.
@@ -146,6 +146,12 @@ The Python extras install wrappers, rather than these managed binaries.
 CodeAF, Gemini, Pi and OMP are CLI-only; other providers may require a
 separately available executable or wrapper, as listed above.
 
+With no explicit provider (including no `AGENTFIELD_HARNESS_PROVIDER`), an
+existing `AFORGE_BIN` or SDK legacy binary option keeps the legacy aforge adapter.
+Select `provider="codeaf"` explicitly to use CodeAF despite that pin. Doctor checks
+for unpinned `aforge` look for CodeAF without downloading, report its version,
+and fall back to checking legacy aforge; a pinned alias checks only that pin.
+
 ### CodeAF adapter contract
 
 By default the SDK runs `codeaf exec --json --dir <cwd> --model <model>` with
@@ -153,13 +159,21 @@ the task on stdin, an explicit timeout, optional `--max-turns`, and optional
 `--system`. Set `AGENTFIELD_CODEAF_COMMAND=do` to use the routed
 `codeaf do --json --yes-spend` workflow instead; it pins worker, plan and check
 models to the selected model and combines the system prompt and task on stdin.
+When `AGENTFIELD_CODEAF_COMMAND` is blank or unset, the process environment's
+`AGENTFIELD_AFORGE_COMMAND` is honored before defaulting to `exec`. Models resolve
+from the explicit option, then `CODEAF_MODEL`, then `AFORGE_MODEL`, then
+`~deepseek/deepseek-v4-flash-latest`; the per-call environment overlays the process
+environment, blank values are unset, and one leading `openrouter/` is stripped.
 Only `exec` and `do` are accepted; other values warn and use `exec`. CodeAF's
 own task spending limit still applies to `do`.
 
 `CODEAF_MAX_CONCURRENT` caps subprocesses at 8 by default, falling back to
 `AFORGE_MAX_CONCURRENT` when unset. Invalid or non-positive values use 8.
 `AGENTFIELD_HARNESS_TIMEOUT_SECONDS` keeps the existing 1800-second outer
-watchdog; the inner timeout is five seconds shorter, with a one-second minimum.
+budget, including first-use provisioning and waiting on a shared download.
+After provisioning, the subprocess gets the remaining budget and the inner
+timeout is five seconds shorter, with a one-second minimum. A call that times
+out while provisioning leaves the shared download running for later calls.
 An idle watchdog is disabled because CodeAF can stay quiet for minutes.
 
 Each child defaults `CODEAF_HOME` to `$AGENTFIELD_HOME/codeaf`, isolating state
