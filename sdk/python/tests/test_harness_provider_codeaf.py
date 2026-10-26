@@ -48,6 +48,8 @@ def isolated_codeaf(monkeypatch, tmp_path, caplog):
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("AGENTFIELD_HOME", str(tmp_path / "af-home"))
+    monkeypatch.setenv("HOME", str(tmp_path / "user-home"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-codeaf-key")
     monkeypatch.setenv("AGENTFIELD_SKIP_CODEAF", "1")
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / "temp"))
     for attr in (

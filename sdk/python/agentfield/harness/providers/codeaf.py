@@ -8,9 +8,12 @@ import logging
 import os
 import shutil
 import time
+from pathlib import Path
 from http.client import HTTPException
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+from urllib.parse import urlsplit
 
+from agentfield.exceptions import HarnessProviderNotConfigured
 from agentfield.harness._availability import provider_unavailable
 from agentfield.harness._cli import resolve_model_and_variant, run_cli, strip_ansi
 from agentfield.harness._codeaf_install import (
@@ -28,11 +31,21 @@ from agentfield.harness.providers.aforge import (
     _task_input,
 )
 
+if TYPE_CHECKING:
+    from agentfield.types import HarnessConfig
+
 logger = logging.getLogger("agentfield.harness.codeaf")
 CODEAF_DEFAULT_MODEL = "~deepseek/deepseek-v4-flash-latest"
 _REASONING_VARIANTS = {"off", "low", "medium", "high"}
 _download_retry_at = 0.0
 _last_download_error: str | None = None
+CODEAF_MISSING_KEY_WARNING = (
+    "CodeAF is the harness provider and no model key is configured, so harness calls will fail. "
+    "Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another "
+    "harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER."
+)
+_missing_key_logged = False
+_construction_warning_logged = False
 
 
 def _max_concurrent() -> int:
@@ -124,6 +137,87 @@ def _child_environment(
     return overlay
 
 
+def _has_model_key(environment: dict[str, str]) -> bool:
+    """Mirror CodeAF's credential ladder; uncertain profile state is allowed."""
+
+    def value(*names: str) -> str:
+        return next(
+            (
+                environment[name].strip()
+                for name in names
+                if environment.get(name, "").strip()
+            ),
+            "",
+        )
+
+    if value("OPENROUTER_API_KEY"):
+        return True
+    key = value("OPENAI_API_KEY")
+    base = value("CODEAF_BASE_URL", "AFORGE_BASE_URL")
+    if key:
+        if key.startswith("sk-or-"):
+            return True
+        if base:
+            try:
+                address = (
+                    base if "://" in base else "https://" + base.removeprefix("//")
+                )
+                parsed = urlsplit(address)
+                # Accessing port also validates malformed endpoint addresses.
+                _ = parsed.port
+                host = (
+                    (parsed.hostname or "")
+                    .lower()
+                    .removesuffix(".")
+                    .removeprefix("www.")
+                )
+                if host != "openrouter.ai":
+                    return True
+            except ValueError:
+                return True
+    profile = Path(
+        value("CODEAF_PROFILE_DIR", "AFORGE_PROFILE_DIR", "CODEAF_HOME", "AFORGE_HOME")
+        or str(Path(environment.get("HOME") or Path.home()) / ".codeaf")
+    )
+    for filename in ("credentials.json", "codex.json"):
+        try:
+            if (profile / filename).exists():
+                return True
+        except OSError:
+            return True
+    try:
+        config = json.loads((profile / "config.json").read_text())
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+    if not isinstance(config, dict):
+        return True
+    saved_key = config.get("api_key")
+    sources = config.get("model_sources")
+    return (isinstance(saved_key, str) and bool(saved_key.strip())) or (
+        isinstance(sources, (list, dict)) and bool(sources)
+    )
+
+
+def warn_codeaf_configuration(config: HarnessConfig) -> None:
+    from agentfield.harness.providers._factory import resolve_execution_provider
+
+    global _construction_warning_logged
+    provider = resolve_execution_provider(config)
+    if provider not in {"codeaf", "aforge"}:
+        return
+    if provider == "aforge" and (
+        config.aforge_bin not in (None, "aforge")
+        or os.environ.get("AFORGE_BIN", "").strip()
+    ):
+        return
+    environment = {**os.environ, **_child_environment({}, None)}
+    if not _has_model_key(environment) and not _construction_warning_logged:
+        _construction_warning_logged = True
+        logger.warning(CODEAF_MISSING_KEY_WARNING)
+
+
 class CodeafProvider:
     """CodeAF exec provider; ``aforge`` without a pin is a compatibility alias."""
 
@@ -159,6 +253,7 @@ class CodeafProvider:
             cls._resolution_task = None
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
+        global _missing_key_logged
         started = time.monotonic()
         timeout = int(os.environ.get("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1800"))
         deadline = started + timeout
@@ -166,6 +261,14 @@ class CodeafProvider:
         legacy_pin = os.environ.get("AFORGE_BIN", "").strip() if self._alias else None
         if legacy_pin:
             return await AforgeProvider(legacy_pin).execute(prompt, options)
+        environment = {**os.environ, **_child_environment(options, None)}
+        if not _has_model_key(environment):
+            if not _missing_key_logged:
+                _missing_key_logged = True
+                logger.warning(CODEAF_MISSING_KEY_WARNING)
+            raise HarnessProviderNotConfigured(
+                binary=self._bin or os.environ.get("CODEAF_BIN") or "codeaf"
+            )
         override = self._bin or os.environ.get("CODEAF_BIN")
         if override:
             binary = await asyncio.to_thread(shutil.which, override)

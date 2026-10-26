@@ -33,8 +33,12 @@ from agentfield.harness.providers.pi import OMPProvider, PiProvider
     ],
 )
 async def test_cli_provider_raises_typed_error_before_spawn(
-    monkeypatch, provider, name, module, install_command
+    monkeypatch, tmp_path, provider, name, module, install_command
 ):
+    if name == "codeaf":
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-codeaf-key")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("AGENTFIELD_HOME", str(tmp_path / "agentfield"))
     monkeypatch.setattr("agentfield.harness._availability.shutil.which", lambda _: None)
     run_cli = AsyncMock()
     monkeypatch.setattr(
