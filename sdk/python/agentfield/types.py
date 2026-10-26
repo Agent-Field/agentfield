@@ -483,7 +483,10 @@ class AIConfig(BaseModel):
     )
     rate_limit_max_delay: float = Field(
         default=30.0,
-        description="Maximum delay for rate limit backoff in seconds.",
+        description=(
+            "Maximum base exponential backoff delay in seconds. A valid Retry-After "
+            "can require a longer wait."
+        ),
     )
     rate_limit_jitter_factor: float = Field(
         default=0.25,

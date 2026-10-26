@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import math
 import os
 import random
 import time
@@ -138,9 +139,12 @@ class StatelessRateLimiter:
         Returns:
             float: Delay in seconds
         """
-        # Use server-suggested delay if available and reasonable
-        if retry_after and retry_after <= self.max_delay:
+        # A server cooldown is a minimum, even when it exceeds the local
+        # exponential-backoff cap. Invalid hints use the normal backoff.
+        minimum_delay = 0.0
+        if retry_after is not None and math.isfinite(retry_after) and retry_after > 0:
             base_delay = retry_after
+            minimum_delay = retry_after
         else:
             # Exponential backoff: base_delay * (2 ^ attempt)
             base_delay = min(self.base_delay * (2**attempt), self.max_delay)
@@ -154,8 +158,8 @@ class StatelessRateLimiter:
         jitter_range = base_delay * self.jitter_factor
         jitter = rng.uniform(-jitter_range, jitter_range)
 
-        # Ensure minimum delay and apply jitter
-        delay = max(0.1, base_delay + jitter)
+        # Negative jitter must not end the server's cooldown early.
+        delay = max(0.1, minimum_delay, base_delay + jitter)
 
         log_debug(
             f"Rate limit backoff: attempt={attempt}, base_delay={base_delay:.2f}s, jitter={jitter:.2f}s, total_delay={delay:.2f}s"
