@@ -1,6 +1,5 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
@@ -220,8 +219,13 @@ function hasModelKey(env: NodeJS.ProcessEnv): boolean {
       }
     }
   }
-  const profile = value('CODEAF_PROFILE_DIR', 'AFORGE_PROFILE_DIR', 'CODEAF_HOME', 'AFORGE_HOME')
-    || path.join(env.HOME || os.homedir(), '.codeaf');
+  const names = ['CODEAF_PROFILE_DIR', 'AFORGE_PROFILE_DIR', 'CODEAF_HOME', 'AFORGE_HOME'];
+  // CodeAF reads a whitespace-only spelling differently from an unset one, and with every
+  // spelling empty it falls back to HOME, a legacy ~/.aforge or a relative directory.
+  // Neither can be seen reliably from here, so the call is allowed.
+  if (names.some((name) => Boolean(env[name]) && !env[name]?.trim())) return true;
+  const profile = value(...names);
+  if (!profile) return true;
   for (const filename of ['credentials.json', 'codex.json']) {
     try {
       fs.statSync(path.join(profile, filename));
@@ -243,12 +247,16 @@ function hasModelKey(env: NodeJS.ProcessEnv): boolean {
 }
 
 export function warnCodeafConfiguration(config: HarnessConfig): void {
-  const provider = resolveExecutionProvider(config);
-  if (provider !== 'codeaf' && provider !== 'aforge') return;
-  if (provider === 'aforge' && (config.aforgeBin !== undefined || process.env.AFORGE_BIN?.trim())) return;
-  if (!hasModelKey({ ...process.env, ...childEnvironment({}, undefined) }) && !constructionWarningLogged) {
-    constructionWarningLogged = true;
-    console.warn(CODEAF_MISSING_KEY_WARNING);
+  try {
+    const provider = resolveExecutionProvider(config);
+    if (provider !== 'codeaf' && provider !== 'aforge') return;
+    if (provider === 'aforge' && (config.aforgeBin !== undefined || process.env.AFORGE_BIN?.trim())) return;
+    if (!hasModelKey({ ...process.env, ...childEnvironment({}, undefined) }) && !constructionWarningLogged) {
+      constructionWarningLogged = true;
+      console.warn(CODEAF_MISSING_KEY_WARNING);
+    }
+  } catch {
+    // Agent construction must not fail over a warning.
   }
 }
 

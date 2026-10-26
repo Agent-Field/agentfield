@@ -67,7 +67,8 @@ an `OPENAI_API_KEY` starting with `sk-or-`, or another `OPENAI_API_KEY` with a
 custom `CODEAF_BASE_URL` (falling back to `AFORGE_BASE_URL`). Ordinary OpenAI keys
 are not accepted for the OpenRouter host. Whitespace-only values are empty.
 The profile directory is the first non-empty `CODEAF_PROFILE_DIR`,
-`AFORGE_PROFILE_DIR`, child `CODEAF_HOME`, or `AFORGE_HOME`, then `~/.codeaf`.
+`AFORGE_PROFILE_DIR`, child `CODEAF_HOME`, or `AFORGE_HOME`; when none is set, or
+one is whitespace only, the call is allowed and CodeAF decides.
 A saved `api_key` or non-empty `model_sources` array/object in its `config.json`
 also permits execution. Unreadable or malformed profile configs and existing
 `credentials.json` or `codex.json` permit execution conservatively, so connected

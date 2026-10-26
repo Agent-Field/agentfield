@@ -196,3 +196,12 @@ def test_k6_agent_environment_provider(name, monkeypatch, caplog):
     assert warning_messages(caplog) == (
         [CONTRACT["warning"]] if name != "claude-code" else []
     )
+
+
+def test_k6_construction_survives_a_failing_key_check(monkeypatch, caplog):
+    def no_home(*_args):
+        raise RuntimeError("no home directory")
+
+    monkeypatch.setattr(codeaf, "_child_environment", no_home)
+    Agent(node_id="auth-test", harness_config=HarnessConfig())
+    assert warning_messages(caplog) == []

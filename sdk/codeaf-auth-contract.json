@@ -380,6 +380,44 @@
       "files": {
         "$STATE/codex.json": ""
       }
+    },
+    {
+      "name": "home-unresolvable",
+      "allow": true,
+      "env": {
+        "CODEAF_HOME": "",
+        "AFORGE_HOME": ""
+      },
+      "overlay": {},
+      "files": {}
+    },
+    {
+      "name": "whitespace-profile-dir",
+      "allow": true,
+      "env": {
+        "CODEAF_PROFILE_DIR": " "
+      },
+      "overlay": {},
+      "files": {}
+    },
+    {
+      "name": "overlay-empties-home",
+      "allow": true,
+      "env": {},
+      "overlay": {
+        "HOME": "",
+        "CODEAF_HOME": ""
+      },
+      "files": {}
+    },
+    {
+      "name": "nan-config",
+      "allow": true,
+      "env": {},
+      "overlay": {},
+      "files": {
+        "$STATE/config.json": "{\"api_key\":\"\",\"x\":NaN}"
+      }
     }
   ]
 }

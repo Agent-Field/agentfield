@@ -137,6 +137,10 @@ def _child_environment(
     return overlay
 
 
+def _reject_json_constant(name: str) -> object:
+    raise ValueError(f"invalid JSON constant {name}")
+
+
 def _has_model_key(environment: dict[str, str]) -> bool:
     """Mirror CodeAF's credential ladder; uncertain profile state is allowed."""
 
@@ -175,10 +179,16 @@ def _has_model_key(environment: dict[str, str]) -> bool:
                     return True
             except ValueError:
                 return True
-    profile = Path(
-        value("CODEAF_PROFILE_DIR", "AFORGE_PROFILE_DIR", "CODEAF_HOME", "AFORGE_HOME")
-        or str(Path(environment.get("HOME") or Path.home()) / ".codeaf")
-    )
+    names = ("CODEAF_PROFILE_DIR", "AFORGE_PROFILE_DIR", "CODEAF_HOME", "AFORGE_HOME")
+    # CodeAF reads a whitespace-only spelling differently from an unset one, and
+    # with every spelling empty it falls back to HOME, a legacy ~/.aforge or a
+    # relative directory. Neither can be seen reliably from here, so allow it.
+    if any(environment.get(name) and not environment[name].strip() for name in names):
+        return True
+    location = value(*names)
+    if not location:
+        return True
+    profile = Path(location)
     for filename in ("credentials.json", "codex.json"):
         try:
             if (profile / filename).exists():
@@ -186,7 +196,9 @@ def _has_model_key(environment: dict[str, str]) -> bool:
         except OSError:
             return True
     try:
-        config = json.loads((profile / "config.json").read_text())
+        config = json.loads(
+            (profile / "config.json").read_text(), parse_constant=_reject_json_constant
+        )
     except FileNotFoundError:
         return False
     except (OSError, ValueError):
@@ -201,6 +213,14 @@ def _has_model_key(environment: dict[str, str]) -> bool:
 
 
 def warn_codeaf_configuration(config: HarnessConfig) -> None:
+    """Warn once when a CodeAF harness has no visible key; never raises."""
+    try:
+        _warn_codeaf_configuration(config)
+    except Exception as exc:  # Agent construction must not fail over a warning.
+        logger.debug("CodeAF key check skipped: %s", exc)
+
+
+def _warn_codeaf_configuration(config: HarnessConfig) -> None:
     from agentfield.harness.providers._factory import resolve_execution_provider
 
     global _construction_warning_logged

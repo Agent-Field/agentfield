@@ -176,13 +176,22 @@ func CodeAFHasCredentials(options Options) bool {
 			}
 		}
 	}
-	profile := value("CODEAF_PROFILE_DIR", "AFORGE_PROFILE_DIR", "CODEAF_HOME", "AFORGE_HOME")
-	if profile == "" {
-		home := value("HOME")
-		if home == "" {
-			home, _ = os.UserHomeDir()
+	names := []string{"CODEAF_PROFILE_DIR", "AFORGE_PROFILE_DIR", "CODEAF_HOME", "AFORGE_HOME"}
+	// CodeAF reads a whitespace-only spelling differently from an unset one, and
+	// with every spelling empty it falls back to HOME, a legacy ~/.aforge or a
+	// relative directory. Neither can be seen reliably from here, so allow it.
+	for _, name := range names {
+		raw, present := env[name]
+		if !present {
+			raw = os.Getenv(name)
 		}
-		profile = filepath.Join(home, ".codeaf")
+		if raw != "" && strings.TrimSpace(raw) == "" {
+			return true
+		}
+	}
+	profile := value(names...)
+	if profile == "" {
+		return true
 	}
 	for _, filename := range []string{"credentials.json", "codex.json"} {
 		if _, err := os.Stat(filepath.Join(profile, filename)); !os.IsNotExist(err) {
