@@ -189,6 +189,21 @@ caller leaves the shared download running. Doctor checks unpinned `aforge`
 against CodeAF read-only, including its version, then falls back to legacy
 aforge; a pin checks only the pinned binary.
 
+CodeAF harness calls fail fast before binary resolution, download or launch when
+no model credential is visible, including with an explicit binary. The SDK's
+unavailable-provider error carries this exact message:
+
+```text
+Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.
+```
+
+The check honors per-call environment overrides, compatible `OPENAI_API_KEY`
+credentials (an `sk-or-` key or a custom base URL), saved profile `api_key` or
+`model_sources`, and connected-provider credential files. Unreadable/malformed
+profiles permit execution conservatively. Refusal warns once per process; an
+Agent with an explicit harness config resolving to CodeAF also warns once at
+construction without failing. Legacy aforge pins are unchanged.
+
 **Harness availability gate** — DO NOT use unless ALL true:
 
 1. `af doctor` reports `recommendation.harness_usable: true` AND lists the chosen provider.

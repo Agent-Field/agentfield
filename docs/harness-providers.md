@@ -47,6 +47,33 @@ result, err := agent.Harness(ctx, task, schema, &dest, harness.Options{Cwd: repo
 const result = await app.harness(task, { schema });
 ```
 
+Without a model credential, Python, Go and TypeScript harness calls fail before
+resolving, downloading or launching CodeAF, including with an explicit binary:
+
+```text
+Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.
+```
+
+The error remains catchable as the SDK's unavailable-provider error (Python and
+TypeScript expose `HarnessProviderNotConfigured`; Go uses
+`ProviderUnavailableError` with `NotConfigured: true`). It identifies `codeaf`
+and lists `OPENROUTER_API_KEY` as missing. Refused calls log a warning once per
+process. An Agent with an explicit harness config resolving to CodeAF also warns
+once at construction; construction continues normally.
+
+The check uses the effective child environment, including per-call `env`
+overrides and the SDK's default `CODEAF_HOME`. It accepts `OPENROUTER_API_KEY`,
+an `OPENAI_API_KEY` starting with `sk-or-`, or another `OPENAI_API_KEY` with a
+custom `CODEAF_BASE_URL` (falling back to `AFORGE_BASE_URL`). Ordinary OpenAI keys
+are not accepted for the OpenRouter host. Whitespace-only values are empty.
+The profile directory is the first non-empty `CODEAF_PROFILE_DIR`,
+`AFORGE_PROFILE_DIR`, child `CODEAF_HOME`, or `AFORGE_HOME`, then `~/.codeaf`.
+A saved `api_key` or non-empty `model_sources` array/object in its `config.json`
+also permits execution. Unreadable or malformed profile configs and existing
+`credentials.json` or `codex.json` permit execution conservatively, so connected
+providers and sign-ins can supply their credentials. Legacy aforge pins keep
+their existing behavior.
+
 The default model is `~deepseek/deepseek-v4-flash-latest`. Pass `model=` to change
 it; the SDK strips one leading `openrouter/` before invoking CodeAF.
 

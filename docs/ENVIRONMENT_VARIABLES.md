@@ -22,6 +22,17 @@ CLI/skill/package installs, node launch and Desktop provision it best-effort.
 The Python-agent, Go-agent and cloud control-plane images ship CodeAF at
 `/usr/local/bin/codeaf`, failing their build if download or verification fails.
 
+SDK harness calls with no model credential fail before binary resolution,
+download or launch, with this message:
+
+```text
+Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.
+```
+
+The check honors the effective child environment and saved/connected profile
+credentials. See the [credential contract](harness-providers.md#default-codeaf)
+for the key ladder and once-per-process warnings.
+
 - `AGENTFIELD_HARNESS_PROVIDER`: Explicit SDK provider config wins over this
   variable; blank values are ignored; the built-in default is `codeaf`.
 - `AGENTFIELD_CODEAF_BASE_URL`: Full release directory override, version included;
