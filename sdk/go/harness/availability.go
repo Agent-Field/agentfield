@@ -145,9 +145,14 @@ type ProviderUnavailableError struct {
 	MissingAuthEnv []string
 	// DownloadError describes a failed best-effort managed CodeAF install.
 	DownloadError error
+	// NotConfigured identifies a CodeAF refusal before binary resolution.
+	NotConfigured bool
 }
 
 func (e *ProviderUnavailableError) Error() string {
+	if e.NotConfigured {
+		return CodeAFMissingKeyMessage
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "harness provider %q is unavailable: binary %q was not found on PATH",
 		e.Provider, e.Binary)

@@ -115,6 +115,9 @@ func TestHarnessRunner_ConcurrentAccess(t *testing.T) {
 }
 
 func TestHarness_ErrorWithoutProvider(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-codeaf-key")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
 	// With no provider configured, Harness() defaults to codeaf and reaches
 	// provider execution. A missing binary may fail, but provider resolution does not.
 	t.Setenv(harness.ProviderEnvVar, "")
@@ -211,6 +214,9 @@ func TestHarnessDoctor_UnknownProviderIsAnError(t *testing.T) {
 }
 
 func TestHarnessDefaultCodeAFRecordsUsage(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-codeaf-key")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AFORGE_BIN", "")
 	t.Setenv(harness.ProviderEnvVar, "")
 	t.Setenv("AGENTFIELD_HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "codeaf")

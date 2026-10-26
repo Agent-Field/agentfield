@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,11 +22,16 @@ const (
 	// DefaultCodeAFModel pins the worker instead of allowing CodeAF's router to choose it.
 	DefaultCodeAFModel         = "~deepseek/deepseek-v4-flash-latest"
 	defaultCodeAFMaxConcurrent = 8
+	// CodeAFMissingKeyMessage is shared by all missing-credential refusals.
+	CodeAFMissingKeyMessage = "Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER."
+	// CodeAFMissingKeyWarning is logged at call time and Agent construction.
+	CodeAFMissingKeyWarning = "CodeAF is the harness provider and no model key is configured, so harness calls will fail. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER."
 )
 
 var (
-	codeAFSemaphore chan struct{}
-	codeAFSemOnce   sync.Once
+	codeAFSemaphore      chan struct{}
+	codeAFSemOnce        sync.Once
+	codeAFMissingKeyOnce sync.Once
 )
 
 // CodeAFProvider invokes CodeAF's canonical headless exec or do protocol.
@@ -132,6 +138,80 @@ func codeAFEnvironment(options Options, variant string) (map[string]string, erro
 	return env, nil
 }
 
+// CodeAFHasCredentials mirrors CodeAF's key ladder against its effective child
+// environment. Uncertain profile state is allowed so connected providers work.
+func CodeAFHasCredentials(options Options) bool {
+	env, _ := codeAFEnvironment(options, "")
+	value := func(names ...string) string {
+		for _, name := range names {
+			v, present := env[name]
+			if !present {
+				v = os.Getenv(name)
+			}
+			if v = strings.TrimSpace(v); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	if value("OPENROUTER_API_KEY") != "" {
+		return true
+	}
+	key, base := value("OPENAI_API_KEY"), value("CODEAF_BASE_URL", "AFORGE_BASE_URL")
+	if key != "" {
+		if strings.HasPrefix(key, "sk-or-") {
+			return true
+		}
+		if base != "" {
+			if !strings.Contains(base, "://") {
+				base = "https://" + strings.TrimPrefix(base, "//")
+			}
+			address, err := url.Parse(base)
+			if err != nil {
+				return true
+			}
+			host := strings.TrimPrefix(strings.TrimSuffix(strings.ToLower(address.Hostname()), "."), "www.")
+			if host != "openrouter.ai" {
+				return true
+			}
+		}
+	}
+	profile := value("CODEAF_PROFILE_DIR", "AFORGE_PROFILE_DIR", "CODEAF_HOME", "AFORGE_HOME")
+	if profile == "" {
+		home := value("HOME")
+		if home == "" {
+			home, _ = os.UserHomeDir()
+		}
+		profile = filepath.Join(home, ".codeaf")
+	}
+	for _, filename := range []string{"credentials.json", "codex.json"} {
+		if _, err := os.Stat(filepath.Join(profile, filename)); !os.IsNotExist(err) {
+			return true
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(profile, "config.json"))
+	if os.IsNotExist(err) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	var config map[string]any
+	if json.Unmarshal(data, &config) != nil || config == nil {
+		return true
+	}
+	if saved, ok := config["api_key"].(string); ok && strings.TrimSpace(saved) != "" {
+		return true
+	}
+	switch sources := config["model_sources"].(type) {
+	case []any:
+		return len(sources) > 0
+	case map[string]any:
+		return len(sources) > 0
+	}
+	return false
+}
+
 func parseCodeAFEnvelope(stdout string) map[string]any {
 	parse := func(text string) map[string]any {
 		var envelope map[string]any
@@ -183,6 +263,14 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	override := p.BinPath
 	if options.BinPath != "" {
 		override = options.BinPath
+	}
+	if !CodeAFHasCredentials(options) {
+		codeAFMissingKeyOnce.Do(func() { log.Print("WARNING " + CodeAFMissingKeyWarning) })
+		binary := firstNonEmpty(override, os.Getenv("CODEAF_BIN"), "codeaf")
+		return nil, &ProviderUnavailableError{
+			Provider: ProviderCodeAF, Binary: binary, InstallCommand: providerSpecs[ProviderCodeAF].InstallCommand,
+			MissingAuthEnv: []string{"OPENROUTER_API_KEY"}, NotConfigured: true,
+		}
 	}
 	binary, err := p.resolveBinary(runCtx, override)
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
