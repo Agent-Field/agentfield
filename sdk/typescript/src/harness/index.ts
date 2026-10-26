@@ -10,6 +10,7 @@ export type {
 } from './availability.js';
 export {
   HarnessProviderUnavailable,
+  HarnessProviderNotConfigured,
   SUPPORTED_PROVIDER_NAMES,
   ensureCliAvailable,
   findExecutable,

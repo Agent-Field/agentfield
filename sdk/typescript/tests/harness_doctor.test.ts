@@ -501,11 +501,19 @@ describe('harness provider availability', () => {
       [binKey]: `agentfield-definitely-missing-${provider}`,
     } as HarnessConfig;
     const instance = await buildProvider(config);
-
-    await expect(instance.execute('do not launch', {})).rejects.toMatchObject({
-      name: 'HarnessProviderUnavailable',
-      provider,
-      binary: `agentfield-definitely-missing-${provider}`,
-    });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentfield-preflight-'));
+    try {
+      const options = provider === 'codeaf' ? { env: {
+        OPENROUTER_API_KEY: 'test-codeaf-key', CODEAF_HOME: directory,
+        HOME: directory, AGENTFIELD_HOME: directory,
+      } } : {};
+      await expect(instance.execute('do not launch', options)).rejects.toMatchObject({
+        name: 'HarnessProviderUnavailable',
+        provider,
+        binary: `agentfield-definitely-missing-${provider}`,
+      });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
