@@ -2780,7 +2780,9 @@ func agentToolNameToInvocationTarget(name string) string {
 //
 //	chunks, errs := agent.AIStream(ctx, "Tell me a story")
 //	for chunk := range chunks {
-//	    fmt.Print(chunk.Choices[0].Delta.Content)
+//	    if len(chunk.Choices) > 0 {
+//	        fmt.Print(chunk.Choices[0].Delta.Content)
+//	    }
 //	}
 //	if err := <-errs; err != nil {
 //	    log.Fatal(err)
