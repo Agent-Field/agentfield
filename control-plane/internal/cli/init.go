@@ -493,7 +493,7 @@ Example:
 	// and README.md are intentionally NOT generated — the skill produces them
 	// after the agent has written real reasoners.
 	cmd.Flags().BoolVar(&withDocker, "docker", false, "Also generate a Docker scaffold (Dockerfile, docker-compose.yml, .env.example, .dockerignore)")
-	cmd.Flags().StringVar(&defaultModel, "default-model", "openrouter/google/gemini-2.5-flash", "Default AI_MODEL string baked into the docker scaffold (LiteLLM-style, e.g. gpt-4o, anthropic/claude-3-5-sonnet-20241022)")
+	cmd.Flags().StringVar(&defaultModel, "default-model", "openrouter/google/gemini-2.5-flash", "Default AI_MODEL string baked into the docker scaffold (LiteLLM-style, e.g. gpt-4o, anthropic/claude-sonnet-5-5)")
 
 	// Hidden flags — sensible defaults; only set when you have a real reason.
 	cmd.Flags().StringVar(&controlPlaneImage, "control-plane-image", "agentfield/control-plane:latest", "")
