@@ -5,13 +5,21 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
+
+// ErrDIDResolutionUnavailable indicates a DID could not be resolved because of
+// a transient storage failure rather than a genuine missing or revoked record.
+// Callers (e.g. the DID auth middleware) should treat it as retryable and
+// return a 503 instead of a 401.
+var ErrDIDResolutionUnavailable = errors.New("DID resolution temporarily unavailable")
 
 // DIDWebService handles did:web generation, storage, and resolution.
 type DIDWebService struct {
@@ -129,11 +137,17 @@ func (s *DIDWebService) ResolveDID(ctx context.Context, did string) (*types.DIDR
 	// Get the DID document record
 	record, err := s.storage.GetDIDDocument(ctx, did)
 	if err != nil {
-		return &types.DIDResolutionResult{
-			DIDResolutionMetadata: types.DIDResolutionMetadata{
-				Error: "notFound",
-			},
-		}, nil
+		// A genuine missing record resolves to "notFound"; any other storage
+		// failure is transient and must propagate so callers can retry rather
+		// than mistake a DB blip for an unknown DID.
+		if errors.Is(err, storage.ErrDIDDocumentNotFound) {
+			return &types.DIDResolutionResult{
+				DIDResolutionMetadata: types.DIDResolutionMetadata{
+					Error: "notFound",
+				},
+			}, nil
+		}
+		return nil, fmt.Errorf("%w: %w", ErrDIDResolutionUnavailable, err)
 	}
 
 	// Check if revoked
@@ -195,10 +209,9 @@ func (s *DIDWebService) RevokeDID(ctx context.Context, did string) error {
 func (s *DIDWebService) IsDIDRevoked(ctx context.Context, did string) bool {
 	record, err := s.storage.GetDIDDocument(ctx, did)
 	if err != nil {
-		// Check if this is a "not found" error vs a real storage failure.
-		// Not found means the DID was never registered — treat as not revoked.
-		// Any other error (DB timeout, connection failure) — fail closed.
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no rows") {
+		// Not found means the DID was never registered - treat as not revoked.
+		// Any other error (DB timeout, connection failure) - fail closed.
+		if errors.Is(err, storage.ErrDIDDocumentNotFound) {
 			return false
 		}
 		logger.Logger.Warn().Err(err).Str("did", did).Msg("Storage error checking DID revocation, failing closed")
