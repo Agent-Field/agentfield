@@ -1,4 +1,4 @@
-"""K1–K7: shared model-key contract through real runners and fake CLIs."""
+"""K1–K7 and W1–W4: shared model-key contract through real runners and fake CLIs."""
 
 import json
 import logging
@@ -36,8 +36,7 @@ def isolated_auth(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(
         codeaf, "install_codeaf", Mock(side_effect=AssertionError("installer called"))
     )
-    monkeypatch.setattr(codeaf, "_missing_key_logged", False)
-    monkeypatch.setattr(codeaf, "_construction_warning_logged", False)
+    monkeypatch.setattr(codeaf, "_missing_key_warned", False)
     monkeypatch.setattr(codeaf.logger, "handlers", [caplog.handler])
     monkeypatch.setattr(codeaf.logger, "propagate", False)
     caplog.set_level(logging.WARNING, logger="agentfield.harness.codeaf")
@@ -86,7 +85,7 @@ def prepare_case(case, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("case", CONTRACT["cases"], ids=lambda c: c["name"])
-async def test_k1_k3_k4_shared_key_ladder(case, tmp_path, monkeypatch, caplog):
+async def test_w4_k1_k3_k4_shared_key_ladder(case, tmp_path, monkeypatch, caplog):
     options = prepare_case(case, tmp_path, monkeypatch)
     binary, marker = fake_binary(tmp_path)
     provider = codeaf.CodeafProvider(binary)
@@ -111,7 +110,7 @@ async def test_k1_k3_k4_shared_key_ladder(case, tmp_path, monkeypatch, caplog):
 
 @pytest.mark.parametrize("provider", [None, "codeaf", "aforge"])
 @pytest.mark.parametrize("pin", ["automatic", "env", "option"])
-async def test_k1_k2_k7_refusal_before_resolution(
+async def test_w2_k1_k2_k7_refusal_before_resolution(
     provider, pin, tmp_path, monkeypatch, caplog
 ):
     binary, marker = fake_binary(tmp_path)
@@ -123,12 +122,14 @@ async def test_k1_k2_k7_refusal_before_resolution(
     resolve = Mock(side_effect=AssertionError("binary resolution called"))
     monkeypatch.setattr(codeaf, "_resolve_binary", resolve)
     harness = build_provider(HarnessConfig(**config))
-    for _ in range(2):
+    for _ in range(3):
         with pytest.raises(
             HarnessProviderNotConfigured, match="needs a model key"
         ) as caught:
             await harness.execute("task", {})
         assert str(caught.value) == CONTRACT["refusal"]
+        assert isinstance(caught.value, HarnessProviderUnavailable)
+        assert caught.value.missing_auth_env == ["OPENROUTER_API_KEY"]
     resolve.assert_not_called()
     codeaf.install_codeaf.assert_not_called()
     assert not marker.exists()
@@ -198,10 +199,64 @@ def test_k6_agent_environment_provider(name, monkeypatch, caplog):
     )
 
 
-def test_k6_construction_survives_a_failing_key_check(monkeypatch, caplog):
+def test_w4_k6_construction_survives_a_failing_key_check(monkeypatch, caplog):
     def no_home(*_args):
         raise RuntimeError("no home directory")
 
     monkeypatch.setattr(codeaf, "_child_environment", no_home)
     Agent(node_id="auth-test", harness_config=HarnessConfig())
     assert warning_messages(caplog) == []
+
+
+@pytest.mark.parametrize(
+    "constructions,configured,key,calls",
+    [(1, True, "", 2), (2, True, "", 1), (1, False, "", 2), (1, True, "key", 1)],
+    ids=["construction-then-calls", "two-agents", "first-refusal", "call-clears-key"],
+)
+async def test_w1_shared_process_warning_budget(
+    constructions, configured, key, calls, tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", key)
+    binary, marker = fake_binary(tmp_path)
+    for _ in range(constructions):
+        agent = Agent(
+            node_id="auth-test",
+            harness_config=HarnessConfig(codeaf_bin=binary) if configured else None,
+        )
+    assert warning_messages(caplog) == (
+        [CONTRACT["warning"]] if configured and not key else []
+    )
+    for _ in range(calls):
+        with pytest.raises(HarnessProviderNotConfigured) as caught:
+            await agent.harness("task", env={"OPENROUTER_API_KEY": ""})
+        assert str(caught.value) == CONTRACT["refusal"]
+        assert caught.value.missing_auth_env == ["OPENROUTER_API_KEY"]
+        assert warning_messages(caplog) == [CONTRACT["warning"]]
+    Agent(node_id="auth-test", harness_config=HarnessConfig(env={"OPENROUTER_API_KEY": ""}))
+    assert warning_messages(caplog) == [CONTRACT["warning"]]
+    assert not marker.exists()
+    codeaf.install_codeaf.assert_not_called()
+
+
+@pytest.mark.parametrize("case", CONTRACT["cases"], ids=lambda c: c["name"])
+def test_w3_construction_uses_config_environment(case, tmp_path, monkeypatch, caplog):
+    options = prepare_case(case, tmp_path, monkeypatch)
+    Agent(node_id="auth-test", harness_config=HarnessConfig(env=options["env"]))
+    assert warning_messages(caplog) == ([] if case["allow"] else [CONTRACT["warning"]])
+    codeaf.install_codeaf.assert_not_called()
+
+
+async def test_w3_key_only_in_config_env_launches_stub(tmp_path, caplog):
+    binary, marker = fake_binary(tmp_path)
+    agent = Agent(
+        node_id="auth-test",
+        harness_config=HarnessConfig(
+            codeaf_bin=binary, env={"OPENROUTER_API_KEY": "config-key"}
+        ),
+    )
+    assert warning_messages(caplog) == []
+    result = await agent.harness("task")
+    assert result.result == "answer"
+    assert marker.exists()
+    assert warning_messages(caplog) == []
+    codeaf.install_codeaf.assert_not_called()

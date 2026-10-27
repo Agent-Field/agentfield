@@ -44,8 +44,14 @@ CODEAF_MISSING_KEY_WARNING = (
     "Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another "
     "harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER."
 )
-_missing_key_logged = False
-_construction_warning_logged = False
+_missing_key_warned = False
+
+
+def _warn_missing_key_once() -> None:
+    global _missing_key_warned
+    if not _missing_key_warned:
+        _missing_key_warned = True
+        logger.warning(CODEAF_MISSING_KEY_WARNING)
 
 
 def _max_concurrent() -> int:
@@ -223,7 +229,6 @@ def warn_codeaf_configuration(config: HarnessConfig) -> None:
 def _warn_codeaf_configuration(config: HarnessConfig) -> None:
     from agentfield.harness.providers._factory import resolve_execution_provider
 
-    global _construction_warning_logged
     provider = resolve_execution_provider(config)
     if provider not in {"codeaf", "aforge"}:
         return
@@ -232,10 +237,12 @@ def _warn_codeaf_configuration(config: HarnessConfig) -> None:
         or os.environ.get("AFORGE_BIN", "").strip()
     ):
         return
-    environment = {**os.environ, **_child_environment({}, None)}
-    if not _has_model_key(environment) and not _construction_warning_logged:
-        _construction_warning_logged = True
-        logger.warning(CODEAF_MISSING_KEY_WARNING)
+    environment = {
+        **os.environ,
+        **_child_environment({"env": dict(config.env or {})}, None),
+    }
+    if not _has_model_key(environment):
+        _warn_missing_key_once()
 
 
 class CodeafProvider:
@@ -273,7 +280,6 @@ class CodeafProvider:
             cls._resolution_task = None
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
-        global _missing_key_logged
         started = time.monotonic()
         timeout = int(os.environ.get("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1800"))
         deadline = started + timeout
@@ -283,9 +289,7 @@ class CodeafProvider:
             return await AforgeProvider(legacy_pin).execute(prompt, options)
         environment = {**os.environ, **_child_environment(options, None)}
         if not _has_model_key(environment):
-            if not _missing_key_logged:
-                _missing_key_logged = True
-                logger.warning(CODEAF_MISSING_KEY_WARNING)
+            _warn_missing_key_once()
             raise HarnessProviderNotConfigured(
                 binary=self._bin or os.environ.get("CODEAF_BIN") or "codeaf"
             )
