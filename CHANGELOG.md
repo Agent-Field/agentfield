@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.2] - 2026-10-27
+
+
+### Chores
+
+- Chore(deps): bump certifi (#1131)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [certifi](https://github.com/certifi/python-certifi).
+
+
+Updates `certifi` from 2026.2.25 to 2026.10.18
+- [Commits](https://github.com/certifi/python-certifi/compare/2026.02.25...2026.10.18)
+
+---
+updated-dependencies:
+- dependency-name: certifi
+  dependency-version: 2026.10.18
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (fe89c85)
+
 ## [0.1.146-rc.1] - 2026-10-27
 
 
