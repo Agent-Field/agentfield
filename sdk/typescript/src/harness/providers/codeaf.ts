@@ -17,12 +17,17 @@ export const CODEAF_DEFAULT_MODEL = '~deepseek/deepseek-v4-flash-latest';
 const REASONING_VARIANTS = new Set(['off', 'low', 'medium', 'high']);
 const ANSI_PATTERN = /\x1B\[[0-?]*[ -/]*[@-~]/g;
 export const CODEAF_MISSING_KEY_WARNING = 'CodeAF is the harness provider and no model key is configured, so harness calls will fail. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.';
-let missingKeyLogged = false;
-let constructionWarningLogged = false;
+let missingKeyWarned = false;
 
 export function resetCodeafAuthWarnings(): void {
-  missingKeyLogged = false;
-  constructionWarningLogged = false;
+  missingKeyWarned = false;
+}
+
+function warnMissingKeyOnce(): void {
+  if (!missingKeyWarned) {
+    missingKeyWarned = true;
+    console.warn(CODEAF_MISSING_KEY_WARNING);
+  }
 }
 
 export function resolveCodeafMaxConcurrent(): number {
@@ -251,9 +256,8 @@ export function warnCodeafConfiguration(config: HarnessConfig): void {
     const provider = resolveExecutionProvider(config);
     if (provider !== 'codeaf' && provider !== 'aforge') return;
     if (provider === 'aforge' && (config.aforgeBin !== undefined || process.env.AFORGE_BIN?.trim())) return;
-    if (!hasModelKey({ ...process.env, ...childEnvironment({}, undefined) }) && !constructionWarningLogged) {
-      constructionWarningLogged = true;
-      console.warn(CODEAF_MISSING_KEY_WARNING);
+    if (!hasModelKey({ ...process.env, ...childEnvironment({ env: config.env }, undefined) })) {
+      warnMissingKeyOnce();
     }
   } catch {
     // Agent construction must not fail over a warning.
@@ -270,10 +274,7 @@ export class CodeafProvider implements HarnessProvider {
       return { ...await new AforgeProvider(legacyPin).execute(prompt, options), provider: 'aforge' };
     }
     if (!hasModelKey({ ...process.env, ...childEnvironment(options, undefined) })) {
-      if (!missingKeyLogged) {
-        missingKeyLogged = true;
-        console.warn(CODEAF_MISSING_KEY_WARNING);
-      }
+      warnMissingKeyOnce();
       throw new HarnessProviderNotConfigured(this.bin || process.env.CODEAF_BIN || 'codeaf');
     }
     const started = performance.now();
