@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.1] - 2026-10-27
+
+
+### Fixed
+
+- Fix(control-plane): return 503 for transient storage errors during DID resolution (#1087) (#1124)
+
+ResolveDID collapsed any GetDIDDocument error into a notFound resolution
+result with a nil error, so a genuine missing DID and a transient DB
+failure were indistinguishable. Both flowed through VerifyDIDOwnership
+and the DID auth middleware as a 401. Since #1081 the Go SDK treats 401
+as non-retryable, so a momentary storage blip now drops the status
+callback instead of being retried away.
+
+- storage: add ErrDIDDocumentNotFound sentinel and wrap sql.ErrNoRows
+  with it in GetDIDDocument (message is unchanged, so no string-match
+  breakage).
+- services: ResolveDID maps to notFound only for ErrDIDDocumentNotFound;
+  any other storage error propagates wrapped in a new retryable
+  ErrDIDResolutionUnavailable sentinel. IsDIDRevoked uses errors.Is
+  against the same sentinel instead of brittle string matching.
+- middleware: return 503 (did_resolution_unavailable) when verification
+  fails with ErrDIDResolutionUnavailable, otherwise keep the existing
+  401.
+
+Genuine not-found, revoked, invalid-document and signature-verification
+failures still return 401; only transient storage errors become 503.
+DID auth is off by default, so this only affects opt-in deployments.
+
+Tests: service-level (transient error propagates, genuine not-found
+stays notFound) and middleware-level (transient to 503, verification
+failure to 401). Updated two existing stubs to return the not-found
+sentinel so they mirror real storage. (7306a0e)
+
 ## [0.1.145] - 2026-10-27
 
 ## [0.1.145-rc.1] - 2026-10-27
