@@ -607,3 +607,97 @@ func TestComplete_WireBody_UnknownHostKeepsMaxTokens(t *testing.T) {
 		t.Errorf("expected max_tokens=654, got %v", val)
 	}
 }
+
+func TestStreamComplete_WireBody_VouchedEndpointRequestsUsage(t *testing.T) {
+	// OpenAI only reports token usage on a stream when the request carries
+	// stream_options.include_usage; without it the final chunk has no usage.
+	cfg := &Config{
+		APIKey:  "test-key",
+		BaseURL: "https://api.openai.com/v1",
+		Model:   "gpt-5",
+	}
+
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+	rt := &recordingTransport{}
+	client.httpClient.Transport = rt
+
+	chunks, errs := client.StreamComplete(context.Background(), "hello")
+	for range chunks {
+	}
+	<-errs
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rt.body, &raw); err != nil {
+		t.Fatalf("unmarshal captured body: %v", err)
+	}
+
+	opts, ok := raw["stream_options"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected stream_options in the wire body for api.openai.com, got %s", rt.body)
+	}
+	if opts["include_usage"] != true {
+		t.Errorf("expected stream_options.include_usage=true, got %v", opts["include_usage"])
+	}
+}
+
+func TestStreamComplete_WireBody_UnknownHostOmitsStreamOptions(t *testing.T) {
+	// Self-hosted OpenAI-compatible servers (Ollama, LM Studio, llama.cpp)
+	// may reject or ignore unknown fields: they keep the plain stream body.
+	var captured []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		captured = b
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client, err := NewClient(&Config{APIKey: "test-key", BaseURL: server.URL, Model: "llama3"})
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+
+	chunks, errs := client.StreamComplete(context.Background(), "hello")
+	for range chunks {
+	}
+	if err := <-errs; err != nil {
+		t.Fatalf("StreamComplete error: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(captured, &raw); err != nil {
+		t.Fatalf("unmarshal captured body: %v", err)
+	}
+	if _, ok := raw["stream_options"]; ok {
+		t.Errorf("expected no stream_options for a self-hosted endpoint, got %s", captured)
+	}
+}
+
+func TestComplete_WireBody_NoStreamOptions(t *testing.T) {
+	// stream_options is only valid on a streaming request.
+	cfg := &Config{APIKey: "test-key", BaseURL: "https://api.openai.com/v1", Model: "gpt-5"}
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+	rt := &recordingTransport{}
+	client.httpClient.Transport = rt
+
+	if _, err := client.Complete(context.Background(), "hello"); err != nil {
+		t.Fatalf("Complete error: %v", err)
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rt.body, &raw); err != nil {
+		t.Fatalf("unmarshal captured body: %v", err)
+	}
+	if _, ok := raw["stream_options"]; ok {
+		t.Errorf("expected no stream_options on a non-streaming request, got %s", rt.body)
+	}
+}
