@@ -2,20 +2,17 @@ package agent
 
 import (
 	"context"
-	"sync"
 
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 )
-
-var codeAFConfigWarning sync.Once
 
 func warnCodeAFConfiguration(cfg Config) {
 	if cfg.HarnessConfig == nil {
 		return
 	}
 	provider, _ := harness.BuildProvider(cfg.HarnessConfig.Provider, cfg.HarnessConfig.BinPath)
-	if _, ok := provider.(*harness.CodeAFProvider); ok && !harness.CodeAFHasCredentials(harness.Options{}) {
-		codeAFConfigWarning.Do(func() { cfg.Logger.Print("WARNING " + harness.CodeAFMissingKeyWarning) })
+	if _, ok := provider.(*harness.CodeAFProvider); ok && !harness.CodeAFHasCredentials(harness.Options{Env: cfg.HarnessConfig.Env}) {
+		harness.WarnCodeAFMissingKeyOnce(func(message string) { cfg.Logger.Print("WARNING " + message) })
 	}
 }
 

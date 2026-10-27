@@ -82,11 +82,12 @@ func assertAuthRefusal(t *testing.T, err error, contract authContract) {
 	assert.ErrorIs(t, err, ErrProviderUnavailable)
 	assert.Equal(t, contract.Refusal, err.Error())
 	assert.Equal(t, ProviderCodeAF, unavailable.Provider)
+	assert.True(t, unavailable.NotConfigured)
 	assert.Equal(t, []string{"OPENROUTER_API_KEY"}, unavailable.MissingAuthEnv)
 	assert.Equal(t, "af codeaf ensure", unavailable.InstallCommand)
 }
 
-func TestCodeAFK1K3K4K7SharedKeyLadder(t *testing.T) {
+func TestCodeAFW4K1K3K4K7SharedKeyLadder(t *testing.T) {
 	contract := readAuthContract(t)
 	for _, tc := range contract.Cases {
 		t.Run(tc.Name, func(t *testing.T) {
@@ -135,7 +136,7 @@ func TestCodeAFK1K3K4K7SharedKeyLadder(t *testing.T) {
 	}
 }
 
-func TestCodeAFK1K2BeforeResolution(t *testing.T) {
+func TestCodeAFW2K1K2BeforeResolution(t *testing.T) {
 	contract := readAuthContract(t)
 	for _, provider := range []string{"", "codeaf", "aforge"} {
 		for _, pin := range []string{"automatic", "env", "option"} {
@@ -157,7 +158,7 @@ func TestCodeAFK1K2BeforeResolution(t *testing.T) {
 				if pin == "option" {
 					opts.BinPath = binary
 				}
-				for call := 0; call < 2; call++ {
+				for call := 0; call < 3; call++ {
 					_, err := p.Execute(context.Background(), "task", opts)
 					assertAuthRefusal(t, err, contract)
 				}

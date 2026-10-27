@@ -34,6 +34,12 @@ var (
 	codeAFMissingKeyOnce sync.Once
 )
 
+// WarnCodeAFMissingKeyOnce shares one process-wide warning budget between Agent
+// construction and refused calls, using the caller's warning logger.
+func WarnCodeAFMissingKeyOnce(warn func(string)) {
+	codeAFMissingKeyOnce.Do(func() { warn(CodeAFMissingKeyWarning) })
+}
+
 // CodeAFProvider invokes CodeAF's canonical headless exec or do protocol.
 // Binary discovery and managed installation happen lazily on first execution.
 // When CodeAF is unavailable it can delegate to the unchanged legacy adapter.
@@ -274,7 +280,7 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 		override = options.BinPath
 	}
 	if !CodeAFHasCredentials(options) {
-		codeAFMissingKeyOnce.Do(func() { log.Print("WARNING " + CodeAFMissingKeyWarning) })
+		WarnCodeAFMissingKeyOnce(func(message string) { log.Print("WARNING " + message) })
 		binary := firstNonEmpty(override, os.Getenv("CODEAF_BIN"), "codeaf")
 		return nil, &ProviderUnavailableError{
 			Provider: ProviderCodeAF, Binary: binary, InstallCommand: providerSpecs[ProviderCodeAF].InstallCommand,
