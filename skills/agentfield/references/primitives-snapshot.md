@@ -200,9 +200,11 @@ Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUT
 The check honors per-call environment overrides, compatible `OPENAI_API_KEY`
 credentials (an `sk-or-` key or a custom base URL), saved profile `api_key` or
 `model_sources`, and connected-provider credential files. Unreadable/malformed
-profiles permit execution conservatively. Refusal warns once per process; an
-Agent with an explicit harness config resolving to CodeAF also warns once at
-construction without failing. Legacy aforge pins are unchanged.
+profiles permit execution conservatively. The warning is logged once per process —
+at construction for an Agent with a CodeAF harness config and no key (counting
+the config's `env`), otherwise at the first refused call. Construction never
+fails; every refused call still fails with the not-configured error. Legacy
+aforge pins are unchanged.
 
 **Harness availability gate** — DO NOT use unless ALL true:
 

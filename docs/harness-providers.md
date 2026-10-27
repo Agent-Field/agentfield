@@ -57,9 +57,10 @@ Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUT
 The error remains catchable as the SDK's unavailable-provider error (Python and
 TypeScript expose `HarnessProviderNotConfigured`; Go uses
 `ProviderUnavailableError` with `NotConfigured: true`). It identifies `codeaf`
-and lists `OPENROUTER_API_KEY` as missing. Refused calls log a warning once per
-process. An Agent with an explicit harness config resolving to CodeAF also warns
-once at construction; construction continues normally.
+and lists `OPENROUTER_API_KEY` as missing. The warning is logged once per process —
+at construction for an Agent with a CodeAF harness config and no key (counting
+the config's `env`), otherwise at the first refused call. Construction continues
+normally; every refused call still fails with the not-configured error.
 
 The check uses the effective child environment, including per-call `env`
 overrides and the SDK's default `CODEAF_HOME`. It accepts `OPENROUTER_API_KEY`,
