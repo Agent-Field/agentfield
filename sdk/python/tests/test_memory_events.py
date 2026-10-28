@@ -57,6 +57,68 @@ def test_memory_event_client_subscription_and_unsubscribe(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pattern, nonmatching_key, matching_key",
+    [
+        ("config.*", "configXtheme", "config.theme"),
+        ("user+.*", "userr.preferences", "user+.preferences"),
+        ("queue[0].*", "queue0.pending", "queue[0].pending"),
+    ],
+)
+async def test_memory_event_client_dispatches_literal_key_patterns(
+    monkeypatch, pattern, nonmatching_key, matching_key
+):
+    ctx = SimpleNamespace(to_headers=lambda: {})
+    client = MemoryEventClient("http://agentfield", ctx)
+    incoming = asyncio.Queue()
+    handled = asyncio.Event()
+    listener_closed = asyncio.Event()
+    received = []
+
+    class DummyWebSocket:
+        open = True
+
+        async def recv(self):
+            message = await incoming.get()
+            if message is None:
+                listener_closed.set()
+                return json.dumps({"scope": "global", "key": "closed", "action": "set"})
+            return message
+
+        async def close(self):
+            self.open = False
+            incoming.put_nowait(None)
+
+    websocket = DummyWebSocket()
+
+    async def fake_connect(url, **kwargs):
+        return websocket
+
+    async def callback(event):
+        received.append(event.key)
+
+    async def observe(event):
+        if event.key == matching_key:
+            handled.set()
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", fake_connect)
+
+    await client.connect()
+    client.subscribe(pattern, callback)
+    client.subscribe("*", observe)
+    try:
+        for key in (nonmatching_key, matching_key):
+            incoming.put_nowait(
+                json.dumps({"scope": "global", "key": key, "action": "set"})
+            )
+        await asyncio.wait_for(handled.wait(), timeout=1)
+        assert received == [matching_key]
+    finally:
+        await client.close()
+        await asyncio.wait_for(listener_closed.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_memory_event_client_history(monkeypatch):
     ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
     client = MemoryEventClient("http://agentfield", ctx)

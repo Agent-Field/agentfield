@@ -30,8 +30,8 @@ class PatternMatcher:
         Returns:
             True if key matches pattern, False otherwise
         """
-        # Convert wildcard pattern to regex
-        regex_pattern = pattern.replace("*", ".*")
+        # Only * is a wildcard; other key characters are literal.
+        regex_pattern = re.escape(pattern).replace(r"\*", ".*")
         regex_pattern = f"^{regex_pattern}$"
 
         try:
