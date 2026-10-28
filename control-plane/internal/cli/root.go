@@ -110,6 +110,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 	RootCmd.AddCommand(NewSkillCommand())
 	RootCmd.AddCommand(NewFurrowCommand())
 	RootCmd.AddCommand(NewAforgeCommand())
+	RootCmd.AddCommand(NewCodeafCommand())
 
 	// Create service container for framework commands
 	cfg := &config.Config{} // Use default config for now

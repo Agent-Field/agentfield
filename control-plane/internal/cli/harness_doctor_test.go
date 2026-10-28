@@ -325,7 +325,7 @@ func TestHarnessDoctorGrokReportsUsable(t *testing.T) {
 
 func TestHarnessProviderSpecsMatchPythonProviderNames(t *testing.T) {
 	// Keep in sync with sdk/python/agentfield/harness/_availability.py.
-	expected := []string{"aforge", "claude-code", "codex", "gemini", "opencode", "grok", "pi", "omp"}
+	expected := []string{"codeaf", "aforge", "claude-code", "codex", "gemini", "opencode", "grok", "pi", "omp"}
 	actual := make([]string, 0, len(harnessProviderSpecs))
 	for _, spec := range harnessProviderSpecs {
 		actual = append(actual, spec.Name)
@@ -390,4 +390,127 @@ func writeHarnessTestBinary(t *testing.T, dir, name, version string) {
 	}
 	path := filepath.Join(dir, name)
 	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '"+version+"'\n"), 0o755))
+}
+
+// F5a-d: aforge preflight follows the unpinned CodeAF alias, without provisioning.
+func TestHarnessDoctorAforgeAliasContract(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell executable fixture")
+	}
+	for _, location := range []string{"managed", "path", "override", "legacy", "missing", "pin", "ready pin"} {
+		t.Run(location, func(t *testing.T) {
+			home, binDir := t.TempDir(), t.TempDir()
+			t.Setenv("AGENTFIELD_HOME", home)
+			t.Setenv("PATH", binDir)
+			t.Setenv("AFORGE_BIN", "")
+			t.Setenv("CODEAF_BIN", "")
+			// If a doctor ever provisions, the request cannot succeed.
+			t.Setenv("AGENTFIELD_CODEAF_BASE_URL", "http://127.0.0.1:1")
+			target := filepath.Join(binDir, "codeaf")
+			if location == "managed" {
+				target = filepath.Join(home, "bin", "codeaf")
+			}
+			if location == "override" {
+				target = filepath.Join(t.TempDir(), "override")
+				t.Setenv("CODEAF_BIN", target)
+			}
+			if location == "legacy" || location == "ready pin" {
+				target = filepath.Join(binDir, "aforge")
+			}
+			if location != "missing" {
+				require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+				version := "codeaf v0.8.2"
+				if location == "legacy" || location == "ready pin" {
+					version = "aforge v0.1.0"
+				}
+				writeHarnessTestBinary(t, filepath.Dir(target), filepath.Base(target), version)
+			}
+			if location == "managed" {
+				require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(target), ".codeaf.version"), []byte("v0.8.2\n"), 0o644))
+			}
+			if location == "pin" {
+				t.Setenv("AFORGE_BIN", filepath.Join(home, "missing"))
+			}
+			if location == "ready pin" {
+				t.Setenv("AFORGE_BIN", target)
+			}
+			cmd := NewHarnessCommand()
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetArgs([]string{"doctor", "--provider", "aforge", "--json"})
+			err := cmd.Execute()
+			if location == "missing" || location == "pin" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			var reports []HarnessProviderHealth
+			require.NoError(t, json.Unmarshal(output.Bytes(), &reports))
+			require.Len(t, reports, 1)
+			report := reports[0]
+			if location == "missing" || location == "pin" {
+				require.False(t, report.Usable)
+				require.Equal(t, "af aforge ensure", report.InstallCommand)
+			} else {
+				require.True(t, report.Usable)
+				require.Equal(t, target, report.Binary)
+				if location == "legacy" || location == "ready pin" {
+					require.Contains(t, report.Version, "aforge")
+				} else {
+					require.Contains(t, report.Version, "codeaf v0.8.2")
+				}
+			}
+		})
+	}
+}
+
+func TestHarnessDoctorR4CodeAFOverride(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell executable fixture")
+	}
+	for _, contract := range []string{"R4a", "R4b", "R4c"} {
+		t.Run(contract, func(t *testing.T) {
+			home, binDir := t.TempDir(), t.TempDir()
+			t.Setenv("AGENTFIELD_HOME", home)
+			t.Setenv("PATH", binDir)
+			t.Setenv("AFORGE_BIN", "")
+			t.Setenv("CODEAF_BIN", "")
+			t.Setenv("AGENTFIELD_CODEAF_BASE_URL", "http://127.0.0.1:1")
+			writeHarnessTestBinary(t, binDir, "aforge", "aforge v0.1.0")
+			target := filepath.Join(t.TempDir(), "override")
+			if contract != "R4b" {
+				t.Setenv("CODEAF_BIN", target)
+			}
+			if contract == "R4c" {
+				writeHarnessTestBinary(t, filepath.Dir(target), filepath.Base(target), "codeaf v0.8.2")
+			}
+			cmd := NewHarnessCommand()
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetArgs([]string{"doctor", "--provider", "aforge", "--json"})
+			err := cmd.Execute()
+			if contract == "R4a" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			var reports []HarnessProviderHealth
+			require.NoError(t, json.Unmarshal(output.Bytes(), &reports))
+			require.Len(t, reports, 1)
+			report := reports[0]
+			require.Equal(t, contract != "R4a", report.Usable)
+			require.Equal(t, report.Usable, report.Installed)
+			switch contract {
+			case "R4a":
+				require.Empty(t, report.Binary)
+				require.Equal(t, []string{"binary_not_found"}, report.Issues)
+			case "R4b":
+				require.Equal(t, filepath.Join(binDir, "aforge"), report.Binary)
+				require.Equal(t, "aforge v0.1.0", report.Version)
+			case "R4c":
+				require.Equal(t, target, report.Binary)
+				require.Equal(t, "codeaf v0.8.2", report.Version)
+			}
+		})
+	}
 }

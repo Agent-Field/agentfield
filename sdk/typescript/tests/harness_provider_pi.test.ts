@@ -288,6 +288,6 @@ describe('provider factory', () => {
     expect(pi).toBeInstanceOf(PiProvider);
     expect(omp).toBeInstanceOf(OMPProvider);
     // Pi and OMP are additional providers: they must be named explicitly.
-    // A provider-less config still resolves to the default, aforge.
+    // A provider-less config still resolves to the default, codeaf.
   });
 });

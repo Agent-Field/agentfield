@@ -130,7 +130,36 @@ func Doctor(ctx context.Context, opts DoctorOptions) ([]ProviderHealth, error) {
 			AuthEnvVars:    append([]string(nil), spec.AuthEnvVars...),
 		}
 
-		if resolved, err := lookPath(spec.Binary); err == nil {
+		binary := spec.Binary
+		codeAFAlias := false
+		if provider == ProviderAforge {
+			if pin := strings.TrimSpace(getenv("AFORGE_BIN")); pin != "" {
+				binary = pin
+			} else {
+				candidate := strings.TrimSpace(getenv("CODEAF_BIN"))
+				if candidate != "" {
+					binary = candidate
+				}
+				if candidate == "" {
+					candidate = findManagedCodeAF()
+				}
+				if candidate == "" {
+					candidate = "codeaf"
+				}
+				if resolved, err := lookPath(candidate); err == nil {
+					binary = resolved
+					codeAFAlias = true
+				}
+			}
+		}
+		if provider == ProviderCodeAF {
+			if override := strings.TrimSpace(getenv("CODEAF_BIN")); override != "" {
+				binary = override
+			} else if managed := findManagedCodeAF(); managed != "" {
+				binary = managed
+			}
+		}
+		if resolved, err := lookPath(binary); err == nil {
 			health.Binary = resolved
 			health.Installed = true
 		} else {
@@ -139,11 +168,20 @@ func Doctor(ctx context.Context, opts DoctorOptions) ([]ProviderHealth, error) {
 
 		if health.Installed && opts.Probe {
 			command := append([]string{health.Binary}, spec.VersionArgs...)
+			if codeAFAlias {
+				command = []string{health.Binary, "version"}
+			}
 			version, err := probe(ctx, command)
 			if err != nil {
 				health.Issues = append(health.Issues, IssueVersionProbeFailed)
 			} else {
 				health.Version = version
+				if provider == ProviderCodeAF {
+					fields := strings.Fields(version)
+					if len(fields) >= 2 && fields[0] == "codeaf" {
+						health.Version = fields[1]
+					}
+				}
 			}
 		}
 

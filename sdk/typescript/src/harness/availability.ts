@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { findManagedCodeaf } from './codeafInstall.js';
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -11,6 +12,12 @@ interface ProviderSpec {
 }
 
 const PROVIDER_SPECS = {
+  codeaf: {
+    binary: 'codeaf',
+    versionArgs: ['version'],
+    installCommand: 'af codeaf ensure',
+    authEnvVars: ['OPENROUTER_API_KEY'],
+  },
   aforge: {
     binary: 'aforge',
     versionArgs: ['version'],
@@ -85,6 +92,8 @@ export interface ProviderHealth {
   issues: readonly string[];
 }
 
+export const CODEAF_MISSING_KEY_MESSAGE = "Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.";
+
 export class HarnessProviderUnavailable extends Error {
   public readonly provider: string;
   public readonly binary: string;
@@ -112,6 +121,16 @@ export class HarnessProviderUnavailable extends Error {
     this.binary = options.binary;
     this.installCommand = options.installCommand;
     this.missingAuthEnv = missingAuthEnv;
+  }
+}
+
+export class HarnessProviderNotConfigured extends HarnessProviderUnavailable {
+  public constructor(binary: string) {
+    super('codeaf', {
+      binary, installCommand: 'af codeaf ensure', missingAuthEnv: ['OPENROUTER_API_KEY'],
+    });
+    this.name = 'HarnessProviderNotConfigured';
+    this.message = CODEAF_MISSING_KEY_MESSAGE;
   }
 }
 
@@ -346,15 +365,25 @@ export async function harnessDoctor(
     }
 
     const binaryName = spec.binary as string;
-    const binary = resolveBinary(binaryName, env) ?? null;
+    const legacyPin = provider === 'aforge' ? env.AFORGE_BIN?.trim() : undefined;
+    const lookupCodeaf = provider === 'codeaf' || (provider === 'aforge' && !legacyPin);
+    const override = lookupCodeaf ? env.CODEAF_BIN?.trim() : undefined;
+    const codeaf = lookupCodeaf ? (override ? resolveBinary(override, env)
+      : findManagedCodeaf(env) ?? resolveBinary('codeaf', env)) : undefined;
+    const codeafAlias = provider === 'aforge' && !!codeaf;
+    const binary = provider === 'codeaf' || override ? codeaf ?? null
+      : legacyPin ? resolveBinary(legacyPin, env) ?? null : codeaf ?? resolveBinary(binaryName, env) ?? null;
     const issues: string[] = [];
     let version: string | null = null;
     if (binary === null) {
       issues.push('binary_not_found');
     } else {
       try {
-        const output = (await versionProbe([binary, ...spec.versionArgs])).trim();
+        const output = (await versionProbe([binary, ...(codeafAlias ? ['version'] : spec.versionArgs)])).trim();
         version = output ? output.split(/\r?\n/, 1)[0] : 'unknown';
+        if (provider === 'codeaf') {
+          version = version.match(/^codeaf\s+(v\S+)/)?.[1] ?? version;
+        }
       } catch {
         issues.push('version_probe_failed');
       }

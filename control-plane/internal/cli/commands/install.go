@@ -2,8 +2,10 @@ package commands
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli/framework"
+	"github.com/Agent-Field/agentfield/control-plane/internal/codeaf"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/spf13/cobra"
 )
@@ -69,12 +71,17 @@ Examples:
   agentfield install agent-name`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
+			var err error
 			if jsonOutput {
-				return cmd.executeJSON(args[0], force, path)
+				err = cmd.executeJSON(args[0], force, path)
+			} else {
+				cmd.output.SetVerbose(verbose)
+				err = cmd.execute(args[0], force, verbose, path)
 			}
-			// Update output formatter with verbose setting
-			cmd.output.SetVerbose(verbose)
-			return cmd.execute(args[0], force, verbose, path)
+			if err == nil {
+				_ = ensureCodeaf(codeaf.Options{Context: cobraCmd.Context()}, os.Stderr)
+			}
+			return err
 		},
 	}
 

@@ -81,6 +81,7 @@ jobs:
             uv --version
             [ "$(uv python dir)" = /data/uv/python ]
             opencode --version
+            codeaf version | grep -q "^codeaf v"
           '
 
   # Summary job that depends on all critical checks

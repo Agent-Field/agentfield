@@ -566,7 +566,7 @@ class TestEnvelopeTransport:
         assert entry["cache_read_tokens"] == 500
         assert entry["cost_usd"] == 0.03
 
-    def test_record_harness_usage_defaults_to_aforge(self, monkeypatch):
+    def test_record_harness_usage_defaults_to_codeaf(self, monkeypatch):
         from agentfield.harness._result import HarnessResult
 
         monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
@@ -579,8 +579,8 @@ class TestEnvelopeTransport:
         )
 
         entry = tracker.serialize()["entries"][0]
-        assert entry["harness"] == "aforge"
-        assert entry["model"] == "aforge"
+        assert entry["harness"] == "codeaf"
+        assert entry["model"] == "codeaf"
 
     def test_record_harness_usage_explicit_provider_wins(self, monkeypatch):
         from agentfield.harness._result import HarnessResult

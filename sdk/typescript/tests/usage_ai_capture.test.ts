@@ -215,6 +215,20 @@ describe('harness usage capture', () => {
   const makeAgent = () =>
     new Agent({ nodeId: 'harness-agent', harnessConfig: { provider: 'claude-code', model: 'claude-opus-4-8' } as any });
 
+  it.each([
+    ['aforge', 'codeaf'], ['codeaf', 'aforge'],
+  ])('V1/V3/V5 attributes configured %s to the actual %s adapter, including measured zero cost', async (configured, actual) => {
+    const agent = new Agent({ nodeId: 'actual-harness-agent', harnessConfig: { provider: configured } as any });
+    vi.spyOn(HarnessRunner.prototype, 'run').mockResolvedValue(
+      createHarnessResult({ provider: actual, result: 'done', costUsd: 0, model: 'returned/model' })
+    );
+    const ctx = makeContext('exec-actual-harness');
+    await ExecutionContext.run(ctx, () => agent.harness('task'));
+    expect(ctx.costTracker.serialize().entries[0]).toMatchObject({
+      harness: actual, model: 'returned/model', cost_usd: 0, cost_source: 'provider',
+    });
+  });
+
   it('records a harness run with tokens and provider cost into the current tracker', async () => {
     const agent = makeAgent();
     vi.spyOn(HarnessRunner.prototype, 'run').mockResolvedValue(
@@ -284,7 +298,7 @@ describe('harness usage capture', () => {
       cost_usd: 0.25,
       cost_source: 'provider',
       total_tokens: 0,
-      harness: 'aforge'
+      harness: 'codeaf'
     });
 
     // Neither tokens nor cost -> no entry.

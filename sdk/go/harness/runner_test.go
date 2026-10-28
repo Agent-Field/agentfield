@@ -37,15 +37,19 @@ func TestRunner_Run_NoSchema(t *testing.T) {
 	runner := NewRunner(Options{Provider: "opencode"})
 
 	// We can't easily test with real providers, so test the merge/validation logic
-	t.Run("empty provider defaults to aforge", func(t *testing.T) {
+	t.Run("empty provider defaults to codeaf", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "test-codeaf-key")
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("AGENTFIELD_HOME", t.TempDir())
 		t.Setenv(ProviderEnvVar, "")
-		r := NewRunner(Options{BinPath: filepath.Join(t.TempDir(), "missing-aforge")})
+		t.Setenv("AFORGE_BIN", "")
+		t.Setenv("CODEAF_BIN", filepath.Join(t.TempDir(), "missing-codeaf"))
+		r := NewRunner(Options{})
 		result, err := r.Run(context.Background(), "test", nil, nil, Options{})
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		assert.True(t, result.IsError)
-		assert.Contains(t, result.ErrorMessage, "missing-aforge")
-		assert.NotContains(t, result.ErrorMessage, "no harness provider specified")
+		assert.Nil(t, result)
+		require.ErrorIs(t, err, ErrProviderUnavailable)
+		assert.Contains(t, err.Error(), "missing-codeaf")
+		assert.Contains(t, err.Error(), "af codeaf ensure")
 	})
 
 	t.Run("unknown provider", func(t *testing.T) {
@@ -598,7 +602,8 @@ func TestBuildProvider(t *testing.T) {
 		wantType string
 		wantErr  bool
 	}{
-		{"aforge", "aforge", "*harness.AforgeProvider", false},
+		{"codeaf", "codeaf", "*harness.CodeAFProvider", false},
+		{"aforge", "aforge", "*harness.CodeAFProvider", false},
 		{"claude-code", "claude-code", "*harness.ClaudeCodeProvider", false},
 		{"codex", "codex", "*harness.CodexProvider", false},
 		{"gemini", "gemini", "*harness.GeminiProvider", false},
@@ -624,7 +629,7 @@ func TestBuildProvider(t *testing.T) {
 
 func TestRunner_BuildProvider_UsesFactory(t *testing.T) {
 	// Verify the runner can build every registered provider.
-	for _, name := range []string{"aforge", "claude-code", "codex", "gemini", "opencode", "pi", "omp"} {
+	for _, name := range []string{"codeaf", "aforge", "claude-code", "codex", "gemini", "opencode", "pi", "omp"} {
 		t.Run(name, func(t *testing.T) {
 			runner := NewRunner(Options{Provider: name})
 			provider, err := runner.buildProvider(runner.DefaultOptions)

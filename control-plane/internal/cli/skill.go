@@ -94,6 +94,7 @@ func newSkillInstallCommand() *cobra.Command {
 			}
 
 			installOpts := skillkit.InstallOptions{
+				Context:       cmd.Context(),
 				SkillName:     skillName,
 				Version:       version,
 				Targets:       targets,

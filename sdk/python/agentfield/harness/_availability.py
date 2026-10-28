@@ -15,6 +15,12 @@ class ProviderSpec:
 
 
 PROVIDER_SPECS = {
+    "codeaf": ProviderSpec(
+        binary="codeaf",
+        version_args=("version",),
+        install_command="af codeaf ensure",
+        auth_env_vars=("OPENROUTER_API_KEY",),
+    ),
     "aforge": ProviderSpec(
         binary="aforge",
         version_args=("version",),
@@ -89,16 +95,29 @@ _FALLBACK_SPEC = ProviderSpec(
 
 
 def ensure_cli_available(provider: str, binary: str) -> str:
+    if provider == "codeaf" and binary == "codeaf":
+        from agentfield.harness._codeaf_install import find_managed_binary
+
+        managed = find_managed_binary()
+        if managed:
+            return managed
     resolved = shutil.which(binary)
     if resolved is not None:
         return resolved
     raise provider_unavailable(provider, binary)
 
 
-def provider_unavailable(provider: str, binary: str) -> HarnessProviderUnavailable:
+def provider_unavailable(
+    provider: str, binary: str, *, detail: str | None = None
+) -> HarnessProviderUnavailable:
     spec = PROVIDER_SPECS.get(provider, _FALLBACK_SPEC)
-    return HarnessProviderUnavailable(
+    error = HarnessProviderUnavailable(
         provider,
         binary=binary,
         install_command=spec.install_command,
     )
+    if provider == "codeaf":
+        error.args = (f"{error} (or set CODEAF_BIN)",)
+    if detail:
+        error.args = (f"{error}. CodeAF download failed: {detail}",)
+    return error

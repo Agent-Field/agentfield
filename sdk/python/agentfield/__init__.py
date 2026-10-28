@@ -72,6 +72,7 @@ from .exceptions import (
     RegistrationError,
     ValidationError,
     HarnessProviderUnavailable,
+    HarnessProviderNotConfigured,
 )
 from .client import ApprovalRequestResponse, ApprovalResult, ApprovalStatusResponse
 from .triggers import EventTrigger, ScheduleTrigger, TriggerContext
@@ -105,6 +106,7 @@ __all__ = [
     "HarnessConfig",
     "HarnessResult",
     "HarnessProviderUnavailable",
+    "HarnessProviderNotConfigured",
     "PromptTemplates",
     "TracedMessage",
     "MemoryConfig",
@@ -195,4 +197,4 @@ __all__ = [
     "reasoner",
 ]
 
-__version__ = "0.1.143-rc.4"
+__version__ = "0.1.146-rc.2"

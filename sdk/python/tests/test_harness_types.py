@@ -6,9 +6,9 @@ from agentfield.harness.providers._factory import build_provider
 from agentfield.types import HarnessConfig
 
 
-def test_harness_config_provider_defaults_to_aforge(monkeypatch):
+def test_harness_config_provider_defaults_to_codeaf(monkeypatch):
     monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
-    assert HarnessConfig().provider == "aforge"
+    assert HarnessConfig().provider == "codeaf"
 
 
 def test_harness_config_defaults():
@@ -29,6 +29,7 @@ def test_harness_config_defaults():
     assert cfg.env == {}
     assert cfg.cwd is None
     assert cfg.aforge_bin == "aforge"
+    assert cfg.codeaf_bin is None
     assert cfg.codex_bin == "codex"
     assert cfg.gemini_bin == "gemini"
     assert cfg.opencode_bin == "opencode"

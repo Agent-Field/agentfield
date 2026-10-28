@@ -8,6 +8,7 @@
  *
  * Run a single provider:
  *   npx vitest run --config vitest.functional.config.ts -t "Aforge"
+ *   CODEAF_INTEGRATION=1 npx vitest run --config vitest.functional.config.ts -t "CodeAF"
  *   npx vitest run --config vitest.functional.config.ts -t "Codex"
  *   npx vitest run --config vitest.functional.config.ts -t "OpenCode"
  */
@@ -18,6 +19,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { HarnessRunner } from '../src/harness/runner.js';
+import { findExecutable } from '../src/harness/availability.js';
+import { findManagedCodeaf } from '../src/harness/codeafInstall.js';
 
 // ────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -36,6 +39,8 @@ const HAS_CODEX = hasBinary('codex');
 const HAS_OPENCODE = hasBinary('opencode');
 const HAS_AFORGE = hasBinary('aforge')
   && Boolean(process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY);
+const CODEAF_BINARY = process.env.CODEAF_BIN || findManagedCodeaf() || findExecutable('codeaf');
+const HAS_CODEAF = process.env.CODEAF_INTEGRATION === '1' && Boolean(CODEAF_BINARY && process.env.OPENROUTER_API_KEY);
 
 /** Plain JSON Schema — no Zod dependency needed. */
 const simpleSchema = {
@@ -114,6 +119,7 @@ describe.skipIf(!HAS_AFORGE)('Aforge Functional', () => {
       'Return exactly: greeting="Hello from Aforge" and number=42. Follow the OUTPUT REQUIREMENTS below precisely.',
       {
         provider: 'aforge',
+        aforgeBin: process.env.AFORGE_BIN || 'aforge',
         schema: simpleSchema,
         cwd: workDir,
         maxRetries: 1,
@@ -130,6 +136,37 @@ describe.skipIf(!HAS_AFORGE)('Aforge Functional', () => {
       cacheReadTokens: result.cacheReadTokens,
       costUsd: result.costUsd,
     }));
+    expect(fs.readdirSync(workDir).filter((name) => name.startsWith('.agentfield-out-'))).toEqual([]);
+  }, 300_000);
+});
+
+describe.skipIf(!HAS_CODEAF)('CodeAF Functional', () => {
+  beforeEach(() => {
+    workDir = createWorkDir();
+  });
+  afterEach(() => {
+    cleanupWorkDir(workDir);
+  });
+
+  it('returns the canonical envelope and metrics through the default adapter', async () => {
+    const result = await new HarnessRunner().run('Reply with exactly: HELLO_AGENTFIELD', {
+      provider: 'codeaf', codeafBin: CODEAF_BINARY, cwd: workDir, maxRetries: 0,
+    });
+    expect(result).toMatchObject({ provider: 'codeaf', isError: false, failureType: 'none' });
+    expect(result.result).toContain('HELLO_AGENTFIELD');
+    expect(result.messages[0]).toHaveProperty('ok', true);
+    expect(result.messages[0]).toHaveProperty('stop', 'done');
+    expect(result.inputTokens).toBeGreaterThan(0);
+    expect(result.outputTokens).toBeGreaterThan(0);
+    expect(result.costUsd).toBeGreaterThanOrEqual(0);
+  }, 300_000);
+
+  it('uses the shared schema output pipeline', async () => {
+    const result = await new HarnessRunner().run('Return greeting="Hello from CodeAF" and number=42.', {
+      provider: 'codeaf', codeafBin: CODEAF_BINARY, cwd: workDir, schema: simpleSchema, maxRetries: 0,
+    });
+    expect(result).toMatchObject({ provider: 'codeaf', isError: false });
+    expect(result.parsed).toMatchObject({ greeting: 'Hello from CodeAF', number: 42 });
     expect(fs.readdirSync(workDir).filter((name) => name.startsWith('.agentfield-out-'))).toEqual([]);
   }, 300_000);
 });

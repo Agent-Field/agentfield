@@ -20,7 +20,7 @@
 
 <div align="center">
 <a href="https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness-banner">
-<img src="assets/harness-banner.png" alt="Now includes Harness Orchestration — multi-turn coding agents with AForge, Claude Code, Codex, Gemini CLI, and OpenCode" width="100%" />
+<img src="assets/harness-banner.png" alt="Now includes Harness Orchestration — multi-turn coding agents with CodeAF, Claude Code, Codex, Gemini CLI, and OpenCode" width="100%" />
 </a>
 </div>
 
@@ -42,9 +42,16 @@ https://github.com/user-attachments/assets/9fb7b1cf-26de-4b9b-9ba2-917252cc26ec
 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
 
-The installer also drops the `aforge` coding harness beside `af` in
-`~/.agentfield/bin`, so harness-backed agents work out of the box; skip it with
-`--no-aforge`.
+The installer also installs the `codeaf` coding harness in
+`$AGENTFIELD_HOME/bin` (`~/.agentfield/bin` by default), so harness-backed agents
+work out of the box; skip it with `--no-codeaf` (`--no-aforge` remains an alias). Staging uses
+`~/.agentfield-staging`; an explicit `AGENTFIELD_HOME` selects the production
+managed home. `AGENTFIELD_INSTALL_DIR` selects the `af` directory; CodeAF
+always uses the managed home's `bin`. Repair it with `af codeaf ensure`.
+The provider name `aforge` remains an alias; set `AFORGE_BIN` and select
+`provider="aforge"` to pin the legacy adapter. CodeAF state stays isolated in
+`$AGENTFIELD_HOME/codeaf`. See [harness providers](docs/harness-providers.md)
+for binary overrides, mirror/skip switches, and telemetry controls.
 
 On macOS the installer also registers the control plane to start at login (under
 launchd) and adds a menu-bar icon. Stop it with `af service stop` or the menu-bar
@@ -251,7 +258,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 - **[Reasoners & Skills](https://agentfield.ai/docs/build/building-blocks/reasoners?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-reasoners)** - `@app.reasoner()` for AI judgment, `@app.skill()` for deterministic code
 - **[Structured AI](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-structured-ai)** - `app.ai(schema=MyModel)` → typed Pydantic/Zod output from any LLM
-- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to AForge, AgentField's own coding harness — no setup. Add `provider="claude-code"` (or `codex`, `gemini`, `opencode`, `pi`, `omp`) to orchestrate someone else's.
+- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to CodeAF, AgentField's own coding harness — no setup. Add `provider="claude-code"` (or `codex`, `gemini`, `opencode`, `pi`, `omp`) to orchestrate someone else's.
 - **[Cross-Agent Calls](https://agentfield.ai/docs/build/coordination/cross-agent-calls?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-cross-agent-calls)** - `app.call("other-agent.func")` routes through the control plane with full tracing
 - **[Discovery](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-discovery)** - `app.discover(tags=["ml*"])` finds agents and capabilities across the mesh. `tools="discover"` lets LLMs auto-invoke them.
 - **[Memory](https://agentfield.ai/docs/build/coordination/shared-memory?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-memory)** - `app.memory.set()` / `.get()` / `.similarity_search()` - KV + vector search, four scopes, no Redis needed
@@ -283,7 +290,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Feature | How |
 |---|---|
 | Structured output (Pydantic/Zod) | `app.ai(schema=MyModel)` |
-| Multi-turn coding agents | `app.harness("task")` — AForge by default |
+| Multi-turn coding agents | `app.harness("task")` — CodeAF by default |
 | Orchestrate another harness | `app.harness("task", provider="claude-code")` (also `codex`, `gemini`, `opencode`, `pi`, `omp`) |
 | LLM auto-discovers agents and tools | `app.ai(tools="discover")` |
 | Multimodal (text, image, audio) | `app.ai("Describe", image_url="...")` |
@@ -382,7 +389,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 | Feature | How |
 |---|---|
-| Zero-setup default harness | AForge (`aforge`), installed alongside `af` |
+| Zero-setup default harness | CodeAF (`codeaf`), installed alongside `af` |
 | Swap the worker, keep the loop | `provider="claude-code"` \| `"codex"` \| `"gemini"` \| `"opencode"` \| `"pi"` \| `"omp"` |
 | Fleet-wide default override | `AGENTFIELD_HARNESS_PROVIDER=codex` |
 | Schema-constrained output | `schema=ResultModel` (Pydantic/Zod) |

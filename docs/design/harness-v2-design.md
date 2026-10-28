@@ -1,6 +1,6 @@
 # `.harness()` — First-Class Coding Agent Integration for AgentField
 
-> **Status**: Implemented; updated for Pi/OMP parity (aforge remains the default)
+> **Status**: Implemented; updated for Pi/OMP parity (codeaf is the default; aforge remains an alias)
 > **Author**: Architecture brainstorm
 > **Scope**: Python, TypeScript, and Go SDKs
 > **Date**: 2026-03-02
@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-Add `.harness()` as a first-class method on the Agent class — matching the DX of `.ai()` — enabling developers to dispatch multi-turn coding tasks to coding agents (AForge, Claude Code, Codex, Gemini CLI, OpenCode, Pi, and OMP). AForge, AgentField's own harness, is the provider default in every SDK; Pi and OMP are additional providers selected explicitly.
+Add `.harness()` as a first-class method on the Agent class — matching the DX of `.ai()` — enabling developers to dispatch multi-turn coding tasks to coding agents (CodeAF, Claude Code, Codex, Gemini CLI, OpenCode, Pi, and OMP). CodeAF, AgentField's own harness, is the provider default in every SDK; Pi and OMP are additional providers selected explicitly.
 
 **Key principle**: `.ai()` is for single-turn LLM calls. `.harness()` is for multi-turn agentic coding tasks that browse files, edit code, run tests, and iterate.
 
@@ -26,7 +26,7 @@ app = Agent(
     node_id="my-agent",
     ai_config=AIConfig(model="openai/gpt-4o"),
     harness_config=HarnessConfig(
-        provider="claude-code",   # Optional — defaults to "aforge"
+        provider="claude-code",   # Optional — defaults to "codeaf"
         model="sonnet",      # Optional — defaults to the provider's own
     ),
 )
@@ -38,7 +38,7 @@ import { Agent } from '@agentfield/sdk';
 const agent = new Agent({
     nodeId: 'my-agent',
     harnessConfig: {
-        provider: 'claude-code',  // Optional — defaults to 'aforge'
+        provider: 'claude-code',  // Optional — defaults to 'codeaf'
         model: 'sonnet',          // Optional — defaults to the provider's own
     },
 });
@@ -108,12 +108,12 @@ fix = await app.harness(
 ### 2.5 Without Constructor Config
 
 ```python
-# No harness_config on Agent — the default provider, "aforge", is selected automatically
+# No harness_config on Agent — the default provider, "codeaf", is selected automatically
 app = Agent(node_id="minimal-agent")
 
 result = await app.harness(
     "Fix the bug",
-    provider="gemini",     # Optional — omit to use the default, "aforge"
+    provider="gemini",     # Optional — omit to use the default, "codeaf"
     model="flash",
     cwd="/my/project",
 )
@@ -143,7 +143,7 @@ async def fix_issue(issue: dict) -> dict:
 ```
 Agent
 ├── .ai()      → AIConfig      → LiteLLM     → LLM APIs (100+ providers)
-└── .harness() → HarnessConfig → HarnessRunner → Provider → {Aforge, Claude Code, Codex, Gemini, OpenCode}
+└── .harness() → HarnessConfig → HarnessRunner → Provider → {Codeaf, Aforge, Claude Code, Codex, Gemini, OpenCode}
 ```
 
 ### 3.2 Component Stack
@@ -353,11 +353,11 @@ Layer 4: Full retry                                      (expensive, last resort
 class HarnessConfig(BaseModel):
     """Configuration for coding agent harness calls.
     
-    Provider defaults to "aforge", AgentField's native harness.
+    Provider defaults to "codeaf", AgentField's native harness.
     All fields have sensible defaults that can be overridden per-call.
     """
-    # Provider selection: explicit > AGENTFIELD_HARNESS_PROVIDER > "aforge"
-    provider: str = "aforge"    # | "claude-code" | "codex" | "gemini" | "opencode" | "pi" | "omp"
+    # Provider selection: explicit > AGENTFIELD_HARNESS_PROVIDER > "codeaf"
+    provider: str = "codeaf"    # | "aforge" (alias) | "claude-code" | "codex" | "gemini" | "opencode" | "pi" | "omp"
     model: Optional[str] = None  # None → the provider's own default
     variant: Optional[str] = None  # Explicit reasoning-effort variant
     
@@ -382,7 +382,8 @@ class HarnessConfig(BaseModel):
     env: Dict[str, str] = Field(default_factory=dict)
 
     # Binary paths (for CLI-based providers)
-    aforge_bin: str = "aforge"
+    codeaf_bin: str | None = None
+    aforge_bin: str = "aforge"  # explicit non-default value pins legacy when provider="aforge"
     codex_bin: str = "codex"
     gemini_bin: str = "gemini"
     opencode_bin: str = "opencode"
@@ -394,8 +395,8 @@ class HarnessConfig(BaseModel):
 
 ```typescript
 interface HarnessConfig {
-    /** 'aforge' when omitted. */
-    provider?: 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
+    /** 'codeaf' when omitted. */
+    provider?: 'codeaf' | 'aforge' | 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'omp';
     /** Omitted uses the selected CLI's configured model. */
     model?: string;
     /** Maximum agent iterations. Default: 30 */
@@ -437,7 +438,7 @@ interface HarnessConfig {
 2. Per-call overrides (passed to .harness() method)
    → Per-call values win over HarnessConfig defaults
    → If no HarnessConfig AND no per-call provider → AGENTFIELD_HARNESS_PROVIDER,
-     then the default provider "aforge"
+     then the default provider "codeaf"
 ```
 
 ---

@@ -35,6 +35,12 @@ type ProviderSpec struct {
 // binary spec like every other provider. cursor is Go-only today and uses the
 // Cursor CLI's `agent` binary (cursor.go).
 var providerSpecs = map[string]ProviderSpec{
+	ProviderCodeAF: {
+		Binary:         "codeaf",
+		VersionArgs:    []string{"version"},
+		InstallCommand: "af codeaf ensure",
+		AuthEnvVars:    []string{"OPENROUTER_API_KEY"},
+	},
 	ProviderAforge: {
 		Binary:      "aforge",
 		VersionArgs: []string{"version"},
@@ -137,14 +143,27 @@ type ProviderUnavailableError struct {
 	// MissingAuthEnv lists the provider's auth variables when none of them are
 	// set. It is empty when credentials are present or the provider needs none.
 	MissingAuthEnv []string
+	// DownloadError describes a failed best-effort managed CodeAF install.
+	DownloadError error
+	// NotConfigured identifies a CodeAF refusal before binary resolution.
+	NotConfigured bool
 }
 
 func (e *ProviderUnavailableError) Error() string {
+	if e.NotConfigured {
+		return CodeAFMissingKeyMessage
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "harness provider %q is unavailable: binary %q was not found on PATH",
 		e.Provider, e.Binary)
 	if e.InstallCommand != "" {
 		fmt.Fprintf(&b, ". Install it with: %s", e.InstallCommand)
+	}
+	if e.Provider == ProviderCodeAF {
+		b.WriteString(" (or set CODEAF_BIN)")
+	}
+	if e.DownloadError != nil {
+		fmt.Fprintf(&b, ". CodeAF download failed: %v", e.DownloadError)
 	}
 	if len(e.MissingAuthEnv) > 0 {
 		fmt.Fprintf(&b, ". Configure one of: %s", strings.Join(e.MissingAuthEnv, ", "))
@@ -188,6 +207,13 @@ func newProviderUnavailable(provider, binary string) *ProviderUnavailableError {
 // not call this: resolution is intentionally PATH based, so an unresolvable
 // path is only meaningful when a real subprocess is about to be spawned.
 func ensureCLIAvailable(provider, binary string) (string, error) {
+	if provider == ProviderCodeAF && binary == "codeaf" {
+		if override := strings.TrimSpace(os.Getenv("CODEAF_BIN")); override != "" {
+			binary = override
+		} else if managed := findManagedCodeAF(); managed != "" {
+			binary = managed
+		}
+	}
 	if binary == "" {
 		return "", newProviderUnavailable(provider, binary)
 	}

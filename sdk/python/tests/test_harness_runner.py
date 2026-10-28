@@ -184,6 +184,7 @@ def test_resolve_options_merges_config_and_overrides_per_call_wins():
         env={"A": "1"},
         cwd="/tmp/base",
         aforge_bin="aforge",
+        codeaf_bin="/custom/codeaf",
         codex_bin="codex",
         gemini_bin="gemini",
         opencode_bin="opencode",
@@ -207,6 +208,7 @@ def test_resolve_options_merges_config_and_overrides_per_call_wins():
     assert resolved["env"] == {"B": "2"}
     assert resolved["cwd"] == "/tmp/override"
     assert resolved["aforge_bin"] == "aforge"
+    assert resolved["codeaf_bin"] == "/custom/codeaf"
 
 
 def test_is_transient_matches_and_rejects_expected_messages():
@@ -298,7 +300,7 @@ async def test_run_with_schema_injects_prompt_suffix_and_parses_output(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_run_defaults_to_aforge_when_no_provider_set(tmp_path, monkeypatch):
+async def test_run_defaults_to_codeaf_when_no_provider_set(tmp_path, monkeypatch):
     monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
     runner = HarnessRunner()
     provider = MockProvider([RawResult(result="ok")])
@@ -311,7 +313,7 @@ async def test_run_defaults_to_aforge_when_no_provider_set(tmp_path, monkeypatch
     with patch("agentfield.harness._runner.build_provider", fake_build_provider):
         result = await runner.run("hello", cwd=str(tmp_path))
 
-    assert captured["provider"] == "aforge"
+    assert captured["provider"] == "codeaf"
     assert result.result == "ok"
 
 

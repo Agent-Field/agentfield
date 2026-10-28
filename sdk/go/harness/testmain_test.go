@@ -13,7 +13,17 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(dir)
 
+	// All normal tests stay offline and isolated from the user's managed install.
+	if err := os.Setenv("AGENTFIELD_SKIP_CODEAF", "1"); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("AGENTFIELD_HOME", filepath.Join(dir, "home")); err != nil {
+		panic(err)
+	}
 	stubs := map[string]string{
+		"codeaf": `#!/bin/sh
+printf '%s\n' '{"ok":true,"stop":"done","answer":"stub codeaf result","steps":1,"spend_usd":0,"tokens":{"in":0,"out":0}}'
+`,
 		"codex": `#!/bin/sh
 printf '%s\n' '{"type":"result","result":"stub codex result","session_id":"stub-session","num_turns":1}'
 `,

@@ -12,23 +12,79 @@ AgentField uses Viper with the prefix `AGENTFIELD` and maps nested config keys u
 - `AGENTFIELD_CONFIG_FILE` (optional): Path to `agentfield.yaml` (in containers this is typically `/etc/agentfield/config/agentfield.yaml`).
 - `AGENTFIELD_HOME` (recommended in containers): Base directory where AgentField stores local state (SQLite DB, Bolt DB, keys, logs). In Kubernetes, mount a PVC and set `AGENTFIELD_HOME=/data`.
 
-### Coding harness (aforge)
+### Coding harness (CodeAF)
 
-`af` distributes one harness CLI itself: `aforge`. Every install surface (the curl
-installer, `af skill install --all`, the desktop app on launch, and the
-`python-agent` / `go-agent` / cloud control-plane images) provisions the pinned
-build into `$AGENTFIELD_HOME/bin/aforge` (`~/.agentfield/bin` by default), verified
-against the published sha256 of the uncompressed binary.
+The SDK default is `codeaf`; `aforge` is an alias unless a legacy binary is
+explicitly pinned. `af codeaf ensure` installs CodeAF v0.8.2 as
+`$AGENTFIELD_HOME/bin/codeaf[.exe]`, with `.codeaf.version` beside it. Downloads
+are raw executables verified against embedded SHA-256 pins (128 MiB maximum).
+CLI/skill/package installs, node launch and Desktop provision it best-effort.
+The Python-agent, Go-agent and cloud control-plane images ship CodeAF at
+`/usr/local/bin/codeaf`, failing their build if download or verification fails.
 
-- `AGENTFIELD_AFORGE_BASE_URL` (optional): Whole-base override for the download host,
-  e.g. an internal mirror. The pinned version is **not** appended — the URL must
-  already point at a directory holding `aforge-<os>-<arch>[.exe].gz` and
-  `checksums.txt`. Default: `https://agentfield.ai/downloads/aforge/<pinned-version>`.
-- `AGENTFIELD_SKIP_AFORGE` (optional): Set to `1` to make every aforge provisioning
-  step a no-op — air-gapped hosts, or images that vendor their own harness.
+SDK harness calls with no model credential fail before binary resolution,
+download or launch, with this message:
 
-Shell-installer equivalents: `--no-aforge` / `AFORGE_MODE=none` (`scripts/install.sh`),
-`-NoAforge` / `$env:AFORGE_MODE='none'` (`scripts/install.ps1`).
+```text
+Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.
+```
+
+The check honors the effective child environment and saved/connected profile
+credentials. See the [credential contract](harness-providers.md#default-codeaf)
+for the key ladder and once-per-process warnings.
+
+- `AGENTFIELD_HARNESS_PROVIDER`: Explicit SDK provider config wins over this
+  variable; blank values are ignored; the built-in default is `codeaf`.
+- `AGENTFIELD_CODEAF_BASE_URL`: Full release directory override, version included;
+  trailing slash is accepted. Default:
+  `https://github.com/Agent-Field/CodeAF/releases/download/v0.8.2`. The mirror
+  serves `codeaf-<os>-<arch>[.exe]`; embedded pins still apply.
+- `AGENTFIELD_SKIP_CODEAF`: Opt out of all CodeAF downloads, including explicit
+  ensure, automatic CLI hooks and SDK lazy installation. Truthy values are
+  `1`, `true`, `yes`, `on` (case-insensitive).
+- `AGENTFIELD_SKIP_AFORGE`: Legacy opt-out also skips CodeAF with the same truthy
+  values. The legacy `af aforge ensure` command retains its original behavior.
+- `CODEAF_BIN`: Explicit CodeAF executable override, after the SDK's per-call or
+  configured binary option, before managed lookup/download and PATH fallback.
+- `AFORGE_BIN`: Pins the legacy adapter for `aforge` or an implicit default
+  provider. Explicit `codeaf` overrides it. Without a pin, `aforge` runs CodeAF;
+  doctor checks CodeAF read-only, then legacy aforge, and reports its version.
+- `AGENTFIELD_CODEAF_COMMAND`: `exec` (default) or `do`; invalid values warn and
+  fall back to `exec`. `do` is unattended with `--yes-spend` and explicit worker,
+  plan and check models; its own per-task spending limit still applies.
+- `AGENTFIELD_AFORGE_COMMAND`: Fallback when `AGENTFIELD_CODEAF_COMMAND` is blank
+  or unset; otherwise defaults to `exec`.
+- `CODEAF_MODEL` / `AFORGE_MODEL`: Model fallbacks after the explicit option, in
+  that order, then `~deepseek/deepseek-v4-flash-latest`. Per-call environment values
+  override process values; blank is unset. One leading `openrouter/` is stripped.
+- `CODEAF_MAX_CONCURRENT`: Positive integer subprocess cap, default `8`;
+  when unset, use `AFORGE_MAX_CONCURRENT`. Invalid or non-positive values use `8`.
+- `CODEAF_EXEC_REASONING`: CodeAF reasoning setting (`off`, `low`, `medium`, `high`);
+  the SDK's model variant handling maps to this variable.
+- `CODEAF_HOME`: Child state root, default `$AGENTFIELD_HOME/codeaf`
+  (`~/.agentfield/codeaf`), created separately from the user's `~/.codeaf`.
+- `CODEAF_NO_UPDATE_CHECK`: Defaults to `1` in SDK children.
+- `CODEAF_TELEMETRY`: Defaults to `off` when `CI` or `DO_NOT_TRACK` is truthy, or
+  `AGENTFIELD_TELEMETRY_ENABLED` is false (`0`, `false`, `no`, `off`). Otherwise
+  left unset. Caller/per-call settings override all child defaults.
+- `CODEAF_MODELS` / `AFORGE_MODELS`: Inherited model-panel settings are removed
+  from CodeAF children unless explicitly supplied by the per-call overlay.
+- `AGENTFIELD_HARNESS_TIMEOUT_SECONDS`: Outer timeout, default `1800` seconds.
+  Includes first-use provisioning and waiting on shared downloads. Execution gets
+  the remaining time, with an inner timeout five seconds shorter (minimum one
+  second). A provisioning timeout leaves the shared download running.
+- `AGENTFIELD_AFORGE_BASE_URL`: Retained for legacy `af aforge ensure`, default
+  `https://agentfield.ai/downloads/aforge/v0.1.0`; serves gzip assets and checksums.
+
+SDK managed lookup uses only `$AGENTFIELD_HOME/bin/codeaf[.exe]`; an unwritable
+location is reported as a download failure. State creation at
+`$AGENTFIELD_HOME/codeaf` is best effort; the child still receives that path.
+A user-installed CodeAF on PATH is a late fallback and is never modified.
+
+Shell-installer equivalents: `--no-codeaf` / `CODEAF_MODE=none` (default `auto`),
+with `--no-aforge` / `AFORGE_MODE=none` kept as opt-out aliases. PowerShell
+supports `-NoCodeaf` and `-NoAforge`, plus the same mode variables. Opting out
+exports both skip variables for every later af/skill/tray child process.
 
 ### Storage
 

@@ -6,6 +6,145 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.2] - 2026-10-27
+
+
+### Chores
+
+- Chore(deps): bump certifi (#1131)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [certifi](https://github.com/certifi/python-certifi).
+
+
+Updates `certifi` from 2026.2.25 to 2026.10.18
+- [Commits](https://github.com/certifi/python-certifi/compare/2026.02.25...2026.10.18)
+
+---
+updated-dependencies:
+- dependency-name: certifi
+  dependency-version: 2026.10.18
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (fe89c85)
+
+## [0.1.146-rc.1] - 2026-10-27
+
+
+### Fixed
+
+- Fix(control-plane): return 503 for transient storage errors during DID resolution (#1087) (#1124)
+
+ResolveDID collapsed any GetDIDDocument error into a notFound resolution
+result with a nil error, so a genuine missing DID and a transient DB
+failure were indistinguishable. Both flowed through VerifyDIDOwnership
+and the DID auth middleware as a 401. Since #1081 the Go SDK treats 401
+as non-retryable, so a momentary storage blip now drops the status
+callback instead of being retried away.
+
+- storage: add ErrDIDDocumentNotFound sentinel and wrap sql.ErrNoRows
+  with it in GetDIDDocument (message is unchanged, so no string-match
+  breakage).
+- services: ResolveDID maps to notFound only for ErrDIDDocumentNotFound;
+  any other storage error propagates wrapped in a new retryable
+  ErrDIDResolutionUnavailable sentinel. IsDIDRevoked uses errors.Is
+  against the same sentinel instead of brittle string matching.
+- middleware: return 503 (did_resolution_unavailable) when verification
+  fails with ErrDIDResolutionUnavailable, otherwise keep the existing
+  401.
+
+Genuine not-found, revoked, invalid-document and signature-verification
+failures still return 401; only transient storage errors become 503.
+DID auth is off by default, so this only affects opt-in deployments.
+
+Tests: service-level (transient error propagates, genuine not-found
+stays notFound) and middleware-level (transient to 503, verification
+failure to 401). Updated two existing stubs to return the not-found
+sentinel so they mirror real storage. (7306a0e)
+
+## [0.1.145] - 2026-10-27
+
+## [0.1.145-rc.1] - 2026-10-27
+
+
+### Fixed
+
+- Fix(sdk): log the CodeAF missing-key warning once, and count the harness config's env (#1132)
+
+Agent construction and call-time refusal now share one warning per process in the Python, Go and TypeScript SDKs, and the construction check reads the same effective environment the harness calls use (the process environment overlaid with the harness config's env map). This removes the double warning for keyless agents, the false warning when the key is only in the config's env, and the missed warning when that env blanks a process key. Refusals and keyed calls are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (d26f52d)
+
+## [0.1.144] - 2026-10-27
+
+## [0.1.144-rc.3] - 2026-10-26
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 3 updates (#1127)
+
+---
+updated-dependencies:
+- dependency-name: aiohttp
+  dependency-version: 3.14.4
+  dependency-type: direct:production
+- dependency-name: claude-agent-sdk
+  dependency-version: 0.2.121
+  dependency-type: direct:production
+- dependency-name: mcp
+  dependency-version: 1.30.0
+  dependency-type: indirect
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (9780d03)
+
+## [0.1.144-rc.2] - 2026-10-26
+
+
+### Fixed
+
+- Fix(sdk): fail fast with a clear message when the CodeAF harness has no model key (#1130)
+
+When CodeAF (the default harness provider) has no model key it could use, the Python, Go and TypeScript SDKs now refuse the call before resolving, downloading or launching CodeAF, with a message that names OPENROUTER_API_KEY and how to pick another provider (HarnessProviderNotConfigured / ProviderUnavailableError{NotConfigured}), and warn once per process and at Agent construction. The check mirrors CodeAF's own key ladder and lets the call through whenever it cannot be sure. Keyless launches no longer reach CodeAF, so they stop being counted as failed CodeAF sessions.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (27bc3a1)
+
+## [0.1.144-rc.1] - 2026-10-26
+
+
+### Fixed
+
+- Fix(sdk/typescript): stop retrying permanent status callbacks (#1126)
+
+Align reportExecutionResult and updateExecutionStatus with the Go SDK's
+postExecutionStatus: retry transport errors, 408, 429 and 5xx with
+1+2+4+8s backoff, and fail fast on any other status (e.g. a 409
+terminal-status conflict). Each attempt is signed with a fresh DID
+timestamp/nonce instead of reusing one signature across retries.
+
+Fixes #1088
+
+Signed-off-by: ShryukGrandhi <85529990+ShryukGrandhi@users.noreply.github.com> (7004561)
+
+## [0.1.143] - 2026-10-24
+
+## [0.1.143-rc.5] - 2026-10-24
+
+
+### Other
+
+- Make CodeAF the default harness, installed automatically with AgentField (#1128)
+
+CodeAF (the renamed aforge-v2) becomes the default harness in the Python, Go and TypeScript SDKs. A provider-less harness call runs `codeaf exec --json` headless. CodeAF v0.8.2 is pinned and sha256-verified, and it is installed by install.sh/install.ps1, desktop launch, af skill install, af install, the agent and cloud images, `af codeaf ensure`, and a lazy first-call download in each SDK.
+
+`provider="aforge"` is an alias that runs CodeAF. Legacy pins (AFORGE_BIN, aforge_bin, aforgeBin, Go BinPath) keep the original aforge adapter, and AGENTFIELD_AFORGE_COMMAND / AFORGE_MODEL are honored as fallbacks.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (647e31c)
+
 ## [0.1.143-rc.4] - 2026-10-20
 
 

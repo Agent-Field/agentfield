@@ -46,7 +46,8 @@ func TestAforgeProvider_Integration(t *testing.T) {
 }
 
 func TestAforgeRunner_Integration_Schema(t *testing.T) {
-	if _, err := exec.LookPath("aforge"); err != nil {
+	binPath, err := exec.LookPath("aforge")
+	if err != nil {
 		t.Skip("aforge binary not installed")
 	}
 	if os.Getenv("OPENROUTER_API_KEY") == "" && os.Getenv("OPENAI_API_KEY") == "" {
@@ -64,7 +65,7 @@ func TestAforgeRunner_Integration_Schema(t *testing.T) {
 	}
 
 	var parsed map[string]any
-	result, err := NewRunner(Options{Provider: ProviderAforge}).Run(
+	result, err := NewRunner(Options{Provider: ProviderAforge, BinPath: binPath}).Run(
 		context.Background(),
 		`Return greeting="Hello from Aforge" and number=42. Follow the OUTPUT REQUIREMENTS precisely.`,
 		schema,

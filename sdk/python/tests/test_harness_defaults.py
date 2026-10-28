@@ -15,9 +15,9 @@ class _Provider:
         return RawResult(result="ok")
 
 
-def test_default_provider_is_aforge(monkeypatch):
+def test_default_provider_is_codeaf(monkeypatch):
     monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
-    assert HarnessConfig().provider == "aforge"
+    assert HarnessConfig().provider == "codeaf"
 
 
 def test_env_provider_is_honoured(monkeypatch):
@@ -32,7 +32,7 @@ def test_explicit_provider_beats_env(monkeypatch):
 
 def test_blank_env_is_ignored(monkeypatch):
     monkeypatch.setenv("AGENTFIELD_HARNESS_PROVIDER", "   ")
-    assert HarnessConfig().provider == "aforge"
+    assert HarnessConfig().provider == "codeaf"
 
 
 async def _run_and_capture_provider(
@@ -52,9 +52,9 @@ async def _run_and_capture_provider(
 
 
 @pytest.mark.asyncio
-async def test_zero_setup_runner_selects_aforge(tmp_path, monkeypatch):
+async def test_zero_setup_runner_selects_codeaf(tmp_path, monkeypatch):
     monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
-    assert await _run_and_capture_provider(tmp_path) == "aforge"
+    assert await _run_and_capture_provider(tmp_path) == "codeaf"
 
 
 @pytest.mark.asyncio

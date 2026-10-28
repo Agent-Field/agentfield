@@ -10,6 +10,7 @@ export type {
 } from './availability.js';
 export {
   HarnessProviderUnavailable,
+  HarnessProviderNotConfigured,
   SUPPORTED_PROVIDER_NAMES,
   ensureCliAvailable,
   findExecutable,
@@ -26,3 +27,5 @@ export {
   SUPPORTED_PROVIDERS,
 } from './providers/factory.js';
 export { HarnessRunner } from './runner.js';
+export { AforgeProvider } from './providers/aforge.js';
+export { CODEAF_DEFAULT_MODEL, CodeafProvider } from './providers/codeaf.js';

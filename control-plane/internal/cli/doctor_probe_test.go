@@ -93,8 +93,8 @@ func TestHarnessProviders_ProbeInputContract(t *testing.T) {
 				}
 			}
 		default:
-			if provider.Name == "aforge" && (len(provider.ProbeArgs) != 0 || provider.ProbeStdin != "") {
-				t.Errorf("aforge must not declare probe input")
+			if (provider.Name == "aforge" || provider.Name == "codeaf") && (len(provider.ProbeArgs) != 0 || provider.ProbeStdin != "") {
+				t.Errorf("%s must not declare probe input", provider.Name)
 			}
 			if provider.ProbeStdin != "" {
 				t.Errorf("positional-prompt provider %s ProbeStdin = %q, want empty", provider.Name, provider.ProbeStdin)
@@ -140,11 +140,13 @@ func TestProbeHarnessProvider_RealProcesses(t *testing.T) {
 // Contract: aforge is surveyed by doctor but never smoke-tested — its only
 // one-shot is a full coding-agent run, so it deliberately declares no ProbeArgs.
 func TestHarnessProviders_AforgeIsSurveyedButNotProbed(t *testing.T) {
-	if harnessProviders[0].Name != "aforge" {
-		t.Fatalf("aforge must lead the provider list, got %q", harnessProviders[0].Name)
+	if harnessProviders[0].Name != "codeaf" {
+		t.Fatalf("codeaf must lead the provider list, got %q", harnessProviders[0].Name)
 	}
-	if len(harnessProviders[0].ProbeArgs) != 0 || harnessProviders[0].ProbeStdin != "" {
-		t.Errorf("aforge must declare no probe input, got %+v", harnessProviders[0])
+	for _, h := range harnessProviders[:2] {
+		if len(h.ProbeArgs) != 0 || h.ProbeStdin != "" {
+			t.Errorf("%s must declare no probe input, got %+v", h.Name, h)
+		}
 	}
 }
 

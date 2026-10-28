@@ -622,6 +622,7 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(os.Stdout, "[agent] ", log.LstdFlags)
 	}
+	warnCodeAFConfiguration(cfg)
 
 	if cfg.CallTimeout <= 0 {
 		cfg.CallTimeout = 15 * time.Second

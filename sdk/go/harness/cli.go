@@ -92,13 +92,22 @@ func RunCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 }
 
 // runCLIWithStdinIdle is the provider-internal variant with an explicit idle
-// watchdog. A value <= 0 disables the watchdog. Aforge uses this because its
+// watchdog. A value <= 0 disables the watchdog. Aforge and CodeAF use this because their
 // machine-readable mode is intentionally silent until the final JSON envelope.
 func runCLIWithStdinIdle(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout, idleSeconds int, stdin []byte) (*CLIResult, error) {
 	return runCLIWithStdin(ctx, cmd, env, cwd, timeout, stdin, &idleSeconds)
 }
 
 func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte, idleOverride *int) (*CLIResult, error) {
+	return runCLIWithEnvironment(ctx, cmd, env, cwd, timeout, stdin, idleOverride, false)
+}
+
+// CodeAF preserves empty overlay values and only unsets inherited panel variables.
+func runCodeAFCLI(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout, idleSeconds int, stdin []byte) (*CLIResult, error) {
+	return runCLIWithEnvironment(ctx, cmd, env, cwd, timeout, stdin, &idleSeconds, true)
+}
+
+func runCLIWithEnvironment(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte, idleOverride *int, codeaf bool) (*CLIResult, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
@@ -111,7 +120,7 @@ func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 
 	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 
-	// Merge environment: empty values unset the variable.
+	// Legacy runners use empty values to unset variables; CodeAF keeps them.
 	merged := make(map[string]string)
 	for _, entry := range os.Environ() {
 		key, value, found := strings.Cut(entry, "=")
@@ -125,8 +134,12 @@ func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 		parentDepth = 0
 	}
 	merged["AGENTFIELD_HARNESS_DEPTH"] = strconv.Itoa(parentDepth + 1)
+	if codeaf {
+		delete(merged, "CODEAF_MODELS")
+		delete(merged, "AFORGE_MODELS")
+	}
 	for k, v := range env {
-		if v == "" {
+		if v == "" && !codeaf {
 			delete(merged, k)
 		} else {
 			merged[k] = v
@@ -134,6 +147,12 @@ func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 	}
 
 	applyOpenRouterAttributionEnv(merged)
+	if codeaf {
+		// Attribution defaults must also preserve CodeAF's explicit overlay.
+		for k, v := range env {
+			merged[k] = v
+		}
+	}
 
 	var mergedEnv []string
 	for k, v := range merged {

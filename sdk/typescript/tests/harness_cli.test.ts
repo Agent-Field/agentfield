@@ -25,7 +25,7 @@ type MockChild = EventEmitter &
 
 const createProcess = (): MockChild => {
   const proc = new EventEmitter() as MockChild;
-  proc.stdin = { end: vi.fn() } as unknown as ChildProcessWithoutNullStreams['stdin'];
+  proc.stdin = Object.assign(new EventEmitter(), { end: vi.fn() }) as unknown as ChildProcessWithoutNullStreams['stdin'];
   proc.stdout = new MockStream() as ChildProcessWithoutNullStreams['stdout'];
   proc.stderr = new MockStream() as ChildProcessWithoutNullStreams['stderr'];
   proc.kill = vi.fn();
@@ -45,6 +45,14 @@ describe('harness cli utilities', () => {
   it('fails with a typed error before spawning a missing provider binary', async () => {
     const command = markProviderCommand('codex', ['codex-definitely-missing-agentfield-test']);
     await expect(runCli(command)).rejects.toBeInstanceOf(HarnessProviderUnavailable);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('V11 identifies CodeAF commands and provides the ensure hint before spawning', async () => {
+    const command = markProviderCommand('codeaf', ['codeaf-definitely-missing-agentfield-test']);
+    await expect(runCli(command)).rejects.toMatchObject({
+      name: 'HarnessProviderUnavailable', provider: 'codeaf', installCommand: 'af codeaf ensure',
+    });
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -147,6 +155,19 @@ describe('harness cli utilities', () => {
 
     proc.emit('close', 0);
     await expect(pending).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it('reports the exit of a child that closes stdin before reading its prompt', async () => {
+    const proc = createProcess();
+    spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);
+
+    const pending = runCli(['codeaf', 'exec', '--json'], { inputText: 'prompt' });
+    const epipe = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+    expect(() => proc.stdin.emit('error', epipe)).not.toThrow();
+    (proc.stderr as unknown as MockStream).pushChunk('error: no key');
+    proc.emit('close', 1);
+
+    await expect(pending).resolves.toMatchObject({ exitCode: 1, stderr: 'error: no key' });
   });
 
   it('rejects on child process errors and on timeouts', async () => {
