@@ -627,6 +627,20 @@ The thinking behind AgentField - essays on AI backends, harness orchestration, a
 - **[vs Agent Frameworks](https://agentfield.ai/docs/learn/vs-frameworks?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-vs-frameworks)** - How AgentField compares to LangChain, CrewAI, and workflow engines
 - **[Full Documentation](https://agentfield.ai/docs/learn?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-full-docs)**
 
+## New from AgentField: CodeAF
+
+<a href="https://agentfield.ai/github/codeaf/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-codeaf-repo">
+  <img src="https://raw.githubusercontent.com/Agent-Field/CodeAF/dev/assets/readme/benchmark-deepswe.webp" alt="First on DeepSWE: senior-dev, CodeAF's developer subharness, solved the most tasks (54.9%) at the lowest cost per solved task (1x). Every other harness solved less and paid more per solve: mini-swe-agent 1.9x, codex 2.1x, pi 2.4x, claude-code 3.4x, omp, kilo and opencode about 4.5x, muse-code 11.3x, deepseek-harness 26.6x." width="100%">
+</a>
+
+**[CodeAF](https://agentfield.ai/github/codeaf/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-codeaf-repo)** is our new open-source coding harness,
+built for open models: frontier-grade coding at a fraction of the cost. It ranked
+**#1 on DeepSWE** out of ten coding harnesses on the same model (DeepSeek V4 Flash),
+ahead of Claude Code, Codex and OpenCode, at the lowest cost per solved issue.
+One Go binary, Apache 2.0.
+
+[Try CodeAF →](https://agentfield.ai/github/codeaf/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-codeaf-repo) · [See the benchmark →](https://agentfield.ai/github/codeaf/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-codeaf-benchmark#benchmarks)
+
 ## Community
 
 <div align="center">
