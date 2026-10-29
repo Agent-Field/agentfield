@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.3] - 2026-10-29
+
+
+### Chores
+
+- Chore(deps): bump follow-redirects (#1125)
+
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [follow-redirects](https://github.com/follow-redirects/follow-redirects).
+
+
+Updates `follow-redirects` from 1.16.0 to 1.16.1
+- [Release notes](https://github.com/follow-redirects/follow-redirects/releases)
+- [Commits](https://github.com/follow-redirects/follow-redirects/compare/v1.16.0...v1.16.1)
+
+---
+updated-dependencies:
+- dependency-name: follow-redirects
+  dependency-version: 1.16.1
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (f36a3eb)
+
+
+
+### Documentation
+
+- Docs(readme): announce CodeAF with its DeepSWE benchmark (#1135)
+
+* docs(readme): announce CodeAF with its DeepSWE benchmark
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(readme): route CodeAF links through tracked agentfield.ai redirect
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: OG <oktaygoktas@users.noreply.github.com>
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (de1dbfa)
+
+
+
+### Fixed
+
+- Fix(python): match memory subscription keys literally (#1136) (92bcf75)
+
 ## [0.1.146-rc.2] - 2026-10-27
 
 
