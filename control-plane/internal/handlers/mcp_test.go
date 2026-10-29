@@ -345,8 +345,6 @@ func TestMCP_GetReasonerSchema(t *testing.T) {
 func TestMCP_ExecuteReasoner(t *testing.T) {
 	store := newMCPTestStore(mcpActiveAgent())
 	router := newMCPTestRouter(t, store)
-	// Finish accepted jobs before later tests replace the global limiter.
-	t.Cleanup(ResetAsyncWorkerPoolForTesting)
 
 	t.Run("bad target errors mentioning discover_agents", func(t *testing.T) {
 		payload, isErr := mcpCallTool(t, router, "execute_reasoner", map[string]interface{}{

@@ -42,8 +42,8 @@ lint:
 	( cd sdk/python && ruff check || true )
 
 fmt:
-	( cd control-plane && go fmt ./... )
-	( cd sdk/go && go fmt ./... )
+	( cd control-plane && gofmt -w $$(go list -f '{{.Dir}}' ./...) )
+	( cd sdk/go && gofmt -w $$(go list -f '{{.Dir}}' ./...) )
 	( cd sdk/python && ruff format . )
 
 tidy:
