@@ -3,6 +3,7 @@ package did
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -274,3 +275,42 @@ func TestClient_ContextCancellation(t *testing.T) {
 	_, err := c.RegisterAgent(ctx, RegistrationRequest{AgentNodeID: "test"})
 	assert.Error(t, err)
 }
+
+func TestC8F8ExportPreservesVerifiability(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields, header string
+		want                 *bool
+		unresolved           []string
+	}{
+		{name: "old export"},
+		{name: "body warning", fields: `,"verifiable":false,"unresolved_dids":["did:missing"]`, want: boolPointer(false), unresolved: []string{"did:missing"}},
+		{name: "verifiable", fields: `,"verifiable":true`, want: boolPointer(true)},
+		{name: "header warning", header: "false", want: boolPointer(false)},
+		{name: "header true", header: "true", want: boolPointer(true)},
+		{name: "warning wins", fields: `,"verifiable":true`, header: "false", want: boolPointer(false)},
+		{name: "body warning wins", fields: `,"verifiable":false`, header: "true", want: boolPointer(false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "/api/v1/did/workflow/wf/vc-chain", r.URL.Path)
+				if tc.header != "" {
+					w.Header().Set("X-AgentField-VC-Chain-Verifiable", tc.header)
+				}
+				fmt.Fprint(w, `{"workflow_id":"wf","workflow_vc":{}`+tc.fields+`}`)
+			}))
+			defer server.Close()
+			chain, err := NewClient(server.URL).ExportWorkflowVCChain(context.Background(), "wf")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, chain.Verifiable)
+			require.Equal(t, tc.unresolved, chain.UnresolvedDIDs)
+			raw, err := json.Marshal(chain)
+			require.NoError(t, err)
+			var roundTrip WorkflowVCChain
+			require.NoError(t, json.Unmarshal(raw, &roundTrip))
+			require.Equal(t, tc.want, roundTrip.Verifiable)
+			require.Equal(t, tc.unresolved, roundTrip.UnresolvedDIDs)
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }

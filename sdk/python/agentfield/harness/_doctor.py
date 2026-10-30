@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from agentfield.harness._availability import PROVIDER_SPECS
+from agentfield.harness._codeaf_install import find_codeaf_binary
 from agentfield.harness.providers._factory import SUPPORTED_PROVIDERS
 
 VersionProbe = Callable[[list[str]], Awaitable[str]]
@@ -69,14 +71,34 @@ async def harness_doctor(
             continue
 
         spec = PROVIDER_SPECS[provider]
-        binary = shutil.which(spec.binary)
+        legacy_pin = environment.get("AFORGE_BIN", "").strip() if provider == "aforge" else ""
+        codeaf_alias = False
+        if provider == "codeaf" or (provider == "aforge" and not legacy_pin):
+            binary = await asyncio.to_thread(find_codeaf_binary, environment)
+            codeaf_alias = provider == "aforge" and binary is not None
+            if (
+                binary is None
+                and provider == "aforge"
+                and not environment.get("CODEAF_BIN", "").strip()
+            ):
+                binary = shutil.which(spec.binary)
+        else:
+            binary = shutil.which(legacy_pin or spec.binary)
         issues: list[str] = []
         version: str | None = None
         if binary is None:
             issues.append("binary_not_found")
         else:
             try:
-                version = await probe([spec.binary, *spec.version_args])
+                version = await probe(
+                    [
+                        binary if provider == "codeaf" or codeaf_alias or legacy_pin else spec.binary,
+                        *(("version",) if codeaf_alias else spec.version_args),
+                    ]
+                )
+                if provider == "codeaf":
+                    match = re.search(r"\bv\d+\.\d+\.\d+\b", version)
+                    version = match.group(0) if match else version
             except (OSError, RuntimeError):
                 issues.append("version_probe_failed")
 

@@ -57,6 +57,30 @@ type TurnUsage struct {
 	Usage *Usage
 }
 
+// TracedMessage tags a message the loop sent with where it came from, so
+// callers can tell SDK-injected text apart from user and model content.
+// Message holds a reference to the message in the loop (not a copy), so the
+// wire messages are never reshaped to make tagging easier (issue #229).
+//
+// Source uses the cross-SDK taxonomy shared with the Python and TypeScript
+// SDKs: "user", "assistant", "sdk.tool_system_prompt", "sdk.tool_result",
+// "sdk.tool_error", "sdk.tool_limit". ("sdk.schema_instruction" exists only in
+// the Python SDK, which injects it; Go uses native structured output.)
+type TracedMessage struct {
+	Message Message `json:"message"`
+	Source  string  `json:"source"`
+}
+
+// Message source tags shared across the SDKs.
+const (
+	TraceSourceUser             = "user"
+	TraceSourceAssistant        = "assistant"
+	TraceSourceToolSystemPrompt = "sdk.tool_system_prompt"
+	TraceSourceToolResult       = "sdk.tool_result"
+	TraceSourceToolError        = "sdk.tool_error"
+	TraceSourceToolLimit        = "sdk.tool_limit"
+)
+
 // ToolCallTrace records the full trace of a tool-call loop.
 type ToolCallTrace struct {
 	Calls          []ToolCallRecord
@@ -69,6 +93,11 @@ type ToolCallTrace struct {
 	// order, so callers can account for the loop's full cost. Responses
 	// without usage data are skipped.
 	Usage []TurnUsage
+
+	// Messages tags each message the loop sent with its source. Additive and
+	// omitempty so existing callers that marshal a trace do not start seeing a
+	// null field (issue #229).
+	Messages []TracedMessage `json:"Messages,omitempty"`
 }
 
 // recordUsage appends resp's usage to the trace when present.
@@ -178,10 +207,27 @@ func (c *Client) ExecuteToolCallLoopResult(
 	}
 	loopMessages := append([]Message(nil), messages...)
 
+	// Capture the initial conversation from the first request we actually send,
+	// including the final request when MaxTurns is zero. Keep the plain builder's
+	// message slice semantics so caller edits remain in subsequent turns.
+	firstRequest := true
+	buildRequest := func(messages []Message, tools []ToolDefinition, includeTools bool) (*Request, error) {
+		if !firstRequest {
+			return c.buildToolCallRequest(messages, tools, includeTools, effectiveOpts)
+		}
+		req, provenance, err := c.buildTracedToolCallRequest(messages, tools, includeTools, config.SystemPrompt, opts)
+		if err != nil {
+			return nil, err
+		}
+		firstRequest = false
+		trace.Messages = append(trace.Messages, provenance...)
+		return req, nil
+	}
+
 	for turn := 0; turn < config.MaxTurns; turn++ {
 		trace.TotalTurns = turn + 1
 
-		req, err := c.buildToolCallRequest(loopMessages, tools, true, effectiveOpts)
+		req, err := buildRequest(loopMessages, tools, true)
 		if err != nil {
 			return result, err
 		}
@@ -200,14 +246,23 @@ func (c *Client) ExecuteToolCallLoopResult(
 
 		// Append assistant message with tool calls
 		loopMessages = append(loopMessages, resp.Choices[0].Message)
+		trace.Messages = append(trace.Messages, TracedMessage{
+			Message: resp.Choices[0].Message,
+			Source:  TraceSourceAssistant,
+		})
 
 		// Execute each tool call
 		for _, tc := range resp.ToolCalls() {
 			if totalCalls >= config.MaxToolCalls {
-				loopMessages = append(loopMessages, Message{
+				limitMsg := Message{
 					Role:       "tool",
 					Content:    []ContentPart{{Type: "text", Text: encodeToolContent(map[string]string{"error": promptConfig.ToolCallLimitReached})}},
 					ToolCallID: tc.ID,
+				}
+				loopMessages = append(loopMessages, limitMsg)
+				trace.Messages = append(trace.Messages, TracedMessage{
+					Message: limitMsg,
+					Source:  TraceSourceToolLimit,
 				})
 				continue
 			}
@@ -233,17 +288,27 @@ func (c *Client) ExecuteToolCallLoopResult(
 
 			if err != nil {
 				record.Error = err.Error()
-				loopMessages = append(loopMessages, Message{
+				errMsg := Message{
 					Role:       "tool",
 					Content:    []ContentPart{{Type: "text", Text: encodeToolContent(promptConfig.ToolErrorFormatter(toolName, err))}},
 					ToolCallID: tc.ID,
+				}
+				loopMessages = append(loopMessages, errMsg)
+				trace.Messages = append(trace.Messages, TracedMessage{
+					Message: errMsg,
+					Source:  TraceSourceToolError,
 				})
 			} else {
 				record.Result = toolResult
-				loopMessages = append(loopMessages, Message{
+				resultMsg := Message{
 					Role:       "tool",
 					Content:    []ContentPart{{Type: "text", Text: encodeToolContent(promptConfig.ToolResultFormatter(toolName, toolResult))}},
 					ToolCallID: tc.ID,
+				}
+				loopMessages = append(loopMessages, resultMsg)
+				trace.Messages = append(trace.Messages, TracedMessage{
+					Message: resultMsg,
+					Source:  TraceSourceToolResult,
 				})
 			}
 
@@ -252,7 +317,7 @@ func (c *Client) ExecuteToolCallLoopResult(
 
 		// If tool call limit reached, make one final call without tools
 		if totalCalls >= config.MaxToolCalls {
-			req, err := c.buildToolCallRequest(loopMessages, nil, false, effectiveOpts)
+			req, err := buildRequest(loopMessages, nil, false)
 			if err != nil {
 				return result, err
 			}
@@ -268,7 +333,7 @@ func (c *Client) ExecuteToolCallLoopResult(
 	}
 
 	// Max turns reached - make final call without tools
-	req, err := c.buildToolCallRequest(loopMessages, nil, false, effectiveOpts)
+	req, err := buildRequest(loopMessages, nil, false)
 	if err != nil {
 		return result, err
 	}
@@ -281,6 +346,47 @@ func (c *Client) ExecuteToolCallLoopResult(
 	trace.FinalResponse = resp.Text()
 	trace.TotalTurns = config.MaxTurns
 	return result, nil
+}
+
+// buildTracedToolCallRequest uses the normal request builder and tracks the
+// SDK system message by its content slice identity. Message values may move or
+// be copied when options prepend, append, insert, or reorder the conversation;
+// their content slices still refer to the same SDK-created content. No marker
+// is added to the public message or its wire representation.
+func (c *Client) buildTracedToolCallRequest(
+	messages []Message,
+	tools []ToolDefinition,
+	includeTools bool,
+	systemPrompt string,
+	callerOpts []Option,
+) (*Request, []TracedMessage, error) {
+	var sdkContent *ContentPart
+	opts := callerOpts
+	if strings.TrimSpace(systemPrompt) != "" {
+		// WithSystem creates a unique content slice. Capture that identity at
+		// insertion, before caller options can move the message anywhere.
+		systemOption := func(req *Request) error {
+			if err := WithSystem(systemPrompt)(req); err != nil {
+				return err
+			}
+			sdkContent = &req.Messages[0].Content[0]
+			return nil
+		}
+		opts = append([]Option{systemOption}, callerOpts...)
+	}
+	req, err := c.buildToolCallRequest(messages, tools, includeTools, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	traced := make([]TracedMessage, len(req.Messages))
+	for i, message := range req.Messages {
+		source := TraceSourceUser
+		if len(message.Content) > 0 && &message.Content[0] == sdkContent {
+			source = TraceSourceToolSystemPrompt
+		}
+		traced[i] = TracedMessage{Message: message, Source: source}
+	}
+	return req, traced, nil
 }
 
 func capabilityToTool(invocationTarget string, description *string, inputSchema map[string]interface{}) ToolDefinition {

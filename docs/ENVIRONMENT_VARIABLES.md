@@ -12,23 +12,79 @@ AgentField uses Viper with the prefix `AGENTFIELD` and maps nested config keys u
 - `AGENTFIELD_CONFIG_FILE` (optional): Path to `agentfield.yaml` (in containers this is typically `/etc/agentfield/config/agentfield.yaml`).
 - `AGENTFIELD_HOME` (recommended in containers): Base directory where AgentField stores local state (SQLite DB, Bolt DB, keys, logs). In Kubernetes, mount a PVC and set `AGENTFIELD_HOME=/data`.
 
-### Coding harness (aforge)
+### Coding harness (CodeAF)
 
-`af` distributes one harness CLI itself: `aforge`. Every install surface (the curl
-installer, `af skill install --all`, the desktop app on launch, and the
-`python-agent` / `go-agent` / cloud control-plane images) provisions the pinned
-build into `$AGENTFIELD_HOME/bin/aforge` (`~/.agentfield/bin` by default), verified
-against the published sha256 of the uncompressed binary.
+The SDK default is `codeaf`; `aforge` is an alias unless a legacy binary is
+explicitly pinned. `af codeaf ensure` installs CodeAF v0.8.2 as
+`$AGENTFIELD_HOME/bin/codeaf[.exe]`, with `.codeaf.version` beside it. Downloads
+are raw executables verified against embedded SHA-256 pins (128 MiB maximum).
+CLI/skill/package installs, node launch and Desktop provision it best-effort.
+The Python-agent, Go-agent and cloud control-plane images ship CodeAF at
+`/usr/local/bin/codeaf`, failing their build if download or verification fails.
 
-- `AGENTFIELD_AFORGE_BASE_URL` (optional): Whole-base override for the download host,
-  e.g. an internal mirror. The pinned version is **not** appended — the URL must
-  already point at a directory holding `aforge-<os>-<arch>[.exe].gz` and
-  `checksums.txt`. Default: `https://agentfield.ai/downloads/aforge/<pinned-version>`.
-- `AGENTFIELD_SKIP_AFORGE` (optional): Set to `1` to make every aforge provisioning
-  step a no-op — air-gapped hosts, or images that vendor their own harness.
+SDK harness calls with no model credential fail before binary resolution,
+download or launch, with this message:
 
-Shell-installer equivalents: `--no-aforge` / `AFORGE_MODE=none` (`scripts/install.sh`),
-`-NoAforge` / `$env:AFORGE_MODE='none'` (`scripts/install.ps1`).
+```text
+Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.
+```
+
+The check honors the effective child environment and saved/connected profile
+credentials. See the [credential contract](harness-providers.md#default-codeaf)
+for the key ladder and once-per-process warnings.
+
+- `AGENTFIELD_HARNESS_PROVIDER`: Explicit SDK provider config wins over this
+  variable; blank values are ignored; the built-in default is `codeaf`.
+- `AGENTFIELD_CODEAF_BASE_URL`: Full release directory override, version included;
+  trailing slash is accepted. Default:
+  `https://github.com/Agent-Field/CodeAF/releases/download/v0.8.2`. The mirror
+  serves `codeaf-<os>-<arch>[.exe]`; embedded pins still apply.
+- `AGENTFIELD_SKIP_CODEAF`: Opt out of all CodeAF downloads, including explicit
+  ensure, automatic CLI hooks and SDK lazy installation. Truthy values are
+  `1`, `true`, `yes`, `on` (case-insensitive).
+- `AGENTFIELD_SKIP_AFORGE`: Legacy opt-out also skips CodeAF with the same truthy
+  values. The legacy `af aforge ensure` command retains its original behavior.
+- `CODEAF_BIN`: Explicit CodeAF executable override, after the SDK's per-call or
+  configured binary option, before managed lookup/download and PATH fallback.
+- `AFORGE_BIN`: Pins the legacy adapter for `aforge` or an implicit default
+  provider. Explicit `codeaf` overrides it. Without a pin, `aforge` runs CodeAF;
+  doctor checks CodeAF read-only, then legacy aforge, and reports its version.
+- `AGENTFIELD_CODEAF_COMMAND`: `exec` (default) or `do`; invalid values warn and
+  fall back to `exec`. `do` is unattended with `--yes-spend` and explicit worker,
+  plan and check models; its own per-task spending limit still applies.
+- `AGENTFIELD_AFORGE_COMMAND`: Fallback when `AGENTFIELD_CODEAF_COMMAND` is blank
+  or unset; otherwise defaults to `exec`.
+- `CODEAF_MODEL` / `AFORGE_MODEL`: Model fallbacks after the explicit option, in
+  that order, then `~deepseek/deepseek-v4-flash-latest`. Per-call environment values
+  override process values; blank is unset. One leading `openrouter/` is stripped.
+- `CODEAF_MAX_CONCURRENT`: Positive integer subprocess cap, default `8`;
+  when unset, use `AFORGE_MAX_CONCURRENT`. Invalid or non-positive values use `8`.
+- `CODEAF_EXEC_REASONING`: CodeAF reasoning setting (`off`, `low`, `medium`, `high`);
+  the SDK's model variant handling maps to this variable.
+- `CODEAF_HOME`: Child state root, default `$AGENTFIELD_HOME/codeaf`
+  (`~/.agentfield/codeaf`), created separately from the user's `~/.codeaf`.
+- `CODEAF_NO_UPDATE_CHECK`: Defaults to `1` in SDK children.
+- `CODEAF_TELEMETRY`: Defaults to `off` when `CI` or `DO_NOT_TRACK` is truthy, or
+  `AGENTFIELD_TELEMETRY_ENABLED` is false (`0`, `false`, `no`, `off`). Otherwise
+  left unset. Caller/per-call settings override all child defaults.
+- `CODEAF_MODELS` / `AFORGE_MODELS`: Inherited model-panel settings are removed
+  from CodeAF children unless explicitly supplied by the per-call overlay.
+- `AGENTFIELD_HARNESS_TIMEOUT_SECONDS`: Outer timeout, default `1800` seconds.
+  Includes first-use provisioning and waiting on shared downloads. Execution gets
+  the remaining time, with an inner timeout five seconds shorter (minimum one
+  second). A provisioning timeout leaves the shared download running.
+- `AGENTFIELD_AFORGE_BASE_URL`: Retained for legacy `af aforge ensure`, default
+  `https://agentfield.ai/downloads/aforge/v0.1.0`; serves gzip assets and checksums.
+
+SDK managed lookup uses only `$AGENTFIELD_HOME/bin/codeaf[.exe]`; an unwritable
+location is reported as a download failure. State creation at
+`$AGENTFIELD_HOME/codeaf` is best effort; the child still receives that path.
+A user-installed CodeAF on PATH is a late fallback and is never modified.
+
+Shell-installer equivalents: `--no-codeaf` / `CODEAF_MODE=none` (default `auto`),
+with `--no-aforge` / `AFORGE_MODE=none` kept as opt-out aliases. PowerShell
+supports `-NoCodeaf` and `-NoAforge`, plus the same mode variables. Opting out
+exports both skip variables for every later af/skill/tray child process.
 
 ### Storage
 
@@ -119,6 +175,8 @@ An execution's terminal outcome is reported once. If a lifecycle event is republ
 - `AGENTFIELD_EXEC_ASYNC_WORKERS` (default: the greater of the available CPU count and `16`): Worker count for asynchronous execution and restart jobs, which are I/O-bound; non-positive values use the default.
 - `AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY` (default: `1024`): Additional admitted asynchronous work beyond the worker count; `workers + queue_capacity` bounds work across preparation, queue wait, and worker dispatch. Admitted but undispatched executions report `queued`. A paused execution pins a worker and reservation for up to 24 hours. Non-positive values use the default. Requests arriving once admission is saturated are rejected with `503`, a `Retry-After` header and a `retry_after` field, and no execution row is persisted for them.
 - `AGENTFIELD_MAX_EXECUTE_BODY_BYTES` (default: `33554432`, 32 MiB): Maximum request body size, in bytes, for POST routes under `/api/v1/execute`. Oversize requests are rejected with `413` before any execution is persisted; other routes are not capped by this setting.
+- `AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_STRICT` (default: `false`): Additionally deny agent endpoints resolving to loopback, RFC1918, ULA, CGNAT, benchmark (`198.18.0.0/15`), IPv4 `0.0.0.0/8`, or IPv6 unspecified addresses. Default mode supports localhost/desktop, Docker Compose, `host.docker.internal`, Kubernetes and public/serverless agents. Equivalent YAML: `agentfield.registration.agent_endpoint_strict` in `config/agentfield.yaml` (or the file selected by `AGENTFIELD_CONFIG_FILE`).
+- `AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_ALLOWED_HOSTS` (default: empty): Comma-separated strict-mode exceptions: case-insensitive hostnames, `*.suffix` subdomain wildcards (excluding the suffix itself), or CIDRs matched against resolved addresses, including `localhost`. To allow localhost through CIDRs, include both `127.0.0.0/8` and `::1/128`; every resolved address must pass the policy. This also covers control-plane-managed local node probes. An explicitly empty variable clears YAML exceptions. Equivalent YAML: `agentfield.registration.agent_endpoint_allowed_hosts` (list). These exceptions never permit link-local, instance metadata (including embedded IPv4 forms and metadata hostnames), multicast or broadcast destinations, which are always denied. Validation checks registration and actual dial addresses; cross-origin redirects are refused. Agent endpoints must use HTTP(S), may include a path prefix, and must omit userinfo, query, fragment, whitespace and traversal/encoded separators. Existing invalid nodes remain listable; re-register them with a valid endpoint before dispatch.
 - `AGENTFIELD_MAX_REGISTER_BODY_BYTES` (default: `8388608`, 8 MiB): Maximum request body size, in bytes, for node registration POST routes (`/api/v1/nodes`, `/api/v1/nodes/register`, and `/api/v1/nodes/register-serverless`). Oversize requests are rejected with `413` before registration handling begins.
 - `AGENTFIELD_SHUTDOWN_TIMEOUT` (default: `30s`): Grace period for draining the control-plane HTTP server. Accepts bare seconds (`30`) and Go duration strings (`30s`, `5m`). The same budget is shared with `StopAsyncWorkerPool`, which is guaranteed a fresh budget of at least 5s, so total shutdown can exceed this value. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
 - `AGENTFIELD_SHUTDOWN_MIN_DELAY` (default: `0`): Control-plane-only delay between SIGTERM/SIGINT and closing the listener; zero preserves existing timing. Accepts bare seconds or a Go duration; invalid or negative values warn and keep the current value. This name is reserved for the control plane so future SDKs do not acquire another dual-meaning shutdown variable. Equivalent YAML: `agentfield.shutdown_min_delay`. It also affects `af server`, the code path the desktop app launches, so a value in `~/.agentfield/agentfield.yaml` slows local Ctrl+C too. See the [Kubernetes shutdown and drain recipe](deploying-on-kubernetes.md).
@@ -159,6 +217,48 @@ These map to `api.cors.*` in config. When set via env, use comma-separated value
 - `AGENTFIELD_API_CORS_ALLOWED_HEADERS` (comma-separated): Include `X-Admin-Token` when browser clients access admin or `/debug/pprof/*` endpoints.
 - `AGENTFIELD_API_CORS_EXPOSED_HEADERS` (comma-separated)
 - `AGENTFIELD_API_CORS_ALLOW_CREDENTIALS` (`true`/`false`)
+
+### DID server identity
+
+The control plane's DID identity (master seed, root DID, and every agent and component DID) is stored in the database. By default, a new registry's public ID is derived deterministically from the absolute `AGENTFIELD_HOME` path, so replicas that share a home path and database converge on one identity; if two start at once, the second adopts the identity the first stored. On later boots the control plane adopts the stored registry, so moving `AGENTFIELD_HOME` keeps the same identity.
+
+- `AGENTFIELD_DID_SERVER_ID` (default: unset): An unpinned startup first selects a registry matching the current home path; otherwise it adopts the sole stored registry. If several registries remain and none matches the current home, startup refuses, lists the stored IDs, and asks you to pin one. On an empty database, a set value names the first registry; otherwise the new registry's public ID is derived from the absolute `AGENTFIELD_HOME` path. On later boots it pins which stored registry this control plane owns. Once registries exist, a pinned ID that matches none of them stops startup. Replicas with different home paths should pin the same stored ID. Equivalent YAML: `features.did.server_id`.
+- If agent DIDs remain but their server's `did_registry` row is missing, startup refuses to create a new identity. Restore the row or database from a backup; the master seed exists only there. If permanently lost, revoke its agents with `UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = '<server ID>';` and restart.
+- DIDs from other registries in the same database stay resolvable so their credentials still verify, but only the active registry's identities can sign.
+- At startup every stored identity is checked against the master seed. A component whose DID cannot be re-derived is retired and gets a new DID when its agent registers again. An agent whose DID cannot be re-derived is refused keys. If it cannot be recovered, revoke it so the node gets a new identity on its next registration (the old identity cannot sign new credentials; historical signatures can still verify with retained public keys or a self-contained `did:key`):
+
+  ```sql
+  UPDATE agent_dids SET status = 'revoked' WHERE did = '<agent DID from the startup log>';
+  ```
+
+  Then restart the control plane. Revoked rows are kept so their keys are never issued again.
+
+#### Component retirement recovery
+
+Startup quarantines a component whose DID cannot be re-derived, and attempts to retire it without issuing its key. If that write fails transiently, the next registration retries retirement. If it continues to fail, fix database write access or stop the control plane, back up the database, and run the exact statement from the error (substitute the named component DID):
+
+```sql
+UPDATE component_dids SET status = 'retired' WHERE did = '<component DID from the error>';
+```
+
+Restart and register the agent again to allocate a fresh component DID. Retired rows remain reserved and cannot be reused. Normal component deregistration also retires every duplicate row with the same agent DID, component type, and function name.
+
+#### Lost-root recovery
+
+If startup reports that the root DID does not match its master seed, stop the control plane and back up the database before changing identity state. Restore the original encryption passphrase (`features.did.keystore.encryption_passphrase` in the configuration) if it changed; use the original database backup if the seed is corrupted. Restart with that passphrase and database to preserve the root and agent identities. Changing the home directory or revoking agents alone cannot repair an inconsistent root.
+
+If the original seed/passphrase is permanently lost, an explicit destructive identity reset is required. Stop every replica using this registry, back up the database, replace `<server ID>` below with the affected `did_registry.agentfield_server_id` (escape any SQL quotes), and run both statements in one transaction:
+
+```sql
+BEGIN;
+UPDATE agent_dids SET status = 'revoked' WHERE agentfield_server_id = '<server ID>';
+DELETE FROM did_registry WHERE agentfield_server_id = '<server ID>';
+COMMIT;
+```
+
+Keep the revoked agent and component rows so their identities remain reserved. Restart with the same `features.did.server_id` / `AGENTFIELD_DID_SERVER_ID` if this was the only registry; on an empty registry table that ID names the new registry. If other registries remain, remove the pin to the deleted ID and select an existing healthy registry explicitly. The next agent registration creates new identities. Old signatures retain their original issuers and can still be checked with retained public keys or a self-contained `did:key`, but the lost identities cannot sign new credentials.
+
+To restore server availability while arranging recovery, set `features.did.enabled: false` in `config/agentfield.yaml` (or the file selected by `AGENTFIELD_CONFIG_FILE`), or set `AGENTFIELD_FEATURES_DID_ENABLED=false`, and restart. This bypasses DID initialization and disables DID/VC operations without resetting identity data. Restore the setting after recovery.
 
 ### Authorization (VC-Based Permissions)
 

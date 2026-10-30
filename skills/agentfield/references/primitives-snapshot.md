@@ -16,7 +16,7 @@ This is a minimal cheat sheet of the five primitives so an offline build can sti
 | `@app.skill()` | Registers a deterministic function (no LLM) | Sort, parse, dedupe, score-with-formula |
 | `app.ai(...)` | Single call OR multi-turn tool-using LLM call when `tools=` is passed | Classification, routing, structured analysis, stateful tool-using |
 | `app.call(target, **kwargs)` | Call another reasoner THROUGH the control plane. Returns `dict`. Tracks the workflow DAG | All inter-reasoner traffic |
-| `app.harness(prompt, provider=...)` | Delegate to a coding-agent CLI (aforge by default; claude-code / codex / gemini / opencode / pi / omp) | When you need a real coding agent to write files / run shell |
+| `app.harness(prompt, provider=...)` | Delegate to a coding-agent CLI (codeaf by default; aforge alias; claude-code / codex / gemini / opencode / pi / omp) | When you need a real coding agent to write files / run shell |
 
 ---
 
@@ -157,7 +157,7 @@ Default canonical pattern: `AgentRouter(prefix="", tags=["domain"])`. `prefix="c
 result = await app.harness(
     prompt: str,
     schema: type[BaseModel] | None = None,
-    provider: "aforge" | "claude-code" | "codex" | "gemini" | "opencode" | "pi" | "omp" | None = None,  # None -> "aforge"
+    provider: "codeaf" | "aforge" | "claude-code" | "codex" | "gemini" | "opencode" | "pi" | "omp" | None = None,  # None -> "codeaf"
     model: str | None = None,
     max_turns: int | None = None,
     max_budget_usd: float | None = None,
@@ -170,6 +170,41 @@ result = await app.harness(
 )
 # Returns HarnessResult with .text, .parsed, .result
 ```
+
+CodeAF v0.8.2 is managed at `$AGENTFIELD_HOME/bin/codeaf` (`~/.agentfield/bin`
+by default). Repair with `af codeaf ensure`; `af harness doctor --provider codeaf`
+checks version/auth without a model task. `CODEAF_BIN` overrides the binary;
+`AGENTFIELD_CODEAF_BASE_URL` overrides the full release directory while embedded
+hashes still apply. `AGENTFIELD_SKIP_CODEAF` or `AGENTFIELD_SKIP_AFORGE` set to
+`1`/`true`/`yes`/`on` opts out of downloads. `AGENTFIELD_CODEAF_COMMAND` chooses
+`exec` (default) or `do`. SDK children isolate `CODEAF_HOME` under
+`$AGENTFIELD_HOME/codeaf` and disable telemetry for truthy `CI`/`DO_NOT_TRACK`
+or explicitly false `AGENTFIELD_TELEMETRY_ENABLED`, unless overridden by the
+caller. An implicit provider with `AFORGE_BIN` or an SDK legacy binary option
+retains aforge; explicit `codeaf` overrides that pin. Legacy
+`AGENTFIELD_AFORGE_COMMAND` and `AFORGE_MODEL` remain fallbacks after the new
+command/model variables (an explicit model wins, and per-call env overrides
+process env). The harness timeout includes first-use provisioning; a timed-out
+caller leaves the shared download running. Doctor checks unpinned `aforge`
+against CodeAF read-only, including its version, then falls back to legacy
+aforge; a pin checks only the pinned binary.
+
+CodeAF harness calls fail fast before binary resolution, download or launch when
+no model credential is visible, including with an explicit binary. The SDK's
+unavailable-provider error carries this exact message:
+
+```text
+Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.
+```
+
+The check honors per-call environment overrides, compatible `OPENAI_API_KEY`
+credentials (an `sk-or-` key or a custom base URL), saved profile `api_key` or
+`model_sources`, and connected-provider credential files. Unreadable/malformed
+profiles permit execution conservatively. The warning is logged once per process —
+at construction for an Agent with a CodeAF harness config and no key (counting
+the config's `env`), otherwise at the first refused call. Construction never
+fails; every refused call still fails with the not-configured error. Legacy
+aforge pins are unchanged.
 
 **Harness availability gate** — DO NOT use unless ALL true:
 

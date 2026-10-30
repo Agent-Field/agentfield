@@ -39,6 +39,20 @@ func resolveIdleSeconds() int {
 	return v
 }
 
+// formatCommandPreview describes a command in error and log messages without
+// quoting its arguments. Providers pass the prompt as an argv element (opencode
+// on POSIX, gemini, cursor), and the runner's retry classifier reads error text,
+// so only the executable and the number of hidden arguments are named.
+func formatCommandPreview(cmd []string) string {
+	if len(cmd) == 0 {
+		return ""
+	}
+	if len(cmd) == 1 {
+		return cmd[0]
+	}
+	return fmt.Sprintf("%s [%d args omitted]", cmd[0], len(cmd)-1)
+}
+
 var ansiRe = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)
 
 // StripANSI removes ANSI escape sequences from text.
@@ -78,13 +92,22 @@ func RunCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 }
 
 // runCLIWithStdinIdle is the provider-internal variant with an explicit idle
-// watchdog. A value <= 0 disables the watchdog. Aforge uses this because its
+// watchdog. A value <= 0 disables the watchdog. Aforge and CodeAF use this because their
 // machine-readable mode is intentionally silent until the final JSON envelope.
 func runCLIWithStdinIdle(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout, idleSeconds int, stdin []byte) (*CLIResult, error) {
 	return runCLIWithStdin(ctx, cmd, env, cwd, timeout, stdin, &idleSeconds)
 }
 
 func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte, idleOverride *int) (*CLIResult, error) {
+	return runCLIWithEnvironment(ctx, cmd, env, cwd, timeout, stdin, idleOverride, false)
+}
+
+// CodeAF preserves empty overlay values and only unsets inherited panel variables.
+func runCodeAFCLI(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout, idleSeconds int, stdin []byte) (*CLIResult, error) {
+	return runCLIWithEnvironment(ctx, cmd, env, cwd, timeout, stdin, &idleSeconds, true)
+}
+
+func runCLIWithEnvironment(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte, idleOverride *int, codeaf bool) (*CLIResult, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
@@ -97,7 +120,7 @@ func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 
 	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 
-	// Merge environment: empty values unset the variable.
+	// Legacy runners use empty values to unset variables; CodeAF keeps them.
 	merged := make(map[string]string)
 	for _, entry := range os.Environ() {
 		key, value, found := strings.Cut(entry, "=")
@@ -111,8 +134,12 @@ func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 		parentDepth = 0
 	}
 	merged["AGENTFIELD_HARNESS_DEPTH"] = strconv.Itoa(parentDepth + 1)
+	if codeaf {
+		delete(merged, "CODEAF_MODELS")
+		delete(merged, "AFORGE_MODELS")
+	}
 	for k, v := range env {
-		if v == "" {
+		if v == "" && !codeaf {
 			delete(merged, k)
 		} else {
 			merged[k] = v
@@ -120,6 +147,12 @@ func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 	}
 
 	applyOpenRouterAttributionEnv(merged)
+	if codeaf {
+		// Attribution defaults must also preserve CodeAF's explicit overlay.
+		for k, v := range env {
+			merged[k] = v
+		}
+	}
 
 	var mergedEnv []string
 	for k, v := range merged {
@@ -245,14 +278,14 @@ func runCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 	}
 
 	if idleTimedOut {
-		return result, fmt.Errorf("CLI command made no progress for %ds: %s", idleSeconds, strings.Join(cmd, " "))
+		return result, fmt.Errorf("CLI command made no progress for %ds: %s", idleSeconds, formatCommandPreview(cmd))
 	}
 
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			result.ReturnCode = exitErr.ExitCode()
 		} else if ctx.Err() != nil {
-			return result, fmt.Errorf("CLI command timed out after %ds: %s", timeout, strings.Join(cmd, " "))
+			return result, fmt.Errorf("CLI command timed out after %ds: %s", timeout, formatCommandPreview(cmd))
 		} else {
 			return nil, waitErr
 		}

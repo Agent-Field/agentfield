@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func TestNormalizeCandidateAddsDefaults(t *testing.T) {
 }
 
 func TestResolveCallbackCandidatesSuccess(t *testing.T) {
-	resolved, normalized, results := resolveCallbackCandidates([]string{"http://agent:7000"}, "")
+	resolved, normalized, results := newRegistrationEndpointValidator(context.Background()).resolveCallbackCandidates([]string{"http://agent:7000"}, "")
 
 	if resolved == "" {
 		t.Fatalf("expected resolved callback URL")

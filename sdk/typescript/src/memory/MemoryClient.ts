@@ -44,7 +44,10 @@ export class MemoryClientBase {
       baseURL: baseUrl.replace(/\/$/, ''),
       timeout: 30000,
       httpAgent,
-      httpsAgent
+      httpsAgent,
+      // Memory API routes never redirect. Refuse all redirects to keep caller
+      // identity and credentials on the configured control plane, even via proxies.
+      maxRedirects: 0
     });
     this.defaultHeaders = this.sanitizeHeaders(defaultHeaders ?? {});
   }

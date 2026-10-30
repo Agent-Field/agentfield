@@ -45,6 +45,8 @@ type Metrics struct {
 // RawResult is the output from a single provider execution before schema
 // parsing.
 type RawResult struct {
+	// Provider is the adapter that actually ran, including alias/fallback resolution.
+	Provider     string
 	Result       string
 	Messages     []map[string]any
 	Metrics      Metrics
@@ -57,6 +59,9 @@ type RawResult struct {
 // Result is the final harness output after schema validation, retries, and
 // metrics accumulation.
 type Result struct {
+	// Provider is the adapter that actually ran, including alias/fallback resolution.
+	Provider string
+
 	// Result is the raw text output from the provider.
 	Result string
 

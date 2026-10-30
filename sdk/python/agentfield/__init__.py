@@ -2,6 +2,7 @@ from .agent import Agent
 from .mesh import AgentMesh
 from .cost_tracker import CostTracker
 from .router import AgentRouter
+from .prompt_templates import PromptTemplates, TracedMessage
 from .types import (
     AIConfig,
     HarnessConfig,
@@ -71,6 +72,7 @@ from .exceptions import (
     RegistrationError,
     ValidationError,
     HarnessProviderUnavailable,
+    HarnessProviderNotConfigured,
 )
 from .client import ApprovalRequestResponse, ApprovalResult, ApprovalStatusResponse
 from .triggers import EventTrigger, ScheduleTrigger, TriggerContext
@@ -104,6 +106,9 @@ __all__ = [
     "HarnessConfig",
     "HarnessResult",
     "HarnessProviderUnavailable",
+    "HarnessProviderNotConfigured",
+    "PromptTemplates",
+    "TracedMessage",
     "MemoryConfig",
     "ReasonerDefinition",
     "SkillDefinition",
@@ -192,4 +197,4 @@ __all__ = [
     "reasoner",
 ]
 
-__version__ = "0.1.142-rc.14"
+__version__ = "0.1.146-rc.5"

@@ -1,6 +1,6 @@
 ---
 name: agentfield
-version: 0.5.2
+version: 0.5.3
 description: "Design and ship a multi-agent system on AgentField. Use when the user asks to build, scaffold, design, or run an agent, reasoner network, multi-agent backend, or 'an agent that does X' — whenever the work would otherwise be a single LLM call or a flat LangChain/CrewAI/AutoGen chain. The skill produces composite intelligence: a deep, dynamic, parallel reasoner graph with a working `docker compose up` smoke test. For an agent installed on this machine through `af` and visible in AgentField Desktop, use the `agentfield-personal` skill instead."
 aliases: [agentfield-multi-reasoner-builder]
 ---
@@ -71,7 +71,7 @@ Everything else is a variation.
 
 Less-used but real:
 - **`@app.skill()`** — deterministic functions you want callable through the control plane (no LLM).
-- **`app.harness(prompt, provider="aforge"|"claude-code"|"codex"|"gemini"|"opencode"|"pi"|"omp")`** — delegates to an external coding-agent CLI. `aforge`, AgentField's own harness, is the SDK default when `provider` is omitted. Heavy. **Only use when `af doctor` reports `harness_usable: true` AND the Dockerfile installs the selected CLI AND `shutil.which()` guards startup.** Otherwise use `app.ai(tools=[...])`.
+- **`app.harness(prompt, provider="codeaf"|"aforge"|"claude-code"|"codex"|"gemini"|"opencode"|"pi"|"omp")`** — delegates to an external coding-agent CLI. `codeaf` is the SDK default when `provider` is omitted; `aforge` is an alias. `af codeaf ensure` provisions the managed binary; an implicit provider with `AFORGE_BIN` or a legacy SDK binary option keeps aforge; explicit `codeaf` overrides that pin. Unpinned `aforge` doctor checks CodeAF read-only, then legacy aforge. Heavy. **Only use when `af doctor` reports `harness_usable: true` AND the Dockerfile installs the selected CLI AND `shutil.which()` guards startup.** Otherwise use `app.ai(tools=[...])`.
 
 Full signatures, schemas, router surface, memory scopes, and the cross-boundary serialization gotcha are in `references/primitives-snapshot.md` (offline-frozen). **Prefer the live `agentfield.ai/llms-full.txt`** when you have a network — it is the source of truth and it does not drift.
 

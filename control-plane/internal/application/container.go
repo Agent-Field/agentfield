@@ -1,8 +1,6 @@
 package application
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"path/filepath"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli/framework"
@@ -75,10 +73,14 @@ func CreateServiceContainer(cfg *config.Config, agentfieldHome string) *framewor
 		if keystoreService != nil && didRegistry != nil {
 			didService = didServices.NewDIDService(&cfg.Features.DID, keystoreService, didRegistry)
 
-			// Generate af server ID based on agentfield home directory
-			// This ensures each agentfield instance has a unique ID while being deterministic
-			agentfieldServerID := generateAgentFieldServerID(agentfieldHome)
-			if err := didService.Initialize(agentfieldServerID); err != nil {
+			// Pick the stored server identity this control plane owns. Moving
+			// AGENTFIELD_HOME must not silently create a new identity.
+			agentfieldServerID, err := didServices.SelectAgentFieldServerID(
+				didRegistry, cfg.Features.DID.ServerID, generateAgentFieldServerID(agentfieldHome))
+			if err == nil {
+				err = didService.Initialize(agentfieldServerID)
+			}
+			if err != nil {
 				logger.Logger.Warn().Err(err).Msg("failed to initialize DID service")
 				didService = nil
 			} else {
@@ -118,22 +120,10 @@ func CreateServiceContainerWithDefaults(agentfieldHome string) *framework.Servic
 
 var absPathForAgentFieldServerID = filepath.Abs
 
-// generateAgentFieldServerID creates a deterministic af server ID based on the agentfield home directory.
-// This ensures each agentfield instance has a unique ID while being deterministic for the same installation.
+// generateAgentFieldServerID returns the af server ID derived from the
+// agentfield home directory. It names a new registry and finds one created at
+// the same home path; SelectAgentFieldServerID decides which stored registry
+// is used.
 func generateAgentFieldServerID(agentfieldHome string) string {
-	// Use the absolute path of agentfield home to generate a deterministic ID
-	absPath, err := absPathForAgentFieldServerID(agentfieldHome)
-	if err != nil {
-		// Fallback to the original path if absolute path fails
-		absPath = agentfieldHome
-	}
-
-	// Create a hash of the agentfield home path to generate a unique but deterministic ID
-	hash := sha256.Sum256([]byte(absPath))
-
-	// Use first 16 characters of the hex hash as the af server ID
-	// This provides uniqueness while keeping the ID manageable
-	agentfieldServerID := hex.EncodeToString(hash[:])[:16]
-
-	return agentfieldServerID
+	return didServices.LegacyAgentFieldServerID(agentfieldHome, absPathForAgentFieldServerID)
 }

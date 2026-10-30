@@ -1,3 +1,25 @@
+# CodeAF is the default harness. Raw assets are authenticated against embedded
+# release pins; any download or verification failure fails the image build.
+FROM debian:bookworm-slim AS codeaf-dist
+ARG TARGETARCH
+ARG CODEAF_VERSION=v0.8.2
+ARG CODEAF_BASE_URL=https://github.com/Agent-Field/CodeAF/releases/download
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /out
+RUN set -eu; \
+    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "${arch}" in \
+        amd64) sha256=681d9813f2517addc86fb644d313e3f7cf0ab60be708c8e8b13d77fb16a6798c ;; \
+        arm64) sha256=c6375d58d198d9e1a84880d8b4324ee6c067a0e5e351af115ca5506b1ffa1c78 ;; \
+        *) echo "Unsupported CodeAF architecture: ${arch}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 3 "${CODEAF_BASE_URL}/${CODEAF_VERSION}/codeaf-linux-${arch}" -o codeaf; \
+    printf '%s  codeaf\n' "${sha256}" | sha256sum -c -; \
+    chmod 0755 codeaf
+
 # aforge — the pinned coding-harness binary AgentField's harness providers
 # spawn (`aforge exec --json -w <dir>`). Fetched in its own stage so the
 # runtime layer is a single COPY and the download never drags curl/apt state
@@ -46,5 +68,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # See the aforge-dist stage for why this copies a directory, not a file.
 COPY --from=aforge-dist /out/ /usr/local/bin/
+
+# The statically linked CodeAF binary also runs on Alpine.
+COPY --from=codeaf-dist /out/codeaf /usr/local/bin/codeaf
+# Prefer the image binary over the SDK lazy-download path.
+ENV CODEAF_BIN=/usr/local/bin/codeaf
 
 CMD ["python", "-c", "print('AgentField Python agent image ready. Override CMD to run your agent.')"]

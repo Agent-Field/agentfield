@@ -38,7 +38,7 @@ function resolveIdleMs(idleSeconds?: number): number | undefined {
 export async function runCli(
   cmd: string[],
   options?: {
-    env?: Record<string, string>;
+    env?: NodeJS.ProcessEnv;
     cwd?: string;
     timeout?: number;
     idleSeconds?: number;
@@ -73,6 +73,10 @@ export async function runCli(
     });
 
     if (hasInput) {
+      // A child that exits before reading its prompt (a startup error, a bad
+      // key) closes the pipe; that EPIPE must not become an uncaught exception
+      // in the agent process. The exit code and stderr still report the failure.
+      proc.stdin?.on('error', () => undefined);
       proc.stdin?.end(options.inputText);
     }
 

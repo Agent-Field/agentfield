@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 )
 
 // NewNodeHTTPClient builds a short-lived control-plane-to-node client for
@@ -18,14 +20,14 @@ import (
 // the node to close first, so the client keeps the connection alive for the
 // request and then closes it from its own side as soon as the body is done.
 func NewNodeHTTPClient(timeout time.Duration) *http.Client {
-	base := &http.Transport{
-		Proxy:               nil, // node traffic is loopback; never route it through a proxy
-		MaxIdleConns:        4,
-		MaxIdleConnsPerHost: 4,
-		IdleConnTimeout:     5 * time.Second,
-		DisableCompression:  true,
-	}
-	return &http.Client{Timeout: timeout, Transport: &clientCloseTransport{base: base}}
+	base := agenturl.NewTransport(30 * time.Second)
+	base.MaxIdleConns = 4
+	base.MaxIdleConnsPerHost = 4
+	base.IdleConnTimeout = 5 * time.Second
+	base.DisableCompression = true
+	client := agenturl.NewClient(timeout)
+	client.Transport = &clientCloseTransport{base: base}
+	return client
 }
 
 // clientCloseTransport releases the connection from the client side once the

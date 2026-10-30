@@ -9,7 +9,7 @@
 // out later, from a coding agent that could not call them. One native
 // notification closes that loop: name the keys, name where to enter them.
 //
-// Same two-part shape as aforge-companion.ts and bundledAgents.ts:
+// Same two-part shape as codeaf-companion.ts and bundledAgents.ts:
 //   1. planKeyNotice() — pure: given the names this run provisioned, the env
 //      reports and what was already announced, decide whether to notify and
 //      what the copy says.

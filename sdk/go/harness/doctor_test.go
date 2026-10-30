@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
+	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -51,7 +55,7 @@ func TestSupportedProviderNames_CoversEveryBuildableProvider(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		ProviderAforge, ProviderClaudeCode, ProviderCodex, ProviderGemini,
+		ProviderCodeAF, ProviderAforge, ProviderClaudeCode, ProviderCodex, ProviderGemini,
 		ProviderOpenCode, ProviderPi, ProviderOMP, ProviderCursor,
 	} {
 		_, ok := SpecForProvider(name)
@@ -357,4 +361,91 @@ func TestExecVersionProbe_FailingCommandErrors(t *testing.T) {
 	_, err := execVersionProbe(context.Background(), []string{"definitely-not-a-real-binary-xyz", "--version"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "version probe failed")
+}
+
+// V11: managed lookup works offline, the CodeAF version is parsed, legacy spec stays intact.
+func TestDoctorCodeAFManagedAndVersion(t *testing.T) {
+	isolateCodeAF(t)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("OPENROUTER_API_KEY", "fixture-key")
+	home := codeAFManagedPaths()
+	writeManagedCodeAF(t, home, "codeaf v0.8.2 built 2026-10-23 11:39 · go1.26.5 linux/amd64")
+	reports, err := Doctor(context.Background(), DoctorOptions{Providers: []string{ProviderCodeAF}, Probe: true})
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	assert.True(t, reports[0].Installed)
+	assert.True(t, reports[0].Usable)
+	assert.Equal(t, home, reports[0].Binary)
+	assert.Equal(t, "v0.8.2", reports[0].Version)
+	assert.Equal(t, "af codeaf ensure", reports[0].InstallCommand)
+	assert.Equal(t, AuthConfigured, reports[0].Auth)
+	resolved, err := ensureCLIAvailable(ProviderCodeAF, "codeaf")
+	require.NoError(t, err)
+	assert.Equal(t, home, resolved)
+	codeaf, ok := SpecForProvider(ProviderCodeAF)
+	require.True(t, ok)
+	assert.Equal(t, ProviderSpec{Binary: "codeaf", VersionArgs: []string{"version"}, InstallCommand: "af codeaf ensure", AuthEnvVars: []string{"OPENROUTER_API_KEY"}}, codeaf)
+	legacy, ok := SpecForProvider(ProviderAforge)
+	require.True(t, ok)
+	assert.Equal(t, ProviderSpec{Binary: "aforge", VersionArgs: []string{"version"}, InstallCommand: "af aforge ensure", AuthEnvVars: []string{"OPENROUTER_API_KEY"}}, legacy)
+}
+
+func TestDoctorCodeAFOverrideAndMissing(t *testing.T) {
+	isolateCodeAF(t)
+	t.Setenv("CODEAF_BIN", "/explicit/codeaf")
+	opts := DoctorOptions{Providers: []string{ProviderCodeAF}, LookPath: fakeLookPath(map[string]string{"/explicit/codeaf": "/explicit/codeaf"}), Probe: true, VersionProbe: func(_ context.Context, cmd []string) (string, error) {
+		assert.Equal(t, []string{"/explicit/codeaf", "version"}, cmd)
+		return "codeaf v0.8.2 built today", nil
+	}}
+	reports, err := Doctor(context.Background(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, "v0.8.2", reports[0].Version)
+	_, err = ensureCLIAvailable(ProviderCodeAF, "codeaf")
+	require.ErrorIs(t, err, ErrProviderUnavailable)
+	opts.LookPath = fakeLookPath(nil)
+	reports, err = Doctor(context.Background(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, []string{IssueBinaryNotFound}, reports[0].Issues)
+	assert.Equal(t, "af codeaf ensure", reports[0].InstallCommand)
+}
+
+// A3 / V11: doctor follows execution's read-only order, even with downloads enabled.
+func TestDoctorCodeAFReadOnlyResolutionOrder(t *testing.T) {
+	for _, location := range []string{"override", "home", "path", "missing"} {
+		t.Run(location, func(t *testing.T) {
+			isolateCodeAF(t)
+			t.Setenv("AGENTFIELD_SKIP_CODEAF", "0")
+			t.Setenv("OPENROUTER_API_KEY", "fixture-key")
+			dir := t.TempDir()
+			t.Setenv("PATH", dir)
+			home := codeAFManagedPaths()
+			paths := []string{filepath.Join(t.TempDir(), "override"), home, filepath.Join(dir, "codeaf")}
+			start := map[string]int{"override": 0, "home": 1, "path": 2, "missing": 3}[location]
+			for i := start; i < len(paths); i++ {
+				if i == 1 {
+					writeManagedCodeAF(t, paths[i], "codeaf v0.8.2 built fixture")
+				} else {
+					writeCodeAFCLI(t, paths[i], "codeaf v0.8.2 built fixture", 0)
+				}
+			}
+			if location == "override" {
+				t.Setenv("CODEAF_BIN", paths[0])
+			}
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { requests.Add(1) }))
+			defer server.Close()
+			t.Setenv("AGENTFIELD_CODEAF_BASE_URL", server.URL)
+			reports, err := Doctor(context.Background(), DoctorOptions{Providers: []string{ProviderCodeAF}, Probe: true})
+			require.NoError(t, err)
+			require.Len(t, reports, 1)
+			if location == "missing" {
+				assert.False(t, reports[0].Installed)
+			} else {
+				assert.True(t, reports[0].Installed)
+				assert.Equal(t, paths[start], reports[0].Binary)
+				assert.Equal(t, "v0.8.2", reports[0].Version)
+			}
+			assert.Zero(t, requests.Load())
+		})
+	}
 }

@@ -141,7 +141,6 @@ def test_agent_continues_to_function_after_did_registration_failure(monkeypatch)
         node_id="did-failure-agent",
         agentfield_server="http://agentfield",
         auto_register=False,
-        enable_mcp=False,
         enable_did=False,
     )
     agent.did_manager = DIDManager("http://agentfield", agent.node_id)

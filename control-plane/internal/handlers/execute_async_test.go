@@ -1533,3 +1533,24 @@ func TestCallAgent_HeaderPropagation(t *testing.T) {
 	require.Equal(t, sessionID, receivedHeaders.Get("X-Session-ID"))
 	require.Equal(t, actorID, receivedHeaders.Get("X-Actor-ID"))
 }
+
+// A stopped process-wide pool refuses new work for the rest of the process;
+// the reset hook retires it and lets the next async execution start a fresh,
+// admitting pool.
+func TestResetAsyncWorkerPoolForTestingReplacesStoppedPool(t *testing.T) {
+	useAsyncPoolForTest(t, newAsyncWorkerPool(1, 1))
+	StopAsyncWorkerPool(context.Background())
+	stopped := getAsyncWorkerPool()
+	_, refused := stopped.reserveForAdmission()
+	require.True(t, refused, "a stopped pool must refuse admission")
+
+	ResetAsyncWorkerPoolForTesting()
+	t.Cleanup(ResetAsyncWorkerPoolForTesting)
+
+	fresh := getAsyncWorkerPool()
+	require.NotSame(t, stopped, fresh)
+	reserved, refused := fresh.reserveForAdmission()
+	require.True(t, reserved)
+	require.False(t, refused)
+	fresh.releaseReservation()
+}

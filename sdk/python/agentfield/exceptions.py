@@ -126,6 +126,13 @@ class ValidationError(AgentFieldError):
     pass
 
 
+CODEAF_MISSING_KEY_MESSAGE = (
+    "Harness provider 'codeaf' needs a model key and none is configured. "
+    "Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another "
+    "harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER."
+)
+
+
 class HarnessProviderUnavailable(AgentFieldError):
     """Raised before a harness run when its runtime dependency is unavailable."""
 
@@ -135,7 +142,7 @@ class HarnessProviderUnavailable(AgentFieldError):
         *,
         binary: str,
         install_command: str,
-        missing_auth_env: tuple[str, ...] = (),
+        missing_auth_env: tuple[str, ...] | list[str] = (),
     ) -> None:
         self.provider = provider
         self.binary = binary
@@ -150,6 +157,19 @@ class HarnessProviderUnavailable(AgentFieldError):
         super().__init__(message)
 
 
+class HarnessProviderNotConfigured(HarnessProviderUnavailable):
+    """Raised before a CodeAF run when no model credential is visible."""
+
+    def __init__(self, *, binary: str) -> None:
+        super().__init__(
+            "codeaf",
+            binary=binary,
+            install_command="af codeaf ensure",
+            missing_auth_env=["OPENROUTER_API_KEY"],
+        )
+        self.args = (CODEAF_MISSING_KEY_MESSAGE,)
+
+
 __all__ = [
     "AgentFieldError",
     "AgentFieldClientError",
@@ -162,4 +182,5 @@ __all__ = [
     "RegistrationError",
     "ValidationError",
     "HarnessProviderUnavailable",
+    "HarnessProviderNotConfigured",
 ]

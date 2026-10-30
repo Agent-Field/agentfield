@@ -7,6 +7,7 @@ from agentfield.openrouter_attribution import (
     apply_litellm_attribution,
     apply_openrouter_usage_accounting,
 )
+from agentfield.prompt_templates import PromptTemplates
 
 
 class AgentStatus(str, Enum):
@@ -284,16 +285,16 @@ class HarnessConfig(BaseModel):
     provider: str = Field(
         default_factory=_default_harness_provider,
         description=(
-            'Coding agent provider: "aforge" (default) | "claude-code" | "codex" | '
+            'Coding agent provider: "codeaf" (default) | "aforge" (alias) | "claude-code" | "codex" | '
             '"gemini" | "opencode" | "grok" | "pi" | "omp". Unset resolves to '
-            'the AGENTFIELD_HARNESS_PROVIDER env var when present, else "aforge".'
+            'the AGENTFIELD_HARNESS_PROVIDER env var when present, else "codeaf".'
         ),
     )
     model: Optional[str] = Field(
         default=None,
         description=(
             "Model identifier. None/empty means the provider's own default "
-            "(aforge picks its own; claude-code uses sonnet)."
+            "(codeaf uses ~deepseek/deepseek-v4-flash-latest; claude-code uses sonnet)."
         ),
     )
     variant: Optional[str] = Field(
@@ -348,6 +349,7 @@ class HarnessConfig(BaseModel):
     pi_bin: str = Field(default="pi", description="Path to Pi binary.")
     omp_bin: str = Field(default="omp", description="Path to OMP binary.")
     aforge_bin: str = Field(default="aforge", description="Path to aforge binary.")
+    codeaf_bin: Optional[str] = Field(default=None, description="Path to CodeAF binary.")
     grok_bin: str = Field(
         default="grok", description="Path to Grok Build CLI binary."
     )
@@ -559,6 +561,14 @@ class AIConfig(BaseModel):
     max_input_tokens: Optional[int] = Field(
         default=None,
         description="Maximum input context tokens (overrides auto-detection)",
+    )
+
+    # All SDK-injected prompt text and tool-message formatters live here so they
+    # are discoverable and overridable in one place. Defaults reproduce the
+    # SDK's prior behavior exactly (issue #229).
+    prompt_templates: PromptTemplates = Field(
+        default_factory=PromptTemplates,
+        description="Overridable templates for text the SDK injects into LLM calls.",
     )
 
     # Pydantic V2: allow fields that start with `model_`

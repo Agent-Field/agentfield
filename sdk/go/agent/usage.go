@@ -150,7 +150,10 @@ func (a *Agent) recordHarnessUsage(ctx context.Context, result *harness.Result, 
 		return
 	}
 
-	provider := opts.Provider
+	provider := result.Provider
+	if provider == "" {
+		provider = opts.Provider
+	}
 	if provider == "" && a.cfg.HarnessConfig != nil {
 		provider = a.cfg.HarnessConfig.Provider
 	}

@@ -41,6 +41,7 @@ import { AIClient } from '../ai/AIClient.js';
 import { AgentFieldClient } from '../client/AgentFieldClient.js';
 import type { HarnessRunner } from '../harness/runner.js';
 import { resolveProviderName } from '../harness/providers/factory.js';
+import { warnCodeafConfiguration } from '../harness/providers/codeaf.js';
 import type { HarnessOptions, HarnessResult } from '../harness/types.js';
 import type { ProviderHealth } from '../harness/availability.js';
 import { splitModelVariant } from '../harness/modelVariant.js';
@@ -172,6 +173,8 @@ export class Agent {
       asyncExecution: config.asyncExecution ?? true
     };
 
+    if (config.harnessConfig) warnCodeafConfiguration(config.harnessConfig);
+
     this.app = express();
     this.app.use(express.json());
 
@@ -183,8 +186,19 @@ export class Agent {
       apiKey: this.config.apiKey,
       headers: this.sanitizeDefaultHeaders(this.config.defaultHeaders)
     });
-    this.memoryClient = new MemoryClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
-    this.memoryEventClient = new MemoryEventClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
+    const memoryHeaders = { ...this.config.defaultHeaders };
+    // Header names are case insensitive; explicit defaults retain precedence.
+    const hasMemoryHeader = (name: string) => Object.entries(memoryHeaders)
+      .some(([key, value]) => key.toLowerCase() === name.toLowerCase() && value != null);
+    if (this.config.apiKey && !hasMemoryHeader('X-API-Key')) {
+      memoryHeaders['X-API-Key'] = this.config.apiKey;
+    }
+    this.memoryClient = new MemoryClient(this.config.agentFieldUrl!, memoryHeaders);
+    const memoryEventHeaders = { ...memoryHeaders };
+    if (!hasMemoryHeader('X-Agent-Node-ID')) {
+      memoryEventHeaders['X-Agent-Node-ID'] = this.config.nodeId;
+    }
+    this.memoryEventClient = new MemoryEventClient(this.config.agentFieldUrl!, memoryEventHeaders);
     this.didClient = new DidClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.didManager = new DidManager(this.didClient, this.config.nodeId);
     this.executionLogger = createExecutionLogger({
@@ -425,7 +439,7 @@ export class Agent {
         return;
       }
 
-      const providerName = resolveProviderName(options?.provider ?? this.config.harnessConfig?.provider);
+      const providerName = result.provider ?? resolveProviderName(options?.provider ?? this.config.harnessConfig?.provider);
       const harnessName = providerName ? String(providerName).replace(/-/g, '_') : null;
       // Usage is recorded against the base model — a "#variant"
       // reasoning-effort suffix on the configured model never reaches the

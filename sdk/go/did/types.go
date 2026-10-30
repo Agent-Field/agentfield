@@ -55,11 +55,11 @@ type ExecutionContext struct {
 // VCGenerationRequest is the payload for generating a Verifiable Credential.
 type VCGenerationRequest struct {
 	ExecutionContext ExecutionContext `json:"execution_context"`
-	InputData        string          `json:"input_data"`
-	OutputData       string          `json:"output_data"`
-	Status           string          `json:"status"`
-	ErrorMessage     string          `json:"error_message,omitempty"`
-	DurationMS       int64           `json:"duration_ms,omitempty"`
+	InputData        string           `json:"input_data"`
+	OutputData       string           `json:"output_data"`
+	Status           string           `json:"status"`
+	ErrorMessage     string           `json:"error_message,omitempty"`
+	DurationMS       int64            `json:"duration_ms,omitempty"`
 }
 
 // ExecutionVC represents a Verifiable Credential generated for an execution.
@@ -81,7 +81,9 @@ type ExecutionVC struct {
 
 // WorkflowVCChain is the audit trail for a workflow, containing all execution VCs.
 type WorkflowVCChain struct {
-	WorkflowID   string        `json:"workflow_id"`
-	ExecutionVCs []ExecutionVC `json:"execution_vcs"`
-	WorkflowVC   any           `json:"workflow_vc,omitempty"`
+	Verifiable     *bool         `json:"verifiable,omitempty"`
+	UnresolvedDIDs []string      `json:"unresolved_dids,omitempty"`
+	WorkflowID     string        `json:"workflow_id"`
+	ExecutionVCs   []ExecutionVC `json:"execution_vcs"`
+	WorkflowVC     any           `json:"workflow_vc,omitempty"`
 }

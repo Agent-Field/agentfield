@@ -10,7 +10,7 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
-from agentfield.harness._defaults import resolve_harness_provider
+from agentfield.harness._defaults import DEFAULT_HARNESS_PROVIDER
 from agentfield.harness._result import FailureType, HarnessResult, RawResult
 from agentfield.harness._schema import (
     build_followup_prompt,
@@ -27,7 +27,10 @@ from agentfield.harness._schema import (
     try_parse_from_text,
 )
 from agentfield.harness.providers._base import HarnessProvider
-from agentfield.harness.providers._factory import build_provider
+from agentfield.harness.providers._factory import (
+    build_provider,
+    resolve_execution_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +177,7 @@ def _resolve_options(
             "cwd",
             "project_dir",
             "aforge_bin",
+            "codeaf_bin",
             "codex_bin",
             "gemini_bin",
             "opencode_bin",
@@ -183,6 +187,12 @@ def _resolve_options(
             "schema_max_retries",
             "schema_mode",
         ]:
+            if (
+                field_name == "provider"
+                and "provider" not in getattr(config, "model_fields_set", {"provider"})
+                and getattr(config, "provider", None) == DEFAULT_HARNESS_PROVIDER
+            ):
+                continue
             val = getattr(config, field_name, None)
             if val is not None:
                 options[field_name] = val
@@ -206,6 +216,7 @@ def _accumulate_metrics(
         "cache_read_tokens": 0,
         "cache_creation_tokens": 0,
         "model": None,
+        "provider": None,
     }
 
     for raw in all_raws:
@@ -223,6 +234,8 @@ def _accumulate_metrics(
         tokens["cache_creation_tokens"] += raw.metrics.cache_creation_tokens or 0
         if raw.metrics.model and not tokens["model"]:
             tokens["model"] = raw.metrics.model
+        if raw.provider:
+            tokens["provider"] = raw.provider
 
     return total_cost, total_turns, session_id, all_messages, tokens
 
@@ -240,6 +253,7 @@ def _token_result_kwargs(tokens: Dict[str, Any]) -> Dict[str, Any]:
         "cache_creation_tokens": cache_creation,
         "total_tokens": input_tokens + output_tokens,
         "model": tokens.get("model"),
+        "provider": tokens.get("provider"),
     }
 
 
@@ -281,11 +295,13 @@ class HarnessRunner:
         }
         options = _resolve_options(self._config, overrides)
 
-        resolved_provider = resolve_harness_provider(options.get("provider"))
+        from types import SimpleNamespace
+
+        resolved_provider = resolve_execution_provider(SimpleNamespace(**options))
         options["provider"] = resolved_provider
+        provider_instance = self._build_provider(resolved_provider, options)
 
         resolved_cwd = str(options.get("cwd") or ".")
-        provider_instance = self._build_provider(str(resolved_provider), options)
 
         # Where the schema output file (.agentfield_output.json) is written and
         # read back. It MUST sit inside the agent's allowed root, or providers

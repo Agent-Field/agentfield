@@ -24,8 +24,8 @@ const (
 const (
 	// DefaultProvider is the harness provider used when no provider is
 	// configured explicitly and AGENTFIELD_HARNESS_PROVIDER is unset.
-	// AForge is AgentField's native coding harness.
-	DefaultProvider = ProviderAforge
+	// CodeAF is AgentField's native coding harness.
+	DefaultProvider = ProviderCodeAF
 
 	// ProviderEnvVar overrides the default provider process-wide. An
 	// explicitly configured provider still wins over it.
@@ -42,10 +42,10 @@ type Provider interface {
 // Options control a single harness invocation. Fields are optional;
 // zero values mean "use default".
 type Options struct {
-	// Provider name: "aforge", "opencode", "claude-code", "codex",
+	// Provider name: "codeaf", "aforge", "opencode", "claude-code", "codex",
 	// "gemini", "pi", "omp", or "cursor". An explicit value wins over
 	// AGENTFIELD_HARNESS_PROVIDER; when both are empty, the provider
-	// defaults to "aforge".
+	// defaults to "codeaf". "aforge" aliases CodeAF unless a legacy binary is pinned.
 	Provider string
 
 	// Model identifier passed to the coding agent. It may carry a

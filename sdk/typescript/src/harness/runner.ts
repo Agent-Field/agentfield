@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildPromptSuffix, cleanupTempFiles, getOutputPath, parseAndValidate } from './schema.js';
-import { buildProvider, resolveProviderName } from './providers/factory.js';
+import { buildProvider, resolveExecutionProvider } from './providers/factory.js';
 import { resolveRoot, type HarnessProvider } from './providers/base.js';
 import {
   createHarnessResult,
@@ -29,13 +29,13 @@ const TRANSIENT_PATTERNS = [
   '500',
 ];
 
-/** Copy provider-reported token/model metrics onto the harness result. */
+/** Copy provider identity and token/model metrics onto the harness result. */
 function tokenMetrics(raw: RawResult): Pick<
   HarnessResult,
-  'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheCreationTokens' | 'totalTokens' | 'model'
+  'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheCreationTokens' | 'totalTokens' | 'model' | 'provider'
 > {
   const { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, model } = raw.metrics;
-  return { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, model };
+  return { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, model, provider: raw.provider };
 }
 
 type RunnerOptions = Omit<HarnessOptions, 'schema'> & {
@@ -44,6 +44,7 @@ type RunnerOptions = Omit<HarnessOptions, 'schema'> & {
   maxDelay?: number;
   backoffFactor?: number;
   projectDir?: string;
+  codeafBin?: string;
   aforgeBin?: string;
   codexBin?: string;
   geminiBin?: string;
@@ -58,7 +59,7 @@ export class HarnessRunner {
   public async run(prompt: string, options: HarnessOptions = {}) {
     const { schema, ...rest } = options;
     const resolved = this.resolveOptions(this.config, rest);
-    resolved.provider = resolveProviderName(resolved.provider);
+    resolved.provider = resolveExecutionProvider(resolved);
 
     const provider = await this.buildProvider(resolved.provider, resolved);
     const outputRoot = resolveRoot(resolved as Record<string, unknown>) ?? '.';
@@ -72,6 +73,7 @@ export class HarnessRunner {
 
     try {
       const raw = await this.executeWithRetry(provider, effectivePrompt, resolved);
+      raw.provider ??= resolved.provider;
 
       if (schema !== undefined) {
         return this.handleSchemaOutput(raw, schema, outputDir!, startTime);
@@ -117,6 +119,7 @@ export class HarnessRunner {
         'env',
         'cwd',
         'projectDir',
+        'codeafBin',
         'aforgeBin',
         'codexBin',
         'geminiBin',

@@ -161,6 +161,9 @@ func (s *VCService) GenerateTriggerEventVC(ctx context.Context, in TriggerEventI
 // private key. Shared by trigger-event and (eventually) other non-execution
 // credentials so signing logic doesn't drift across files.
 func (s *VCService) signCanonical(canonical []byte, identity *types.DIDIdentity) (string, error) {
+	if err := requireSigningKey(identity); err != nil {
+		return "", err
+	}
 	var jwk map[string]interface{}
 	if err := json.Unmarshal([]byte(identity.PrivateKeyJWK), &jwk); err != nil {
 		return "", fmt.Errorf("parse issuer JWK: %w", err)

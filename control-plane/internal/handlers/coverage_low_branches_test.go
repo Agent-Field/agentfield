@@ -226,6 +226,8 @@ func TestSelectVersionedAgent(t *testing.T) {
 }
 
 func TestNormalizeWebhookRequest(t *testing.T) {
+	services.SetWebhookAllowedHosts(nil)
+	t.Cleanup(func() { services.SetWebhookAllowedHosts(nil) })
 	longValue := strings.Repeat("a", maxWebhookSecretLength+1)
 	longHeader := strings.Repeat("h", maxWebhookHeaderLength+1)
 
@@ -296,13 +298,25 @@ func TestNormalizeWebhookRequest(t *testing.T) {
 			wantErr: "webhook url rejected",
 		},
 		{
+			// C1: execute webhook registration refuses IPv4-embedding IPv6 literals.
+			name:    "ssrf nat64 loopback",
+			req:     &WebhookRequest{URL: "http://[64:ff9b::7f00:1]:9999/cb"},
+			wantErr: "private/internal address",
+		},
+		{
 			name:    "ssrf unspecified",
 			req:     &WebhookRequest{URL: "http://0.0.0.0:9999/cb"},
 			wantErr: "webhook url rejected",
 		},
 		{
-			name:    "too many headers",
-			req:     &WebhookRequest{URL: "https://example.com/path", Headers: func() map[string]string { m := map[string]string{}; for i := 0; i < maxWebhookHeaders+1; i++ { m[time.Unix(int64(i), 0).UTC().Format(time.RFC3339)] = "v" }; return m }()},
+			name: "too many headers",
+			req: &WebhookRequest{URL: "https://example.com/path", Headers: func() map[string]string {
+				m := map[string]string{}
+				for i := 0; i < maxWebhookHeaders+1; i++ {
+					m[time.Unix(int64(i), 0).UTC().Format(time.RFC3339)] = "v"
+				}
+				return m
+			}()},
 			wantErr: "webhook.headers supports at most",
 		},
 		{
@@ -405,13 +419,13 @@ func TestDeriveWorkflowHierarchy(t *testing.T) {
 		parentID := "parent-exec"
 		rootWorkflowID := "root-wf"
 		require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{
-			ExecutionID:     parentID,
-			WorkflowID:      "parent-wf",
-			RootWorkflowID:  &rootWorkflowID,
-			WorkflowDepth:   2,
-			AgentNodeID:     "agent-1",
-			Status:          types.ExecutionStatusRunning,
-			StartedAt:       time.Now().UTC(),
+			ExecutionID:    parentID,
+			WorkflowID:     "parent-wf",
+			RootWorkflowID: &rootWorkflowID,
+			WorkflowDepth:  2,
+			AgentNodeID:    "agent-1",
+			Status:         types.ExecutionStatusRunning,
+			StartedAt:      time.Now().UTC(),
 		}))
 
 		controller := newExecutionController(store, nil, nil, 0, "")

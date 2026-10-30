@@ -355,6 +355,12 @@ type WorkflowVCChainResponse struct {
 	Status       string        `json:"status"`
 	// Enhanced: DID resolution bundle for offline verification
 	DIDResolutionBundle map[string]DIDResolutionEntry `json:"did_resolution_bundle,omitempty"`
+	// UnresolvedDIDs lists DIDs referenced by the chain whose public keys could
+	// not be included, so callers can tell the chain is not fully verifiable.
+	UnresolvedDIDs []string `json:"unresolved_dids,omitempty"`
+	// Verifiable is false when any DID referenced by the chain could not be
+	// resolved, meaning the chain cannot be fully verified offline.
+	Verifiable bool `json:"verifiable"`
 }
 
 // WorkflowVCStatusAggregation represents aggregated VC stats per workflow directly from storage.
@@ -412,13 +418,17 @@ type DIDRegistryEntry struct {
 
 // ComponentDIDInfo represents DID information for a component (reasoner or skill).
 type ComponentDIDInfo struct {
-	ComponentID     string    `json:"component_id" db:"component_id"`
-	ComponentDID    string    `json:"component_did" db:"component_did"`
-	AgentDID        string    `json:"agent_did" db:"agent_did"`
-	ComponentType   string    `json:"component_type" db:"component_type"`
-	ComponentName   string    `json:"component_name" db:"component_name"`
-	DerivationIndex int       `json:"derivation_index" db:"derivation_index"`
-	CreatedAt       time.Time `json:"created_at" db:"created_at"`
+	ComponentID     string `json:"component_id" db:"component_id"`
+	ComponentDID    string `json:"component_did" db:"component_did"`
+	AgentDID        string `json:"agent_did" db:"agent_did"`
+	ComponentType   string `json:"component_type" db:"component_type"`
+	ComponentName   string `json:"component_name" db:"component_name"`
+	DerivationIndex int    `json:"derivation_index" db:"derivation_index"`
+	// DerivationPath and PublicKeyJWK are the stored values, returned verbatim.
+	DerivationPath string    `json:"derivation_path,omitempty" db:"derivation_path"`
+	PublicKeyJWK   string    `json:"public_key_jwk,omitempty" db:"public_key_jwk"`
+	Status         string    `json:"status" db:"status"` // "active", or "retired" once removed from its agent
+	CreatedAt      time.Time `json:"created_at" db:"created_at"`
 }
 
 // ExecutionVCInfo represents information about an execution VC stored in database.

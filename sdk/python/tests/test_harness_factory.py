@@ -35,6 +35,7 @@ def _make_config(provider: str, **kwargs) -> HarnessConfig:
 
 def test_supported_providers_contains_expected_names():
     assert "aforge" in SUPPORTED_PROVIDERS
+    assert "codeaf" in SUPPORTED_PROVIDERS
     assert "claude-code" in SUPPORTED_PROVIDERS
     assert "codex" in SUPPORTED_PROVIDERS
     assert "gemini" in SUPPORTED_PROVIDERS
@@ -44,14 +45,14 @@ def test_supported_providers_contains_expected_names():
     assert "grok" in SUPPORTED_PROVIDERS
 
 
-def test_default_provider_is_aforge(monkeypatch):
-    from agentfield.harness.providers.aforge import AforgeProvider
+def test_default_provider_is_codeaf(monkeypatch):
+    from agentfield.harness.providers.codeaf import CodeafProvider
 
     # HarnessConfig.provider resolves through AGENTFIELD_HARNESS_PROVIDER, so the
     # ambient value has to be cleared for this to assert the built-in default.
     monkeypatch.delenv("AGENTFIELD_HARNESS_PROVIDER", raising=False)
-    assert HarnessConfig().provider == "aforge"
-    assert isinstance(build_provider(HarnessConfig()), AforgeProvider)
+    assert HarnessConfig().provider == "codeaf"
+    assert isinstance(build_provider(HarnessConfig()), CodeafProvider)
 
 
 def test_build_provider_pi_returns_pi_provider():
@@ -114,21 +115,25 @@ def test_build_provider_unknown_message_lists_supported():
 # ---------------------------------------------------------------------------
 
 
-def test_build_provider_aforge_returns_aforge_provider():
-    from agentfield.harness.providers.aforge import AforgeProvider
+def test_build_provider_aforge_returns_codeaf_provider(monkeypatch):
+    from agentfield.harness.providers.codeaf import CodeafProvider
+
+    monkeypatch.delenv("AFORGE_BIN", raising=False)
 
     config = _make_config("aforge")
     provider = build_provider(config)
-    assert isinstance(provider, AforgeProvider)
+    assert isinstance(provider, CodeafProvider)
 
 
-def test_build_provider_aforge_default_bin():
-    from agentfield.harness.providers.aforge import AforgeProvider
+def test_build_provider_aforge_default_bin(monkeypatch):
+    from agentfield.harness.providers.codeaf import CodeafProvider
+
+    monkeypatch.delenv("AFORGE_BIN", raising=False)
 
     config = _make_config("aforge")
     provider = build_provider(config)
-    assert isinstance(provider, AforgeProvider)
-    assert provider._bin == "aforge"
+    assert isinstance(provider, CodeafProvider)
+    assert provider._bin is None
 
 
 def test_build_provider_aforge_custom_bin():

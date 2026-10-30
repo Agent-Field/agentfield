@@ -669,7 +669,7 @@ async def test_tool_calling_loop_recovers_from_hang(monkeypatch, fast_timeout_ag
     # Stub out the tool-call loop machinery so we can drive _tool_loop_completion
     # directly without needing real tool schemas.
     async def fake_loop(*, agent, messages, tools, config, needs_lazy_hydration,
-                       litellm_params, make_completion):
+                       litellm_params, make_completion, **_kwargs):
         params = {**litellm_params, "messages": messages}
         resp = await make_completion(params)
         return resp, SimpleNamespace(total_turns=1)

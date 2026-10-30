@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -77,6 +78,9 @@ func SetMemoryHandler(storageProvider MemoryStorage) gin.HandlerFunc {
 			Msg("request parsed")
 
 		scope, scopeID := resolveScope(c, req.Scope)
+		if !middleware.RequireMemoryScope(c, scope, scopeID) {
+			return
+		}
 		logger.Logger.Debug().
 			Str("operation", "resolve_scope").
 			Str("scope", scope).
@@ -256,6 +260,9 @@ func GetMemoryHandler(storageProvider MemoryStorage) gin.HandlerFunc {
 		if req.Scope != nil {
 			// Explicit scope provided
 			scope, scopeID := resolveScope(c, req.Scope)
+			if !middleware.RequireMemoryScope(c, scope, scopeID) {
+				return
+			}
 			memory, err := storageProvider.GetMemory(ctx, scope, scopeID, req.Key)
 			if err != nil {
 				c.JSON(http.StatusNotFound, ErrorResponse{
@@ -276,6 +283,9 @@ func GetMemoryHandler(storageProvider MemoryStorage) gin.HandlerFunc {
 			if scopeID != "" || scope == "global" {
 				if scope == "global" {
 					scopeID = "global" // Use a consistent ID for global scope
+				}
+				if middleware.AuthorizeMemoryScope(c, scope, scopeID) != nil {
+					continue
 				}
 				memory, err := storageProvider.GetMemory(ctx, scope, scopeID, req.Key)
 				if err == nil {
@@ -308,6 +318,9 @@ func DeleteMemoryHandler(storageProvider MemoryStorage) gin.HandlerFunc {
 		}
 
 		scope, scopeID := resolveScope(c, req.Scope)
+		if !middleware.RequireMemoryScope(c, scope, scopeID) {
+			return
+		}
 
 		// Get existing memory value for event publishing
 		var previousData json.RawMessage
@@ -379,6 +392,9 @@ func ListMemoryHandler(storageProvider MemoryStorage) gin.HandlerFunc {
 		}
 
 		scope, scopeID := resolveScope(c, &scopeParam)
+		if !middleware.RequireMemoryScope(c, scope, scopeID) {
+			return
+		}
 
 		memories, err := storageProvider.ListMemory(ctx, scope, scopeID)
 		if err != nil {

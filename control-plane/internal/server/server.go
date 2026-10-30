@@ -3,8 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services"
@@ -315,8 +314,13 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 			return nil, fmt.Errorf("failed to initialize VC service: %w", err)
 		}
 
-		// Generate af server ID based on agentfield home directory
-		agentfieldServerID := generateAgentFieldServerID(agentfieldHome)
+		// Pick the stored server identity this control plane owns. Moving
+		// AGENTFIELD_HOME must not silently create a new identity.
+		agentfieldServerID, err := services.SelectAgentFieldServerID(
+			didRegistry, cfg.Features.DID.ServerID, generateAgentFieldServerID(agentfieldHome))
+		if err != nil {
+			return nil, fmt.Errorf("failed to select af server DID registry: %w", err)
+		}
 
 		// Initialize af server DID with dynamic ID
 		fmt.Printf("🧠 Initializing af server DID (ID: %s)...\n", agentfieldServerID)
@@ -469,6 +473,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	// Configure SSRF-safe webhook client allowlist. Hosts/CIDRs listed here
 	// bypass the private-IP check (e.g. for internal Docker/K8s service names).
 	services.SetWebhookAllowedHosts(cfg.AgentField.Registration.WebhookAllowedHosts)
+	agenturl.Configure(cfg.AgentField.Registration.AgentEndpointStrict, cfg.AgentField.Registration.AgentEndpointAllowedHosts)
 
 	webhookDispatcher := services.NewWebhookDispatcher(storageProvider, services.WebhookDispatcherConfig{
 		Timeout:         cfg.AgentField.ExecutionQueue.WebhookTimeout,
@@ -805,7 +810,7 @@ func maxExecuteBodyHandler(next http.Handler, limit int64) http.Handler {
 
 func maxRequestBodyHandler(next http.Handler, executeLimit, registerLimit int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		isExecuteRoute := r.URL.Path == "/api/v1/execute" || strings.HasPrefix(r.URL.Path, "/api/v1/execute/")
+		isExecuteRoute := r.URL.Path == "/api/v1/execute" || strings.HasPrefix(r.URL.Path, "/api/v1/execute/") || isSessionInstancePath(r.URL.Path)
 		if r.Method == http.MethodPost && isExecuteRoute {
 			if r.ContentLength > executeLimit {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -835,6 +840,16 @@ func maxRequestBodyHandler(next http.Handler, executeLimit, registerLimit int64)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isSessionInstancePath reports whether a path is under /api/v1/session-instances/.
+// Session tool calls (POST /api/v1/session-instances/:session_id/tools/:tool)
+// run the execute pipeline in-process, so they share the execute body limit.
+// The whole prefix is matched so that path variants gin still routes to the
+// tool handler (for example an empty session id) cannot skip the limit; the
+// only other route under it, realtime-offer, takes a small SDP body.
+func isSessionInstancePath(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/session-instances/")
 }
 
 func writeBodyTooLarge(w http.ResponseWriter) {
@@ -1192,22 +1207,10 @@ func (s *AgentFieldServer) initRateLimiters() {
 
 var absPathForServerID = filepath.Abs
 
-// generateAgentFieldServerID creates a deterministic af server ID based on the agentfield home directory.
-// This ensures each agentfield instance has a unique ID while being deterministic for the same installation.
+// generateAgentFieldServerID returns the af server ID derived from the
+// agentfield home directory. It names a new registry and finds one created at
+// the same home path; SelectAgentFieldServerID decides which stored registry
+// is used.
 func generateAgentFieldServerID(agentfieldHome string) string {
-	// Use the absolute path of agentfield home to generate a deterministic ID
-	absPath, err := absPathForServerID(agentfieldHome)
-	if err != nil {
-		// Fallback to the original path if absolute path fails
-		absPath = agentfieldHome
-	}
-
-	// Create a hash of the agentfield home path to generate a unique but deterministic ID
-	hash := sha256.Sum256([]byte(absPath))
-
-	// Use first 16 characters of the hex hash as the af server ID
-	// This provides uniqueness while keeping the ID manageable
-	agentfieldServerID := hex.EncodeToString(hash[:])[:16]
-
-	return agentfieldServerID
+	return services.LegacyAgentFieldServerID(agentfieldHome, absPathForServerID)
 }

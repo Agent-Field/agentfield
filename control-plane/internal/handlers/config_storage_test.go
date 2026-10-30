@@ -353,6 +353,21 @@ func (m *configStorageMock) ListAgentFieldServerDIDs(ctx context.Context) ([]*ty
 func (m *configStorageMock) StoreAgentDID(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int) error {
 	return nil
 }
+
+// GetActiveAgentDID selects the first active identity for a node in this test store.
+func (m *configStorageMock) GetActiveAgentDID(ctx context.Context, serverID, nodeID string) (*types.AgentDIDInfo, error) {
+	rows, err := m.ListAgentDIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row != nil && row.AgentFieldServerID == serverID && row.AgentNodeID == nodeID && row.Status != types.AgentDIDStatusRevoked {
+			return row, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *configStorageMock) GetAgentDID(ctx context.Context, agentID string) (*types.AgentDIDInfo, error) {
 	return nil, nil
 }
@@ -369,6 +384,16 @@ func (m *configStorageMock) ListComponentDIDs(ctx context.Context, agentDID stri
 	return nil, nil
 }
 func (m *configStorageMock) StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int, components []storage.ComponentDIDRequest) error {
+	return nil
+}
+
+func (m *configStorageMock) UpsertAgentDIDWithComponents(ctx context.Context, record storage.AgentDIDRecord) error {
+	return nil
+}
+func (m *configStorageMock) ListAllComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
+	return nil, nil
+}
+func (m *configStorageMock) RetireComponentDIDs(ctx context.Context, agentDID string, componentDIDs []string) error {
 	return nil
 }
 func (m *configStorageMock) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {

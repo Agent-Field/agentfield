@@ -15,11 +15,11 @@ func TestResolveProviderName(t *testing.T) {
 		env      string
 		want     string
 	}{
-		{name: "default", want: ProviderAforge},
+		{name: "default", want: ProviderCodeAF},
 		{name: "environment", env: ProviderCodex, want: ProviderCodex},
 		{name: "explicit wins", explicit: ProviderGemini, env: ProviderCodex, want: ProviderGemini},
-		{name: "blank explicit", explicit: "   ", want: ProviderAforge},
-		{name: "blank environment", env: "  ", want: ProviderAforge},
+		{name: "blank explicit", explicit: "   ", want: ProviderCodeAF},
+		{name: "blank environment", env: "  ", want: ProviderCodeAF},
 	}
 
 	for _, tt := range tests {
@@ -30,12 +30,12 @@ func TestResolveProviderName(t *testing.T) {
 	}
 }
 
-func TestBuildProvider_DefaultsToAforge(t *testing.T) {
+func TestBuildProvider_DefaultsToCodeAF(t *testing.T) {
 	t.Setenv(ProviderEnvVar, "")
 	provider, err := BuildProvider("", "")
 	require.NoError(t, err)
 	require.NotNil(t, provider)
-	_, ok := provider.(*AforgeProvider)
+	_, ok := provider.(*CodeAFProvider)
 	assert.True(t, ok)
 }
 
@@ -44,6 +44,8 @@ func TestBuildProvider_ExplicitProviders(t *testing.T) {
 		name string
 		want any
 	}{
+		{name: ProviderCodeAF, want: &CodeAFProvider{}},
+		{name: ProviderAforge, want: &AforgeProvider{}},
 		{name: ProviderClaudeCode, want: &ClaudeCodeProvider{}},
 		{name: ProviderOpenCode, want: &OpenCodeProvider{}},
 	}
@@ -63,5 +65,5 @@ func TestBuildProvider_RejectsUnknownName(t *testing.T) {
 	assert.Nil(t, provider)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nope")
-	assert.True(t, strings.Contains(err.Error(), "supported: aforge, claude-code, codex, gemini, opencode, pi, omp, cursor"))
+	assert.True(t, strings.Contains(err.Error(), "supported: codeaf, aforge, claude-code, codex, gemini, opencode, pi, omp, cursor"))
 }

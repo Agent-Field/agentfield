@@ -93,8 +93,10 @@ type doctorHarnessProvider struct {
 }
 
 // harnessProviders is the canonical list of CLIs `app.harness()` knows how to
-// drive. aforge leads it: it is the SDK's default provider and ships with `af`.
+// drive. CodeAF leads it: it is the SDK's default provider and ships with `af`.
 var harnessProviders = []doctorHarnessProvider{
+	// CodeAF is surveyed by version only; never launch a model task.
+	{Name: "codeaf", Binary: "codeaf"},
 	// aforge declares no ProbeArgs on purpose — see runHarnessProbes.
 	{Name: "aforge", Binary: "aforge"},
 	{Name: "claude-code", Binary: "claude", ProbeArgs: []string{"-p", "Say OK"}},
@@ -134,7 +136,7 @@ func NewDoctorCommand() *cobra.Command {
 		Long: `Doctor inspects the local environment and reports what's available for
 building AgentField multi-reasoner systems:
 
-  • Available harness provider CLIs (aforge, claude-code, codex, gemini, opencode, pi, omp)
+  • Available harness provider CLIs (codeaf, aforge, claude-code, codex, gemini, opencode, pi, omp)
   • Provider API keys set in the environment (without leaking values)
   • Docker availability and whether the control-plane image is locally cached
   • Whether a local control plane is reachable
@@ -190,9 +192,9 @@ func runHarnessProbes(report DoctorReport) map[string]HarnessProbeResult {
 		if !report.HarnessProviders[h.Name].Available {
 			continue
 		}
-		// Every other probe is one trivial completion. Aforge's only one-shot is
-		// a full coding-agent run with working-directory write access, so `af
-		// doctor` must not start it; `af harness doctor` reports its health.
+		// Every other probe is one trivial completion. CodeAF and aforge run
+		// full coding-agent tasks with working-directory write access, so `af
+		// doctor` must not start them; `af harness doctor` reports its health.
 		if len(h.ProbeArgs) == 0 {
 			continue
 		}
@@ -374,8 +376,8 @@ func buildDoctorReport(controlPlaneURL string) DoctorReport {
 	for _, h := range harnessProviders {
 		// Share the harness doctor's provider-specific version arguments and its
 		// $AGENTFIELD_HOME/bin fallback wherever a binary-backed spec exists, so
-		// both doctors agree on what "installed" means. aforge in particular
-		// answers `version`, not `--version`, and `af aforge ensure` puts it in
+		// both doctors agree on what "installed" means. CodeAF and aforge
+		// answer `version`; their ensure commands put them in
 		// AgentField's own bin directory rather than on PATH. claude-code has no
 		// binary in that table (it is the pip-package wrapper), so it keeps the
 		// plain PATH check.
@@ -421,6 +423,10 @@ func buildDoctorReport(controlPlaneURL string) DoctorReport {
 		notes = append(notes, "No harness provider CLIs available. Do NOT use app.harness() in scaffolds — use app.ai(tools=[...]) or chunked-loop reasoners instead.")
 	} else {
 		notes = append(notes, fmt.Sprintf("Harness providers available: %s. app.harness(provider=...) is usable.", strings.Join(availableHarness, ", ")))
+	}
+
+	if status := report.HarnessProviders["codeaf"]; !status.Available || status.Version == "" {
+		notes = append(notes, "CodeAF needs installation or repair. Run `af codeaf ensure` for the default harness.")
 	}
 
 	if !report.Docker.Available {

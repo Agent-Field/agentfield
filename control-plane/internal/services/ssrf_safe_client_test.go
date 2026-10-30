@@ -2,9 +2,12 @@ package services
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -139,6 +142,31 @@ func TestNewSSRFSafeClient_BlocksPrivateIPs(t *testing.T) {
 	_, err = client.Do(req)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "private/internal address")
+}
+
+// C2: a hostname is checked after resolution at connect time, independently of
+// the registration pre-check. "localhost" resolves through the hosts file on
+// every CI platform, so this needs no external DNS.
+func TestNewSSRFSafeClient_RefusesHostnameResolvingToLoopback(t *testing.T) {
+	original := webhookAllowedHosts()
+	t.Cleanup(func() { SetWebhookAllowedHosts(original) })
+	SetWebhookAllowedHosts(nil)
+
+	var hit atomic.Bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	target := strings.Replace(ts.URL, "127.0.0.1", "localhost", 1)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
+	require.NoError(t, err)
+
+	_, err = NewSSRFSafeClient(5 * time.Second).Do(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "private/internal address")
+	assert.False(t, hit.Load(), "the loopback listener must not receive the request")
 }
 
 func TestNewSSRFSafeClient_AllowsPublicIPs(t *testing.T) {
@@ -283,14 +311,271 @@ func TestValidateWebhookURL_HostnameResolvesToPrivate(t *testing.T) {
 
 func TestNewSSRFSafeClient_AllowlistedLoopback(t *testing.T) {
 	original := webhookAllowedHosts()
-	defer SetWebhookAllowedHosts(original)
-
-	// Allow the entire 127.0.0.0/8 range and verify the transport now connects
-	// to a loopback test server.
-	SetWebhookAllowedHosts([]string{"127.0.0.0/8"})
+	t.Cleanup(func() { SetWebhookAllowedHosts(original) })
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	// C5: explicit hostnames, exact IPs and CIDRs bypass both validation and dialing.
+	for _, tc := range []struct {
+		name    string
+		allowed string
+		url     string
+	}{
+		{"CIDR", "127.0.0.0/8", ts.URL},
+		{"exact IP", "127.0.0.1", ts.URL},
+		{"hostname", "localhost", strings.Replace(ts.URL, "127.0.0.1", "localhost", 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			SetWebhookAllowedHosts([]string{tc.allowed})
+			require.NoError(t, ValidateWebhookURL(tc.url))
+			client := NewSSRFSafeClient(5 * time.Second)
+			t.Cleanup(client.CloseIdleConnections)
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, tc.url, nil)
+			require.NoError(t, err)
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+		})
+	}
+}
+
+// C5: an IPv4 CIDR does not implicitly trust an IPv6 transition address;
+// explicitly trusting that IPv6 host or CIDR still bypasses both checks.
+func TestWebhookAllowlist_TransitionAddresses(t *testing.T) {
+	original := webhookAllowedHosts()
+	t.Cleanup(func() { SetWebhookAllowedHosts(original) })
+	for _, tc := range []struct {
+		name    string
+		ip      string
+		allowed string
+		bypass  bool
+	}{
+		{"explicit NAT64 CIDR", "64:ff9b::7f00:1", "64:ff9b::/96", true},
+		{"explicit NAT64 IP", "64:ff9b::7f00:1", "64:ff9b::7f00:1", true},
+		{"IPv4 CIDR does not trust NAT64", "64:ff9b::7f00:1", "127.0.0.0/8", false},
+		{"IPv4 CIDR does not trust 6to4", "2002:7f00:1::", "127.0.0.0/8", false},
+		{"IPv4 CIDR does not trust compatible", "::127.0.0.1", "127.0.0.0/8", false},
+		{"IPv4 CIDR does not trust translated", "::ffff:0:7f00:1", "127.0.0.0/8", false},
+		{"IPv4 CIDR does not trust local-use NAT64", "64:ff9b:1::7f00:1", "127.0.0.0/8", false},
+		{"IPv4 CIDR does not trust Teredo", "2001:0:4136:e378:8000:63bf:80ff:fffe", "127.0.0.0/8", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			SetWebhookAllowedHosts([]string{tc.allowed})
+			err := ValidateWebhookURL("http://" + urlHost(tc.ip) + "/cb")
+			if tc.bypass {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "private/internal address")
+			}
+
+			transport := NewSSRFSafeClient(time.Second).Transport.(*http.Transport)
+			// No packet leaves even when the transition address is explicitly trusted.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			conn, err := transport.DialContext(ctx, "tcp", net.JoinHostPort(tc.ip, "80"))
+			if conn != nil {
+				conn.Close()
+			}
+			require.Error(t, err)
+			if tc.bypass {
+				assert.True(t, errors.Is(err, context.Canceled), "trusted address must reach the cancelled dialer: %v", err)
+				assert.NotContains(t, err.Error(), "ssrf:")
+			} else {
+				assert.Contains(t, err.Error(), "ssrf: webhook target resolves to private/internal address")
+			}
+		})
+	}
+}
+
+// C1, C2, C3 and the hardening contract: embeddedAndSpecialUseRefused covers
+// IPv6 forms that carry an IPv4 destination, shared and benchmarking space,
+// "this network", reserved IPv4, site-local IPv6 and non-unicast destinations.
+// Every address must be refused by registration and by the dial hook.
+var embeddedAndSpecialUseRefused = []struct {
+	name string
+	ip   string
+}{
+	{"nat64 well-known to loopback", "64:ff9b::7f00:1"},
+	{"nat64 well-known to metadata", "64:ff9b::a9fe:a9fe"},
+	{"nat64 local-use to loopback", "64:ff9b:1::7f00:1"},
+	{"6to4 to loopback", "2002:7f00:1::1"},
+	{"6to4 to metadata", "2002:a9fe:a9fe::1"},
+	{"teredo", "2001:0:4136:e378:8000:63bf:80ff:fffe"},
+	{"ipv4-mapped loopback", "::ffff:127.0.0.1"},
+	{"ipv4-mapped metadata", "::ffff:169.254.169.254"},
+	{"ipv4-compatible loopback", "::127.0.0.1"},
+	{"ipv4-translated loopback", "::ffff:0:7f00:1"},
+	{"shared address space", "100.64.0.1"},
+	{"shared address space low", "100.64.0.0"},
+	{"shared address space high", "100.127.255.255"},
+	{"benchmarking", "198.18.0.1"},
+	{"benchmarking low", "198.18.0.0"},
+	{"benchmarking high", "198.19.255.255"},
+	{"ipv4 unspecified", "0.0.0.0"},
+	{"ipv6 unspecified", "::"},
+	{"this network low", "0.0.0.1"},
+	{"this network assigned on loopback", "0.1.2.3"},
+	{"this network high", "0.255.255.255"},
+	{"reserved ipv4 low", "240.0.0.0"},
+	{"reserved ipv4 assigned on loopback", "240.1.2.3"},
+	{"reserved ipv4 high", "255.255.255.254"},
+	{"limited broadcast", "255.255.255.255"},
+	{"site-local low", "fec0::"},
+	{"site-local", "fec0::1"},
+	{"site-local high", "feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"},
+	{"ipv4 global multicast", "224.0.1.1"},
+	{"ipv4 multicast high", "239.255.255.255"},
+	{"ipv6 global multicast", "ff0e::1"},
+	{"ipv6 link-local multicast", "ff02::1"},
+	{"ipv4 service continuity low", "192.0.0.0"},
+	{"ipv4 service continuity", "192.0.0.2"},
+	{"ipv4 service continuity high", "192.0.0.7"},
+	{"ipv6 benchmarking", "2001:2::1"},
+	{"ipv6 benchmarking high", "2001:2:0:ffff:ffff:ffff:ffff:ffff"},
+}
+
+// C4: publicControls must stay reachable. They include the neighbours of the new
+// ranges and an IPv4-mapped public address, which is what a mis-spelled
+// translated prefix (::ffff:0:0/96, read by Go as all of IPv4) would block.
+var publicControls = []struct {
+	name string
+	ip   string
+}{
+	{"public ipv4", "8.8.8.8"},
+	{"public ipv4 one", "1.1.1.1"},
+	{"public ipv6", "2606:4700:4700::1111"},
+	{"public ipv6 beside teredo", "2001:4860:4860::8888"},
+	{"ipv4-mapped public", "::ffff:8.8.8.8"},
+	{"just below shared address space", "100.63.255.255"},
+	{"just above shared address space", "100.128.0.0"},
+	{"just below benchmarking", "198.17.255.255"},
+	{"just above benchmarking", "198.20.0.0"},
+	{"just above this network", "1.0.0.0"},
+	{"beside nat64 well-known", "64:ff9b:0:0:1::1"},
+	{"just above nat64 well-known", "64:ff9b::1:0:0"},
+	{"just below nat64 well-known", "64:ff9a:ffff:ffff:ffff:ffff:ffff:ffff"},
+	{"just below nat64 local-use", "64:ff9b:0:ffff:ffff:ffff:ffff:ffff"},
+	{"just above nat64 local-use", "64:ff9b:2::"},
+	{"just above 6to4", "2003::1"},
+	{"just below 6to4", "2001:ffff:ffff:ffff:ffff:ffff:ffff:ffff"},
+	{"just above teredo", "2001:1::1"},
+	{"just below teredo", "2000:ffff:ffff:ffff:ffff:ffff:ffff:ffff"},
+	{"just above ipv4-compatible", "::1:0:0"},
+	{"just below ipv4-translated", "::fffe:ffff:ffff:ffff"},
+	{"just above ipv4-translated", "::ffff:1:0:0"},
+	{"just below ipv4 service continuity", "191.255.255.255"},
+	{"just above ipv6 benchmarking", "2001:3::1"},
+}
+
+func TestIsPrivateIP_EmbeddedIPv4AndSpecialUse(t *testing.T) {
+	for _, tt := range embeddedAndSpecialUseRefused {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			require.NotNil(t, ip, "test address %q must parse", tt.ip)
+			assert.True(t, isPrivateIP(ip), "isPrivateIP(%s) must refuse", tt.ip)
+		})
+	}
+	for _, tt := range publicControls {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			require.NotNil(t, ip, "test address %q must parse", tt.ip)
+			assert.False(t, isPrivateIP(ip), "isPrivateIP(%s) must allow", tt.ip)
+		})
+	}
+}
+
+// urlHost spells an IP literal as a URL host, bracketing every IPv6
+// spelling, including the IPv4-mapped ones.
+func urlHost(ip string) string {
+	if strings.Contains(ip, ":") {
+		return "[" + ip + "]"
+	}
+	return ip
+}
+
+func TestValidateWebhookURL_EmbeddedIPv4AndSpecialUse(t *testing.T) {
+	original := webhookAllowedHosts()
+	t.Cleanup(func() { SetWebhookAllowedHosts(original) })
+	SetWebhookAllowedHosts(nil)
+
+	for _, tt := range embeddedAndSpecialUseRefused {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := "http://" + urlHost(tt.ip) + ":8080/cb"
+			err := ValidateWebhookURL(raw)
+			require.Error(t, err, "expected %s to be refused", raw)
+			assert.Contains(t, err.Error(), "private/internal address")
+		})
+	}
+	for _, tt := range publicControls {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := "https://" + urlHost(tt.ip) + "/cb"
+			assert.NoError(t, ValidateWebhookURL(raw), "expected %s to be allowed", raw)
+		})
+	}
+}
+
+func TestNewSSRFSafeClient_RefusesEmbeddedIPv4AndSpecialUseAtDial(t *testing.T) {
+	original := webhookAllowedHosts()
+	t.Cleanup(func() { SetWebhookAllowedHosts(original) })
+	SetWebhookAllowedHosts(nil)
+
+	client := NewSSRFSafeClient(2 * time.Second)
+	for _, tt := range embeddedAndSpecialUseRefused {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+urlHost(tt.ip)+":80/cb", nil)
+			require.NoError(t, err)
+			resp, err := client.Do(req)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "ssrf: webhook target resolves to private/internal address")
+		})
+	}
+}
+
+func TestNewSSRFSafeClient_PassesPublicAddressesToTheDialer(t *testing.T) {
+	original := webhookAllowedHosts()
+	t.Cleanup(func() { SetWebhookAllowedHosts(original) })
+	SetWebhookAllowedHosts(nil)
+
+	transport, ok := NewSSRFSafeClient(2 * time.Second).Transport.(*http.Transport)
+	require.True(t, ok)
+
+	// A cancelled context lets the guard run on the literal (no DNS is needed
+	// for one) and then stops the dialer before any packet leaves, so the
+	// error shows the guard let the address through rather than refusing it.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tt := range publicControls {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := transport.DialContext(ctx, "tcp", net.JoinHostPort(tt.ip, "443"))
+			if conn != nil {
+				conn.Close()
+			}
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "ssrf:")
+			assert.True(t, errors.Is(err, context.Canceled), "public target must reach the cancelled dialer: %v", err)
+		})
+	}
+}
+
+// C2: redirects from a permitted origin must re-check the destination at dial time.
+func TestNewSSRFSafeClient_RefusesRedirectToTransitionAddress(t *testing.T) {
+	original := webhookAllowedHosts()
+	t.Cleanup(func() { SetWebhookAllowedHosts(original) })
+	// Only the loopback origin is trusted; the redirect target is not.
+	SetWebhookAllowedHosts([]string{"127.0.0.0/8"})
+
+	hits := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Redirect(w, r, "http://[64:ff9b::7f00:1]:80/cb", http.StatusFound)
 	}))
 	defer ts.Close()
 
@@ -298,7 +583,10 @@ func TestNewSSRFSafeClient_AllowlistedLoopback(t *testing.T) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL, nil)
 	require.NoError(t, err)
 	resp, err := client.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "private/internal address 64:ff9b::7f00:1")
+	assert.Equal(t, 1, hits, "the trusted origin is reached once, the redirect target never")
 }

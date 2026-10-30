@@ -1,6 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import websockets
 
@@ -57,6 +58,68 @@ def test_memory_event_client_subscription_and_unsubscribe(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pattern, nonmatching_key, matching_key",
+    [
+        ("config.*", "configXtheme", "config.theme"),
+        ("user+.*", "userr.preferences", "user+.preferences"),
+        ("queue[0].*", "queue0.pending", "queue[0].pending"),
+    ],
+)
+async def test_memory_event_client_dispatches_literal_key_patterns(
+    monkeypatch, pattern, nonmatching_key, matching_key
+):
+    ctx = SimpleNamespace(to_headers=lambda: {})
+    client = MemoryEventClient("http://agentfield", ctx)
+    incoming = asyncio.Queue()
+    handled = asyncio.Event()
+    listener_closed = asyncio.Event()
+    received = []
+
+    class DummyWebSocket:
+        open = True
+
+        async def recv(self):
+            message = await incoming.get()
+            if message is None:
+                listener_closed.set()
+                return json.dumps({"scope": "global", "key": "closed", "action": "set"})
+            return message
+
+        async def close(self):
+            self.open = False
+            incoming.put_nowait(None)
+
+    websocket = DummyWebSocket()
+
+    async def fake_connect(url, **kwargs):
+        return websocket
+
+    async def callback(event):
+        received.append(event.key)
+
+    async def observe(event):
+        if event.key == matching_key:
+            handled.set()
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", fake_connect)
+
+    await client.connect()
+    client.subscribe(pattern, callback)
+    client.subscribe("*", observe)
+    try:
+        for key in (nonmatching_key, matching_key):
+            incoming.put_nowait(
+                json.dumps({"scope": "global", "key": key, "action": "set"})
+            )
+        await asyncio.wait_for(handled.wait(), timeout=1)
+        assert received == [matching_key]
+    finally:
+        await client.close()
+        await asyncio.wait_for(listener_closed.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_memory_event_client_history(monkeypatch):
     ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
     client = MemoryEventClient("http://agentfield", ctx)
@@ -99,7 +162,18 @@ async def test_memory_event_client_history(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
+@pytest.mark.parametrize(
+    ("patterns", "scope", "scope_id"),
+    [
+        (["cart.*", "order.*"], "session", "abc"),
+        (["user+plan.*"], "actor", "alice+trial@example.com"),
+        (["cart&total.*", "issue#*"], "session", "team&env=prod#1"),
+        (["user preferences.*", "用户.*"], "workflow", "会话 + 1"),
+    ],
+)
+async def test_memory_event_client_connect_builds_ws_url(
+    monkeypatch, patterns, scope, scope_id
+):
     ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
     client = MemoryEventClient("http://agentfield", ctx)
 
@@ -112,7 +186,9 @@ async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
 
     async def fake_connect(url, **kwargs):
         record["url"] = url
-        record["headers"] = kwargs.get("additional_headers") or kwargs.get("extra_headers")
+        record["headers"] = kwargs.get("additional_headers") or kwargs.get(
+            "extra_headers"
+        )
         return DummyWebSocket()
 
     async def fake_listen(self):
@@ -121,15 +197,19 @@ async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
     monkeypatch.setattr("agentfield.memory_events.websockets.connect", fake_connect)
     monkeypatch.setattr(MemoryEventClient, "_listen", fake_listen, raising=False)
 
-    await client.connect(
-        patterns=["cart.*", "order.*"], scope="session", scope_id="abc"
-    )
+    await client.connect(patterns=patterns, scope=scope, scope_id=scope_id)
     await asyncio.sleep(0)
 
-    assert record["url"].startswith("ws://agentfield")
-    assert "patterns=cart.*,order.*" in record["url"]
-    assert "scope=session" in record["url"]
-    assert "scope_id=abc" in record["url"]
+    parsed_url = urlsplit(record["url"])
+    assert parsed_url.scheme == "ws"
+    assert parsed_url.netloc == "agentfield"
+    assert parsed_url.path == "/api/v1/memory/events/ws"
+    assert parsed_url.fragment == ""
+    assert parse_qs(parsed_url.query) == {
+        "patterns": [",".join(patterns)],
+        "scope": [scope],
+        "scope_id": [scope_id],
+    }
     assert record["headers"] == {"Authorization": "token"}
     assert listener_called.get("run") is True
 
@@ -163,6 +243,7 @@ async def test_connect_passes_correct_headers_kwarg(monkeypatch):
 
     async def fake_connect(url, **kwargs):
         called_with.update(kwargs)
+        called_with["url"] = url
         return DummyWebSocket()
 
     monkeypatch.setattr("agentfield.memory_events.websockets.connect", fake_connect)
@@ -173,6 +254,7 @@ async def test_connect_passes_correct_headers_kwarg(monkeypatch):
 
     assert _HEADERS_KWARG in called_with
     assert called_with[_HEADERS_KWARG] == {"Authorization": "token"}
+    assert called_with["url"] == "ws://agentfield/api/v1/memory/events/ws"
 
 
 @pytest.mark.asyncio
@@ -198,7 +280,9 @@ async def test_connect_does_not_block_startup_on_failure(monkeypatch):
     # Give the background task a chance to start
     await asyncio.sleep(0.05)
 
-    assert reconnect_started.is_set(), "reconnect should have been started in background"
+    assert reconnect_started.is_set(), (
+        "reconnect should have been started in background"
+    )
     assert not client.is_listening
 
 

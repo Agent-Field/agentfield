@@ -4,6 +4,7 @@ import type { SkillDefinition } from './skill.js';
 import type { MemoryChangeEvent, MemoryWatchHandler } from '../memory/MemoryInterface.js';
 import type { ExecutionMetadata } from '../context/ExecutionContext.js';
 import type { HarnessConfig } from '../harness/types.js';
+import type { PromptTemplates } from '../ai/PromptTemplates.js';
 
 export type DeploymentType = 'long_running' | 'serverless';
 
@@ -81,6 +82,11 @@ export interface AIConfig {
   rateLimitJitterFactor?: number;
   rateLimitCircuitBreakerThreshold?: number;
   rateLimitCircuitBreakerTimeout?: number;
+  /**
+   * Overridable templates for text and tool-message framing the SDK injects
+   * into LLM calls. Merged over the defaults per call (issue #229).
+   */
+  promptTemplates?: Partial<PromptTemplates>;
 }
 
 export interface MemoryConfig {

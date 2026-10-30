@@ -135,6 +135,7 @@ describe('harness runner', () => {
       env: { A: '1' },
       cwd: '/tmp/base',
       projectDir: '/tmp/project',
+      codeafBin: 'codeaf',
       aforgeBin: 'aforge',
       codexBin: 'codex',
       geminiBin: 'gemini',
@@ -159,6 +160,7 @@ describe('harness runner', () => {
     expect(options.env).toEqual({ B: '2' });
     expect(options.cwd).toBe('/tmp/override');
     expect(options.projectDir).toBe('/tmp/project');
+    expect(options.codeafBin).toBe('codeaf');
     expect(options.aforgeBin).toBe('aforge');
     expect(options.piBin).toBe('pi');
     expect(options.ompBin).toBe('omp');
@@ -272,15 +274,15 @@ describe('harness runner', () => {
     expect(fs.existsSync(getOutputPath(cwd))).toBe(false);
   });
 
-  it('run defaults to aforge when no provider is configured', async () => {
+  it('run defaults to codeaf when no provider is configured', async () => {
     vi.stubEnv('AGENTFIELD_HARNESS_PROVIDER', '');
     const provider = new MockProvider();
     const buildProviderSpy = vi.spyOn(factory, 'buildProvider').mockResolvedValue(provider);
     const runner = new HarnessRunner();
     await runner.run('hello', {});
 
-    expect(buildProviderSpy).toHaveBeenCalledWith(expect.objectContaining({ provider: 'aforge' }));
-    expect(provider.lastOptions?.provider).toBe('aforge');
+    expect(buildProviderSpy).toHaveBeenCalledWith(expect.objectContaining({ provider: 'codeaf' }));
+    expect(provider.lastOptions?.provider).toBe('codeaf');
   });
 
   it('per-call provider wins over the runner default and environment', async () => {

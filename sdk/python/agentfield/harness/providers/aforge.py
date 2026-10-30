@@ -26,6 +26,14 @@ AFORGE_DEFAULT_MODEL = "~deepseek/deepseek-v4-flash-latest"
 _REASONING_VARIANTS = {"off", "low", "medium", "high"}
 
 
+def _max_concurrent() -> int:
+    try:
+        value = int(os.environ.get("AFORGE_MAX_CONCURRENT", "8"))
+        return value if value > 0 else 8
+    except ValueError:
+        return 8
+
+
 def _strip_openrouter_prefix(model: str) -> str:
     """Strip one leading ``openrouter/`` prefix from a model slug."""
     return model.removeprefix("openrouter/")
@@ -97,7 +105,7 @@ class AforgeProvider:
     ``AGENTFIELD_AFORGE_COMMAND=do`` to opt into Aforge's routed workflow.
     """
 
-    _MAX_CONCURRENT: ClassVar[int] = int(os.environ.get("AFORGE_MAX_CONCURRENT", "8"))
+    _MAX_CONCURRENT: ClassVar[int] = _max_concurrent()
     _concurrency_sem: ClassVar[asyncio.Semaphore | None] = None
 
     def __init__(self, bin_path: str = "aforge"):
@@ -120,7 +128,9 @@ class AforgeProvider:
             self._MAX_CONCURRENT,
         )
         async with sem:
-            return await self._execute_impl(prompt, options)
+            result = await self._execute_impl(prompt, options)
+            result.provider = "aforge"
+            return result
 
     async def _execute_impl(self, prompt: str, options: dict[str, object]) -> RawResult:
         # project_dir is the canonical agent root; a nested task cwd must not

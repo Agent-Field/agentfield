@@ -127,6 +127,9 @@ type VCVerificationResult struct {
 	VerificationSteps []VerificationStep               `json:"verification_steps,omitempty"`
 	Summary           VerificationSummary              `json:"summary"`
 	Comprehensive     *ComprehensiveVerificationResult `json:"comprehensive,omitempty"`
+	// UnresolvedDIDs lists DIDs the exported chain declares as unresolvable.
+	// When non-empty the chain is not fully verifiable and Valid is false.
+	UnresolvedDIDs []string `json:"unresolved_dids,omitempty"`
 }
 
 // ComponentVerification represents verification result for a single component
@@ -424,12 +427,25 @@ func outputJSON(result VCVerificationResult) error {
 		return fmt.Errorf("failed to marshal result: %v", err)
 	}
 	fmt.Println(string(jsonData))
+	if warning := unresolvedDIDsWarning(result); warning != "" {
+		fmt.Fprintln(os.Stderr, warning)
+	}
 
 	// Exit with appropriate code
 	if !result.Valid {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// unresolvedDIDsWarning returns a one-line warning (plus the DID list) for a
+// chain that declares unresolvable DIDs, or "" when there are none.
+func unresolvedDIDsWarning(result VCVerificationResult) string {
+	if len(result.UnresolvedDIDs) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("WARNING: this audit chain cannot be fully verified: %d DID(s) could not be resolved: %s",
+		len(result.UnresolvedDIDs), strings.Join(result.UnresolvedDIDs, ", "))
 }
 
 func outputPretty(result VCVerificationResult, verbose bool) error {
@@ -452,6 +468,9 @@ func outputPretty(result VCVerificationResult, verbose bool) error {
 
 	if result.Error != "" {
 		fmt.Printf("Error: %s\n", result.Error)
+	}
+	if warning := unresolvedDIDsWarning(result); warning != "" {
+		fmt.Println(warning)
 	}
 
 	// Summary

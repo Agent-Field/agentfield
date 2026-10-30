@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { AforgeProvider } from '../src/harness/providers/aforge.js';
+import { CodeafProvider } from '../src/harness/providers/codeaf.js';
 import {
   buildProvider,
   HARNESS_PROVIDER_ENV_VAR,
@@ -24,8 +24,8 @@ afterEach(() => {
 });
 
 describe('harness provider factory', () => {
-  it('defaults to aforge', () => {
-    expect(resolveProviderName(undefined)).toBe('aforge');
+  it('defaults to codeaf', () => {
+    expect(resolveProviderName(undefined)).toBe('codeaf');
   });
 
   it('honours the environment fallback', () => {
@@ -39,14 +39,14 @@ describe('harness provider factory', () => {
   });
 
   it('treats blank explicit and environment values as unset', () => {
-    expect(resolveProviderName('   ')).toBe('aforge');
+    expect(resolveProviderName('   ')).toBe('codeaf');
 
     process.env[HARNESS_PROVIDER_ENV_VAR] = '  ';
-    expect(resolveProviderName(undefined)).toBe('aforge');
+    expect(resolveProviderName(undefined)).toBe('codeaf');
   });
 
-  it('builds the aforge provider when no provider is configured', async () => {
-    await expect(buildProvider({})).resolves.toBeInstanceOf(AforgeProvider);
+  it('builds the codeaf provider when no provider is configured', async () => {
+    await expect(buildProvider({})).resolves.toBeInstanceOf(CodeafProvider);
   });
 
   it('builds the additional pi and omp providers when named explicitly', async () => {
@@ -58,7 +58,7 @@ describe('harness provider factory', () => {
   it('rejects genuinely unknown providers with the supported list', async () => {
     const config = { provider: 'nope' } as unknown as HarnessConfig;
     await expect(buildProvider(config)).rejects.toThrow(
-      'Unknown harness provider: "nope". Supported: aforge, claude-code, codex, gemini, omp, opencode, pi'
+      'Unknown harness provider: "nope". Supported: aforge, claude-code, codeaf, codex, gemini, omp, opencode, pi'
     );
   });
 });

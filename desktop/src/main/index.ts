@@ -19,7 +19,7 @@ import {
   startControlPlane,
   uninstallAgent
 } from './agents'
-import { ensureAforgeCompanion } from './aforge-companion'
+import { ensureCodeafCompanion } from './codeaf-companion'
 import { recoverAutostartFailure, runAutostart } from './autostart'
 import { runDesktopBootChain } from './bootChain'
 import { bundledStatuses, ensureBundledAgents } from './bundledAgents'
@@ -547,11 +547,11 @@ function main(): void {
     // (it needs the managed bin dir to exist) and non-blocking, like syncSkills.
     syncTray(settings.trayCompanion)
 
-    // The pinned aforge harness binary lands beside af in ~/.agentfield/bin, so a
+    // The pinned CodeAF harness binary lands beside af in ~/.agentfield/bin, so a
     // desktop-only install can run harness-backed agents. Fire-and-forget: a failed
     // download must never delay or break app startup.
-    void ensureAforgeCompanion().then((r) =>
-      console.log(`aforge companion: ${r.ok ? 'ok' : 'FAILED'} — ${r.message}`)
+    void ensureCodeafCompanion().then((r) =>
+      console.log(`codeaf companion: ${r.ok ? 'ok' : 'FAILED'} — ${r.message}`)
     )
 
     // The snapshot carries the last skill-sync result along with the control-

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/codeaf"
 	"github.com/spf13/cobra"
 )
 
@@ -38,6 +39,7 @@ type harnessProviderSpec struct {
 }
 
 var harnessProviderSpecs = []harnessProviderSpec{
+	{Name: "codeaf", Binary: "codeaf", InstallCommand: "af codeaf ensure", AuthEnvVars: []string{"OPENROUTER_API_KEY"}, VersionArgs: [][]string{{"version"}}},
 	{Name: "aforge", Binary: "aforge", InstallCommand: "af aforge ensure", AuthEnvVars: []string{"OPENROUTER_API_KEY"}, VersionArgs: [][]string{{"version"}, {"--version"}}},
 	// claude-code has no Binary: the Python provider runs on the
 	// claude_agent_sdk pip package (which bundles its own CLI), not on a
@@ -97,7 +99,7 @@ func newHarnessDoctorCommand() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check, default all: aforge, claude-code, codex, gemini, opencode, grok, pi, omp")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Provider(s) to check, default all: codeaf, aforge, claude-code, codex, gemini, opencode, grok, pi, omp")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output structured JSON")
 	return cmd
 }
@@ -150,10 +152,32 @@ func buildHarnessDoctorReports(requested []string) ([]HarnessProviderHealth, err
 // probeHarnessBinary resolves a provider binary and asks it for a version,
 // trying each candidate argument set in order.
 func probeHarnessBinary(spec harnessProviderSpec) ToolStatus {
-	path, err := exec.LookPath(spec.Binary)
+	var path string
+	var err error
+	if spec.Name == "aforge" {
+		if pin := strings.TrimSpace(os.Getenv("AFORGE_BIN")); pin != "" {
+			path, err = exec.LookPath(pin)
+			if err != nil {
+				return ToolStatus{}
+			}
+		} else if resolved, lookupErr := codeaf.Lookup(""); lookupErr == nil {
+			path = resolved
+			spec.VersionArgs = [][]string{{"version"}}
+		} else if strings.TrimSpace(os.Getenv("CODEAF_BIN")) != "" {
+			return ToolStatus{}
+		}
+	}
+	if spec.Name == "codeaf" {
+		path, err = codeaf.Lookup("")
+		if err != nil {
+			return ToolStatus{}
+		}
+	} else if path == "" {
+		path, err = exec.LookPath(spec.Binary)
+	}
 	if err != nil {
-		// `af aforge ensure` installs into AgentField's own bin directory, which
-		// the current shell may not have re-read into PATH yet. Looking there
+		// The ensure commands install into AgentField's own bin directory,
+		// which the current shell may not have re-read into PATH yet. Looking there
 		// directly is what stops the doctor from calling a binary it just
 		// installed "not found".
 		home := os.Getenv("AGENTFIELD_HOME")
@@ -193,6 +217,13 @@ func probeHarnessBinary(spec harnessProviderSpec) ToolStatus {
 			continue
 		}
 		if version := strings.Split(strings.TrimSpace(string(out)), "\n")[0]; version != "" {
+			if spec.Name == "codeaf" {
+				fields := strings.Fields(version)
+				if len(fields) < 2 || fields[0] != "codeaf" || !strings.HasPrefix(fields[1], "v") {
+					continue
+				}
+				version = fields[1]
+			}
 			status.Version = version
 			break
 		}

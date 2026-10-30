@@ -133,6 +133,10 @@ type RegistrationConfig struct {
 	// deployments where webhooks legitimately target internal RFC-1918 hosts
 	// (e.g. Docker service names, Kubernetes cluster DNS).
 	WebhookAllowedHosts []string `yaml:"webhook_allowed_hosts" mapstructure:"webhook_allowed_hosts"`
+	// AgentEndpointStrict additionally denies private/internal destinations.
+	AgentEndpointStrict bool `yaml:"agent_endpoint_strict" mapstructure:"agent_endpoint_strict"`
+	// AgentEndpointAllowedHosts exempts hosts/wildcards/CIDRs from strict checks only.
+	AgentEndpointAllowedHosts []string `yaml:"agent_endpoint_allowed_hosts" mapstructure:"agent_endpoint_allowed_hosts"`
 }
 
 // NodeLogProxyConfig limits the control plane proxy to agent process logs (NDJSON).
@@ -470,14 +474,18 @@ type ConnectorCapability struct {
 
 // DIDConfig holds configuration for DID identity system.
 type DIDConfig struct {
-	Enabled          bool                `yaml:"enabled" mapstructure:"enabled" default:"true"`
-	Method           string              `yaml:"method" mapstructure:"method" default:"did:key"`
-	KeyAlgorithm     string              `yaml:"key_algorithm" mapstructure:"key_algorithm" default:"Ed25519"`
-	DerivationMethod string              `yaml:"derivation_method" mapstructure:"derivation_method" default:"BIP32"`
-	KeyRotationDays  int                 `yaml:"key_rotation_days" mapstructure:"key_rotation_days" default:"90"`
-	VCRequirements   VCRequirements      `yaml:"vc_requirements" mapstructure:"vc_requirements"`
-	Keystore         KeystoreConfig      `yaml:"keystore" mapstructure:"keystore"`
-	Authorization    AuthorizationConfig `yaml:"authorization" mapstructure:"authorization"`
+	Enabled          bool   `yaml:"enabled" mapstructure:"enabled" default:"true"`
+	Method           string `yaml:"method" mapstructure:"method" default:"did:key"`
+	KeyAlgorithm     string `yaml:"key_algorithm" mapstructure:"key_algorithm" default:"Ed25519"`
+	DerivationMethod string `yaml:"derivation_method" mapstructure:"derivation_method" default:"BIP32"`
+	KeyRotationDays  int    `yaml:"key_rotation_days" mapstructure:"key_rotation_days" default:"90"`
+	// ServerID pins which stored DID registry this control plane owns. When
+	// empty, the existing registry is found automatically; set it only when
+	// several registries share one database.
+	ServerID       string              `yaml:"server_id" mapstructure:"server_id"`
+	VCRequirements VCRequirements      `yaml:"vc_requirements" mapstructure:"vc_requirements"`
+	Keystore       KeystoreConfig      `yaml:"keystore" mapstructure:"keystore"`
+	Authorization  AuthorizationConfig `yaml:"authorization" mapstructure:"authorization"`
 }
 
 // AuthorizationConfig holds configuration for VC-based authorization.
@@ -723,6 +731,10 @@ func ApplyEnvOverrides(cfg *Config) {
 		cfg.Features.Knowledge.Enabled = &enabled
 	}
 
+	if val := os.Getenv("AGENTFIELD_DID_SERVER_ID"); val != "" {
+		cfg.Features.DID.ServerID = strings.TrimSpace(val)
+	}
+
 	// Embedded MCP server toggle. Enabled by default; set to a falsey value to
 	// make the /mcp route return 404.
 	if val := os.Getenv("AGENTFIELD_MCP_ENABLED"); val != "" {
@@ -776,6 +788,13 @@ func ApplyEnvOverrides(cfg *Config) {
 				cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts = append(cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts, trimmed)
 			}
 		}
+	}
+
+	if val := os.Getenv("AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_STRICT"); val != "" {
+		cfg.AgentField.Registration.AgentEndpointStrict = parseEnvBool(val)
+	}
+	if val, exists := os.LookupEnv("AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_ALLOWED_HOSTS"); exists {
+		cfg.AgentField.Registration.AgentEndpointAllowedHosts = splitEnvCSV(val)
 	}
 
 	if val := os.Getenv("AGENTFIELD_WEBHOOK_ALLOWED_HOSTS"); val != "" {

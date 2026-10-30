@@ -848,3 +848,57 @@ async def test_debug_tasks_endpoint_reports_done_and_cancelled_state():
             await stuck_task
         except (asyncio.CancelledError, BaseException):
             pass
+
+
+# ---------------------------------------------------------------------------
+# Port-selection env flags
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
+def test_strict_port_flag_accepts_truthy_vocabulary(monkeypatch, value):
+    monkeypatch.setenv("PORT", "8123")
+    monkeypatch.setenv("AGENTFIELD_STRICT_PORT", value)
+    monkeypatch.setattr(
+        "agentfield.agent_server.AgentUtils.is_port_available", lambda port: False
+    )
+
+    with pytest.raises(RuntimeError, match="assigned port 8123 is unavailable"):
+        AgentServer(make_agent_app()).serve()
+
+
+class _AutoPortPicked(Exception):
+    pass
+
+
+@pytest.mark.parametrize("value", ["1", "true", "Yes", "on"])
+def test_auto_port_flag_accepts_truthy_vocabulary(monkeypatch, value):
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.setenv("AGENTFIELD_AUTO_PORT", value)
+
+    def fake_get_free_port(*args, **kwargs):
+        raise _AutoPortPicked
+
+    monkeypatch.setattr("agentfield.agent_server.get_free_port", fake_get_free_port)
+
+    with pytest.raises(_AutoPortPicked):
+        AgentServer(make_agent_app()).serve()
+
+
+@pytest.mark.parametrize("value", ["0", "false", "off", "maybe"])
+def test_auto_port_flag_off_uses_default_port(monkeypatch, value):
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.setenv("AGENTFIELD_AUTO_PORT", value)
+    checked = []
+
+    def fake_is_port_available(port):
+        checked.append(port)
+        raise _AutoPortPicked
+
+    monkeypatch.setattr(
+        "agentfield.agent_server.AgentUtils.is_port_available", fake_is_port_available
+    )
+
+    with pytest.raises(_AutoPortPicked):
+        AgentServer(make_agent_app()).serve()
+    assert checked == [8001]
