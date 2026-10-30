@@ -67,6 +67,98 @@ async def test_execute_with_retry_eventual_success(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retry_after", [10.0, 60.0])
+async def test_execute_with_retry_respects_server_wait(monkeypatch, retry_after):
+    limiter = StatelessRateLimiter(max_retries=1, max_delay=30.0, jitter_factor=0.25)
+    elapsed = 0.0
+    attempts = []
+
+    async def fake_sleep(delay):
+        nonlocal elapsed
+        elapsed += delay
+
+    async def rate_limited_call():
+        attempts.append(elapsed)
+        if len(attempts) == 1:
+            raise DummyHTTPError(retry_after=retry_after)
+        return "ok"
+
+    monkeypatch.setattr("agentfield.rate_limiter.asyncio.sleep", fake_sleep)
+    # Exercise the earliest retry the configured jitter can produce.
+    monkeypatch.setattr(random.Random, "uniform", lambda self, low, high: low)
+
+    assert await limiter.execute_with_retry(rate_limited_call) == "ok"
+    assert len(attempts) == 2
+    assert attempts[1] >= retry_after
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "max_delay, retry_after, jitter_end, expected_wait",
+    [
+        (30.0, 3600.0, "low", 300.0),
+        (30.0, 3600.0, "high", 375.0),
+        (600.0, 500.0, "low", 500.0),
+        (600.0, 3600.0, "low", 600.0),
+    ],
+)
+async def test_execute_with_retry_bounds_server_wait(
+    monkeypatch, max_delay, retry_after, jitter_end, expected_wait
+):
+    limiter = StatelessRateLimiter(
+        max_retries=1, max_delay=max_delay, jitter_factor=0.25
+    )
+    attempts = 0
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    async def rate_limited_call():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise DummyHTTPError(retry_after=retry_after)
+        return "ok"
+
+    monkeypatch.setattr("agentfield.rate_limiter.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(
+        random.Random,
+        "uniform",
+        lambda self, low, high: low if jitter_end == "low" else high,
+    )
+
+    assert await limiter.execute_with_retry(rate_limited_call) == "ok"
+    assert sleeps == [pytest.approx(expected_wait)]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry_after", [-1.0, float("nan"), float("inf")])
+async def test_execute_with_retry_ignores_invalid_server_wait(monkeypatch, retry_after):
+    limiter = StatelessRateLimiter(max_retries=1, base_delay=0.5, jitter_factor=0.0)
+    attempts = 0
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    async def rate_limited_call():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise DummyHTTPError(retry_after=retry_after)
+        return "ok"
+
+    monkeypatch.setattr("agentfield.rate_limiter.asyncio.sleep", fake_sleep)
+
+    assert await limiter.execute_with_retry(rate_limited_call) == "ok"
+    assert sleeps == [0.5]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_execute_with_retry_gives_up(monkeypatch):
     limiter = StatelessRateLimiter(max_retries=1, base_delay=0.01, jitter_factor=0.0)
 

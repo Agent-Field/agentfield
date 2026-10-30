@@ -349,10 +349,10 @@ class HarnessConfig(BaseModel):
     pi_bin: str = Field(default="pi", description="Path to Pi binary.")
     omp_bin: str = Field(default="omp", description="Path to OMP binary.")
     aforge_bin: str = Field(default="aforge", description="Path to aforge binary.")
-    codeaf_bin: Optional[str] = Field(default=None, description="Path to CodeAF binary.")
-    grok_bin: str = Field(
-        default="grok", description="Path to Grok Build CLI binary."
+    codeaf_bin: Optional[str] = Field(
+        default=None, description="Path to CodeAF binary."
     )
+    grok_bin: str = Field(default="grok", description="Path to Grok Build CLI binary.")
     schema_mode: str = Field(
         default="single",
         description=(
@@ -483,7 +483,10 @@ class AIConfig(BaseModel):
     )
     rate_limit_max_delay: float = Field(
         default=30.0,
-        description="Maximum delay for rate limit backoff in seconds.",
+        description=(
+            "Maximum base exponential backoff delay in seconds. A valid Retry-After "
+            "can require a longer wait, up to 5 minutes or this value if larger."
+        ),
     )
     rate_limit_jitter_factor: float = Field(
         default=0.25,
