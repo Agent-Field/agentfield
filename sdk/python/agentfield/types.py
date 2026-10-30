@@ -485,7 +485,7 @@ class AIConfig(BaseModel):
         default=30.0,
         description=(
             "Maximum base exponential backoff delay in seconds. A valid Retry-After "
-            "can require a longer wait."
+            "can require a longer wait, up to 5 minutes or this value if larger."
         ),
     )
     rate_limit_jitter_factor: float = Field(

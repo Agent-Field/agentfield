@@ -8,6 +8,9 @@ from typing import Any, Optional
 from agentfield.logger import log_debug
 
 
+_MAX_RETRY_AFTER_SECONDS = 300.0
+
+
 class RateLimitError(Exception):
     """Custom exception for rate limit errors"""
 
@@ -139,12 +142,12 @@ class StatelessRateLimiter:
         Returns:
             float: Delay in seconds
         """
-        # A server cooldown is a minimum, even when it exceeds the local
+        # Honour server cooldowns up to the ceiling, even above the local
         # exponential-backoff cap. Invalid hints use the normal backoff.
         minimum_delay = 0.0
         if retry_after is not None and math.isfinite(retry_after) and retry_after > 0:
-            base_delay = retry_after
-            minimum_delay = retry_after
+            base_delay = min(retry_after, max(self.max_delay, _MAX_RETRY_AFTER_SECONDS))
+            minimum_delay = base_delay
         else:
             # Exponential backoff: base_delay * (2 ^ attempt)
             base_delay = min(self.base_delay * (2**attempt), self.max_delay)
