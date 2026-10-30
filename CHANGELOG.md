@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.9] - 2026-10-30
+
+
+### Fixed
+
+- Fix(sdk/python): honor numeric Retry-After minimum waits (#1129)
+
+* fix(sdk/python): honor numeric Retry-After waits
+
+* style(sdk/python): normalize config field wrapping
+
+* fix(sdk/python): cap honoured Retry-After waits at five minutes
+
+Treating every finite Retry-After as a minimum let a provider
+suspend each retry indefinitely: a 86400s hint made the default
+five retries sleep five days, with no outer deadline on direct
+Agent.ai calls. Honour hints up to max(rate_limit_max_delay, 300s)
+and clamp anything larger to that ceiling, so jitter still never
+retries before the (capped) cooldown.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (db7d3de)
+
 ## [0.1.146-rc.8] - 2026-10-30
 
 
