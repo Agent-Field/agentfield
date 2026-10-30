@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.7] - 2026-10-30
+
+
+### Fixed
+
+- Fix(sdk/go): request usage on streamed completions from OpenAI endpoints (#1134)
+
+* fix(sdk/go): request usage on streamed completions from OpenAI endpoints
+
+StreamComplete never sent stream_options.include_usage, so against OpenAI
+(and Azure OpenAI) the final chunk carried no usage and streamed calls
+reported no token counts, even though StreamChunk.Usage documents that
+field. Send include_usage on streaming requests to the endpoints that
+already get the max_completion_tokens rewrite (OpenAI, Azure OpenAI,
+OpenRouter); self-hosted servers keep the plain body.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(sdk/go): guard the AIStream example against the usage-only final chunk
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (72a3288)
+
 ## [0.1.146-rc.6] - 2026-10-30
 
 
