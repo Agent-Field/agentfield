@@ -99,6 +99,15 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 		req.Usage = &RequestUsage{Include: true}
 	}
 
+	// OpenAI (and Azure OpenAI, OpenRouter) only report token usage on a
+	// stream when the request opts in with stream_options.include_usage.
+	// Self-hosted OpenAI-compatible servers may reject or drop the field, so
+	// it is limited to the same endpoints as the max_completion_tokens
+	// rewrite. Requests that already set StreamOptions are left alone.
+	if req.Stream && req.StreamOptions == nil && isVouchedRewriteEndpoint(c.config.BaseURL) {
+		req.StreamOptions = &StreamOptions{IncludeUsage: true}
+	}
+
 	model := req.Model
 	if model == "" {
 		model = c.config.Model

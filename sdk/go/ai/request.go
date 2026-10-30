@@ -46,6 +46,16 @@ type Request struct {
 	// object carry the native cost of the call; the client sets it
 	// automatically for OpenRouter requests.
 	Usage *RequestUsage `json:"usage,omitempty"`
+
+	// StreamOptions carries streaming-only options. The client sets
+	// include_usage for streaming requests to endpoints known to accept it
+	// (see isVouchedRewriteEndpoint), so the final chunk reports token usage.
+	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+}
+
+// StreamOptions is the request-body stream_options object (OpenAI shape).
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // RequestUsage is the request-body usage accounting opt-in (OpenRouter shape).
