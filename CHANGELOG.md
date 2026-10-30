@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.5] - 2026-10-30
+
+
+### Fixed
+
+- Fix(python): URL-encode memory subscription filters (#1137)
+
+* fix(python): encode memory event subscription query parameters
+
+* test(control-plane): drain MCP jobs before replacing shared state
+
+* fix(build): format Go packages without recursive overlap
+
+* chore: move validation fixes to focused pull requests (fe6f9cb)
+
 ## [0.1.146-rc.4] - 2026-10-30
 
 
