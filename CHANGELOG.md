@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.8] - 2026-10-30
+
+
+### Documentation
+
+- Docs(examples): list MiniMax M3.1 Flash and M3 as harness_duo model options (#1112)
+
+* fix(examples): use MiniMax M3.1 Flash in the Pi and OMP workflow
+
+* fix(examples): keep MiniMax M2.7 as the harness_duo default
+
+M2.7 still has several live OpenRouter providers, while the
+minimax-m3.1-flash:free route currently has no published endpoint.
+List M3.1 Flash and M3 as HARNESS_MODEL options instead of making
+a single free route the default, and drop the dated availability
+notes. The :free suffix pass-through test stays.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (b43b196)
+
 ## [0.1.146-rc.7] - 2026-10-30
 
 

@@ -197,4 +197,4 @@ __all__ = [
     "reasoner",
 ]
 
-__version__ = "0.1.146-rc.7"
+__version__ = "0.1.146-rc.8"
