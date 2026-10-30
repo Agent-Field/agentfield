@@ -957,6 +957,10 @@ class Agent(FastAPI):
         except Exception as exc:
             log_debug(f"Could not configure LiteLLM observability callbacks: {exc}")
         self.harness_config = harness_config
+        if harness_config is not None:
+            from agentfield.harness.providers.codeaf import warn_codeaf_configuration
+
+            warn_codeaf_configuration(harness_config)
         self.cost_tracker = CostTracker()
         self.memory_config = (
             memory_config

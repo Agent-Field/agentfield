@@ -7,9 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	storagepkg "github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -73,7 +75,7 @@ func TestDIDWebServiceDocumentLifecycleAndResolution(t *testing.T) {
 		require.Equal(t, "example.com", service.GetDomain())
 	})
 
-	t.Run("storage failures and malformed payloads return DID resolution metadata", func(t *testing.T) {
+	t.Run("genuine missing, revoked and malformed records map to resolution metadata; transient errors propagate", func(t *testing.T) {
 		now := time.Now().UTC()
 		service := NewDIDWebService("example.com", nil, &didWebStorageWithErrors{
 			didWebStorageStub: didWebStorageStub{
@@ -95,7 +97,10 @@ func TestDIDWebServiceDocumentLifecycleAndResolution(t *testing.T) {
 					},
 				},
 				errByDID: map[string]error{
-					"did:web:example.com:agents:missing": errors.New("not found"),
+					// A genuine missing record surfaces the storage not-found sentinel.
+					"did:web:example.com:agents:missing": fmt.Errorf("%w: did:web:example.com:agents:missing", storagepkg.ErrDIDDocumentNotFound),
+					// A transient failure is a different, non-sentinel error.
+					"did:web:example.com:agents:flaky": errors.New("connection reset by peer"),
 				},
 			},
 		})
@@ -103,6 +108,13 @@ func TestDIDWebServiceDocumentLifecycleAndResolution(t *testing.T) {
 		missing, err := service.ResolveDID(context.Background(), "did:web:example.com:agents:missing")
 		require.NoError(t, err)
 		require.Equal(t, "notFound", missing.DIDResolutionMetadata.Error)
+
+		// Transient storage errors must not be masked as notFound; they propagate
+		// as a retryable resolution error so the middleware can answer 503.
+		flaky, err := service.ResolveDID(context.Background(), "did:web:example.com:agents:flaky")
+		require.Error(t, err)
+		require.Nil(t, flaky)
+		require.ErrorIs(t, err, ErrDIDResolutionUnavailable)
 
 		revoked, err := service.ResolveDID(context.Background(), "did:web:example.com:agents:revoked")
 		require.NoError(t, err)
@@ -184,7 +196,7 @@ func TestDIDWebServiceGetOrCreateAndRevocationPaths(t *testing.T) {
 					},
 				},
 				errByDID: map[string]error{
-					"did:web:example.com:agents:missing": errors.New("not found"),
+					"did:web:example.com:agents:missing": fmt.Errorf("%w: did:web:example.com:agents:missing", storagepkg.ErrDIDDocumentNotFound),
 					"did:web:example.com:agents:error":   errors.New("database unavailable"),
 				},
 			},

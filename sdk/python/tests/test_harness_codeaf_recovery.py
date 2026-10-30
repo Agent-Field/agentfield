@@ -60,6 +60,8 @@ def isolated_resolution(monkeypatch, tmp_path):
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("AGENTFIELD_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("HOME", str(tmp_path / "user-home"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-codeaf-key")
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(install.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
     monkeypatch.setattr(install.platform, "system", lambda: "Linux")

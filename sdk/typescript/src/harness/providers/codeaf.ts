@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
@@ -6,13 +7,28 @@ import { AforgeProvider } from './aforge.js';
 import type { FailureType, RawResult } from '../types.js';
 import { createMetrics, createRawResult } from '../types.js';
 import { markProviderCommand, runCli } from '../cli.js';
-import { findExecutable, HarnessProviderUnavailable, providerUnavailable } from '../availability.js';
+import { findExecutable, HarnessProviderNotConfigured, HarnessProviderUnavailable, providerUnavailable } from '../availability.js';
 import { agentfieldHome, codeafStateHome, ensureCodeafInstalled, findManagedCodeaf, isTruthy } from '../codeafInstall.js';
 import { resolveModelAndVariant } from '../modelVariant.js';
+import { resolveExecutionProvider } from './factory.js';
+import type { HarnessConfig } from '../types.js';
 
 export const CODEAF_DEFAULT_MODEL = '~deepseek/deepseek-v4-flash-latest';
 const REASONING_VARIANTS = new Set(['off', 'low', 'medium', 'high']);
 const ANSI_PATTERN = /\x1B\[[0-?]*[ -/]*[@-~]/g;
+export const CODEAF_MISSING_KEY_WARNING = 'CodeAF is the harness provider and no model key is configured, so harness calls will fail. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.';
+let missingKeyWarned = false;
+
+export function resetCodeafAuthWarnings(): void {
+  missingKeyWarned = false;
+}
+
+function warnMissingKeyOnce(): void {
+  if (!missingKeyWarned) {
+    missingKeyWarned = true;
+    console.warn(CODEAF_MISSING_KEY_WARNING);
+  }
+}
 
 export function resolveCodeafMaxConcurrent(): number {
   const value = process.env.CODEAF_MAX_CONCURRENT ?? process.env.AFORGE_MAX_CONCURRENT;
@@ -191,6 +207,63 @@ function childEnvironment(options: Record<string, unknown>, variant: string | un
   return { ...env, ...overlay };
 }
 
+function hasModelKey(env: NodeJS.ProcessEnv): boolean {
+  const value = (...names: string[]): string => names.map((name) => env[name]?.trim() ?? '').find(Boolean) ?? '';
+  if (value('OPENROUTER_API_KEY')) return true;
+  const key = value('OPENAI_API_KEY');
+  const base = value('CODEAF_BASE_URL', 'AFORGE_BASE_URL');
+  if (key) {
+    if (key.startsWith('sk-or-')) return true;
+    if (base) {
+      try {
+        const address = base.includes('://') ? base : `https://${base.replace(/^\/\//, '')}`;
+        const host = new URL(address).hostname.toLowerCase().replace(/\.$/, '').replace(/^www\./, '');
+        if (host !== 'openrouter.ai') return true;
+      } catch {
+        return true;
+      }
+    }
+  }
+  const names = ['CODEAF_PROFILE_DIR', 'AFORGE_PROFILE_DIR', 'CODEAF_HOME', 'AFORGE_HOME'];
+  // CodeAF reads a whitespace-only spelling differently from an unset one, and with every
+  // spelling empty it falls back to HOME, a legacy ~/.aforge or a relative directory.
+  // Neither can be seen reliably from here, so the call is allowed.
+  if (names.some((name) => Boolean(env[name]) && !env[name]?.trim())) return true;
+  const profile = value(...names);
+  if (!profile) return true;
+  for (const filename of ['credentials.json', 'codex.json']) {
+    try {
+      fs.statSync(path.join(profile, filename));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true;
+    }
+  }
+  let config: unknown;
+  try {
+    config = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) return true;
+  const { api_key: savedKey, model_sources: sources } = config as Record<string, unknown>;
+  return (typeof savedKey === 'string' && Boolean(savedKey.trim()))
+    || (sources !== null && typeof sources === 'object' && Object.keys(sources).length > 0);
+}
+
+export function warnCodeafConfiguration(config: HarnessConfig): void {
+  try {
+    const provider = resolveExecutionProvider(config);
+    if (provider !== 'codeaf' && provider !== 'aforge') return;
+    if (provider === 'aforge' && (config.aforgeBin !== undefined || process.env.AFORGE_BIN?.trim())) return;
+    if (!hasModelKey({ ...process.env, ...childEnvironment({ env: config.env }, undefined) })) {
+      warnMissingKeyOnce();
+    }
+  } catch {
+    // Agent construction must not fail over a warning.
+  }
+}
+
 /** Canonical CodeAF headless adapter, with lazy managed installation and legacy fallback. */
 export class CodeafProvider implements HarnessProvider {
   public constructor(private readonly bin?: string, private readonly alias = false) {}
@@ -199,6 +272,10 @@ export class CodeafProvider implements HarnessProvider {
     const legacyPin = this.alias ? process.env.AFORGE_BIN?.trim() : undefined;
     if (legacyPin) {
       return { ...await new AforgeProvider(legacyPin).execute(prompt, options), provider: 'aforge' };
+    }
+    if (!hasModelKey({ ...process.env, ...childEnvironment(options, undefined) })) {
+      warnMissingKeyOnce();
+      throw new HarnessProviderNotConfigured(this.bin || process.env.CODEAF_BIN || 'codeaf');
     }
     const started = performance.now();
     const parsedTimeout = Number.parseInt(process.env.AGENTFIELD_HARNESS_TIMEOUT_SECONDS ?? '', 10);

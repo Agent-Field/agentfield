@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Union
+from urllib.parse import urlencode
 
 import websockets
 
@@ -30,8 +31,8 @@ class PatternMatcher:
         Returns:
             True if key matches pattern, False otherwise
         """
-        # Convert wildcard pattern to regex
-        regex_pattern = pattern.replace("*", ".*")
+        # Only * is a wildcard; other key characters are literal.
+        regex_pattern = re.escape(pattern).replace(r"\*", ".*")
         regex_pattern = f"^{regex_pattern}$"
 
         try:
@@ -152,16 +153,16 @@ class MemoryEventClient:
                 ws_url = f"{self.base_url}/api/v1/memory/events/ws"
 
                 # Add query parameters for server-side filtering
-                query_params = []
+                query_params = {}
                 if patterns:
-                    query_params.append(f"patterns={','.join(patterns)}")
+                    query_params["patterns"] = ",".join(patterns)
                 if scope:
-                    query_params.append(f"scope={scope}")
+                    query_params["scope"] = scope
                 if scope_id:
-                    query_params.append(f"scope_id={scope_id}")
+                    query_params["scope_id"] = scope_id
 
                 if query_params:
-                    ws_url += "?" + "&".join(query_params)
+                    ws_url += "?" + urlencode(query_params)
 
                 self.websocket = await asyncio.wait_for(
                     websockets.connect(ws_url, **{_HEADERS_KWARG: headers}),

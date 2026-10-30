@@ -47,6 +47,8 @@ def local_release(monkeypatch, tmp_path, caplog):
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("AGENTFIELD_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("HOME", str(tmp_path / "user-home"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-codeaf-key")
     monkeypatch.setenv(
         "AGENTFIELD_CODEAF_BASE_URL", f"http://127.0.0.1:{server.server_port}/v0.8.2/"
     )

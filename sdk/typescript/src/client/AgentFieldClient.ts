@@ -367,7 +367,7 @@ export class AgentFieldClient {
     void request;
   }
 
-  async updateExecutionStatus(executionId: string, update: ExecutionStatusUpdate) {
+  async updateExecutionStatus(executionId: string, update: ExecutionStatusUpdate, maxRetries = 5) {
     if (!executionId) {
       throw new Error('executionId is required to update workflow status');
     }
@@ -381,11 +381,38 @@ export class AgentFieldClient {
       status_reason: update.statusReason
     };
 
-    const bodyStr = JSON.stringify(payload);
-    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
-    await this.http.post(`/api/v1/executions/${executionId}/status`, bodyStr, {
-      headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders })
-    });
+    await this.postExecutionStatus(executionId, JSON.stringify(payload), maxRetries);
+  }
+
+  /**
+   * POST a status update, matching the Go SDK's postExecutionStatus: retry
+   * transport errors, 408, 429 and 5xx with 1s, 2s, 4s, 8s backoff; any other
+   * status (e.g. 404 unknown execution, 409 terminal-status conflict) will not
+   * change on a resend, so it fails fast. Throws the last error on failure.
+   */
+  private async postExecutionStatus(executionId: string, bodyStr: string, maxRetries: number): Promise<void> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // Sign per attempt so each retry carries a fresh DID timestamp/nonce.
+      const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
+      try {
+        await this.http.post(`/api/v1/executions/${encodeURIComponent(executionId)}/status`, bodyStr, {
+          headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders }),
+          timeout: 30000
+        });
+        return;
+      } catch (err) {
+        lastErr = err;
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        if (status !== undefined && !isRetryableStatus(status)) {
+          throw err;
+        }
+      }
+      if (attempt < maxRetries - 1) {
+        await sleep(2 ** attempt * 1000);
+      }
+    }
+    throw lastErr;
   }
 
   /** Build the `X-*` dispatch headers shared by execute / executeAsync. */
@@ -632,30 +659,12 @@ export class AgentFieldClient {
     if (payload.errorDetails !== undefined) body.error_details = payload.errorDetails;
     if (payload.usage !== undefined) body.usage = payload.usage;
 
-    const bodyStr = JSON.stringify(body);
-    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
-
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const res = await this.http.post(
-          `/api/v1/executions/${encodeURIComponent(executionId)}/status`,
-          bodyStr,
-          {
-            headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders }),
-            timeout: 30000
-          }
-        );
-        if (res.status >= 200 && res.status < 300) {
-          return true;
-        }
-      } catch {
-        // fall through to backoff/retry
-      }
-      if (attempt < maxRetries - 1) {
-        await sleep(2 ** attempt * 1000);
-      }
+    try {
+      await this.postExecutionStatus(executionId, JSON.stringify(body), maxRetries);
+      return true;
+    } catch {
+      return false;
     }
-    return false;
   }
 
   async discoverCapabilities(options: DiscoveryOptions = {}): Promise<DiscoveryResult> {
@@ -884,6 +893,11 @@ export class AgentFieldClient {
       .catch(() => {});
     void request;
   }
+}
+
+/** Statuses worth resending a status callback for (Go `isTransientPollStatus`). */
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
 }
 
 function sleep(ms: number): Promise<void> {

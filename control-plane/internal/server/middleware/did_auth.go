@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/gin-gonic/gin"
 )
 
@@ -281,6 +283,14 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 		)
 
 		if err != nil {
+			if errors.Is(err, services.ErrDIDResolutionUnavailable) {
+				logger.Logger.Warn().Err(err).Str("caller_did", callerDID).Msg("DID resolution temporarily unavailable")
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+					"error":   "did_resolution_unavailable",
+					"message": "DID resolution is temporarily unavailable, retry shortly",
+				})
+				return
+			}
 			logger.Logger.Warn().Err(err).Str("caller_did", callerDID).Msg("DID signature verification error")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error":   "verification_error",

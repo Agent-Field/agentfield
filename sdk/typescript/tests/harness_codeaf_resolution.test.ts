@@ -68,6 +68,8 @@ beforeEach(() => {
     'AFORGE_MODELS', 'AFORGE_MODEL', 'CODEAF_MODEL', 'CI', 'DO_NOT_TRACK', 'AGENTFIELD_TELEMETRY_ENABLED', 'HTTPS_PROXY', 'https_proxy',
   ]) vi.stubEnv(name, undefined);
   vi.stubEnv('AGENTFIELD_HOME', path.join(directory, 'home'));
+  vi.stubEnv('HOME', path.join(directory, 'user-home'));
+  vi.stubEnv('OPENROUTER_API_KEY', 'test-codeaf-key');
   vi.stubEnv('PATH', binDirectory);
   vi.stubEnv('AGENTFIELD_SKIP_CODEAF', 'true');
   vi.stubEnv('AGENTFIELD_SKIP_AFORGE', '');

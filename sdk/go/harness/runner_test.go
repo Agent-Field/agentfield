@@ -38,6 +38,9 @@ func TestRunner_Run_NoSchema(t *testing.T) {
 
 	// We can't easily test with real providers, so test the merge/validation logic
 	t.Run("empty provider defaults to codeaf", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "test-codeaf-key")
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("AGENTFIELD_HOME", t.TempDir())
 		t.Setenv(ProviderEnvVar, "")
 		t.Setenv("AFORGE_BIN", "")
 		t.Setenv("CODEAF_BIN", filepath.Join(t.TempDir(), "missing-codeaf"))

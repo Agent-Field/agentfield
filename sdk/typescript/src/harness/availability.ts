@@ -92,6 +92,8 @@ export interface ProviderHealth {
   issues: readonly string[];
 }
 
+export const CODEAF_MISSING_KEY_MESSAGE = "Harness provider 'codeaf' needs a model key and none is configured. Set OPENROUTER_API_KEY (https://openrouter.ai/keys), or choose another harness provider with the provider option or AGENTFIELD_HARNESS_PROVIDER.";
+
 export class HarnessProviderUnavailable extends Error {
   public readonly provider: string;
   public readonly binary: string;
@@ -119,6 +121,16 @@ export class HarnessProviderUnavailable extends Error {
     this.binary = options.binary;
     this.installCommand = options.installCommand;
     this.missingAuthEnv = missingAuthEnv;
+  }
+}
+
+export class HarnessProviderNotConfigured extends HarnessProviderUnavailable {
+  public constructor(binary: string) {
+    super('codeaf', {
+      binary, installCommand: 'af codeaf ensure', missingAuthEnv: ['OPENROUTER_API_KEY'],
+    });
+    this.name = 'HarnessProviderNotConfigured';
+    this.message = CODEAF_MISSING_KEY_MESSAGE;
   }
 }
 

@@ -21,6 +21,8 @@ import (
 func isolateCodeAF(t *testing.T) {
 	t.Helper()
 	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OPENROUTER_API_KEY", "test-codeaf-key")
 	t.Setenv("TMPDIR", t.TempDir())
 	for _, key := range []string{"CODEAF_BIN", "AFORGE_BIN", "AGENTFIELD_AFORGE_COMMAND", "AGENTFIELD_CODEAF_COMMAND", "AGENTFIELD_SKIP_AFORGE", "CODEAF_HOME", "CODEAF_NO_UPDATE_CHECK", "CODEAF_TELEMETRY", "CI", "DO_NOT_TRACK", "AGENTFIELD_TELEMETRY_ENABLED"} {
 		t.Setenv(key, "")

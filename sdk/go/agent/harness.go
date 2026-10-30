@@ -6,6 +6,16 @@ import (
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 )
 
+func warnCodeAFConfiguration(cfg Config) {
+	if cfg.HarnessConfig == nil {
+		return
+	}
+	provider, _ := harness.BuildProvider(cfg.HarnessConfig.Provider, cfg.HarnessConfig.BinPath)
+	if _, ok := provider.(*harness.CodeAFProvider); ok && !harness.CodeAFHasCredentials(harness.Options{Env: cfg.HarnessConfig.Env}) {
+		harness.WarnCodeAFMissingKeyOnce(func(message string) { cfg.Logger.Print("WARNING " + message) })
+	}
+}
+
 // harness.go integrates the harness package with the Agent struct,
 // providing lazy initialization and a convenience Harness() method.
 // HarnessConfig configures the default harness runner for the agent.

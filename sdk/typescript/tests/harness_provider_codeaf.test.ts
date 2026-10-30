@@ -25,6 +25,8 @@ beforeEach(() => {
     'AFORGE_MAX_CONCURRENT', 'AFORGE_MODEL', 'CODEAF_MODEL', 'AGENTFIELD_AFORGE_COMMAND',
   ]) vi.stubEnv(name, undefined);
   vi.stubEnv('AGENTFIELD_HOME', directory);
+  vi.stubEnv('HOME', path.join(directory, 'user-home'));
+  vi.stubEnv('OPENROUTER_API_KEY', 'test-codeaf-key');
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   vi.spyOn(cli, 'runCli').mockResolvedValue({ stdout: envelope(), stderr: '', exitCode: 0 });
 });
