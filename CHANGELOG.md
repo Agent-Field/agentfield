@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.6] - 2026-10-30
+
+
+### Chores
+
+- Chore(deps): bump msgpack (#1138)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [msgpack](https://github.com/msgpack/msgpack-python).
+
+
+Updates `msgpack` from 1.2.1 to 1.2.3
+- [Release notes](https://github.com/msgpack/msgpack-python/releases)
+- [Changelog](https://github.com/msgpack/msgpack-python/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/msgpack/msgpack-python/compare/v1.2.1...v1.2.3)
+
+---
+updated-dependencies:
+- dependency-name: msgpack
+  dependency-version: 1.2.3
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (ac45612)
+
 ## [0.1.146-rc.5] - 2026-10-30
 
 
