@@ -314,8 +314,10 @@ per-call `Agent.harness(..., variant=...)` value overrides the configured
 default. Per provider:
 
 Pi and OMP accept the same OpenRouter model strings in every SDK, for example
-`openrouter/minimax/minimax-m2.7` or
-`openrouter/google/gemini-2.5-flash#low`.
+`openrouter/minimax/minimax-m2.7` (the `harness_duo` default),
+`openrouter/minimax/minimax-m3.1-flash`, or
+`openrouter/google/gemini-2.5-flash#low`. Route suffixes such as `:free` are
+passed through unchanged.
 
 | Provider | Model flag | Variant handling |
 | --- | --- | --- |

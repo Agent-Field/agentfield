@@ -99,6 +99,25 @@ func TestPiFamilyCommandAndMetrics(t *testing.T) {
 	}
 }
 
+func TestPiFamilyPreservesOpenRouterFreeSuffix(t *testing.T) {
+	const model = "openrouter/minimax/minimax-m3.1-flash:free"
+	for _, flavor := range []piFlavor{piFlavorPi, piFlavorOMP} {
+		t.Run(string(flavor), func(t *testing.T) {
+			provider := &piFamilyProvider{BinPath: string(flavor), flavor: flavor}
+			var gotCmd []string
+			provider.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, _ []byte) (*CLIResult, error) {
+				gotCmd = append([]string(nil), cmd...)
+				return &CLIResult{Stdout: piEventStream}, nil
+			}
+			raw, err := provider.execute(context.Background(), "inspect", Options{Model: model})
+			require.NoError(t, err)
+			assertFlagValue(t, gotCmd, "--model", model)
+			assert.NotContains(t, gotCmd, "--thinking")
+			assert.Equal(t, model, raw.Metrics.Model)
+		})
+	}
+}
+
 func TestPiConfiguredModelOverridesReportedModel(t *testing.T) {
 	provider := NewPiProvider("pi")
 	provider.runCLI = func(context.Context, []string, map[string]string, string, int, []byte) (*CLIResult, error) {
