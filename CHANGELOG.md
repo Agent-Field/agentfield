@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.4] - 2026-10-30
+
+
+### Fixed
+
+- Fix(build): format Go packages without recursive overlap (#1141) (5fd106c)
+
+
+
+### Testing
+
+- Test(control-plane): drain MCP jobs before replacing shared state (#1140) (9960fbd)
+
 ## [0.1.146-rc.3] - 2026-10-29
 
 
