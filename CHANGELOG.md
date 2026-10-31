@@ -6,6 +6,172 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.10] - 2026-10-31
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 6 directories with 7 updates (#1139)
+
+* chore(deps): bump the npm_and_yarn group across 6 directories with 7 updates
+
+Bumps the npm_and_yarn group with 2 updates in the /control-plane/web/client directory: [zod](https://github.com/colinhacks/zod) and [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite).
+Bumps the npm_and_yarn group with 3 updates in the /desktop directory: [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite), [@vitest/mocker](https://github.com/vitest-dev/vitest/tree/HEAD/packages/mocker) and [electron](https://github.com/electron/electron).
+Bumps the npm_and_yarn group with 3 updates in the /examples/benchmarks/100k-scale/mastra-bench directory: [zod](https://github.com/colinhacks/zod), [undici](https://github.com/nodejs/undici) and [ip-address](https://github.com/beaugunderson/ip-address).
+Bumps the npm_and_yarn group with 1 update in the /examples/python_agent_nodes/rag_evaluation/ui directory: [next](https://github.com/vercel/next.js).
+Bumps the npm_and_yarn group with 1 update in the /examples/ts-node-examples/init-example directory: [zod](https://github.com/colinhacks/zod).
+Bumps the npm_and_yarn group with 4 updates in the /sdk/typescript directory: [zod](https://github.com/colinhacks/zod), [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite), [undici](https://github.com/nodejs/undici) and [ip-address](https://github.com/beaugunderson/ip-address).
+
+
+Updates `zod` from 4.1.12 to 4.6.6
+- [Release notes](https://github.com/colinhacks/zod/releases)
+- [Commits](https://github.com/colinhacks/zod/compare/v4.1.12...v4.6.6)
+
+Updates `vite` from 8.0.16 to 8.3.5
+- [Release notes](https://github.com/vitejs/vite/releases)
+- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)
+- [Commits](https://github.com/vitejs/vite/commits/v8.3.5/packages/vite)
+
+Updates `vite` from 6.4.3 to 6.4.5
+- [Release notes](https://github.com/vitejs/vite/releases)
+- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)
+- [Commits](https://github.com/vitejs/vite/commits/v8.3.5/packages/vite)
+
+Updates `@vitest/mocker` from 4.1.11 to 4.1.12
+- [Release notes](https://github.com/vitest-dev/vitest/releases)
+- [Changelog](https://github.com/vitest-dev/vitest/blob/main/docs/releases.md)
+- [Commits](https://github.com/vitest-dev/vitest/commits/v4.1.12/packages/mocker)
+
+Updates `electron` from 42.10.0 to 42.11.16
+- [Release notes](https://github.com/electron/electron/releases)
+- [Commits](https://github.com/electron/electron/compare/v42.10.0...v42.11.16)
+
+Updates `zod` from 3.25.76 to 4.6.7
+- [Release notes](https://github.com/colinhacks/zod/releases)
+- [Commits](https://github.com/colinhacks/zod/compare/v4.1.12...v4.6.6)
+
+Updates `zod` from 4.4.3 to 4.6.7
+- [Release notes](https://github.com/colinhacks/zod/releases)
+- [Commits](https://github.com/colinhacks/zod/compare/v4.1.12...v4.6.6)
+
+Updates `undici` from 6.29.0 to 6.29.1
+- [Release notes](https://github.com/nodejs/undici/releases)
+- [Commits](https://github.com/nodejs/undici/compare/v6.29.0...v6.29.1)
+
+Updates `ip-address` from 10.7.2 to 10.7.5
+- [Release notes](https://github.com/beaugunderson/ip-address/releases)
+- [Commits](https://github.com/beaugunderson/ip-address/compare/v10.7.2...v10.7.5)
+
+Updates `next` from 15.5.27 to 15.5.28
+- [Release notes](https://github.com/vercel/next.js/releases)
+- [Commits](https://github.com/vercel/next.js/compare/v15.5.27...v15.5.28)
+
+Updates `zod` from 3.25.76 to 4.6.7
+- [Release notes](https://github.com/colinhacks/zod/releases)
+- [Commits](https://github.com/colinhacks/zod/compare/v4.1.12...v4.6.6)
+
+Updates `zod` from 3.25.76 to 4.6.7
+- [Release notes](https://github.com/colinhacks/zod/releases)
+- [Commits](https://github.com/colinhacks/zod/compare/v4.1.12...v4.6.6)
+
+Updates `vite` from 8.0.16 to 8.3.5
+- [Release notes](https://github.com/vitejs/vite/releases)
+- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)
+- [Commits](https://github.com/vitejs/vite/commits/v8.3.5/packages/vite)
+
+Updates `undici` from 6.29.0 to 6.29.1
+- [Release notes](https://github.com/nodejs/undici/releases)
+- [Commits](https://github.com/nodejs/undici/compare/v6.29.0...v6.29.1)
+
+Updates `ip-address` from 10.7.2 to 10.7.5
+- [Release notes](https://github.com/beaugunderson/ip-address/releases)
+- [Commits](https://github.com/beaugunderson/ip-address/compare/v10.7.2...v10.7.5)
+
+---
+updated-dependencies:
+- dependency-name: zod
+  dependency-version: 4.6.6
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+- dependency-name: vite
+  dependency-version: 8.3.5
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: vite
+  dependency-version: 6.4.5
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: "@vitest/mocker"
+  dependency-version: 4.1.12
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: electron
+  dependency-version: 42.11.16
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: zod
+  dependency-version: 4.6.7
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+- dependency-name: zod
+  dependency-version: 4.6.7
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: undici
+  dependency-version: 6.29.1
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: ip-address
+  dependency-version: 10.7.5
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: next
+  dependency-version: 15.5.28
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+- dependency-name: zod
+  dependency-version: 4.6.7
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+- dependency-name: zod
+  dependency-version: 4.6.7
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+- dependency-name: vite
+  dependency-version: 8.3.5
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: undici
+  dependency-version: 6.29.1
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: ip-address
+  dependency-version: 10.7.5
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+* fix(sdk/typescript): type schemas against zod 4 after the zod bump
+
+zod 4 no longer exports ZodTypeDef, so the DTS build failed on the
+ZodSchema alias. Type it as a zod 4 ZodType, and keep zod 3 schemas
+assignable so apps that still pin zod 3 keep compiling. The legacy
+zod-to-json-schema path now takes its ZodType from zod/v3.
+
+Adds tests for converting a zod/v3 schema and for result-type
+inference through ai.generate and ctx.ai with both zod flavours.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (799ffc0)
+
 ## [0.1.146-rc.9] - 2026-10-30
 
 
