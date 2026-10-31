@@ -123,7 +123,7 @@ async def test_subscribe_on_change_close_and_scoped_client(monkeypatch, executio
     def fake_create_task(coro):
         scheduled.append(coro)
         coro.close()
-        return SimpleNamespace()
+        return asyncio.get_running_loop().create_future()
 
     monkeypatch.setattr("agentfield.memory_events.asyncio.create_task", fake_create_task)
 
