@@ -15,6 +15,7 @@ import { createXai } from '@ai-sdk/xai';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createCohere } from '@ai-sdk/cohere';
 import type { z } from 'zod';
+import type { ZodType as ZodV3Type } from 'zod/v3';
 import type { AIConfig } from '../types/agent.js';
 import { StatelessRateLimiter } from './RateLimiter.js';
 import {
@@ -31,7 +32,8 @@ import {
   type MultimodalContent,
 } from './multimodal.js';
 
-export type ZodSchema<T> = z.Schema<T, z.ZodTypeDef, any>;
+// zod 4 schemas, plus zod 3 schemas from apps that still pin zod 3.
+export type ZodSchema<T> = z.ZodType<T, any> | ZodV3Type<T, any, any>;
 
 /**
  * Attempts to repair malformed JSON text from model responses.

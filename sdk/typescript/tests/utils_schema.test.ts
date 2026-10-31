@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
 import { z } from 'zod';
+import { z as z3 } from 'zod/v3';
 import * as z4 from 'zod/v4';
 
+import type { AIClient, AIRequestOptions, ReasonerContext, ZodSchema } from '../src/index.js';
 import { toJsonSchema } from '../src/utils/schema.js';
 
 describe('toJsonSchema', () => {
@@ -32,6 +34,37 @@ describe('toJsonSchema', () => {
       required: ['name'],
       additionalProperties: false,
     });
+  });
+
+  it('converts zod 3 objects with the legacy converter', () => {
+    expect(toJsonSchema(z3.object({ name: z3.string(), count: z3.number().optional() }))).toEqual({
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        count: { type: 'number' },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    });
+  });
+
+  it('preserves zod 4 output inference through the public API', () => {
+    const schema = z.object({ a: z.string() });
+    const generate = (ai: AIClient) => ai.generate('prompt', { schema });
+    const contextAi = (context: ReasonerContext) => context.ai('prompt', { schema });
+
+    expectTypeOf(schema).toExtend<ZodSchema<{ a: string }>>();
+    expectTypeOf({ schema }).toExtend<AIRequestOptions>();
+    expectTypeOf(generate).returns.toEqualTypeOf<Promise<{ a: string }>>();
+    expectTypeOf(contextAi).returns.toEqualTypeOf<Promise<{ a: string }>>();
+  });
+
+  it('keeps zod 3 schemas assignable through the public API', () => {
+    const schema = z3.object({ a: z3.string() });
+    const generate = (ai: AIClient) => ai.generate('prompt', { schema });
+
+    expectTypeOf(schema).toExtend<ZodSchema<{ a: string }>>();
+    expectTypeOf(generate).returns.toEqualTypeOf<Promise<{ a: string }>>();
   });
 
   it('returns plain json schema objects unchanged', () => {

@@ -10,7 +10,7 @@
     "dependencies": {
         "@agentfield/sdk": "^0.1.36",
         "dotenv": "^16.4.5",
-        "zod": "^3.22.4"
+        "zod": "^4.6.7"
     },
     "devDependencies": {
         "tsx": "^4.19.2",

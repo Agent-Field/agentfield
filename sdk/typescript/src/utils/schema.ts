@@ -1,5 +1,5 @@
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import type { ZodType } from 'zod';
+import type { ZodType } from 'zod/v3';
 import { isZod4Schema, zod4ToJsonSchema } from './zod-schema.js';
 
 /**
