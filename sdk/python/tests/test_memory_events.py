@@ -73,7 +73,6 @@ async def test_memory_event_client_dispatches_literal_key_patterns(
     client = MemoryEventClient("http://agentfield", ctx)
     incoming = asyncio.Queue()
     handled = asyncio.Event()
-    listener_closed = asyncio.Event()
     received = []
 
     class DummyWebSocket:
@@ -82,7 +81,6 @@ async def test_memory_event_client_dispatches_literal_key_patterns(
         async def recv(self):
             message = await incoming.get()
             if message is None:
-                listener_closed.set()
                 return json.dumps({"scope": "global", "key": "closed", "action": "set"})
             return message
 
@@ -116,7 +114,7 @@ async def test_memory_event_client_dispatches_literal_key_patterns(
         assert received == [matching_key]
     finally:
         await client.close()
-        await asyncio.wait_for(listener_closed.wait(), timeout=1)
+        assert not websocket.open
 
 
 @pytest.mark.asyncio
@@ -225,6 +223,282 @@ def test_websockets_version_detection():
         assert _HEADERS_KWARG == "additional_headers"
     else:
         assert _HEADERS_KWARG == "extra_headers"
+
+
+@pytest.mark.asyncio
+async def test_close_does_not_reconnect_after_listener_receives_close(monkeypatch):
+    client = MemoryEventClient(
+        "http://agentfield", SimpleNamespace(to_headers=lambda: {})
+    )
+    client._reconnect_delay = 0
+    sockets = []
+    tasks = []
+    create_task = asyncio.create_task
+
+    class Socket:
+        open = True
+
+        def __init__(self):
+            self.receiving = asyncio.Event()
+            self.closed = asyncio.Event()
+
+        async def recv(self):
+            self.receiving.set()
+            await self.closed.wait()
+            raise websockets.exceptions.ConnectionClosedOK(None, None)
+
+        async def close(self):
+            self.open = False
+            self.closed.set()
+
+    async def connect(url, **kwargs):
+        socket = Socket()
+        sockets.append(socket)
+        return socket
+
+    def capture_task(coro, *args, **kwargs):
+        task = create_task(coro, *args, **kwargs)
+        tasks.append(task)
+        return task
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", connect)
+    monkeypatch.setattr(asyncio, "create_task", capture_task)
+    try:
+        await client.connect()
+        await asyncio.wait_for(sockets[0].receiving.wait(), timeout=1)
+        listener = tasks[0]
+
+        await client.close()
+        await asyncio.wait_for(
+            asyncio.gather(listener, return_exceptions=True), timeout=1
+        )
+
+        assert len(sockets) == 1
+        assert sockets[0].closed.is_set()
+        assert client.websocket is None
+        assert not client.is_listening
+    finally:
+        for socket in sockets:
+            await socket.close()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_close_discards_connection_that_finishes_after_shutdown(monkeypatch):
+    client = MemoryEventClient(
+        "http://agentfield", SimpleNamespace(to_headers=lambda: {})
+    )
+    connecting = asyncio.Event()
+    release = asyncio.Event()
+    closed = asyncio.Event()
+
+    class Socket:
+        open = True
+
+        async def recv(self):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            self.open = False
+            closed.set()
+
+    async def connect(url, **kwargs):
+        connecting.set()
+        await release.wait()
+        return Socket()
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", connect)
+    pending = asyncio.create_task(client.connect())
+    try:
+        await asyncio.wait_for(connecting.wait(), timeout=1)
+        await client.close()
+        release.set()
+        await asyncio.wait_for(pending, timeout=1)
+
+        assert closed.is_set()
+        assert client.websocket is None
+        assert not client.is_listening
+    finally:
+        release.set()
+        await pending
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_close_discards_connection_queued_behind_inflight_connect(monkeypatch):
+    client = MemoryEventClient(
+        "http://agentfield", SimpleNamespace(to_headers=lambda: {})
+    )
+    connecting = asyncio.Event()
+    queued = asyncio.Event()
+    release = asyncio.Event()
+    attempts = []
+
+    class Socket:
+        open = True
+
+        async def recv(self):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            self.open = False
+
+    async def connect(url, **kwargs):
+        socket = Socket()
+        attempts.append(socket)
+        connecting.set()
+        await release.wait()
+        return socket
+
+    async def connect_again():
+        queued.set()
+        await client.connect()
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", connect)
+    pending = [asyncio.create_task(client.connect())]
+    try:
+        await asyncio.wait_for(connecting.wait(), timeout=1)
+        pending.append(asyncio.create_task(connect_again()))
+        await asyncio.wait_for(queued.wait(), timeout=1)
+
+        await client.close()
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*pending), timeout=1)
+
+        assert len(attempts) == 1
+        assert not attempts[0].open
+        assert client.websocket is None
+        assert not client.is_listening
+    finally:
+        release.set()
+        await asyncio.gather(*pending, return_exceptions=True)
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_retry_backoff(monkeypatch):
+    client = MemoryEventClient(
+        "http://agentfield", SimpleNamespace(to_headers=lambda: {})
+    )
+    sleeping = asyncio.Event()
+    stopped = asyncio.Event()
+    release = asyncio.Event()
+    attempts = []
+
+    async def connect(url, **kwargs):
+        attempts.append(url)
+        raise ConnectionRefusedError("offline")
+
+    async def sleep(delay):
+        sleeping.set()
+        try:
+            await release.wait()
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", connect)
+    monkeypatch.setattr("agentfield.memory_events.asyncio.sleep", sleep)
+    try:
+        await client.connect()
+        await asyncio.wait_for(sleeping.wait(), timeout=1)
+
+        await client.close()
+
+        assert stopped.is_set()
+        assert len(attempts) == 1
+        assert client.websocket is None
+    finally:
+        release.set()
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_close_still_closes_transport(monkeypatch):
+    client = MemoryEventClient(
+        "http://agentfield", SimpleNamespace(to_headers=lambda: {})
+    )
+    receiving = asyncio.Event()
+    stopping = asyncio.Event()
+    release = asyncio.Event()
+    closed = asyncio.Event()
+
+    class Socket:
+        open = True
+
+        async def recv(self):
+            receiving.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopping.set()
+                await release.wait()
+
+        async def close(self):
+            self.open = False
+            closed.set()
+
+    socket = Socket()
+
+    async def connect(url, **kwargs):
+        return socket
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", connect)
+    await client.connect()
+    await asyncio.wait_for(receiving.wait(), timeout=1)
+    closing = asyncio.create_task(client.close())
+    try:
+        await asyncio.wait_for(stopping.wait(), timeout=1)
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+
+        assert closed.is_set()
+    finally:
+        release.set()
+        if not closing.done():
+            closing.cancel()
+        await asyncio.gather(closing, return_exceptions=True)
+        await client.close()
+        await socket.close()
+
+
+@pytest.mark.asyncio
+async def test_client_can_explicitly_reconnect_after_close():
+    received = []
+    events = asyncio.Queue()
+    connections = 0
+
+    async def handler(socket, path=None):
+        nonlocal connections
+        connections += 1
+        await socket.send(
+            json.dumps(
+                {"scope": "global", "key": f"connection.{connections}", "action": "set"}
+            )
+        )
+        await socket.wait_closed()
+
+    async def callback(event):
+        received.append(event.key)
+        events.put_nowait(event.key)
+
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        client = MemoryEventClient(
+            f"http://127.0.0.1:{port}", SimpleNamespace(to_headers=lambda: {})
+        )
+        try:
+            for key in ("connection.1", "connection.2"):
+                await client.connect()
+                client.subscribe("connection.*", callback)
+                assert await asyncio.wait_for(events.get(), timeout=1) == key
+                await client.close()
+        finally:
+            await client.close()
+
+    assert received == ["connection.1", "connection.2"]
 
 
 @pytest.mark.asyncio

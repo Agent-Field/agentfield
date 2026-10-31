@@ -3,7 +3,7 @@ import json
 import re
 from datetime import datetime
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Union
 from urllib.parse import urlencode
 
 import websockets
@@ -103,6 +103,13 @@ class MemoryEventClient:
         self._max_reconnect_attempts = 5
         self._reconnect_delay = 1.0
         self._connect_timeout = 5.0  # Timeout for initial connection attempt
+        self._background_tasks: Set[asyncio.Task] = set()
+        self._connection_generation = 0
+
+    def _start_background_task(self, coroutine: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(coroutine)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def _is_connected(self) -> bool:
         """
@@ -139,10 +146,13 @@ class MemoryEventClient:
             scope: Scope to filter events by
             scope_id: Scope ID to filter events by
         """
+        generation = self._connection_generation
         if self._connect_lock is None:
             self._connect_lock = asyncio.Lock()
 
         async with self._connect_lock:
+            if generation != self._connection_generation:
+                return
             if self._is_connected():
                 return
 
@@ -164,20 +174,25 @@ class MemoryEventClient:
                 if query_params:
                     ws_url += "?" + urlencode(query_params)
 
-                self.websocket = await asyncio.wait_for(
+                websocket = await asyncio.wait_for(
                     websockets.connect(ws_url, **{_HEADERS_KWARG: headers}),
                     timeout=self._connect_timeout,
                 )
+                if generation != self._connection_generation:
+                    await websocket.close()
+                    return
+                self.websocket = websocket
                 self.is_listening = True
                 self._reconnect_attempts = 0
-                asyncio.create_task(self._listen())
+                self._start_background_task(self._listen())
 
             except Exception as e:
                 log_error(f"Failed to connect to memory events: {e}")
                 # Background the retry loop so startup is not blocked by
                 # repeated reconnection attempts when the server is
                 # unreachable.
-                asyncio.create_task(self._handle_reconnect())
+                if generation == self._connection_generation:
+                    self._start_background_task(self._handle_reconnect())
 
     async def _listen(self):
         """Listens for incoming messages and dispatches them to subscribers."""
@@ -269,7 +284,7 @@ class MemoryEventClient:
         # We rely on client-side pattern matching, so we don't need to send
         # pattern filters to the server.
         if not self._is_connected():
-            asyncio.create_task(self.connect())
+            self._start_background_task(self.connect())
 
         return subscription
 
@@ -445,12 +460,25 @@ class MemoryEventClient:
 
     async def close(self):
         """Closes the WebSocket connection and cleans up subscriptions."""
+        self._connection_generation += 1
         self.is_listening = False
         self.unsubscribe_all()
 
-        if self.websocket:
-            await self.websocket.close()
-            self.websocket = None
+        websocket = self.websocket
+        self.websocket = None
+        tasks = [
+            task
+            for task in self._background_tasks
+            if task is not asyncio.current_task()
+        ]
+        for task in tasks:
+            task.cancel()
+        try:
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            if websocket:
+                await websocket.close()
 
 
 class ScopedMemoryEventClient:
