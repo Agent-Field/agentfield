@@ -93,6 +93,7 @@ class MemoryEventClient:
             self.base_url = base_url
         self.execution_context = execution_context
         self.api_key = api_key
+        self._connection_params: Dict[str, Any] = {}
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.is_listening = False
         # Lazily initialize the lock inside an active event loop to avoid
@@ -140,6 +141,7 @@ class MemoryEventClient:
     ):
         """
         Establishes a WebSocket connection with optional filtering.
+        Automatic reconnections retain these filters.
 
         Args:
             patterns: List of patterns to subscribe to
@@ -155,6 +157,12 @@ class MemoryEventClient:
                 return
             if self._is_connected():
                 return
+
+            self._connection_params = {
+                "patterns": list(patterns) if patterns is not None else None,
+                "scope": scope,
+                "scope_id": scope_id,
+            }
 
             try:
                 headers = self.execution_context.to_headers()
@@ -251,7 +259,7 @@ class MemoryEventClient:
         await asyncio.sleep(delay)
 
         try:
-            await self.connect()
+            await self.connect(**self._connection_params)
         except Exception as e:
             log_error(f"Reconnection failed: {e}")
 
@@ -280,11 +288,10 @@ class MemoryEventClient:
         subscription = EventSubscription(patterns, callback, scope, scope_id)
         self.subscriptions.append(subscription)
 
-        # If not connected, establish (or re-establish) the WebSocket connection.
-        # We rely on client-side pattern matching, so we don't need to send
-        # pattern filters to the server.
+        # Subscriptions use client-side matching. Preserve any explicit connection
+        # filters when establishing or re-establishing the WebSocket connection.
         if not self._is_connected():
-            self._start_background_task(self.connect())
+            self._start_background_task(self.connect(**self._connection_params))
 
         return subscription
 
