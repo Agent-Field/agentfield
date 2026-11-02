@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.14] - 2026-11-02
+
+
+### Fixed
+
+- Fix(sdk/go): omit temperature for models that reject it (#1146)
+
+* fix(sdk/go): omit temperature for models that reject it
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(sdk/go): keep temperature for GPT-5.1/5.2/5.4, match only documented rejecters
+
+The blanket gpt-5* match dropped a caller's temperature for GPT-5.1, 5.2 and 5.4, which default to reasoning effort none and accept temperature (OpenAI latest-model guide). Match the o-series, gpt-5 and the GPT-5 variants documented to reject it, and Claude Opus 4.7+/Claude 5; every other model keeps today's behaviour. The contract test covers 42 models x nil/zero/configured temperatures and checks the caller's Request is not mutated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (04436cf)
+
 ## [0.1.146-rc.13] - 2026-11-02
 
 
