@@ -74,9 +74,9 @@ var providerEnvVars = []struct {
 	Model  string // suggested default model when this provider is the chosen one
 }{
 	{Name: "openrouter", EnvVar: "OPENROUTER_API_KEY", Model: "openrouter/google/gemini-2.5-flash"},
-	{Name: "anthropic", EnvVar: "ANTHROPIC_API_KEY", Model: "claude-3-5-sonnet-20241022"},
+	{Name: "anthropic", EnvVar: "ANTHROPIC_API_KEY", Model: "claude-sonnet-5-5"},
 	{Name: "openai", EnvVar: "OPENAI_API_KEY", Model: "gpt-4o"},
-	{Name: "google", EnvVar: "GOOGLE_API_KEY", Model: "gemini-1.5-pro"},
+	{Name: "google", EnvVar: "GOOGLE_API_KEY", Model: "gemini-3.8-flash"},
 }
 
 // doctorHarnessProvider describes one CLI `app.harness()` knows how to drive,
