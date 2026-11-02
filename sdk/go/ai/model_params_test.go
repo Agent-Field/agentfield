@@ -701,3 +701,48 @@ func TestComplete_WireBody_NoStreamOptions(t *testing.T) {
 		t.Errorf("expected no stream_options on a non-streaming request, got %s", rt.body)
 	}
 }
+
+func TestMarshalRequest_TemperatureCompatibility(t *testing.T) {
+	for model, restricted := range map[string]bool{
+		"gpt-5": true, "gpt-5-2025-08-07": true, "gpt-5-mini": true, "gpt-5-nano": true,
+		"gpt-5-pro": true, "gpt-5.2-pro": true, "gpt-5.4-pro": true, "gpt-5.5": true, "gpt-5.6-sol": true,
+		"o1": true, "o3-mini": true, "o4-mini": true, "openai/o3-mini": true, " AZURE/O3-MINI ": true,
+		"openai/gpt-5-mini": true, "azure/deployments/GPT-5": true,
+		"gpt-5-codex": true, "openai/gpt-5.1-codex-mini": true, "gpt-5.2-codex": true, "gpt-5.3-codex": true,
+		"gpt-4o": false, "gpt-4.1": false, "openai/gpt-4o": false,
+		"gpt-5.1": false, "gpt-5.2": false, "gpt-5.4": false, "gpt-5-chat-latest": false,
+		"claude-sonnet-4-6": false, "anthropic/claude-opus-4-1": false, "claude-sonnet-5-5": true, "claude-opus-4-7": true, "claude-opus-4-8": true,
+		"anthropic/claude-sonnet-5": true, "claude-fable-5-1": true, "claude-haiku-5-5": true, "claude-opus-5-5": true, "llama-3": false,
+		"gemini-3.8-flash": false, "google/gemini-2.5-flash": false, "omni-1": false, "o": false, "gpt-50": false,
+	} {
+		t.Run(model, func(t *testing.T) {
+			zero, configured, maxTokens := 0.0, 0.7, 42
+			for _, temp := range []*float64{nil, &zero, &configured} {
+				for _, explicitModel := range []string{model, ""} {
+					client := &Client{config: &Config{Model: model, BaseURL: "https://api.openai.com/v1"}}
+					req := &Request{Model: explicitModel, Temperature: temp, MaxTokens: &maxTokens}
+					before := *req
+					wantValue := 0.0
+					if temp != nil {
+						wantValue = *temp
+					}
+					body, err := client.marshalRequest(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var raw map[string]interface{}
+					if err := json.Unmarshal(body, &raw); err != nil {
+						t.Fatal(err)
+					}
+					got, present := raw["temperature"]
+					if want := temp != nil && !restricted; present != want || (want && got != wantValue) {
+						t.Errorf("temperature = %v (present %v), restricted=%v, input=%v", got, present, restricted, temp)
+					}
+					if req.Model != before.Model || req.Temperature != before.Temperature || req.MaxTokens != before.MaxTokens || (temp != nil && *temp != wantValue) {
+						t.Fatal("caller's request was mutated")
+					}
+				}
+			}
+		})
+	}
+}

@@ -46,6 +46,31 @@ func needsMaxCompletionTokens(model string) bool {
 	return false
 }
 
+// rejectsTemperature identifies models whose default mode rejects custom
+// temperature. This SDK does not expose reasoning_effort.
+// GPT-5.1/5.2/5.4 default to none and accept temperature; do not match all gpt-5*.
+// https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.2
+func rejectsTemperature(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if idx := strings.LastIndex(m, "/"); idx >= 0 {
+		m = m[idx+1:]
+	}
+	if len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9' {
+		return true
+	}
+	if m == "gpt-5" || strings.HasPrefix(m, "gpt-5-202") {
+		return true
+	}
+	for _, family := range []string{"gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-5.2-pro", "gpt-5.4-pro", "gpt-5.5", "gpt-5.6",
+		"gpt-5-codex", "gpt-5.1-codex", "gpt-5.2-codex", "gpt-5.3-codex",
+		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "claude-fable-5"} {
+		if m == family || strings.HasPrefix(m, family+"-") {
+			return true
+		}
+	}
+	return false
+}
+
 // vouchedRewriteDomains lists the hosts known to accept (and, for newer
 // models, require) max_completion_tokens. Matching is by exact host or any
 // subdomain (e.g. api.openai.com, <resource>.openai.azure.com).
@@ -146,6 +171,14 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 			shadow.Model = stripped
 			req = &shadow
 		}
+	}
+
+	// Models that reject custom temperature receive no temperature field
+	// (on a copy; the caller's Request is untouched).
+	if req.Temperature != nil && rejectsTemperature(model) {
+		shadow := *req
+		shadow.Temperature = nil
+		req = &shadow
 	}
 
 	// If the model needs max_completion_tokens and we have a max_tokens value,
