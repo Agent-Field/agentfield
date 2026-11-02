@@ -701,3 +701,52 @@ func TestComplete_WireBody_NoStreamOptions(t *testing.T) {
 		t.Errorf("expected no stream_options on a non-streaming request, got %s", rt.body)
 	}
 }
+
+func TestRejectsTemperature(t *testing.T) {
+	for model, want := range map[string]bool{
+		"gpt-5": true, "gpt-5.1": true, "openai/gpt-5-mini": true,
+		"o1": true, "o3-mini": true, "o4-mini": true,
+		"claude-opus-5-5": true, "claude-sonnet-5-5": true, "claude-opus-4-7": true, "claude-opus-4-8": true, "claude-fable-5-1": true, "anthropic/claude-sonnet-5": true,
+		"gpt-4o": false, "gpt-4.1": false, "claude-sonnet-4-6": false,
+		"claude-opus-4-1": false, "omni-1": false, "llama-3": false,
+	} {
+		if got := rejectsTemperature(model); got != want {
+			t.Errorf("rejectsTemperature(%q) = %v, want %v", model, got, want)
+		}
+	}
+}
+
+func TestMarshalRequest_OmitsTemperatureForRestrictedModels(t *testing.T) {
+	for model, wantTemp := range map[string]bool{
+		"gpt-5.1": false, "o3-mini": false, "claude-opus-5-5": false, "gpt-4o": true,
+	} {
+		cfg := DefaultConfig()
+		cfg.APIKey = "test-key"
+		cfg.BaseURL = "https://api.openai.com/v1"
+		cfg.Model = model
+		client, err := NewClient(cfg)
+		if err != nil {
+			t.Fatalf("NewClient error: %v", err)
+		}
+		temp := 0.7
+		req := &Request{
+			Model:       model,
+			Temperature: &temp,
+			Messages:    []Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "hello"}}}},
+		}
+		body, err := client.marshalRequest(req)
+		if err != nil {
+			t.Fatalf("marshalRequest error: %v", err)
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			t.Fatalf("unmarshal error: %v", err)
+		}
+		if _, ok := raw["temperature"]; ok != wantTemp {
+			t.Errorf("%s: temperature present = %v, want %v", model, ok, wantTemp)
+		}
+		if req.Temperature == nil {
+			t.Errorf("%s: caller's request was mutated", model)
+		}
+	}
+}

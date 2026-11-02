@@ -46,6 +46,36 @@ func needsMaxCompletionTokens(model string) bool {
 	return false
 }
 
+// rejectsTemperature returns true for models whose APIs only accept the
+// default temperature and answer 400 when the field is present: OpenAI's
+// o-series and gpt-5 family, Claude Opus 4.7 and later, and the Claude 5 generation. The client always
+// fills Temperature from its config, so these models would otherwise fail on
+// every call.
+func rejectsTemperature(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if idx := strings.LastIndex(m, "/"); idx >= 0 {
+		m = m[idx+1:]
+	}
+
+	if strings.HasPrefix(m, "gpt-5") {
+		return true
+	}
+	if len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9' {
+		return true
+	}
+	// Claude Opus 4.7 and later, and the whole Claude 5 generation
+	// (claude-opus-5-5, claude-sonnet-5, claude-fable-5-1, claude-5-haiku, ...).
+	for _, prefix := range []string{"claude-opus-", "claude-sonnet-", "claude-haiku-", "claude-fable-", "claude-"} {
+		if rest := strings.TrimPrefix(m, prefix); rest != m {
+			if prefix == "claude-opus-" && (strings.HasPrefix(rest, "4-7") || strings.HasPrefix(rest, "4-8")) {
+				return true
+			}
+			return strings.HasPrefix(rest, "5")
+		}
+	}
+	return false
+}
+
 // vouchedRewriteDomains lists the hosts known to accept (and, for newer
 // models, require) max_completion_tokens. Matching is by exact host or any
 // subdomain (e.g. api.openai.com, <resource>.openai.azure.com).
@@ -146,6 +176,14 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 			shadow.Model = stripped
 			req = &shadow
 		}
+	}
+
+	// Models that only accept the default temperature reject any explicit
+	// value, so drop it (on a copy; the caller's Request is untouched).
+	if req.Temperature != nil && rejectsTemperature(model) {
+		shadow := *req
+		shadow.Temperature = nil
+		req = &shadow
 	}
 
 	// If the model needs max_completion_tokens and we have a max_tokens value,
