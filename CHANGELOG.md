@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.13] - 2026-11-02
+
+
+### Fixed
+
+- Fix(doctor): recommend current Anthropic and Google models (#1133)
+
+* fix(doctor): recommend current Anthropic and Google models
+
+af doctor suggested claude-3-5-sonnet-20241022 and gemini-1.5-pro as the
+AI_MODEL for an Anthropic or Google key; both models are retired, so a
+scaffold that follows the recommendation fails on its first call. Recommend
+claude-sonnet-5-5 and gemini-3.8-flash, and update the commented examples in
+the docker .env template.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(init): use a current model in the --default-model help example
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (addbec5)
+
 ## [0.1.146-rc.12] - 2026-11-02
 
 
