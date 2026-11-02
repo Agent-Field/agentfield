@@ -46,31 +46,26 @@ func needsMaxCompletionTokens(model string) bool {
 	return false
 }
 
-// rejectsTemperature returns true for models whose APIs only accept the
-// default temperature and answer 400 when the field is present: OpenAI's
-// o-series and gpt-5 family, Claude Opus 4.7 and later, and the Claude 5 generation. The client always
-// fills Temperature from its config, so these models would otherwise fail on
-// every call.
+// rejectsTemperature identifies models whose default mode rejects custom
+// temperature. This SDK does not expose reasoning_effort.
+// GPT-5.1/5.2/5.4 default to none and accept temperature; do not match all gpt-5*.
+// https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.2
 func rejectsTemperature(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if idx := strings.LastIndex(m, "/"); idx >= 0 {
 		m = m[idx+1:]
 	}
-
-	if strings.HasPrefix(m, "gpt-5") {
-		return true
-	}
 	if len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9' {
 		return true
 	}
-	// Claude Opus 4.7 and later, and the whole Claude 5 generation
-	// (claude-opus-5-5, claude-sonnet-5, claude-fable-5-1, claude-5-haiku, ...).
-	for _, prefix := range []string{"claude-opus-", "claude-sonnet-", "claude-haiku-", "claude-fable-", "claude-"} {
-		if rest := strings.TrimPrefix(m, prefix); rest != m {
-			if prefix == "claude-opus-" && (strings.HasPrefix(rest, "4-7") || strings.HasPrefix(rest, "4-8")) {
-				return true
-			}
-			return strings.HasPrefix(rest, "5")
+	if m == "gpt-5" || strings.HasPrefix(m, "gpt-5-202") {
+		return true
+	}
+	for _, family := range []string{"gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-5.2-pro", "gpt-5.4-pro", "gpt-5.5", "gpt-5.6",
+		"gpt-5-codex", "gpt-5.1-codex", "gpt-5.2-codex", "gpt-5.3-codex",
+		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "claude-fable-5"} {
+		if m == family || strings.HasPrefix(m, family+"-") {
+			return true
 		}
 	}
 	return false
@@ -178,8 +173,8 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 		}
 	}
 
-	// Models that only accept the default temperature reject any explicit
-	// value, so drop it (on a copy; the caller's Request is untouched).
+	// Models that reject custom temperature receive no temperature field
+	// (on a copy; the caller's Request is untouched).
 	if req.Temperature != nil && rejectsTemperature(model) {
 		shadow := *req
 		shadow.Temperature = nil
