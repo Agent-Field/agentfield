@@ -171,6 +171,18 @@ def _reset_litellm_http_clients(litellm_module: Any) -> None:
 
 _AI_TIMEOUT_RETRIES_DEFAULT = 2
 
+# Providers whose chat API (via LiteLLM) accepts ``stream_options``; requesting
+# ``include_usage`` makes the final streamed chunk carry token usage.
+_STREAM_USAGE_PROVIDER_PREFIXES = (
+    "openrouter/",
+    "openai/",
+    "azure/",
+    "groq/",
+    "deepseek/",
+    "xai/",
+    "together_ai/",
+)
+
 
 def _resolve_timeout_retries() -> int:
     """How many times to retry an LLM call that hit the wall-clock safety-net
@@ -839,7 +851,9 @@ class AgentAI:
             else getattr(self.agent.async_config, "llm_call_timeout", 120.0)
         )
         litellm_params.setdefault("timeout", effective_timeout)
-        if final_config.stream and final_config.model.startswith(("openrouter/", "openai/")):
+        if final_config.stream and final_config.model.startswith(
+            _STREAM_USAGE_PROVIDER_PREFIXES
+        ):
             litellm_params.setdefault("stream_options", {"include_usage": True})
 
         if schema:
