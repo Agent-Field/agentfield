@@ -17,10 +17,15 @@ const defaultInfronBaseURL = "https://llm.onerouter.pro/v1"
 // strings, e.g. "meta-llama/Llama-3.3-70B-Instruct".
 const defaultIonetBaseURL = "https://api.intelligence.io.solutions/api/v1"
 
+// defaultRuncrateBaseURL is Runcrate's OpenAI-compatible Chat Completions
+// endpoint for open-weight models. Model ids are Hugging Face-style
+// `org/name` strings, e.g. "deepseek-ai/DeepSeek-V4.1-Flash".
+const defaultRuncrateBaseURL = "https://api.runcrate.ai/v1"
+
 // Config holds AI/LLM configuration for making API calls.
 type Config struct {
 	// API Key for the selected provider: OpenAI, Infron,
-	// IO Intelligence (io.net), or OpenRouter
+	// IO Intelligence (io.net), Runcrate, or OpenRouter
 	APIKey string
 
 	// BaseURL can be either OpenAI or OpenRouter endpoint
@@ -28,6 +33,7 @@ type Config struct {
 	// OpenRouter: https://openrouter.ai/api/v1
 	// Infron: https://llm.onerouter.pro/v1
 	// IO Intelligence (io.net): https://api.intelligence.io.solutions/api/v1
+	// Runcrate: https://api.runcrate.ai/v1
 	BaseURL string
 
 	// Default model to use (e.g., "gpt-4o", "openai/gpt-4o" for OpenRouter)
@@ -69,12 +75,13 @@ type Config struct {
 // - OPENAI_API_KEY or OPENROUTER_API_KEY
 // - INFRON_API_KEY
 // - IONET_API_KEY
+// - RUNCRATE_API_KEY
 // - AI_BASE_URL (defaults to OpenAI)
-// - AI_MODEL (defaults to gpt-4o, or to an io.net model for IO Intelligence)
+// - AI_MODEL (defaults to gpt-4o, or to a provider model for io.net/Runcrate)
 //
 // A provider key that was already honored keeps precedence, so adding a
-// gateway key (Infron, IO Intelligence) to an existing environment never
-// silently reroutes it.
+// gateway key (Infron, IO Intelligence, Runcrate) to an existing environment
+// never silently reroutes it.
 func DefaultConfig() *Config {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	baseURL := "https://api.openai.com/v1"
@@ -95,6 +102,15 @@ func DefaultConfig() *Config {
 	if ionetKey := os.Getenv("IONET_API_KEY"); ionetKey != "" && apiKey == "" {
 		apiKey = ionetKey
 		baseURL = defaultIonetBaseURL
+	}
+
+	// Check for Runcrate configuration, with the same precedence rule: a key
+	// from a provider already configured in the environment keeps precedence,
+	// so adding RUNCRATE_API_KEY never silently reroutes an existing
+	// deployment.
+	if runcrateKey := os.Getenv("RUNCRATE_API_KEY"); runcrateKey != "" && apiKey == "" {
+		apiKey = runcrateKey
+		baseURL = defaultRuncrateBaseURL
 	}
 
 	// Check for OpenRouter configuration
@@ -140,6 +156,11 @@ func DefaultConfig() *Config {
 		// An explicit AI_MODEL always wins.
 		cfg.Model = defaultIonetModel
 	}
+	if modelDefaulted && cfg.IsRuncrate() {
+		// Runcrate serves open-weight models only, so the global gpt-4o
+		// fallback would 404 there. An explicit AI_MODEL always wins.
+		cfg.Model = defaultRuncrateModel
+	}
 	return cfg
 }
 
@@ -183,6 +204,17 @@ func (c *Config) IsInfron() bool {
 func (c *Config) IsIonet() bool {
 	return strings.Contains(strings.ToLower(c.BaseURL), "intelligence.io.solutions") ||
 		strings.HasPrefix(strings.ToLower(c.Model), ionetModelPrefix)
+}
+
+// IsRuncrate returns true if the base URL is for Runcrate.
+//
+// Runcrate serves bare Hugging Face-style `org/name` model ids, so an explicit
+// "runcrate/" prefix is the only thing that distinguishes it by model alone,
+// and a config that matches a gateway already supported keeps its previous
+// meaning.
+func (c *Config) IsRuncrate() bool {
+	return strings.Contains(strings.ToLower(c.BaseURL), "api.runcrate.ai") ||
+		strings.HasPrefix(strings.ToLower(c.Model), runcrateModelPrefix)
 }
 
 // RateLimitEnabled reports whether automatic rate-limit retries are configured.

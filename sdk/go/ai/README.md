@@ -181,6 +181,41 @@ provider key set the request still goes to that provider's endpoint:
 Model: "ionet/meta-llama/Llama-3.3-70B-Instruct"  // sent as meta-llama/Llama-3.3-70B-Instruct
 ```
 
+### Runcrate Configuration
+
+Runcrate is an OpenAI-compatible Chat Completions endpoint for open-weight
+models that serves Hugging Face-style `org/name` model ids, so wiring it up is
+a base URL and a model id:
+
+```go
+aiConfig := &ai.Config{
+    APIKey:      os.Getenv("RUNCRATE_API_KEY"),
+    BaseURL:     "https://api.runcrate.ai/v1",
+    Model:       "deepseek-ai/DeepSeek-V4.1-Flash", // id as returned by GET /models
+    Temperature: 0.7,
+    MaxTokens:   4096,
+}
+```
+
+`ai.DefaultConfig()` picks this up from `RUNCRATE_API_KEY` automatically. A
+key from a provider already configured in the environment keeps precedence.
+With no `AI_MODEL` set, the default falls back to
+`deepseek-ai/DeepSeek-V4.1-Flash` (Runcrate serves no `gpt-4o`), so a
+Runcrate-only environment works out of the box. Set `AI_MODEL` to any id from
+`GET /models` on the base URL to pick another model, for example
+`zai-org/GLM-5.3` or `moonshotai/Kimi-K3`. If you route Runcrate through a
+custom `AI_BASE_URL` the SDK cannot recognize as Runcrate (a proxy), set
+`AI_MODEL` yourself. Keys are at https://runcrate.ai/dashboard/api-keys.
+
+A `runcrate/` model prefix is accepted as a routing marker for callers that
+select the gateway by model string, and is stripped before the request goes
+out (the endpoint serves the bare id). The marker rewrites the model string
+only and never reroutes a request on its own:
+
+```go
+Model: "runcrate/deepseek-ai/DeepSeek-V4.1-Flash"  // sent as deepseek-ai/DeepSeek-V4.1-Flash
+```
+
 ### Rate Limiting & Circuit Breaker
 
 The client can automatically retry rate-limited AI calls (HTTP 429/503, or
