@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Client provides AI/LLM capabilities using OpenAI or OpenRouter API.
@@ -283,8 +284,27 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 			applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 		}
 
+		// http.Client.Timeout covers reading the whole body, which would cut off
+		// a stream that is still delivering chunks. Bound only the wait for the
+		// response headers with the same duration instead.
+		streamClient := c.httpClient
+		var headerTimer *time.Timer
+		if headerTimeout := c.httpClient.Timeout; headerTimeout > 0 {
+			clone := *c.httpClient
+			clone.Timeout = 0
+			streamClient = &clone
+
+			reqCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			headerTimer = time.AfterFunc(headerTimeout, cancel)
+			httpReq = httpReq.WithContext(reqCtx)
+		}
+
 		// Execute request
-		httpResp, err := c.httpClient.Do(httpReq)
+		httpResp, err := streamClient.Do(httpReq)
+		if headerTimer != nil {
+			headerTimer.Stop()
+		}
 		if err != nil {
 			errCh <- fmt.Errorf("execute request: %w", err)
 			return
