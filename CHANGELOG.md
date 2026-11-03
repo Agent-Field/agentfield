@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.15] - 2026-11-03
+
+
+### Fixed
+
+- Fix(python-sdk): preserve Unicode separators in harness JSONL (#1148)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (75d8f2a)
+
+- Fix(sdk/go): don't cut active streams with Client.Timeout (#1147)
+
+StreamComplete used the shared http.Client, whose Timeout also covers
+reading the body, so any stream longer than Timeout failed with
+'decode stream: context deadline exceeded'. Bound only the wait for the
+response headers instead. (0dc65cd)
+
 ## [0.1.146-rc.14] - 2026-11-02
 
 
