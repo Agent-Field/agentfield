@@ -447,7 +447,8 @@ async def run_cli(
 def parse_jsonl(text: str) -> List[Dict[str, Any]]:
     """Parse JSONL (newline-delimited JSON) output. Skips invalid lines."""
     events = []
-    for line in text.strip().splitlines():
+    # JSONL uses LF delimiters; Unicode line separators may occur inside strings.
+    for line in text.strip().split("\n"):
         line = line.strip()
         if not line:
             continue
