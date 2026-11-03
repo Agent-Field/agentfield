@@ -212,6 +212,112 @@ async def test_memory_event_client_connect_builds_ws_url(
     assert listener_called.get("run") is True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "disconnect",
+        "initial_failure",
+        "mutated_patterns",
+        "connected_noop",
+        "explicit_unfiltered",
+    ],
+)
+async def test_reconnect_retains_server_side_filters(monkeypatch, scenario):
+    disconnect = asyncio.Event()
+    delivered = asyncio.Event()
+    requests = []
+    received = []
+    expected = {
+        "patterns": ["cart&total.*,用户 preferences.*"],
+        "scope": ["session"],
+        "scope_id": ["team&env=prod#会话"],
+    }
+
+    attempts = []
+    original_connect = websockets.connect
+
+    async def connect(url, **kwargs):
+        attempts.append(parse_qs(urlsplit(url).query))
+        if (
+            scenario in {"initial_failure", "explicit_unfiltered"}
+            and len(attempts) == 1
+        ):
+            raise ConnectionRefusedError("temporary connection failure")
+        return await original_connect(url, **kwargs)
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", connect)
+
+    async def handler(socket):
+        request = getattr(socket, "request", None)
+        path = request.path if request is not None else socket.path
+        requests.append(parse_qs(urlsplit(path).query))
+        if (
+            scenario not in {"initial_failure", "explicit_unfiltered"}
+            and len(requests) == 1
+        ):
+            await disconnect.wait()
+            await socket.close()
+        else:
+            await socket.send(
+                json.dumps(
+                    {
+                        "scope": "session",
+                        "scope_id": "team&env=prod#会话",
+                        "key": "cart&total.current",
+                        "action": "set",
+                        "data": 42,
+                    }
+                )
+            )
+            await socket.wait_closed()
+
+    async def callback(event):
+        received.append((event.key, event.data))
+        delivered.set()
+
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        client = MemoryEventClient(
+            f"http://127.0.0.1:{port}", SimpleNamespace(to_headers=lambda: {})
+        )
+        client._reconnect_delay = 0
+        patterns = ["cart&total.*", "用户 preferences.*"]
+        if scenario == "explicit_unfiltered":
+            client._max_reconnect_attempts = 0
+        try:
+            await client.connect(
+                patterns=patterns,
+                scope="session",
+                scope_id="team&env=prod#会话",
+            )
+            if scenario == "explicit_unfiltered":
+                await client.connect()
+            elif scenario == "mutated_patterns":
+                patterns[:] = ["changed.*"]
+            elif scenario == "connected_noop":
+                await client.connect(
+                    patterns=["changed.*"], scope="actor", scope_id="other"
+                )
+            client.subscribe(
+                "cart&total.*", callback, scope="session", scope_id="team&env=prod#会话"
+            )
+            disconnect.set()
+            await asyncio.wait_for(delivered.wait(), timeout=2)
+
+            reconnected = {} if scenario == "explicit_unfiltered" else expected
+            request_count = (
+                1 if scenario in {"initial_failure", "explicit_unfiltered"} else 2
+            )
+            assert requests == [reconnected] * request_count
+            assert attempts == [expected, reconnected]
+            assert received == [("cart&total.current", 42)]
+        finally:
+            disconnect.set()
+            client._max_reconnect_attempts = 0
+            await client.close()
+
+
 def test_websockets_version_detection():
     """Verify version detection picks the correct header kwarg for the installed websockets."""
     from agentfield.memory_events import _WEBSOCKETS_MAJOR, _HEADERS_KWARG

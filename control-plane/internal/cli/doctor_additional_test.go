@@ -32,6 +32,28 @@ func TestDoctorHelpersAndCommand(t *testing.T) {
 		require.Equal(t, "OPENAI_API_KEY", report.ProviderKeys["openai"].EnvVar)
 	})
 
+	t.Run("recommended models are not retired ones", func(t *testing.T) {
+		for _, tc := range []struct {
+			provider string
+			envVar   string
+			model    string
+		}{
+			{"anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-5-5"},
+			{"google", "GOOGLE_API_KEY", "gemini-3.8-flash"},
+		} {
+			t.Run(tc.provider, func(t *testing.T) {
+				for _, p := range providerEnvVars {
+					t.Setenv(p.EnvVar, "")
+				}
+				t.Setenv(tc.envVar, "key")
+
+				report := buildDoctorReport("http://127.0.0.1:1")
+				require.Equal(t, tc.provider, report.Recommendation.Provider)
+				require.Equal(t, tc.model, report.Recommendation.AIModel)
+			})
+		}
+	})
+
 	t.Run("tool and control plane checks cover success and failure", func(t *testing.T) {
 		tool := checkTool("go", "version")
 		require.True(t, tool.Available)

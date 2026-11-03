@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -237,6 +238,17 @@ async def test_run_cli_timeout():
             await run_cli(["agentfield", "hang"], timeout=0.01, idle_seconds=0)
 
     process.wait.assert_awaited()
+
+
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_parse_jsonl_preserves_unicode_separators(separator, line_ending):
+    event = {"type": "result", "result": f"first{separator}second"}
+    stream = line_ending.join(
+        [json.dumps(event, ensure_ascii=False), '{"type":"done"}']
+    )
+
+    assert parse_jsonl(stream) == [event, {"type": "done"}]
 
 
 def test_parse_jsonl_skips_invalid():

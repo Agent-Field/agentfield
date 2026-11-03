@@ -6,6 +6,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.15] - 2026-11-03
+
+
+### Fixed
+
+- Fix(python-sdk): preserve Unicode separators in harness JSONL (#1148)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (75d8f2a)
+
+- Fix(sdk/go): don't cut active streams with Client.Timeout (#1147)
+
+StreamComplete used the shared http.Client, whose Timeout also covers
+reading the body, so any stream longer than Timeout failed with
+'decode stream: context deadline exceeded'. Bound only the wait for the
+response headers instead. (0dc65cd)
+
+## [0.1.146-rc.14] - 2026-11-02
+
+
+### Fixed
+
+- Fix(sdk/go): omit temperature for models that reject it (#1146)
+
+* fix(sdk/go): omit temperature for models that reject it
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(sdk/go): keep temperature for GPT-5.1/5.2/5.4, match only documented rejecters
+
+The blanket gpt-5* match dropped a caller's temperature for GPT-5.1, 5.2 and 5.4, which default to reasoning effort none and accept temperature (OpenAI latest-model guide). Match the o-series, gpt-5 and the GPT-5 variants documented to reject it, and Claude Opus 4.7+/Claude 5; every other model keeps today's behaviour. The contract test covers 42 models x nil/zero/configured temperatures and checks the caller's Request is not mutated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (04436cf)
+
+## [0.1.146-rc.13] - 2026-11-02
+
+
+### Fixed
+
+- Fix(doctor): recommend current Anthropic and Google models (#1133)
+
+* fix(doctor): recommend current Anthropic and Google models
+
+af doctor suggested claude-3-5-sonnet-20241022 and gemini-1.5-pro as the
+AI_MODEL for an Anthropic or Google key; both models are retired, so a
+scaffold that follows the recommendation fails on its first call. Recommend
+claude-sonnet-5-5 and gemini-3.8-flash, and update the commented examples in
+the docker .env template.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(init): use a current model in the --default-model help example
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (addbec5)
+
+## [0.1.146-rc.12] - 2026-11-02
+
+
+### Fixed
+
+- Fix(python): retain memory event filters across reconnects (#1145) (232088a)
+
 ## [0.1.146-rc.11] - 2026-11-01
 
 

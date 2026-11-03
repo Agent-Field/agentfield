@@ -707,3 +707,65 @@ func TestStructuredAI(t *testing.T) {
 	// This test requires a valid config, so we'll skip it in unit tests
 	t.Skip("Requires actual API key or extensive mocking")
 }
+
+func collectStream(chunks <-chan StreamChunk, errs <-chan error) ([]StreamChunk, error) {
+	var got []StreamChunk
+	for chunk := range chunks {
+		got = append(got, chunk)
+	}
+	select {
+	case err := <-errs:
+		return got, err
+	case <-time.After(time.Second):
+		return got, nil
+	}
+}
+
+// The configured Timeout bounds how long we wait for the server to start
+// responding; it must not cut off a stream that is still delivering chunks.
+func TestStreamComplete_TimeoutDoesNotCutActiveStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for i := 0; i < 4; i++ {
+			_, _ = w.Write([]byte(`data: {"id":"chatcmpl-123","choices":[{"delta":{"content":"x"}}]}` + "\n\n"))
+			w.(http.Flusher).Flush()
+			time.Sleep(150 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		w.(http.Flusher).Flush()
+	}))
+	defer server.Close()
+
+	client, err := NewClient(&Config{APIKey: "k", BaseURL: server.URL, Model: "m", Timeout: 300 * time.Millisecond})
+	require.NoError(t, err)
+
+	chunks, errs := client.StreamComplete(context.Background(), "hi")
+	got, streamErr := collectStream(chunks, errs)
+
+	assert.NoError(t, streamErr)
+	assert.Len(t, got, 4)
+}
+
+// A server that never starts responding must still be bounded by Timeout.
+func TestStreamComplete_TimeoutAppliesWhileWaitingForResponse(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	client, err := NewClient(&Config{APIKey: "k", BaseURL: server.URL, Model: "m", Timeout: 200 * time.Millisecond})
+	require.NoError(t, err)
+
+	start := time.Now()
+	chunks, errs := client.StreamComplete(context.Background(), "hi")
+	_, streamErr := collectStream(chunks, errs)
+
+	assert.Error(t, streamErr)
+	assert.Less(t, time.Since(start), 2*time.Second)
+}
