@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.16] - 2026-11-03
+
+
+### Added
+
+- Feat(sdk/go/ai): support the Runcrate provider (#1149)
+
+DefaultConfig picks up RUNCRATE_API_KEY when no provider key with higher precedence is set and points at https://api.runcrate.ai/v1, defaulting the model to deepseek-ai/DeepSeek-V4.1-Flash when AI_MODEL is unset. A runcrate/ model prefix is accepted as a routing marker and stripped before the request goes out. Mirrors the IO Intelligence provider.
+
+Signed-off-by: Nirupam Bhowmick <48842933+heydryft@users.noreply.github.com> (2fd5bc9)
+
 ## [0.1.146-rc.15] - 2026-11-03
 
 
