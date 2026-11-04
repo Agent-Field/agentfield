@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.17] - 2026-11-04
+
+
+### Fixed
+
+- Fix(agentic): honor limit and offset for resource=runs in /agentic/query (#1152)
+
+queryRuns never copied req.Limit/req.Offset into the ExecutionFilter, so the
+storage layer always returned its default page of 20 starting at 0 while the
+response echoed the requested values. Forward both to the filter. (2d6250d)
+
+- Fix(python-sdk): preserve boolean defaults in agent CLI calls (#1151) (462d1cd)
+
+- Fix(sdk-python): request stream usage for more LiteLLM providers (#1150)
+
+app.ai(stream=True) only set stream_options.include_usage for openrouter/
+and openai/ models, so azure, groq, deepseek, xai and together_ai streams
+ended with usage_status=missing. LiteLLM accepts stream_options for these.
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (762d53c)
+
 ## [0.1.146-rc.16] - 2026-11-03
 
 
