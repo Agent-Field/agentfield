@@ -417,3 +417,27 @@ func TestQueryHandler_OffsetPastEndReturnsEmptyPage(t *testing.T) {
 		})
 	}
 }
+
+func TestQueryHandler_RunsForwardsLimitAndOffset(t *testing.T) {
+	var got types.ExecutionFilter
+	store := &handlerTestStorage{
+		mockStatusStorage: &mockStatusStorage{},
+		queryRunSummariesFn: func(_ context.Context, filter types.ExecutionFilter) ([]*storage.RunSummaryAggregation, int, error) {
+			got = filter
+			return []*storage.RunSummaryAggregation{{RunID: "run-1"}}, 1, nil
+		},
+	}
+
+	router := gin.New()
+	router.POST("/query", QueryHandler(store))
+
+	body := `{"resource":"runs","limit":5,"offset":10}`
+	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 5, got.Limit)
+	assert.Equal(t, 10, got.Offset)
+}

@@ -74,7 +74,7 @@ func QueryHandler(store storage.StorageProvider) gin.HandlerFunc {
 }
 
 func queryRuns(c *gin.Context, ctx context.Context, store storage.StorageProvider, req QueryRequest) {
-	filter := types.ExecutionFilter{}
+	filter := types.ExecutionFilter{Limit: req.Limit, Offset: req.Offset}
 	if req.Filters.Status != "" {
 		filter.Status = &req.Filters.Status
 	}
