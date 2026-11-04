@@ -116,6 +116,11 @@ class AgentCLI:
                 parser.add_argument(
                     f"--{param_name}",
                     action="store_true",
+                    default=(
+                        False
+                        if param.default is inspect.Parameter.empty
+                        else param.default
+                    ),
                     help=f"{param_name} (boolean flag)",
                 )
             elif param_type is int:
