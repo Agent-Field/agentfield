@@ -155,6 +155,45 @@ async def test_ai_streaming_response(monkeypatch, agent_with_ai):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("openai/gpt-4o", True),
+        ("openrouter/openai/gpt-4o", True),
+        ("azure/my-deployment", True),
+        ("groq/llama-3.3-70b-versatile", True),
+        ("deepseek/deepseek-chat", True),
+        ("xai/grok-3", True),
+        ("together_ai/meta-llama/Llama-3-8b", True),
+        # LiteLLM rejects stream_options for these providers.
+        ("mistral/mistral-large-latest", False),
+        ("anthropic/claude-3-opus", False),
+    ],
+)
+async def test_ai_streaming_requests_usage_for_supported_providers(
+    monkeypatch, agent_with_ai, model, expected
+):
+    """stream_options include_usage is only requested where LiteLLM accepts it."""
+    litellm_module = setup_litellm_stub(monkeypatch)
+
+    async def stream_generator():
+        yield SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content="x"))]
+        )
+
+    litellm_module.acompletion.return_value = stream_generator()
+
+    ai = AgentAI(agent_with_ai)
+    await ai.ai("test", model=model, stream=True)
+
+    kwargs = litellm_module.acompletion.call_args[1]
+    if expected:
+        assert kwargs["stream_options"] == {"include_usage": True}
+    else:
+        assert "stream_options" not in kwargs
+
+
+@pytest.mark.asyncio
 async def test_ai_multimodal_input_processing(monkeypatch, agent_with_ai):
     """Test multimodal input processing."""
     litellm_module = setup_litellm_stub(monkeypatch)
