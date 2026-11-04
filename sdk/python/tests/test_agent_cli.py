@@ -2,6 +2,8 @@
 Tests for agent_cli.py CLI functionality.
 """
 
+import json
+
 import pytest
 from unittest.mock import MagicMock, patch, Mock
 from agentfield.agent_cli import AgentCLI
@@ -267,6 +269,24 @@ def test_run_cli_call_command(mock_agent):
             ):
                 cli.run_cli()
                 mock_call.assert_called_once_with("func1", ["--arg", "value"])
+
+
+@pytest.mark.parametrize(
+    ("cli_args", "verbose"),
+    [([], False), (["--verbose"], True)],
+)
+def test_run_cli_call_preserves_boolean_defaults(
+    mock_agent, monkeypatch, capsys, cli_args, verbose
+):
+    def skill1(safe: bool = True, verbose: bool = False) -> dict:
+        return {"safe": safe, "verbose": verbose}
+
+    mock_agent.skill1 = skill1
+    monkeypatch.setattr("sys.argv", ["script", "call", "skill1", *cli_args])
+
+    AgentCLI(mock_agent).run_cli()
+
+    assert json.loads(capsys.readouterr().out) == {"safe": True, "verbose": verbose}
 
 
 def test_run_cli_help_command(mock_agent):
