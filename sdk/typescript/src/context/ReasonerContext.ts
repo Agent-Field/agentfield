@@ -159,7 +159,11 @@ export class ReasonerContext<TInput = any> {
       mergedConfig,
       needsLazyHydration,
       () => this.aiClient.getModel(options),
-      options,
+      {
+        ...options,
+        temperature: options.temperature ?? this.aiClient.generationDefaults?.temperature,
+        maxTokens: options.maxTokens ?? this.aiClient.generationDefaults?.maxTokens
+      },
       modelChoice
     );
   }
