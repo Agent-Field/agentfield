@@ -113,6 +113,11 @@ export class AIClient {
     return this.config.promptTemplates;
   }
 
+  /** Generation defaults shared with the tool-calling path. */
+  get generationDefaults(): Pick<AIRequestOptions, 'temperature' | 'maxTokens'> {
+    return { temperature: this.config.temperature, maxTokens: this.config.maxTokens };
+  }
+
   async generate<T>(prompt: string, options: AIRequestOptions & { schema: ZodSchema<T> }): Promise<T>;
   async generate(prompt: string, options?: AIRequestOptions): Promise<string>;
   async generate<T = any>(prompt: string, options: AIRequestOptions = {}): Promise<T | string> {
