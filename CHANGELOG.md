@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.18] - 2026-11-06
+
+
+### Fixed
+
+- Fix(sdk): honor generation defaults in TypeScript tool calls (#1154) (f946579)
+
 ## [0.1.146-rc.17] - 2026-11-04
 
 
