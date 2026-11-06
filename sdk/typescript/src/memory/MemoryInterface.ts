@@ -94,8 +94,15 @@ export class MemoryInterface {
   }
 
   searchVector(queryEmbedding: number[], options: Omit<VectorSearchOptions, 'metadata'> = {}) {
+    // Same defaults as set/get/delete: the scoped handle (session(), workflow(), …)
+    // searches its own scope. An explicit scope in options wins, and the default
+    // scopeId only applies to the default scope.
+    const scope = options.scope ?? this.defaultScope;
+    const scopeId = options.scopeId ?? (scope === this.defaultScope ? this.defaultScopeId : undefined);
     return this.client.searchVector(queryEmbedding, {
       ...options,
+      scope,
+      scopeId,
       metadata: this.metadata
     });
   }
