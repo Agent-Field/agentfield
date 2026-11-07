@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.19] - 2026-11-07
+
+
+### Fixed
+
+- Fix(sdk-python): omit temperature for models that reject it (#1158)
+
+AIConfig.get_litellm_params forwarded a user-set temperature to gpt-5,
+o-series and newer Claude models, which reject it. Mirror the Go SDK's
+rejectsTemperature criterion and drop the field for those models. (f499137)
+
+- Fix(sdk-python): omit rejected temperature in schema repair (#1157) (be5b193)
+
+- Fix(sdk-ts): default searchVector to the handle's scope (#1156)
+
+MemoryInterface.searchVector forwarded only the caller's options, so
+session()/workflow()/actor() handles searched the wrong scope. Default
+scope/scopeId from the handle like set/get/delete; explicit options win. (11f0a76)
+
 ## [0.1.146-rc.18] - 2026-11-06
 
 
