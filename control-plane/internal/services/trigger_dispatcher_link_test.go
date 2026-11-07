@@ -116,6 +116,7 @@ func TestTriggerDispatchGoesDownALiveLink(t *testing.T) {
 	exec, err := provider.GetExecutionRecord(ctx, execID)
 	require.NoError(t, err)
 	require.Equal(t, types.ExecutionStatusRunning, exec.Status, "accepted is the 202 path")
+	require.Equal(t, exec.RunID, b.Headers["X-Run-ID"], "the node is told the run its root is filed under")
 }
 
 // A LINK-ONLY GO SDK NODE (no base_url, hello accepts "http") IS DISPATCHED

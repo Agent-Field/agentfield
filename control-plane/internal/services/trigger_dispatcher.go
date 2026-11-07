@@ -203,6 +203,11 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Workflow-ID", dispatchWorkflowID)
+	// THE RUN IS THE WORKFLOW. createDispatchRecords files the root under
+	// run_id = workflow id; a node that is not told that run mints a fresh one
+	// for every child it calls, and the CP then cannot link any child to its
+	// parent, so a trigger-started run had a one-node tree.
+	req.Header.Set("X-Run-ID", dispatchWorkflowID)
 	req.Header.Set("X-Execution-ID", dispatchExecutionID)
 	// Record the workflow ID against the inbound event so the runs-list
 	// and run-dag handlers can correlate a triggered run back to this
@@ -284,6 +289,7 @@ func (d *TriggerDispatcher) dispatchOverLink(ctx context.Context, node *types.Ag
 	}
 	headers := map[string]string{
 		"X-Workflow-ID":           workflowID,
+		"X-Run-ID":                workflowID,
 		"X-Execution-ID":          executionID,
 		"X-AgentField-Request-ID": requestID,
 		"X-Trigger-ID":            trig.ID,
