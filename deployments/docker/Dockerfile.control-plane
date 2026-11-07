@@ -1,6 +1,6 @@
 # Base images are build args so a deployment can pin them (for example by digest)
 # without patching this file. The defaults are the images this build has always used.
-ARG NODE_BUILD_IMAGE=node:20-bookworm-slim
+ARG NODE_BUILD_IMAGE=node:24-bookworm-slim
 ARG GO_BUILD_IMAGE=golang:1.25-bookworm
 ARG RUNTIME_IMAGE=gcr.io/distroless/base-debian12
 
