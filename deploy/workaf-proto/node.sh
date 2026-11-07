@@ -106,9 +106,14 @@ prove() {
   (( bad == 0 )) || die "the node is reachable from the control-plane host"
 }
 
+# stop waits for the node to go: a node drains its running harness on
+# SIGTERM and can outlive a quick check (down.sh once reported workaf-research
+# gone while it was still exiting). After ten seconds it is killed.
 stop() {
   remote "for f in node tunnel; do p=\$(cat $RN/\$f.pid 2>/dev/null) && kill \$p 2>/dev/null; rm -f $RN/\$f.pid; done; \
-    pkill -f '$KIT/bin/$EX' 2>/dev/null; pkill -f '$KIT/bin/codeaf' 2>/dev/null; true"
+    pkill -f '$KIT/bin/$EX' 2>/dev/null; pkill -f '$KIT/bin/codeaf' 2>/dev/null; \
+    for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -f '$KIT/bin/($EX|codeaf)' >/dev/null || break; sleep 1; done; \
+    pkill -9 -f '$KIT/bin/($EX|codeaf)' 2>/dev/null; true"
   say "$EX stopped on $NODE_HOST"
 }
 
