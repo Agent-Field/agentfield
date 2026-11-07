@@ -2,14 +2,11 @@
 # An example node on $NODE_HOST (dumb), run from spark.
 # Usage: node.sh start|stop|restart|status|prove|clean [workaf-support|workaf-research]
 #
-# THE NODE BINDS NO PORT ANYONE CAN REACH. The Go SDK on this branch still
-# takes its dispatches over HTTP (its node link carries only steer and cancel),
-# so the node serves on 127.0.0.1:$NODE_PORT and the node box itself dials out
-# an ssh reverse tunnel that makes that loopback port appear on spark's
-# loopback. The control plane dispatches to http://127.0.0.1:$NODE_PORT on
-# spark. Every connection is opened by the node box. When the SDK answers
-# `http` deliveries on its link, drop the tunnel and register the base_url
-# http://<node>.nodelink instead (see RUN.md).
+# THE NODE BINDS NO PORT ANYONE CAN REACH. It runs link only
+# (AGENTFIELD_NODE_LINK_ONLY=1): the SDK dials the control plane's node link,
+# registers http://<node>.nodelink, and serves every dispatch, nested call,
+# cancel and steer that arrives down that link. Its own listener is an
+# ephemeral loopback port, which `prove` checks nothing outside can reach.
 #
 # Secrets are piped straight from where they live into mode-600 files on the
 # node box, never through argv or this terminal:
@@ -56,22 +53,25 @@ secrets() {
   say "secrets in place on $NODE_HOST (mode 600)"
 }
 
-tunnel() {
-  remote "kill -0 \$(cat $RN/tunnel.pid 2>/dev/null) 2>/dev/null" && return
-  remote "nohup ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
-    -o ControlMaster=no -o ControlPath=none -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $NODE_SSH_KEY \
-    -R 127.0.0.1:$PORT:127.0.0.1:$PORT $CP_SSH_USER@$CP_SSH_ADDR \
-    > $R/logs/$EX-tunnel.log 2>&1 < /dev/null & echo \$! > $RN/tunnel.pid"
-  for i in {1..20}; do nc -z 127.0.0.1 $PORT 2>/dev/null && break; sleep 0.5; done
-  say "tunnel up: $NODE_HOST dialed $CP_SSH_ADDR; spark 127.0.0.1:$PORT → $NODE_HOST 127.0.0.1:$PORT"
+# codeaf_home writes the harness's codeaf home ($AGENTFIELD_HOME/codeaf, which
+# the SDK points CODEAF_HOME at): every model row is $MODEL, so no tier falls
+# back to a built-in default. The key comes in through OPENROUTER_API_KEY_FILE.
+codeaf_home() {
+  remote "mkdir -p $RN/home/codeaf && chmod 700 $RN/home/codeaf && umask 077 && cat > $RN/home/codeaf/config.json" <<JSON
+{"model.talk": "$MODEL", "task.model": "$MODEL", "vision_model": "$MODEL",
+ "models.tiers.low": "$MODEL", "models.tiers.reflex": "$MODEL"}
+JSON
+  say "codeaf home on $NODE_HOST: every model row $MODEL"
 }
 
 start() {
-  ship; secrets
-  if running; then say "$EX already up on $NODE_HOST pid $(remote "cat $RN/node.pid")"; tunnel; return; fi
-  tunnel
+  ship; secrets; codeaf_home
+  if running; then say "$EX already up on $NODE_HOST pid $(remote "cat $RN/node.pid")"; return; fi
+  # LINK ONLY: the SDK serves every control-plane request down the link it
+  # dials, listens on an ephemeral loopback port nobody else can reach, and
+  # registers http://$EX.nodelink. No tunnel, no inbound port.
   remote "cd $RN/work; env -i HOME=\$HOME USER=\$USER PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
-    AGENT_NODE_ID=$EX AGENT_LISTEN=127.0.0.1:$PORT AGENT_CALLBACK_URL=http://127.0.0.1:$PORT \
+    AGENT_NODE_ID=$EX AGENTFIELD_NODE_LINK_ONLY=1 \
     AGENTFIELD_URL=$CP_URL AGENTFIELD_API_KEY_FILE=$R/secrets/cpkey \
     OPENROUTER_API_KEY_FILE=$R/secrets/openrouter GITHUB_TOKEN_FILE=$R/secrets/github \
     AGENTFIELD_HOME=$RN/home CODEAF_BIN=$R/bin/codeaf SUPPORT_MODEL=$MODEL RESEARCH_MODEL=$MODEL \
@@ -92,10 +92,15 @@ start() {
 prove() {
   say "listeners held by $EX and its children on $NODE_HOST:"
   remote "p=\$(cat $RN/node.pid); pids=\$p,\$(pgrep -d, -P \$p || true); lsof -nP -a -iTCP -sTCP:LISTEN -p \${pids%,} 2>/dev/null | sed 's/^/    /' || true"
-  local bad=0 ip
+  local bad=0 ip p
+  local ports=(${(f)"$(remote "p=\$(cat $RN/node.pid); pids=\$p,\$(pgrep -d, -P \$p || true); lsof -nP -a -iTCP -sTCP:LISTEN -p \${pids%,} 2>/dev/null" | awk 'NR>1{n=split($9,a,":"); print a[n]}' | sort -u)"})
   for ip in $(remote "ipconfig getifaddr en0 2>/dev/null; ipconfig getifaddr en1 2>/dev/null; /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4 2>/dev/null" | sort -u); do
-    if nc -z -w 3 $ip $PORT 2>/dev/null; then say "  REACHABLE from spark: $ip:$PORT"; bad=1; else say "  not reachable from spark: $ip:$PORT"; fi
+    for p in $ports; do
+      [[ -n $p ]] || continue
+      if nc -z -w 3 $ip $p 2>/dev/null; then say "  REACHABLE from spark: $ip:$p"; bad=1; else say "  not reachable from spark: $ip:$p"; fi
+    done
   done
+  curl -fsS -H "X-API-Key: $(<$LOCAL/cp/secrets/cpkey)" http://127.0.0.1:$CP_PORT/api/v1/nodes/$EX 2>/dev/null | jq -c '{id, base_url, health_status}' || true
   (( bad == 0 )) || die "the node is reachable from the control-plane host"
 }
 
@@ -107,7 +112,6 @@ stop() {
 
 status() {
   running && say "$EX up on $NODE_HOST" || say "$EX down on $NODE_HOST"
-  remote "kill -0 \$(cat $RN/tunnel.pid 2>/dev/null) 2>/dev/null" && say "tunnel up" || say "tunnel down"
 }
 
 case ${1:-} in

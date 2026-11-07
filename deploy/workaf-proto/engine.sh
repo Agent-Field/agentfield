@@ -24,7 +24,7 @@ ship() {
     say "shipping codeaf to $ENGINE_HOST"
     scp -q $s/codeaf $ENGINE_HOST:$KIT/bin/.codeaf.new && remote "mv -f $R/bin/.codeaf.new $R/bin/codeaf"
   fi
-  scp -q $HERE/engine-driver.py $ENGINE_HOST:$KIT/bin/engine-driver.py
+  scp -q $HERE/engine-driver.py $HERE/rpc.py $ENGINE_HOST:$KIT/bin/
 }
 
 # home writes the fresh home's config.json: api_key copied from ~/.codeaf,
@@ -45,6 +45,8 @@ with os.fdopen(fd, "w") as f:
 print("fresh home config rows:", ", ".join(sorted(k for k in cfg if k != "api_key")))
 PY
   remote "umask 077; cat > $R/secrets/cpkey" < $LOCAL/cp/secrets/cpkey
+  # The factory's GitHub login (its runner needs one), from spark's gh.
+  remote "test -s $R/secrets/github" || gh auth token | remote "umask 077; cat > $R/secrets/github"
 }
 
 start() {
@@ -53,10 +55,10 @@ start() {
   home
   remote "rm -f $E/state.json $E/ctl; cd $E; env -i HOME=\$HOME USER=\$USER PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
     CODEAF_HOME=$E/home CODEAF_NO_UPDATE_CHECK=1 CODEAF_TELEMETRY=off TMPDIR=$E \
-    nohup /usr/bin/python3 $R/bin/engine-driver.py $R/bin/codeaf $E/home $E $CP_URL $R/secrets/cpkey $MODEL \
+    nohup /usr/bin/python3 $R/bin/engine-driver.py $R/bin/codeaf $E/home $E $CP_URL $R/secrets/cpkey $MODEL $R/secrets/github $DEMO_REPO \
     > $R/logs/engine-driver.log 2>&1 < /dev/null & echo \$! > $E/driver.pid"
-  for i in {1..90}; do
-    remote "grep -q '\"link\": \"up\"' $E/state.json 2>/dev/null" && break
+  for i in {1..150}; do
+    remote "grep -q '\"trigger\"' $E/state.json 2>/dev/null" && break
     running || { remote "tail -20 $R/logs/engine-driver.log $E/engine.stderr"; die "the engine driver exited"; }
     sleep 1
   done

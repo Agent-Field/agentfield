@@ -30,6 +30,8 @@
 : ${CODEAF_REPO:=$HOME/src/codeaf}
 : ${CODEAF_REF:=origin/proto/af-watch}
 : ${MODEL:=deepseek/deepseek-v4.1-flash}
+# The repository the factory's setup selects, and a native job runs on.
+: ${DEMO_REPO:=santoshkumarradha/factory-demo}
 
 # One directory per box holds everything this kit creates; `clean` removes it.
 : ${KIT:=af-workaf-proto}
