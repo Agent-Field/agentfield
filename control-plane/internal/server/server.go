@@ -110,6 +110,9 @@ type AgentFieldServer struct {
 	cancelDispatcher *services.CancelDispatcher
 	// linkHub holds every node-initiated link (internal/nodelink).
 	linkHub *nodelink.Hub
+	// pipe is the harness-entry store-and-forward and the steer
+	// (nodelink/pipe.go); nil on a store that has no relay table.
+	pipe *nodelink.Pipe
 	// Agentic API
 	apiCatalog *apicatalog.Catalog
 	kb         *knowledgebase.KB
@@ -584,6 +587,19 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	linkHub.Router = Router
 	// A node with no address is reached down its link (agenturl/link.go).
 	agenturl.SetLinkCarrier(linkHub)
+	var pipe *nodelink.Pipe
+	if store, ok := storageProvider.(nodelink.PipeStore); ok {
+		pipe = &nodelink.Pipe{
+			Store:         store,
+			Hub:           linkHub,
+			InternalToken: cfg.Features.DID.Authorization.InternalToken,
+			Retention: func() time.Duration {
+				return config.EffectiveExecutionLogs(cfg.AgentField.ExecutionLogs).RetentionPeriod
+			},
+		}
+		linkHub.Pipe = pipe
+		pipe.Start()
+	}
 
 	// Native RAG knowledge store: pick the embedding provider from config,
 	// falling back to the deterministic FakeEmbedder when no OpenAI key is set.
@@ -640,6 +656,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		triggerHandlers:        triggerHandlers,
 		cancelDispatcher:       cancelDispatcher,
 		linkHub:                linkHub,
+		pipe:                   pipe,
 		apiCatalog:             initAPICatalog(),
 		kb:                     initKnowledgeBase(),
 		knowledgeService:       knowledgeService,
@@ -1017,6 +1034,9 @@ func (s *AgentFieldServer) Stop() error {
 	// Stop cancel dispatcher
 	if s.cancelDispatcher != nil {
 		s.cancelDispatcher.Stop()
+	}
+	if s.pipe != nil {
+		s.pipe.Stop()
 	}
 	if s.linkHub != nil {
 		s.linkHub.Close()

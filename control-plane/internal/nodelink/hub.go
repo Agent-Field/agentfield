@@ -54,6 +54,8 @@ type Delivery struct {
 	Dedupe   string
 	Dispatch *Dispatch
 	Reason   string
+	// Message is a steer delivery's note.
+	Message string
 	// HTTP is an http delivery's request.
 	HTTP *HTTPRequest
 	// TTL is how long the delivery waits for an ack; zero is the kind's
@@ -89,6 +91,8 @@ type Hub struct {
 	InternalToken string
 	// Agents is where a link's node must already be registered.
 	Agents agentGetter
+	// Pipe serves the harness-entry frames (pipe.go). nil refuses them.
+	Pipe *Pipe
 
 	// RedeliverAfter is how long a sent delivery waits for its ack before it
 	// is sent again (default 30s). PingEvery and PongWait are the WebSocket
@@ -239,7 +243,7 @@ func (h *Hub) push(l *link, p *pending) {
 	p.tries++
 	tries := p.tries
 	h.mu.Unlock()
-	body := DeliverBody{Kind: p.d.Kind, IdempotencyKey: p.d.Dedupe, Reason: p.d.Reason}
+	body := DeliverBody{Kind: p.d.Kind, IdempotencyKey: p.d.Dedupe, Reason: p.d.Reason, Message: p.d.Message}
 	if p.d.Dispatch != nil {
 		body.Reasoner, body.Input, body.Headers = p.d.Dispatch.Reasoner, p.d.Dispatch.Input, p.d.Dispatch.Headers
 	}
@@ -309,6 +313,11 @@ func (h *Hub) sweep() {
 				switch {
 				case now.After(p.expires):
 					expired = append(expired, p.id)
+				// An http delivery already on this link is not sent again on a
+				// timer: a synchronous reasoner may work for minutes, and the
+				// node dedupes on the delivery id anyway. It goes again only
+				// on a new link (adopt clears sentAt).
+				case l != nil && p.d.Kind == KindHTTP && !p.sentAt.IsZero():
 				case l != nil && (p.sentAt.IsZero() || now.Sub(p.sentAt) >= h.RedeliverAfter):
 					sends = append(sends, send{l, p})
 				}
@@ -477,6 +486,10 @@ func (h *Hub) serve(node, instance string, conn *websocket.Conn) {
 		case TLog:
 			code, msg := h.reenter(http.MethodPost, "/api/v1/executions/"+url.PathEscape(f.Exec)+"/logs", f.Body)
 			_ = l.send(Frame{T: TOK, Seq: f.Seq, Exec: f.Exec}, OKBody{Code: code, Error: msg})
+		default:
+			if h.Pipe == nil || !h.Pipe.frame(l, f) {
+				_ = l.send(Frame{T: TOK, Seq: f.Seq, Exec: f.Exec}, OKBody{Code: http.StatusNotImplemented, Error: "this control plane does not take " + f.T + " frames"})
+			}
 		}
 	}
 	h.drop(l)
@@ -502,9 +515,12 @@ func (h *Hub) adopt(l *link) {
 
 func (h *Hub) drop(l *link) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.links[l.node] == l {
 		delete(h.links, l.node)
+	}
+	h.mu.Unlock()
+	if h.Pipe != nil {
+		h.Pipe.unsubscribe(l)
 	}
 }
 

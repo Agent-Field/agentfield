@@ -42,9 +42,20 @@ const (
 	TProgress  = "progress"  // exec; body = a non-terminal status body
 	TLog       = "log"       // exec; body = the POST /executions/:id/logs body
 	THeartbeat = "heartbeat" // body = Heartbeat
+
+	// The pipe (pipe.go). TEntries goes both ways: up from the node that ran
+	// an execution (body = EntriesUp), and down to the run's subscriber (body
+	// = EntriesDown). TRun is down only. TSubscribe, TEntriesAck and TSteer are
+	// up from the subscriber; each is answered by an ok frame on its seq.
+	TEntries    = "entries"     // exec; up EntriesUp, down EntriesDown
+	TEntriesAck = "entries_ack" // exec; body = EntriesAck
+	TSubscribe  = "subscribe"   // body = Subscribe
+	TRun        = "run"         // down; body = RunState
+	TSteer      = "steer"       // exec; body = SteerUp
 )
 
-var known = map[string]bool{TWelcome: true, TDeliver: true, TOK: true, THello: true, TAck: true, TStatus: true, TProgress: true, TLog: true, THeartbeat: true}
+var known = map[string]bool{TWelcome: true, TDeliver: true, TOK: true, THello: true, TAck: true, TStatus: true, TProgress: true, TLog: true, THeartbeat: true,
+	TEntries: true, TEntriesAck: true, TSubscribe: true, TRun: true, TSteer: true}
 
 // Frame is the one envelope every message travels in.
 type Frame struct {
@@ -65,6 +76,9 @@ const (
 	// (agenturl's link carrier): the node serves it on its own handler and
 	// acks with the response. A node takes it only if its hello accepts it.
 	KindHTTP = "http"
+	// KindSteer is a person's note for a running codeaf harness execution, for
+	// a node that takes it as its own delivery rather than over KindHTTP.
+	KindSteer = "steer"
 )
 
 // DeliverBody is a deliver frame's body.
@@ -77,6 +91,8 @@ type DeliverBody struct {
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	// Cancel.
 	Reason string `json:"reason,omitempty"`
+	// Steer (a node whose hello accepts "steer" but not "http").
+	Message string `json:"message,omitempty"`
 	// HTTP.
 	Method string `json:"method,omitempty"`
 	Path   string `json:"path,omitempty"`
@@ -135,6 +151,79 @@ type Welcome struct {
 type OKBody struct {
 	Code  int    `json:"code"`
 	Error string `json:"error,omitempty"`
+	// Through answers an entries frame: the highest seq the control plane
+	// now holds or has already passed on, so the node may forget every entry
+	// up to it.
+	Through int64 `json:"through,omitempty"`
+	// Dropped answers an entries_ack: how many held entries were deleted.
+	Dropped int64 `json:"dropped,omitempty"`
+}
+
+// Entry is one harness entry in flight. Data is the node's bytes, verbatim.
+type Entry struct {
+	Seq  int64           `json:"seq"`
+	Kind string          `json:"kind"`
+	Data json.RawMessage `json:"data,omitempty"`
+	At   string          `json:"at,omitempty"`
+}
+
+// EntriesUp is an up entries frame's body.
+type EntriesUp struct {
+	Entries []Entry `json:"entries"`
+}
+
+// EntriesDown is a down entries frame's body: entries of one execution,
+// oldest first, every seq above the subscriber's last ack.
+type EntriesDown struct {
+	RunID   string  `json:"run_id"`
+	Entries []Entry `json:"entries"`
+}
+
+// Subscribe is the subscriber's subscribe body. The link's own node is the
+// subscriber; it is sent only the runs it owns. After skips entries the
+// subscriber already keeps but has not acked yet (exec → seq). Runs names
+// runs it wants a fresh tree for even if they ended while it was away.
+type Subscribe struct {
+	After map[string]int64 `json:"after,omitempty"`
+	Runs  []string         `json:"runs,omitempty"`
+}
+
+// EntriesAck is an entries_ack body: the subscriber keeps every entry of
+// the frame's execution through Through, so the control plane drops them.
+// (The frame's own seq is the up-frame's, answered by the ok.)
+type EntriesAck struct {
+	Through int64 `json:"through"`
+}
+
+// SteerUp is a steer frame's body.
+type SteerUp struct {
+	Message string `json:"message"`
+}
+
+// RunState is a run frame's body: some executions of one run as the control
+// plane holds them now. Full is true for a whole-tree snapshot (sent on
+// subscribe); otherwise it carries the executions that just changed.
+type RunState struct {
+	RunID      string      `json:"run_id"`
+	Owner      string      `json:"owner"`
+	Full       bool        `json:"full,omitempty"`
+	Executions []ExecState `json:"executions"`
+}
+
+// ExecState is one execution's control data, the only part of it the
+// control plane keeps for good.
+type ExecState struct {
+	ExecutionID       string          `json:"execution_id"`
+	ParentExecutionID string          `json:"parent_execution_id,omitempty"`
+	AgentNodeID       string          `json:"agent_node_id"`
+	ReasonerID        string          `json:"reasoner_id"`
+	Status            string          `json:"status"`
+	StartedAt         string          `json:"started_at,omitempty"`
+	CompletedAt       string          `json:"completed_at,omitempty"`
+	DurationMS        int64           `json:"duration_ms,omitempty"`
+	Error             string          `json:"error,omitempty"`
+	Result            json.RawMessage `json:"result,omitempty"`
+	ResultOmitted     bool            `json:"result_omitted,omitempty"`
 }
 
 // Encode builds a frame of type t with body b (nil for none).

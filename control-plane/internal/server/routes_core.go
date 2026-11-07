@@ -136,12 +136,13 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	}))
 	agentAPI.POST("/executions/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
 	// The codeaf harness relay and the steer (handlers/relay.go).
-	relayRetention := func() time.Duration { return s.config.AgentField.ExecutionLogs.RetentionPeriod }
-	agentAPI.POST("/executions/:execution_id/relay", handlers.RelayPutHandler(s.storage, relayRetention))
-	agentAPI.GET("/executions/:execution_id/relay", handlers.RelayReadHandler(s.storage))
-	agentAPI.POST("/executions/:execution_id/relay/ack", handlers.RelayAckHandler(s.storage))
-	agentAPI.GET("/relay/count", handlers.RelayCountHandler(s.storage))
-	agentAPI.POST("/executions/:execution_id/steer", handlers.SteerExecutionHandler(s.storage, s.config.Features.DID.Authorization.InternalToken))
+	if s.pipe != nil {
+		agentAPI.POST("/executions/:execution_id/relay", handlers.RelayPutHandler(s.pipe))
+		agentAPI.GET("/executions/:execution_id/relay", handlers.RelayReadHandler(s.pipe))
+		agentAPI.POST("/executions/:execution_id/relay/ack", handlers.RelayAckHandler(s.pipe))
+		agentAPI.GET("/relay/count", handlers.RelayCountHandler(s.pipe))
+		agentAPI.POST("/executions/:execution_id/steer", handlers.SteerExecutionHandler(s.pipe))
+	}
 	agentAPI.POST("/executions/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/restart", handlers.RestartExecutionHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))

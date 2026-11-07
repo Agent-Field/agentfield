@@ -35,6 +35,24 @@ type carrierBox struct{ c LinkCarrier }
 // SetLinkCarrier installs the control plane's link hub as the carrier.
 func SetLinkCarrier(c LinkCarrier) { carrier.Store(carrierBox{c}) }
 
+func carrierInstalled() bool {
+	box, _ := carrier.Load().(carrierBox)
+	return box.c != nil
+}
+
+// liveCarrier is a carrier that can say whether a node is linked now.
+type liveCarrier interface {
+	Live(node string) bool
+}
+
+// LinkLive says node holds a live link to this control plane now. A node
+// that does is reachable whatever its last HTTP health probe said.
+func LinkLive(node string) bool {
+	box, _ := carrier.Load().(carrierBox)
+	lc, ok := box.c.(liveCarrier)
+	return ok && lc.Live(node)
+}
+
 // LinkNode is the node a URL host names when it is a link host.
 func LinkNode(host string) (string, bool) {
 	host = strings.ToLower(strings.TrimSpace(host))

@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -148,4 +150,104 @@ func (ls *LocalStorage) RelayCount(ctx context.Context, executionID string) (int
 	var n int64
 	err := ls.db.QueryRowContext(ctx, q, args...).Scan(&n)
 	return n, err
+}
+
+// RelayExecutions is every execution with entries held now, for a subscriber
+// that reconnects and must be sent what it has not acked.
+func (ls *LocalStorage) RelayExecutions(ctx context.Context) ([]string, error) {
+	if err := ls.relayTable(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := ls.db.QueryContext(ctx, `SELECT DISTINCT execution_id FROM execution_relay ORDER BY execution_id`)
+	if err != nil {
+		return nil, fmt.Errorf("relay executions: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// ── WHO A RUN BELONGS TO ────────────────────────────────────────────────────
+//
+// A run's owner is the node that may watch it: the node that started it (an
+// execute carrying X-AgentField-Run-Owner) or the node a trigger routed it to.
+// Every execution in the run's tree shares its run_id, so one row scopes the
+// whole tree, descendants included. THE FIRST OWNER WINS: a nested call that
+// carries the header again cannot move a run to another subscriber. This is
+// control data, like the execution tree itself, so it is durable.
+
+func (ls *LocalStorage) runOwnerTable(ctx context.Context) error {
+	if err := ls.relayTable(ctx); err != nil {
+		return err
+	}
+	_, err := ls.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS run_owners (
+		run_id TEXT PRIMARY KEY,
+		owner_node_id TEXT NOT NULL,
+		created_at TIMESTAMP NOT NULL)`)
+	if err != nil {
+		return fmt.Errorf("create run_owners: %w", err)
+	}
+	return nil
+}
+
+// SetRunOwner records owner for runID unless the run already has one.
+func (ls *LocalStorage) SetRunOwner(ctx context.Context, runID, owner string) error {
+	if runID == "" || owner == "" {
+		return nil
+	}
+	if err := ls.runOwnerTable(ctx); err != nil {
+		return err
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	_, err := ls.db.ExecContext(ctx, `INSERT INTO run_owners (run_id, owner_node_id, created_at) VALUES (?, ?, ?)
+		ON CONFLICT (run_id) DO NOTHING`, runID, owner, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("set run owner: %w", err)
+	}
+	return nil
+}
+
+// RunOwner is runID's owner, "" when it has none.
+func (ls *LocalStorage) RunOwner(ctx context.Context, runID string) (string, error) {
+	if err := ls.runOwnerTable(ctx); err != nil {
+		return "", err
+	}
+	var owner string
+	err := ls.db.QueryRowContext(ctx, `SELECT owner_node_id FROM run_owners WHERE run_id = ?`, runID).Scan(&owner)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("run owner: %w", err)
+	}
+	return owner, nil
+}
+
+// RunsOwnedBy is every run owner has owned since since, oldest first.
+func (ls *LocalStorage) RunsOwnedBy(ctx context.Context, owner string, since time.Time) ([]string, error) {
+	if err := ls.runOwnerTable(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := ls.db.QueryContext(ctx, `SELECT run_id FROM run_owners WHERE owner_node_id = ? AND created_at >= ? ORDER BY created_at`, owner, since.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("runs owned: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
