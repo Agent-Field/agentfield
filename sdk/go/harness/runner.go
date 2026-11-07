@@ -516,13 +516,13 @@ func (r *Runner) handleSchemaWithRetry(
 				retryPrompt = followup
 			}
 		} else {
-			errorDetail := DiagnoseOutputFailure(outputPath, schema)
+			errorDetail := DiagnoseOutputFailureFor(outputPath, schema, dest)
 			retryPrompt = BuildFollowupPrompt(errorDetail, outputDir, schema)
 		}
 
 		r.Logger.Printf("Schema validation retry %d/%d: %s",
 			retryNum+1, maxRetries,
-			truncate(DiagnoseOutputFailure(outputPath, schema), 200))
+			truncate(DiagnoseOutputFailureFor(outputPath, schema, dest), 200))
 
 		retryOpts := opts
 		if lastSessionID != "" && !isCrash {
@@ -582,7 +582,7 @@ func (r *Runner) handleSchemaWithRetry(
 
 	elapsed := int(time.Since(startTime).Milliseconds())
 	cost, turns, sid, msgs, tok := accumulateMetrics(allRaws)
-	finalDiagnosis := DiagnoseOutputFailure(outputPath, schema)
+	finalDiagnosis := DiagnoseOutputFailureFor(outputPath, schema, dest)
 	res := &Result{
 		Result:  allRaws[len(allRaws)-1].Result,
 		IsError: true,

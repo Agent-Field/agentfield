@@ -234,8 +234,31 @@ func TestDiagnoseOutputFailure(t *testing.T) {
 		path := filepath.Join(dir, "wrong.json")
 		os.WriteFile(path, []byte(`{"other": "field"}`), 0o644)
 		result := DiagnoseOutputFailure(path, schema)
-		assert.Contains(t, result, "top-level keys")
+		assert.Contains(t, result, "Missing top-level keys: [name]")
 	})
+}
+
+// THE DIAGNOSIS NAMES THE REAL FAILURE. Right keys, wrong value type: the old
+// message listed two equal key sets in different orders and nothing to fix.
+func TestTheDiagnosisNamesTheValueThatIsWrongNotTheKeys(t *testing.T) {
+	type finding struct {
+		Driver   string            `json:"driver"`
+		Stars    int64             `json:"stars"`
+		Features map[string]string `json:"features"`
+	}
+	schema, err := StructToJSONSchema(finding{})
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "out.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"features":{"cgo":false},"stars":"4k","driver":"ncruces"}`), 0o644))
+
+	got := DiagnoseOutputFailureFor(path, schema, &finding{})
+	assert.NotContains(t, got, "top-level keys")
+	assert.Contains(t, got, "stars", got)
+	assert.Contains(t, got, "features", got)
+
+	var untouched finding
+	_ = DiagnoseOutputFailureFor(path, schema, &untouched)
+	assert.Equal(t, finding{}, untouched, "the diagnosis never writes to dest")
 }
 
 func TestBuildFollowupPrompt(t *testing.T) {
