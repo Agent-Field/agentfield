@@ -189,6 +189,22 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 		}
 	}
 
+	// The "cloudgpu/" prefix is a routing marker for callers that select the
+	// gateway by model string; CloudGPU serves the bare id, so the marker must
+	// not reach the wire.
+	//
+	// Only a non-empty req.Model is rewritten, and only on a copy: the
+	// caller's Request is left untouched, c.config.Model keeps what was
+	// configured, and IsCloudGPU() still reports the truth.
+	if c.config.IsCloudGPU() && req.Model != "" {
+		if stripped := stripCloudGPUPrefix(req.Model); stripped != req.Model {
+			model = stripped
+			shadow := *req
+			shadow.Model = stripped
+			req = &shadow
+		}
+	}
+
 	// Models that reject custom temperature receive no temperature field
 	// (on a copy; the caller's Request is untouched).
 	if req.Temperature != nil && rejectsTemperature(model) {

@@ -250,6 +250,7 @@ func TestSimpleAIAndStructuredAI_ErrorPaths(t *testing.T) {
 		t.Setenv("INFRON_API_KEY", "")
 		t.Setenv("IONET_API_KEY", "")
 		t.Setenv("RUNCRATE_API_KEY", "")
+		t.Setenv("CLOUDGPU_API_KEY", "")
 		t.Setenv("AI_BASE_URL", "")
 		t.Setenv("AI_MODEL", "")
 
