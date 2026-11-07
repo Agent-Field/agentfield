@@ -75,7 +75,8 @@ start() {
     AGENTFIELD_URL=$CP_URL AGENTFIELD_API_KEY_FILE=$R/secrets/cpkey \
     OPENROUTER_API_KEY_FILE=$R/secrets/openrouter GITHUB_TOKEN_FILE=$R/secrets/github \
     AGENTFIELD_HOME=$RN/home CODEAF_BIN=$R/bin/codeaf SUPPORT_MODEL=$MODEL RESEARCH_MODEL=$MODEL \
-    SUPPORT_WORKDIR=$RN/work TMPDIR=$RN/work \
+    SUPPORT_WORKDIR=$RN/work RESEARCH_WORKDIR=$RN/work TMPDIR=$RN/work \
+    GOPATH=$RN/gopath GOCACHE=$RN/gocache GOMODCACHE=$RN/gopath/pkg/mod HOMEBREW_NO_AUTO_UPDATE=1 \
     nohup $R/bin/$EX > $R/logs/$EX.log 2>&1 < /dev/null & echo \$! > $RN/node.pid"
   local key=$(<$LOCAL/cp/secrets/cpkey)
   for i in {1..60}; do
@@ -112,7 +113,7 @@ status() {
 case ${1:-} in
   start) start;; stop) stop;; restart) stop; sleep 1; start;; status) status;; prove) prove;;
   clean) EX=workaf-research RN="$R/workaf-research" stop; EX=workaf-support RN="$R/workaf-support" stop
-         remote "rm -rf $R; ssh-keygen -R $CP_SSH_ADDR >/dev/null 2>&1; true"
+         remote "chmod -R u+w $R 2>/dev/null; rm -rf $R; sed -i '' -E \"/^${CP_SSH_ADDR//./\\\\.} /d\" \$HOME/.ssh/known_hosts; true"
          say "removed ~/$KIT on $NODE_HOST (binaries, homes, clones, logs, secrets) and its known_hosts row for $CP_SSH_ADDR";;
   *) die "usage: node.sh start|stop|restart|status|prove|clean [workaf-support|workaf-research]";;
 esac

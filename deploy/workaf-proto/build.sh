@@ -45,4 +45,4 @@ case ${1:-all} in
   clean) go clean -cache 2>/dev/null || true; rm -rf $LOCAL/stage $LOCAL/src $LOCAL/gocache; say "removed stage, sources and GOCACHE";;
   *) die "usage: build.sh [all|cp|nodes|codeaf|clean]";;
 esac
-ls -la $STAGE/*/ 2>/dev/null | grep -v '^total' || true
+ls -la $STAGE/*/(N) 2>/dev/null | grep -v '^total' || true

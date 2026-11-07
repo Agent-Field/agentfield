@@ -169,7 +169,9 @@ The plan every investigation follows:
 You measure ONE driver: %s (database/sql name %q; %s).
 This directory is empty. Create a Go module, write the probe program on this
 driver, run the plan's commands, and report what you measured. Report a build
-that fails as the failure, not as a number.`, str(in, "question"), render(in["plan"]), module, sqlName, note)
+that fails as the failure, not as a number. Work only inside this directory:
+install nothing system-wide (no brew, no apt, no docker pulls); if a target
+needs a tool that is not already here, report that as the result.`, str(in, "question"), render(in["plan"]), module, sqlName, note)
 	var m Measurement
 	return harnessInto(ctx, r.app, prompt, dir, &m)
 }
