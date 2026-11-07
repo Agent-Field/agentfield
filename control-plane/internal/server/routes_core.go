@@ -156,7 +156,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// Authenticated approval resolution by execution ID — same resolution
 	// logic as the HMAC webhook below, for operators/CLIs that hold an API
 	// key rather than the webhook secret.
-	agentAPI.POST("/executions/:execution_id/approval-response", handlers.ResolveApprovalHandler(s.storage))
+	agentAPI.POST("/executions/:execution_id/approval-response", handlers.ResolveApprovalHandler(s.storage, s.approvalScope()))
 
 	// Agent-scoped approval routes — enforce that the execution belongs to the requesting agent.
 	agentAPI.POST("/agents/:node_id/executions/:execution_id/request-approval", handlers.AgentScopedRequestApprovalHandler(s.storage))
@@ -455,4 +455,13 @@ func rateLimitKeyFromContext(c *gin.Context) string {
 		}
 	}
 	return "ip:" + c.ClientIP()
+}
+
+// approvalScope is the run-owner rule the approval answer route applies, or
+// nil when there is no pipe (a nil *Pipe in the interface would not be nil).
+func (s *AgentFieldServer) approvalScope() handlers.ApprovalScope {
+	if s.pipe == nil {
+		return nil
+	}
+	return s.pipe
 }

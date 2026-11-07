@@ -342,15 +342,71 @@ func (p *Pipe) Changed(ctx context.Context, exec string) {
 	if err != nil || rec == nil {
 		return
 	}
-	_ = s.l.send(Frame{T: TRun, Exec: exec}, RunState{RunID: run, Owner: owner, Executions: []ExecState{stateOf(rec)}})
+	_ = s.l.send(Frame{T: TRun, Exec: exec}, RunState{RunID: run, Owner: owner, Executions: []ExecState{p.stateWithApproval(ctx, rec)}})
 }
 
 // maxResult is the largest result a run frame carries; a larger one is
 // flagged result_omitted and read from GET /executions/:id.
 const maxResult = 256 << 10
 
+// fitApprovalBodies drops approval bodies from a snapshot that would not fit
+// one frame, flagging each so the owner reads it from approval-status. One
+// execution's body is capped at ask time, so a single-execution frame always
+// fits; only a run with several waiting at once can need this.
+func fitApprovalBodies(state *RunState) {
+	raw, err := json.Marshal(state)
+	if err == nil && len(raw) < MaxFrame-(64<<10) {
+		return
+	}
+	for i := range state.Executions {
+		if a := state.Executions[i].Approval; a != nil && a.Body != "" {
+			a.Body, a.BodyOmitted = "", true
+		}
+	}
+}
+
+// approvalStore is the part of a store that can say what a waiting
+// execution is asking. A store without it still pushes status and reason.
+type approvalStore interface {
+	GetWorkflowExecution(ctx context.Context, executionID string) (*types.WorkflowExecution, error)
+	GetApprovalQuestion(ctx context.Context, executionID, approvalRequestID string) (*types.ApprovalQuestion, error)
+}
+
+// stateWithApproval is stateOf plus the pending approval's question, so the
+// run's owner learns from the one frame that a person is needed and what
+// they are asked.
+func (p *Pipe) stateWithApproval(ctx context.Context, e *types.Execution) ExecState {
+	s := stateOf(e)
+	if s.Status != types.ExecutionStatusWaiting {
+		return s
+	}
+	as, ok := p.Store.(approvalStore)
+	if !ok {
+		return s
+	}
+	wf, err := as.GetWorkflowExecution(ctx, e.ExecutionID)
+	if err != nil || wf == nil || wf.ApprovalRequestID == nil || *wf.ApprovalRequestID == "" {
+		return s
+	}
+	if wf.ApprovalStatus == nil || *wf.ApprovalStatus != "pending" {
+		return s
+	}
+	a := &ApprovalState{ID: *wf.ApprovalRequestID}
+	if wf.ApprovalExpiresAt != nil {
+		a.ExpiresAt = wf.ApprovalExpiresAt.UTC().Format(time.RFC3339)
+	}
+	if q, err := as.GetApprovalQuestion(ctx, e.ExecutionID, a.ID); err == nil && q != nil {
+		a.Kind, a.Question, a.Body, a.Options = q.Kind, q.Question, q.Body, q.Options
+	}
+	s.Approval = a
+	return s
+}
+
 func stateOf(e *types.Execution) ExecState {
 	s := ExecState{ExecutionID: e.ExecutionID, AgentNodeID: e.AgentNodeID, ReasonerID: e.ReasonerID, Status: e.Status}
+	if e.StatusReason != nil {
+		s.StatusReason = *e.StatusReason
+	}
 	if e.ParentExecutionID != nil {
 		s.ParentExecutionID = *e.ParentExecutionID
 	}
@@ -432,8 +488,9 @@ func (p *Pipe) catchUp(ctx context.Context, s *subscriber, named []string) {
 		}
 		state := RunState{RunID: run, Owner: s.node, Full: true}
 		for _, e := range execs {
-			state.Executions = append(state.Executions, stateOf(e))
+			state.Executions = append(state.Executions, p.stateWithApproval(ctx, e))
 		}
+		fitApprovalBodies(&state)
 		_ = s.l.send(Frame{T: TRun}, state)
 	}
 	for run, execs := range heldRun {
@@ -470,6 +527,13 @@ func (p *Pipe) Read(ctx context.Context, caller, exec string, after int64, limit
 		return nil, err
 	}
 	return p.Store.RelayAfter(ctx, exec, after, limit)
+}
+
+// Scope is scope for another door: the approval answer route holds a
+// caller to the runs it owns the same way.
+func (p *Pipe) Scope(ctx context.Context, caller, exec string) error {
+	p.init()
+	return p.scope(ctx, caller, exec)
 }
 
 // scope refuses a caller that does not own exec's run. An empty caller is

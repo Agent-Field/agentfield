@@ -218,12 +218,31 @@ type ExecState struct {
 	AgentNodeID       string          `json:"agent_node_id"`
 	ReasonerID        string          `json:"reasoner_id"`
 	Status            string          `json:"status"`
+	StatusReason      string          `json:"status_reason,omitempty"`
 	StartedAt         string          `json:"started_at,omitempty"`
 	CompletedAt       string          `json:"completed_at,omitempty"`
 	DurationMS        int64           `json:"duration_ms,omitempty"`
 	Error             string          `json:"error,omitempty"`
 	Result            json.RawMessage `json:"result,omitempty"`
 	ResultOmitted     bool            `json:"result_omitted,omitempty"`
+	// Approval is the question a waiting execution asks a person; it is
+	// present only while that approval is pending.
+	Approval *ApprovalState `json:"approval,omitempty"`
+}
+
+// ApprovalState is a pending approval as the run's owner shows it: the
+// request's id (what an answer resolves), its kind, the one-line question,
+// the full markdown body and the option labels.
+type ApprovalState struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind,omitempty"`
+	Question string `json:"question,omitempty"`
+	Body     string `json:"body,omitempty"`
+	// BodyOmitted is set when a whole-run snapshot was too large to carry
+	// every body; the body is then read from GET …/approval-status.
+	BodyOmitted bool     `json:"body_omitted,omitempty"`
+	Options     []string `json:"options,omitempty"`
+	ExpiresAt   string   `json:"expires_at,omitempty"`
 }
 
 // Encode builds a frame of type t with body b (nil for none).
