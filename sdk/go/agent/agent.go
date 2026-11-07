@@ -2016,6 +2016,12 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 	execCtx := executionContextFrom(ctx)
 	runID := execCtx.RunID
 	if runID == "" {
+		// A run a trigger started arrives with its workflow id and no run id.
+		// The child belongs to that same run, or its parent link is lost and
+		// every call would start a tree of its own.
+		runID = execCtx.WorkflowID
+	}
+	if runID == "" {
 		runID = generateRunID()
 	}
 
