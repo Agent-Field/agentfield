@@ -62,10 +62,14 @@ FROM ${GO_IMAGE}
 
 WORKDIR /workspace
 
-COPY sdk/go /tmp/go-sdk
+# sdk/go's harness tests read ../../codeaf-auth-contract.json, which resolves from
+# sdk/go/harness to sdk/codeaf-auth-contract.json (the CodeAF auth contract shared with
+# the Python and TypeScript SDKs). Keep that layout so the tests find it.
+COPY sdk/go /tmp/src/sdk/go
+COPY sdk/codeaf-auth-contract.json /tmp/src/sdk/codeaf-auth-contract.json
 
 RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
-    cd /tmp/go-sdk && go mod download && go test ./...
+    cd /tmp/src/sdk/go && go mod download && go test ./...
 
 # aforge is a statically linked ELF binary, so the debian-built asset runs
 # unchanged on this musl/alpine base. See the aforge-dist stage for why
