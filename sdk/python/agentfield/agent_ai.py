@@ -87,12 +87,16 @@ def _is_empty_structured_result(parsed: BaseModel) -> bool:
 
 
 def _increase_retry_max_tokens(params: Dict[str, Any]) -> None:
-    current = params.get("max_tokens")
-    if current is None:
-        params.pop("max_tokens", None)
-        return
-    if isinstance(current, int) and current > 0:
-        params["max_tokens"] = current * 2
+    # Some providers (e.g. OpenAI) get ``max_tokens`` renamed to
+    # ``max_completion_tokens`` before the call, so handle both keys.
+    for key in ("max_tokens", "max_completion_tokens"):
+        if key not in params:
+            continue
+        current = params[key]
+        if current is None:
+            params.pop(key, None)
+        elif isinstance(current, int) and current > 0:
+            params[key] = current * 2
 
 
 def _raise_if_empty_reasoning_structured_output(
