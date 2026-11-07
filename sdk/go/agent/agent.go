@@ -585,6 +585,8 @@ type Agent struct {
 	// right now, keyed by execution_id (harness_live.go). An execution not in
 	// it cannot be steered.
 	steer        steerBoxes
+	relays       relays
+	link         linkState
 	executionWG  sync.WaitGroup
 	shutdownMu   sync.Mutex
 	shuttingDown bool
@@ -610,6 +612,13 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		cfg.APIKey = strings.TrimSpace(os.Getenv("AGENTFIELD_API_KEY"))
+	}
+	// A LINK-ONLY NODE HAS NO INBOUND PORT (link.go): it listens on loopback
+	// only and registers the link host, so the control plane reaches it down
+	// the link it opens and nothing else can reach it at all.
+	if LinkOnly() {
+		cfg.ListenAddress = "127.0.0.1:0"
+		cfg.PublicURL = linkOnlyURL(cfg.NodeID)
 	}
 	if cfg.ListenAddress == "" {
 		cfg.ListenAddress = ":8001"

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -38,26 +39,38 @@ printf '%s\n' '{"ok":true,"stop":"done","answer":"wrote it"}'
 `
 
 type cpRecorder struct {
-	mu   sync.Mutex
-	logs []ExecutionLogEntry
+	mu      sync.Mutex
+	entries []RelayEntry
+	seen    map[int64]bool
+	down    bool
 }
 
 func (c *cpRecorder) handler(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/logs") {
-			raw, _ := io.ReadAll(r.Body)
-			var batch struct {
-				Entries []ExecutionLogEntry `json:"entries"`
-			}
-			var one ExecutionLogEntry
+		if strings.HasSuffix(r.URL.Path, "/relay") {
 			c.mu.Lock()
-			if json.Unmarshal(raw, &batch) == nil && len(batch.Entries) > 0 {
-				c.logs = append(c.logs, batch.Entries...)
-			} else if json.Unmarshal(raw, &one) == nil {
-				c.logs = append(c.logs, one)
+			defer c.mu.Unlock()
+			if c.down {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
 			}
-			c.mu.Unlock()
-			w.WriteHeader(http.StatusAccepted)
+			var body struct {
+				Entries []RelayEntry `json:"entries"`
+			}
+			raw, _ := io.ReadAll(r.Body)
+			require.NoError(t, json.Unmarshal(raw, &body))
+			if c.seen == nil {
+				c.seen = map[int64]bool{}
+			}
+			var through int64
+			for _, e := range body.Entries {
+				if !c.seen[e.Seq] {
+					c.seen[e.Seq] = true
+					c.entries = append(c.entries, e)
+				}
+				through = e.Seq
+			}
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"through":%d}`, through)))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -65,12 +78,12 @@ func (c *cpRecorder) handler(t *testing.T) http.Handler {
 	})
 }
 
-func (c *cpRecorder) types() []string {
+func (c *cpRecorder) kinds() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var out []string
-	for _, l := range c.logs {
-		out = append(out, l.EventType)
+	for _, e := range c.entries {
+		out = append(out, e.Kind)
 	}
 	return out
 }
@@ -102,7 +115,10 @@ func TestHarnessOnCodeAFStreamsItsTranscriptAndTakesASteer(t *testing.T) {
 	ctx := contextWithExecution(context.Background(), ExecutionContext{ExecutionID: "exec-write", RunID: "run-1", WorkflowID: "run-1", AgentNodeID: "demo", ReasonerName: "write"})
 	done := make(chan error, 1)
 	go func() {
-		_, err := a.Harness(ctx, "write a function", nil, nil, harness.Options{})
+		res, err := a.Harness(ctx, "write a function", nil, nil, harness.Options{})
+		if res != nil && res.IsError {
+			t.Logf("harness result: %+v", res)
+		}
 		done <- err
 	}()
 
@@ -124,31 +140,67 @@ func TestHarnessOnCodeAFStreamsItsTranscriptAndTakesASteer(t *testing.T) {
 	// Ended: no longer steerable.
 	assert.Equal(t, http.StatusConflict, steerRequest(a, "exec-write", "too late").Code)
 
-	require.Eventually(t, func() bool {
-		ty := cp.types()
-		return len(ty) >= 6
-	}, 5*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool { return len(cp.kinds()) >= 6 }, 5*time.Second, 20*time.Millisecond)
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
-	var codeaf []string
 	var order []string
-	for _, l := range cp.logs {
-		assert.Equal(t, "exec-write", l.ExecutionID)
-		if l.EventType == harnessEventType {
-			raw, _ := json.Marshal(l.Attributes["codeaf"])
-			codeaf = append(codeaf, string(raw))
+	var lines []string
+	for i, e := range cp.entries {
+		assert.Equal(t, int64(i+1), e.Seq, "seq is the node's, from 1, in order")
+		if e.Kind != RelayPerson {
+			order = append(order, e.Kind)
 		}
-		if l.EventType != harnessPersonType {
-			order = append(order, l.EventType)
+		if e.Kind == RelayLine {
+			lines = append(lines, string(e.Data))
 		}
 	}
-	assert.Equal(t, []string{harnessStartedType, harnessEventType, harnessEventType, harnessEventType, harnessEventType, harnessEndedType}, order)
-	assert.Equal(t, `{"kind":"assistant","turn":1,"text":"looking at main.go"}`, codeaf[1], "the event was not carried verbatim")
-	assert.Contains(t, codeaf[2], "steered: also add a doc comment", "codeaf never read the note")
-	assert.Contains(t, cp.types(), harnessPersonType)
-	started := cp.logs[0]
-	assert.Equal(t, true, started.Attributes["steerable"])
-	assert.Equal(t, "run-1", started.RunID)
+	assert.Equal(t, []string{RelayStarted, RelayLine, RelayLine, RelayLine, RelayEnded}, order)
+	assert.Equal(t, `{"kind":"assistant","turn":1,"text":"looking at main.go"}`, lines[1], "the line was not carried verbatim")
+	assert.Contains(t, lines[2], "steered: also add a doc comment", "codeaf never read the note")
+	assert.Contains(t, cp.kindsLocked(), RelayPerson)
+	assert.JSONEq(t, `{"harness":"codeaf","steerable":true}`, string(cp.entries[0].Data))
+}
+
+func (c *cpRecorder) kindsLocked() []string {
+	var out []string
+	for _, e := range c.entries {
+		out = append(out, e.Kind)
+	}
+	return out
+}
+
+// A control plane that is down for a while loses nothing and doubles
+// nothing: the node keeps every unanswered entry and replays it.
+func TestRelaySurvivesAControlPlaneOutage(t *testing.T) {
+	relayMaxBackoff = 50 * time.Millisecond
+	t.Cleanup(func() { relayMaxBackoff = 5 * time.Second })
+	cp := &cpRecorder{}
+	server := httptest.NewServer(cp.handler(t))
+	defer server.Close()
+	a, err := New(Config{NodeID: "demo", Version: "1", AgentFieldURL: server.URL, Logger: log.New(io.Discard, "", 0)})
+	require.NoError(t, err)
+	r := a.relayFor("exec-1")
+	r.send(RelayStarted, json.RawMessage(`{}`))
+	require.Eventually(t, func() bool { return len(cp.kinds()) == 1 }, 3*time.Second, 10*time.Millisecond)
+	cp.mu.Lock()
+	cp.down = true
+	cp.mu.Unlock()
+	for i := 0; i < 50; i++ {
+		r.send(RelayLine, json.RawMessage(fmt.Sprintf(`{"n":%d}`, i)))
+	}
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, 50, r.relayPending(), "nothing is dropped while the control plane is down")
+	cp.mu.Lock()
+	cp.down = false
+	cp.mu.Unlock()
+	r.flush(3 * time.Second)
+	assert.Equal(t, 0, r.relayPending())
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	require.Len(t, cp.entries, 51)
+	for i, e := range cp.entries {
+		assert.Equal(t, int64(i+1), e.Seq)
+	}
 }
 
 // A harness call on another provider never opens a mailbox.
@@ -168,7 +220,7 @@ func TestHarnessOnAnotherProviderIsNeverSteerable(t *testing.T) {
 func TestLinkServesSteerAndRefusesANonCodeAFExecution(t *testing.T) {
 	t.Setenv("AGENTFIELD_LOG_STDOUT", "off")
 	upgrader := websocket.Upgrader{}
-	acks := make(chan map[string]any, 4)
+	acks := make(chan map[string]any, 6)
 	hello := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/api/v1/nodes/demo/link") {
@@ -190,14 +242,20 @@ func TestLinkServesSteerAndRefusesANonCodeAFExecution(t *testing.T) {
 		var h map[string]any
 		_ = json.Unmarshal(f.Body, &h)
 		hello <- h
-		for _, d := range []struct{ id, exec string }{{"dlv_1", "exec-plan"}, {"dlv_2", "exec-write"}} {
-			raw, _ := json.Marshal(linkFrame{V: 1, T: "deliver", ID: d.id, Exec: d.exec, Body: json.RawMessage(`{"kind":"steer","message":"also add a doc comment"}`)})
+		// A steer carried as http, for a plain step and a codeaf run; then
+		// the second delivered again, as a reconnect would.
+		for _, d := range []struct{ id, exec string }{{"dlv_1", "exec-plan"}, {"dlv_2", "exec-write"}, {"dlv_2", "exec-write"}} {
+			body, _ := json.Marshal(map[string]any{"kind": "http", "method": "POST", "path": "/_internal/executions/" + d.exec + "/steer",
+				"headers": map[string]string{"Content-Type": "application/json", "X-Execution-ID": d.exec}, "body": []byte(`{"message":"also add a doc comment"}`)})
+			raw, _ := json.Marshal(linkFrame{V: 1, T: "deliver", ID: d.id, Exec: d.exec, Body: body})
 			require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw))
 			ack := read()
-			var body map[string]any
-			_ = json.Unmarshal(ack.Body, &body)
-			body["id"] = ack.ID
-			acks <- body
+			var out struct {
+				Outcome string         `json:"outcome"`
+				Result  linkHTTPResult `json:"result"`
+			}
+			_ = json.Unmarshal(ack.Body, &out)
+			acks <- map[string]any{"id": ack.ID, "outcome": out.Outcome, "code": out.Result.Code, "body": string(out.Result.Body)}
 		}
 	}))
 	defer server.Close()
@@ -210,12 +268,14 @@ func TestLinkServesSteerAndRefusesANonCodeAFExecution(t *testing.T) {
 	go a.linkOnce(target)
 
 	h := <-hello
-	assert.Equal(t, []any{"steer", "cancel"}, h["accepts"])
-	first, second := <-acks, <-acks
+	assert.Equal(t, []any{"http", "steer", "cancel"}, h["accepts"])
+	first, second, again := <-acks, <-acks, <-acks
 	assert.Equal(t, "dlv_1", first["id"])
-	assert.Equal(t, "rejected", first["outcome"])
-	assert.Contains(t, first["error"], "not running the codeaf harness")
+	assert.Equal(t, 409, first["code"])
+	assert.Contains(t, first["body"], "not running the codeaf harness")
 	assert.Equal(t, "dlv_2", second["id"])
-	assert.Equal(t, "accepted", second["outcome"])
+	assert.Equal(t, 200, second["code"])
+	assert.Equal(t, second, again, "a redelivery is answered with the same ack")
+	assert.Len(t, box, 1, "a redelivery is not a second steer")
 	assert.Equal(t, "also add a doc comment", <-box)
 }

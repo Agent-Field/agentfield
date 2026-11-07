@@ -58,6 +58,10 @@ func TestCodeAFLiveStreamsWhileRunningAndDeliversASteer(t *testing.T) {
 	first := `{"kind":"assistant", "turn":1,"text":"looking at main.go"}`
 	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout, idle int, stdin []byte) (*CLIResult, error) {
 		events, steerPath := flagValue(cmd, "--events"), flagValue(cmd, "--steer")
+		// A watched run is the native step engine: one headless chat turn.
+		require.Equal(t, []string{"chat", "--once", "write it"}, cmd[1:4])
+		require.Contains(t, cmd, "--json")
+		require.NotEmpty(t, cwd)
 		require.NotEmpty(t, events)
 		require.NotEmpty(t, steerPath)
 		appendLine(t, events, first+"\n")

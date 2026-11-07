@@ -4,22 +4,34 @@ package agent
 //
 // The control plane's node link (control-plane/internal/nodelink) is one
 // WebSocket a node opens and keeps open, so the control plane can reach a
-// node it cannot dial. This SDK opens it after registering and serves the two
-// deliveries a Go agent needs pushed to it: a person's STEER note for a codeaf
-// harness run, and CANCEL. Its hello says so (accepts: steer, cancel), and the
-// control plane keeps sending dispatches over HTTP to this node, exactly as
-// before — a Go agent still serves /execute on its own address.
+// node it cannot dial. This SDK opens it after registering and serves:
+//
+//   - http: one request the control plane would have dialed (a dispatch, a
+//     nested call, a cancel, a steer, a probe), run on this agent's own
+//     handler, with the response as the ack. A node in LINK-ONLY mode
+//     (AGENTFIELD_NODE_LINK_ONLY=1) registers base_url http://<id>.nodelink and
+//     listens on loopback only, so it has no inbound port at all and every
+//     request reaches it this way;
+//   - steer and cancel, the two kinds that came before the http carrier.
+//
+// A REDELIVERY IS NEVER A SECOND RUN. The control plane redelivers a delivery
+// until it is acked, on a timer and on every reconnect. A delivery id this
+// node is still serving is ignored; one it has served is answered with the
+// ack it gave, on whichever link is up when it is asked again.
 //
 // It is on by default and costs nothing when the control plane has no link:
-// a control plane that answers the upgrade 404 is asked again only every few
+// a control plane that refuses the upgrade is asked again only every few
 // minutes. AGENTFIELD_NODE_LINK=off turns it off.
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -38,10 +50,37 @@ type linkFrame struct {
 }
 
 type linkDeliver struct {
-	Kind    string `json:"kind"`
-	Message string `json:"message,omitempty"`
-	Reason  string `json:"reason,omitempty"`
+	Kind    string            `json:"kind"`
+	Message string            `json:"message,omitempty"`
+	Reason  string            `json:"reason,omitempty"`
+	Method  string            `json:"method,omitempty"`
+	Path    string            `json:"path,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    []byte            `json:"body,omitempty"`
 }
+
+type linkHTTPResult struct {
+	Code    int               `json:"code"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    []byte            `json:"body,omitempty"`
+}
+
+// linkState is the link's live connection and what it has served.
+type linkState struct {
+	mu     sync.Mutex
+	conn   *websocket.Conn
+	wmu    sync.Mutex
+	served map[string]*servedDelivery
+}
+
+type servedDelivery struct {
+	ack  []byte // nil while still being served
+	exec string
+	at   time.Time
+}
+
+// linkKeep is how long a served delivery's ack is kept for a redelivery.
+const linkKeep = 30 * time.Minute
 
 func linkEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFIELD_NODE_LINK"))) {
@@ -50,6 +89,19 @@ func linkEnabled() bool {
 	}
 	return true
 }
+
+// LinkOnly says this node has no inbound port and is reached only down its
+// link (AGENTFIELD_NODE_LINK_ONLY=1).
+func LinkOnly() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFIELD_NODE_LINK_ONLY"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// linkOnlyURL is the base_url a link-only node registers.
+func linkOnlyURL(nodeID string) string { return "http://" + nodeID + ".nodelink" }
 
 // linkURL is the control plane's link address for this node.
 func (a *Agent) linkURL() (string, bool) {
@@ -86,7 +138,7 @@ func (a *Agent) linkLoop(target string) {
 			backoff = time.Second
 		}
 		wait := backoff
-		if status == http.StatusNotFound || status == http.StatusUnauthorized || status == http.StatusForbidden {
+		if !LinkOnly() && (status == http.StatusNotFound || status == http.StatusUnauthorized || status == http.StatusForbidden) {
 			// No link on this control plane (or not for us): ask again rarely.
 			wait = 5 * time.Minute
 		}
@@ -95,10 +147,31 @@ func (a *Agent) linkLoop(target string) {
 			return
 		case <-time.After(wait):
 		}
-		if backoff < 30*time.Second {
+		if backoff < 10*time.Second {
 			backoff *= 2
 		}
 	}
+}
+
+// linkWrite sends one frame on whichever link is up now; false when none is.
+func (a *Agent) linkWrite(f linkFrame, body any) bool {
+	f.V = linkVersion
+	f.TS = time.Now().UTC().Format(time.RFC3339Nano)
+	if body != nil {
+		raw, _ := json.Marshal(body)
+		f.Body = raw
+	}
+	raw, _ := json.Marshal(f)
+	a.link.mu.Lock()
+	conn := a.link.conn
+	a.link.mu.Unlock()
+	if conn == nil {
+		return false
+	}
+	a.link.wmu.Lock()
+	defer a.link.wmu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return conn.WriteMessage(websocket.TextMessage, raw) == nil
 }
 
 // linkOnce holds one link until it drops. It says whether the link came up,
@@ -120,6 +193,19 @@ func (a *Agent) linkOnce(target string) (bool, int) {
 		return false, 0
 	}
 	defer conn.Close()
+	a.link.mu.Lock()
+	a.link.conn = conn
+	if a.link.served == nil {
+		a.link.served = map[string]*servedDelivery{}
+	}
+	a.link.mu.Unlock()
+	defer func() {
+		a.link.mu.Lock()
+		if a.link.conn == conn {
+			a.link.conn = nil
+		}
+		a.link.mu.Unlock()
+	}()
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {
@@ -129,18 +215,7 @@ func (a *Agent) linkOnce(target string) (bool, int) {
 		case <-stop:
 		}
 	}()
-	send := func(f linkFrame, body any) error {
-		f.V = linkVersion
-		f.TS = time.Now().UTC().Format(time.RFC3339Nano)
-		if body != nil {
-			raw, _ := json.Marshal(body)
-			f.Body = raw
-		}
-		raw, _ := json.Marshal(f)
-		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		return conn.WriteMessage(websocket.TextMessage, raw)
-	}
-	if err := send(linkFrame{T: "hello", Seq: 1}, map[string]any{"instance_id": a.cfg.NodeID, "sdk": "go", "version": a.cfg.Version, "accepts": []string{"steer", "cancel"}}); err != nil {
+	if !a.linkWrite(linkFrame{T: "hello", Seq: 1}, map[string]any{"instance_id": a.cfg.NodeID, "sdk": "go", "version": a.cfg.Version, "accepts": []string{"http", "steer", "cancel"}}) {
 		return false, 0
 	}
 	a.logger.Printf("node link up (%s)", target)
@@ -154,23 +229,88 @@ func (a *Agent) linkOnce(target string) (bool, int) {
 		if json.Unmarshal(raw, &f) != nil || f.T != "deliver" {
 			continue
 		}
-		var d linkDeliver
-		_ = json.Unmarshal(f.Body, &d)
-		ack := map[string]any{"outcome": "accepted"}
-		switch d.Kind {
-		case "steer":
-			if err := a.steerFromControlPlane(f.Exec, d.Message); err != nil {
-				ack = map[string]any{"outcome": "rejected", "error": err.Error()}
-			} else {
-				a.logger.Printf("steer for %s arrived over the link", f.Exec)
-			}
-		case "cancel":
-			a.CancelExecution(f.Exec)
-		default:
-			ack = map[string]any{"outcome": "rejected", "error": "this node takes " + d.Kind + " over HTTP, not the link"}
-		}
-		if err := send(linkFrame{T: "ack", ID: f.ID, Exec: f.Exec}, ack); err != nil {
-			return true, 0
+		a.linkServe(f)
+	}
+}
+
+// linkServe answers one delivery, once.
+func (a *Agent) linkServe(f linkFrame) {
+	a.link.mu.Lock()
+	if a.link.served == nil {
+		a.link.served = map[string]*servedDelivery{}
+	}
+	for id, s := range a.link.served {
+		if s.ack != nil && time.Since(s.at) > linkKeep {
+			delete(a.link.served, id)
 		}
 	}
+	seen := a.link.served[f.ID]
+	if seen == nil {
+		a.link.served[f.ID] = &servedDelivery{exec: f.Exec, at: time.Now()}
+	}
+	var cached []byte
+	if seen != nil {
+		cached = seen.ack
+	}
+	a.link.mu.Unlock()
+	if seen != nil {
+		if cached != nil {
+			a.linkWrite(linkFrame{T: "ack", ID: f.ID, Exec: f.Exec}, json.RawMessage(cached))
+		}
+		return
+	}
+	var d linkDeliver
+	_ = json.Unmarshal(f.Body, &d)
+	answer := func(ack map[string]any) {
+		raw, _ := json.Marshal(ack)
+		a.link.mu.Lock()
+		if s := a.link.served[f.ID]; s != nil {
+			s.ack, s.at = raw, time.Now()
+		}
+		a.link.mu.Unlock()
+		a.linkWrite(linkFrame{T: "ack", ID: f.ID, Exec: f.Exec}, json.RawMessage(raw))
+	}
+	switch d.Kind {
+	case "http":
+		// A request can run for minutes (a synchronous reasoner), so it is
+		// served beside the read loop, never in it.
+		go func() { answer(map[string]any{"outcome": "accepted", "result": a.serveLinkHTTP(d)}) }()
+	case "steer":
+		if err := a.steerFromControlPlane(f.Exec, d.Message); err != nil {
+			answer(map[string]any{"outcome": "rejected", "error": err.Error()})
+		} else {
+			a.logger.Printf("steer for %s arrived over the link", f.Exec)
+			answer(map[string]any{"outcome": "accepted"})
+		}
+	case "cancel":
+		a.CancelExecution(f.Exec)
+		answer(map[string]any{"outcome": "accepted"})
+	default:
+		answer(map[string]any{"outcome": "rejected", "error": "this node does not take " + d.Kind + " over the link"})
+	}
+}
+
+// serveLinkHTTP runs one carried request on this agent's own handler.
+func (a *Agent) serveLinkHTTP(d linkDeliver) linkHTTPResult {
+	method := d.Method
+	if method == "" {
+		method = http.MethodPost
+	}
+	req := httptest.NewRequest(method, d.Path, bytes.NewReader(d.Body))
+	for k, v := range d.Headers {
+		req.Header.Set(k, v)
+	}
+	req.RemoteAddr = "127.0.0.1:0"
+	if strings.HasSuffix(d.Path, "/steer") {
+		a.logger.Printf("steer for %s arrived over the link", req.Header.Get("X-Execution-ID"))
+	}
+	rec := httptest.NewRecorder()
+	a.handler().ServeHTTP(rec, req)
+	out := linkHTTPResult{Code: rec.Code, Body: rec.Body.Bytes(), Headers: map[string]string{}}
+	for k, v := range rec.Header() {
+		if len(v) > 0 {
+			out.Headers[k] = v[0]
+		}
+	}
+	return out
 }
