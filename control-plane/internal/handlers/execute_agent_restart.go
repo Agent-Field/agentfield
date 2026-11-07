@@ -203,6 +203,11 @@ func ensureAgentDispatchable(agent *types.AgentNode, nodeID string) error {
 	if _, extended := agentRestartGraceFor(nodeID); extended {
 		return nil
 	}
+	// A node holding a live link is reached down it: an HTTP health probe
+	// that cannot reach it (behind NAT, no base_url) says nothing about it.
+	if agenturl.LinkLive(agent.ID) {
+		return nil
+	}
 	if agent.HealthStatus == types.HealthStatusInactive {
 		return &executionPreconditionError{
 			code:      http.StatusServiceUnavailable,

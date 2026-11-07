@@ -54,6 +54,11 @@ func (d *TriggerDispatcher) WithLink(h *nodelink.Hub) *TriggerDispatcher {
 	return d
 }
 
+// runOwnerSetter is the store's record of who owns a run (storage/relay.go).
+type runOwnerSetter interface {
+	SetRunOwner(ctx context.Context, runID, owner string) error
+}
+
 // NewTriggerDispatcher returns a dispatcher with sensible defaults.
 // vcService may be nil when DID isn't configured — dispatch still works,
 // just without VC chain extension.
@@ -83,7 +88,12 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("target node %q not found: %v", trig.TargetNodeID, err))
 		return
 	}
-	linked := d.link != nil && d.link.LiveFor(node.ID, nodelink.KindDispatch)
+	// A linked node takes the dispatch as a dispatch frame (codeaf's factory
+	// node) or as the HTTP request itself carried down the link (the Go SDK,
+	// whose hello accepts "http").
+	linkDispatch := d.link != nil && d.link.LiveFor(node.ID, nodelink.KindDispatch)
+	linkHTTP := d.link != nil && d.link.LiveFor(node.ID, nodelink.KindHTTP)
+	linked := linkDispatch || linkHTTP
 	// A linked node is reached down its link, so an HTTP health probe that
 	// cannot reach it (it is behind NAT, or has no base_url) says nothing.
 	if !linked && (node.HealthStatus == types.HealthStatusInactive || node.LifecycleStatus == types.AgentStatusOffline) {
@@ -164,12 +174,19 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	// Down the link: a node with a live link, or one with no address at all
 	// (it waits in the hub's queue for the node to connect, up to the
 	// dispatch expiry). Everything else is HTTP exactly as before.
-	if d.link != nil && (linked || node.BaseURL == "") {
+	if d.link != nil && (linkDispatch || (node.BaseURL == "" && !linkHTTP)) {
 		d.dispatchOverLink(ctx, node, trig, ev, dispatchWorkflowID, dispatchExecutionID, requestID, parentVCID, body)
 		return
 	}
 
-	endpoint, err := agenturl.ForNode(node.ID, node.BaseURL, "reasoners", trig.TargetReasoner)
+	// A node whose link carries HTTP is reached on its link host, so the
+	// request below rides the link (agenturl/link.go) whatever base_url it
+	// registered; every other node is dialled exactly as before.
+	base := node.BaseURL
+	if linkHTTP {
+		base = "http://" + agenturl.LinkHost(node.ID)
+	}
+	endpoint, err := agenturl.ForNode(node.ID, base, "reasoners", trig.TargetReasoner)
 	if err != nil {
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("build request: %v", err))
 		return
@@ -321,6 +338,13 @@ func (d *TriggerDispatcher) createDispatchRecords(ctx context.Context, node *typ
 	}
 	if err := d.storage.CreateExecutionRecord(ctx, exec); err != nil {
 		return err
+	}
+	// The node a trigger routed the run to owns it: it is the subscriber the
+	// pipe sends this run's tree and harness entries to (nodelink/pipe.go).
+	if owners, ok := d.storage.(runOwnerSetter); ok {
+		if err := owners.SetRunOwner(ctx, runID, node.ID); err != nil {
+			logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to record the run's owner")
+		}
 	}
 
 	workflowExec := &types.WorkflowExecution{

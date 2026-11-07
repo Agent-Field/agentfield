@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
@@ -114,4 +116,77 @@ func TestTriggerDispatchGoesDownALiveLink(t *testing.T) {
 	exec, err := provider.GetExecutionRecord(ctx, execID)
 	require.NoError(t, err)
 	require.Equal(t, types.ExecutionStatusRunning, exec.Status, "accepted is the 202 path")
+}
+
+// A LINK-ONLY GO SDK NODE (no base_url, hello accepts "http") IS DISPATCHED
+// WITH THE HTTP REQUEST ITSELF CARRIED DOWN ITS LINK — never a dispatch
+// frame it would refuse — and the node the trigger routed the run to owns it.
+func TestTriggerDispatchCarriesHTTPToALinkOnlySDKNode(t *testing.T) {
+	node, trig, ev := dispatcherTrigger("", []types.ReasonerDefinition{{ID: "handle"}})
+	node.BaseURL = ""
+	ctx, provider, d := storeDispatchFixture(t, node, trig, ev)
+
+	gin.SetMode(gin.TestMode)
+	hub := &nodelink.Hub{Sweep: 10 * time.Millisecond}
+	r := gin.New()
+	r.GET("/api/v1/nodes/:node_id/link", hub.Handler())
+	cp := httptest.NewServer(r)
+	defer cp.Close()
+	defer hub.Close()
+	agenturl.SetLinkCarrier(hub)
+	defer agenturl.SetLinkCarrier(nil)
+	d.WithInternalToken("itok").WithLink(hub)
+	d.httpClient = agenturl.NewClient(5 * time.Second)
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(cp.URL, "http")+"/api/v1/nodes/"+node.ID+"/link", nil)
+	require.NoError(t, err)
+	defer conn.Close()
+	read := func() nodelink.Frame {
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_, raw, err := conn.ReadMessage()
+		require.NoError(t, err)
+		f, err := nodelink.Decode(raw)
+		require.NoError(t, err)
+		return f
+	}
+	send := func(f nodelink.Frame, body any) {
+		raw, err := nodelink.Encode(f, body)
+		require.NoError(t, err)
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw))
+	}
+	require.Equal(t, nodelink.TWelcome, read().T)
+	send(nodelink.Frame{T: nodelink.THello}, nodelink.Hello{InstanceID: "i1", Accepts: []string{"http", "steer", "cancel"}})
+	require.Equal(t, nodelink.TOK, read().T)
+	require.Eventually(t, func() bool { return hub.LiveFor(node.ID, nodelink.KindHTTP) }, 3*time.Second, 5*time.Millisecond)
+
+	done := make(chan struct{})
+	go func() { defer close(done); d.DispatchEvent(ctx, trig, ev) }()
+
+	f := read()
+	require.Equal(t, nodelink.TDeliver, f.T)
+	var b nodelink.DeliverBody
+	require.NoError(t, json.Unmarshal(f.Body, &b))
+	require.Equal(t, nodelink.KindHTTP, b.Kind)
+	require.Equal(t, http.MethodPost, b.Method)
+	require.Equal(t, "/reasoners/handle", b.Path)
+	require.Equal(t, "Bearer itok", b.Headers["Authorization"])
+	execID := b.Headers["X-Execution-ID"]
+	require.NotEmpty(t, execID)
+	res, _ := json.Marshal(nodelink.HTTPResult{Code: http.StatusAccepted})
+	send(nodelink.Frame{T: nodelink.TAck, ID: f.ID}, nodelink.Ack{Outcome: nodelink.OutcomeAccepted, Result: res})
+	<-done
+
+	stored, err := provider.GetInboundEvent(ctx, ev.ID)
+	require.NoError(t, err)
+	require.Equal(t, types.InboundEventStatusDispatched, stored.Status)
+	exec, err := provider.GetExecutionRecord(ctx, execID)
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusRunning, exec.Status)
+	owners, ok := provider.(interface {
+		RunOwner(ctx context.Context, runID string) (string, error)
+	})
+	require.True(t, ok)
+	owner, err := owners.RunOwner(ctx, exec.RunID)
+	require.NoError(t, err)
+	require.Equal(t, node.ID, owner, "the node a trigger routed the run to owns it")
 }
