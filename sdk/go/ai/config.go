@@ -22,10 +22,15 @@ const defaultIonetBaseURL = "https://api.intelligence.io.solutions/api/v1"
 // `org/name` strings, e.g. "deepseek-ai/DeepSeek-V4.1-Flash".
 const defaultRuncrateBaseURL = "https://api.runcrate.ai/v1"
 
+// defaultCloudGPUBaseURL is CloudGPU's OpenAI-compatible Chat Completions
+// endpoint (DeepSeek, Kimi, GLM, MiniMax, Qwen and more). Model ids are bare
+// names, e.g. "deepseek-v4-flash".
+const defaultCloudGPUBaseURL = "https://cloudgpu.app/v1"
+
 // Config holds AI/LLM configuration for making API calls.
 type Config struct {
 	// API Key for the selected provider: OpenAI, Infron,
-	// IO Intelligence (io.net), Runcrate, or OpenRouter
+	// IO Intelligence (io.net), Runcrate, CloudGPU, or OpenRouter
 	APIKey string
 
 	// BaseURL can be either OpenAI or OpenRouter endpoint
@@ -34,6 +39,7 @@ type Config struct {
 	// Infron: https://llm.onerouter.pro/v1
 	// IO Intelligence (io.net): https://api.intelligence.io.solutions/api/v1
 	// Runcrate: https://api.runcrate.ai/v1
+	// CloudGPU: https://cloudgpu.app/v1
 	BaseURL string
 
 	// Default model to use (e.g., "gpt-4o", "openai/gpt-4o" for OpenRouter)
@@ -76,12 +82,13 @@ type Config struct {
 // - INFRON_API_KEY
 // - IONET_API_KEY
 // - RUNCRATE_API_KEY
+// - CLOUDGPU_API_KEY
 // - AI_BASE_URL (defaults to OpenAI)
 // - AI_MODEL (defaults to gpt-4o, or to a provider model for io.net/Runcrate)
 //
 // A provider key that was already honored keeps precedence, so adding a
-// gateway key (Infron, IO Intelligence, Runcrate) to an existing environment
-// never silently reroutes it.
+// gateway key (Infron, IO Intelligence, Runcrate, CloudGPU) to an existing
+// environment never silently reroutes it.
 func DefaultConfig() *Config {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	baseURL := "https://api.openai.com/v1"
@@ -111,6 +118,15 @@ func DefaultConfig() *Config {
 	if runcrateKey := os.Getenv("RUNCRATE_API_KEY"); runcrateKey != "" && apiKey == "" {
 		apiKey = runcrateKey
 		baseURL = defaultRuncrateBaseURL
+	}
+
+	// Check for CloudGPU configuration, with the same precedence rule: a key
+	// from a provider already configured in the environment keeps precedence,
+	// so adding CLOUDGPU_API_KEY never silently reroutes an existing
+	// deployment.
+	if cloudgpuKey := os.Getenv("CLOUDGPU_API_KEY"); cloudgpuKey != "" && apiKey == "" {
+		apiKey = cloudgpuKey
+		baseURL = defaultCloudGPUBaseURL
 	}
 
 	// Check for OpenRouter configuration
@@ -160,6 +176,11 @@ func DefaultConfig() *Config {
 		// Runcrate serves open-weight models only, so the global gpt-4o
 		// fallback would 404 there. An explicit AI_MODEL always wins.
 		cfg.Model = defaultRuncrateModel
+	}
+	if modelDefaulted && cfg.IsCloudGPU() {
+		// The global default model is not in CloudGPU's catalog, so fall back
+		// to a CloudGPU id. An explicit AI_MODEL always wins.
+		cfg.Model = defaultCloudGPUModel
 	}
 	return cfg
 }
@@ -215,6 +236,17 @@ func (c *Config) IsIonet() bool {
 func (c *Config) IsRuncrate() bool {
 	return strings.Contains(strings.ToLower(c.BaseURL), "api.runcrate.ai") ||
 		strings.HasPrefix(strings.ToLower(c.Model), runcrateModelPrefix)
+}
+
+// IsCloudGPU returns true if the base URL is for CloudGPU.
+//
+// CloudGPU serves bare model ids (e.g. "deepseek-v4-flash"), so an explicit
+// "cloudgpu/" prefix is the only thing that distinguishes it by model alone,
+// and a config that matches a gateway already supported keeps its previous
+// meaning.
+func (c *Config) IsCloudGPU() bool {
+	return strings.Contains(strings.ToLower(c.BaseURL), "cloudgpu.app") ||
+		strings.HasPrefix(strings.ToLower(c.Model), cloudgpuModelPrefix)
 }
 
 // RateLimitEnabled reports whether automatic rate-limit retries are configured.

@@ -417,6 +417,12 @@ IO Intelligence is OpenAI-compatible (Chat Completions) and serves Hugging Face-
 
 Runcrate is OpenAI-compatible (Chat Completions) and serves Hugging Face-style `org/name` model ids (`deepseek-ai/DeepSeek-V4.1-Flash`, `zai-org/GLM-5.3`; the exact list comes from `GET /models` on the configured base URL). A `runcrate/` prefix is accepted as a routing marker for callers that select the gateway by model string, and is stripped before the request is sent, since the endpoint serves the bare id. The marker rewrites the model string only and never reroutes a request on its own; the base URL still follows the provider-key precedence above.
 
+### CloudGPU
+
+- `CLOUDGPU_API_KEY`: API key for CloudGPU. When it is the only provider key set, the Go SDK's `ai.DefaultConfig()` points at `https://cloudgpu.app/v1`. `OPENAI_API_KEY`, `INFRON_API_KEY`, `IONET_API_KEY`, `RUNCRATE_API_KEY` and `OPENROUTER_API_KEY` all keep precedence over it, so adding this key never reroutes an existing deployment. When `AI_MODEL` is unset, the model defaults to `deepseek-v4-flash`; routing through a custom `AI_BASE_URL` the SDK cannot recognize as CloudGPU requires setting `AI_MODEL`.
+
+CloudGPU is OpenAI-compatible (Chat Completions) and serves bare model ids (`deepseek-v4-flash`, `glm-5.3`, `kimi-k3`; the exact list comes from `GET /models` on the configured base URL). A `cloudgpu/` prefix is accepted as a routing marker for callers that select the gateway by model string, and is stripped before the request is sent, since the endpoint serves the bare id. The marker rewrites the model string only and never reroutes a request on its own; the base URL still follows the provider-key precedence above.
+
 ### Harness (SDKs)
 
 - `AGENTFIELD_HARNESS_DEPTH`: Marks subprocesses running inside an AgentField
