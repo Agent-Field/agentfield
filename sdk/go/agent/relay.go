@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -10,8 +11,9 @@ import (
 
 // ── THE RELAY, FROM THE NODE'S SIDE ─────────────────────────────────────────
 //
-// A codeaf harness run's lines go to the control plane's relay
-// (POST /api/v1/executions/:id/relay), which holds them only until WorkAF —
+// A codeaf harness run's lines go to the control plane's relay — an
+// `entries` frame on the node's link, or POST /api/v1/executions/:id/relay
+// when no link is up — which holds them only until WorkAF —
 // the system of record for the transcript — has acked them.
 //
 // NOTHING IS LOST AND NOTHING IS DOUBLED ACROSS A CONTROL PLANE OUTAGE. This
@@ -105,9 +107,7 @@ func (r *execRelay) loop() {
 		batch := append([]RelayEntry(nil), r.pending[:min(len(r.pending), relayBatch)]...)
 		r.mu.Unlock()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		through, err := r.agent.client.PostExecutionRelay(ctx, r.id, batch)
-		cancel()
+		through, err := r.deliver(batch)
 		if err != nil {
 			if !strings.Contains(err.Error(), "connection refused") {
 				r.agent.logger.Printf("warn: relay for %s waiting on the control plane: %v", r.id, err)
@@ -122,7 +122,9 @@ func (r *execRelay) loop() {
 			continue
 		}
 		backoff = 100 * time.Millisecond
-		if through < batch[len(batch)-1].Seq {
+		// What the control plane holds is what it says it holds; an older one
+		// that answers no "through" held the whole batch.
+		if through == 0 {
 			through = batch[len(batch)-1].Seq
 		}
 		r.mu.Lock()
@@ -135,6 +137,32 @@ func (r *execRelay) loop() {
 		r.pending = keep
 		r.mu.Unlock()
 	}
+}
+
+// deliver hands one batch to the control plane and says through which seq it
+// now holds them. THE LINK FIRST: an `entries` frame on the link this node
+// already holds, its data seqs in the body and the frame's own seq the reply
+// key. With no link up, or no answer on it, the same entries go by HTTP
+// (POST /api/v1/executions/:id/relay), which the control plane serves by the
+// same code. Either way the control plane holds them only until WorkAF acks.
+func (r *execRelay) deliver(batch []RelayEntry) (int64, error) {
+	ok, err := r.agent.linkAsk("entries", r.id, map[string]any{"entries": batch}, 10*time.Second)
+	if err == nil {
+		switch ok.Code {
+		case 200:
+			return ok.Through, nil
+		case 400:
+			// An entry the control plane can never take would hold every
+			// line after it forever: it is said and let go.
+			r.agent.logger.Printf("warn: relay for %s: the control plane refused seqs %d–%d: %s", r.id, batch[0].Seq, batch[len(batch)-1].Seq, ok.Error)
+			return batch[len(batch)-1].Seq, nil
+		default:
+			return 0, fmt.Errorf("the control plane answered %d: %s", ok.Code, ok.Error)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return r.agent.client.PostExecutionRelay(ctx, r.id, batch)
 }
 
 // flush waits until every entry was answered, at most timeout. Entries still

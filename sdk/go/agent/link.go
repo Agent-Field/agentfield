@@ -26,6 +26,8 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -71,6 +73,74 @@ type linkState struct {
 	conn   *websocket.Conn
 	wmu    sync.Mutex
 	served map[string]*servedDelivery
+	// seq is this node's own up-frame counter (hello is 1); waits holds the
+	// asker of each frame still waiting for its ok, by that counter.
+	seq   int64
+	waits map[int64]chan linkFrame
+}
+
+// errNoLink says no link is up to carry a frame; the caller uses HTTP.
+var errNoLink = errors.New("no node link is up")
+
+// linkOK is the body of the control plane's ok to an up frame.
+type linkOK struct {
+	Code    int    `json:"code"`
+	Error   string `json:"error,omitempty"`
+	Through int64  `json:"through,omitempty"`
+	Dropped int64  `json:"dropped,omitempty"`
+}
+
+// linkAsk sends one up frame and waits for its ok. THE FRAME'S seq IS THIS
+// NODE'S OWN COUNTER AND NOTHING ELSE: the control plane answers it by that
+// number, so a data seq never goes there (it travels in the body).
+func (a *Agent) linkAsk(t, exec string, body any, timeout time.Duration) (linkOK, error) {
+	reply := make(chan linkFrame, 1)
+	a.link.mu.Lock()
+	if a.link.conn == nil {
+		a.link.mu.Unlock()
+		return linkOK{}, errNoLink
+	}
+	if a.link.seq < 1 {
+		a.link.seq = 1
+	}
+	a.link.seq++
+	seq := a.link.seq
+	if a.link.waits == nil {
+		a.link.waits = map[int64]chan linkFrame{}
+	}
+	a.link.waits[seq] = reply
+	a.link.mu.Unlock()
+	defer func() {
+		a.link.mu.Lock()
+		delete(a.link.waits, seq)
+		a.link.mu.Unlock()
+	}()
+	if !a.linkWrite(linkFrame{T: t, Exec: exec, Seq: seq}, body) {
+		return linkOK{}, errNoLink
+	}
+	select {
+	case f := <-reply:
+		var ok linkOK
+		if err := json.Unmarshal(f.Body, &ok); err != nil {
+			return linkOK{}, fmt.Errorf("the control plane's answer to %s is not an ok: %w", t, err)
+		}
+		return ok, nil
+	case <-time.After(timeout):
+		return linkOK{}, fmt.Errorf("the control plane did not answer %s within %s", t, timeout)
+	}
+}
+
+// linkAnswered hands an ok frame to the frame that is waiting for it.
+func (a *Agent) linkAnswered(f linkFrame) {
+	a.link.mu.Lock()
+	reply := a.link.waits[f.Seq]
+	a.link.mu.Unlock()
+	if reply != nil {
+		select {
+		case reply <- f:
+		default:
+		}
+	}
 }
 
 type servedDelivery struct {
@@ -226,10 +296,15 @@ func (a *Agent) linkOnce(target string) (bool, int) {
 			return true, 0
 		}
 		var f linkFrame
-		if json.Unmarshal(raw, &f) != nil || f.T != "deliver" {
+		if json.Unmarshal(raw, &f) != nil {
 			continue
 		}
-		a.linkServe(f)
+		switch f.T {
+		case "deliver":
+			a.linkServe(f)
+		case "ok":
+			a.linkAnswered(f)
+		}
 	}
 }
 

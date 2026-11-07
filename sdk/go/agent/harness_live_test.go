@@ -231,14 +231,23 @@ func TestLinkServesSteerAndRefusesANonCodeAFExecution(t *testing.T) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		require.NoError(t, err)
 		defer conn.Close()
-		read := func() linkFrame {
+		next := func() linkFrame {
 			_, raw, err := conn.ReadMessage()
 			require.NoError(t, err)
 			var f linkFrame
 			require.NoError(t, json.Unmarshal(raw, &f))
 			return f
 		}
-		f := read()
+		// The steer's own record (a "person" entry) rides the link too, as an
+		// entries frame; this test reads the acks.
+		read := func() linkFrame {
+			for {
+				if f := next(); f.T != "entries" {
+					return f
+				}
+			}
+		}
+		f := next()
 		var h map[string]any
 		_ = json.Unmarshal(f.Body, &h)
 		hello <- h
@@ -278,4 +287,103 @@ func TestLinkServesSteerAndRefusesANonCodeAFExecution(t *testing.T) {
 	assert.Equal(t, second, again, "a redelivery is answered with the same ack")
 	assert.Len(t, box, 1, "a redelivery is not a second steer")
 	assert.Equal(t, "also add a doc comment", <-box)
+}
+
+// THE RELAY RIDES THE LINK. Each batch is an `entries` frame whose seq is the
+// link's own counter (the reply key) and whose body carries the entries' own
+// seqs; the node forgets what the ok's `through` covers. With the link gone the
+// same entries go by POST /relay, and every entry is held once, in order.
+func TestRelayRidesTheLinkAndFallsBackToHTTP(t *testing.T) {
+	t.Setenv("AGENTFIELD_LOG_STDOUT", "off")
+	relayMaxBackoff = 50 * time.Millisecond
+	t.Cleanup(func() { relayMaxBackoff = 5 * time.Second })
+	var mu sync.Mutex
+	held := map[int64]string{}
+	var frameSeqs []int64
+	var overHTTP int
+	keep := func(es []RelayEntry) (through int64) {
+		for _, e := range es {
+			if _, ok := held[e.Seq]; !ok {
+				held[e.Seq] = e.Kind
+			}
+			through = e.Seq
+		}
+		return through
+	}
+	linkUp := make(chan *websocket.Conn, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/link"):
+			conn, err := upgrader.Upgrade(w, r, nil)
+			require.NoError(t, err)
+			linkUp <- conn
+			for {
+				_, raw, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				var f linkFrame
+				require.NoError(t, json.Unmarshal(raw, &f))
+				if f.T != "entries" {
+					continue
+				}
+				var body struct {
+					Entries []RelayEntry `json:"entries"`
+				}
+				require.NoError(t, json.Unmarshal(f.Body, &body))
+				mu.Lock()
+				frameSeqs = append(frameSeqs, f.Seq)
+				through := keep(body.Entries)
+				mu.Unlock()
+				okBody, _ := json.Marshal(map[string]any{"code": 200, "through": through})
+				out, _ := json.Marshal(linkFrame{V: 1, T: "ok", Seq: f.Seq, Exec: f.Exec, Body: okBody})
+				_ = conn.WriteMessage(websocket.TextMessage, out)
+			}
+		case strings.HasSuffix(r.URL.Path, "/relay"):
+			var body struct {
+				Entries []RelayEntry `json:"entries"`
+			}
+			raw, _ := io.ReadAll(r.Body)
+			require.NoError(t, json.Unmarshal(raw, &body))
+			mu.Lock()
+			overHTTP++
+			through := keep(body.Entries)
+			mu.Unlock()
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"stored":%d,"through":%d}`, len(body.Entries), through)))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	defer server.Close()
+	a, err := New(Config{NodeID: "demo", Version: "1", AgentFieldURL: server.URL, Logger: log.New(io.Discard, "", 0)})
+	require.NoError(t, err)
+	target, ok := a.linkURL()
+	require.True(t, ok)
+	go a.linkOnce(target)
+	conn := <-linkUp
+	require.Eventually(t, func() bool { a.link.mu.Lock(); defer a.link.mu.Unlock(); return a.link.conn != nil }, 3*time.Second, 10*time.Millisecond)
+
+	r := a.relayFor("exec-1")
+	r.send(RelayStarted, json.RawMessage(`{"harness":"codeaf","steerable":true}`))
+	r.send(RelayLine, json.RawMessage(`{"type":"message"}`))
+	r.flush(3 * time.Second)
+	mu.Lock()
+	assert.Equal(t, 0, overHTTP, "with a link up nothing goes by HTTP")
+	require.NotEmpty(t, frameSeqs)
+	assert.Greater(t, frameSeqs[0], int64(1), "the frame seq is the link's counter after hello, not a data seq")
+	mu.Unlock()
+
+	// The link drops: the rest goes by HTTP.
+	_ = conn.Close()
+	require.Eventually(t, func() bool { a.link.mu.Lock(); defer a.link.mu.Unlock(); return a.link.conn == nil }, 3*time.Second, 10*time.Millisecond)
+	r.send(RelayLine, json.RawMessage(`{"type":"message","n":2}`))
+	r.send(RelayEnded, json.RawMessage(`{}`))
+	r.flush(3 * time.Second)
+	assert.Equal(t, 0, r.relayPending())
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Positive(t, overHTTP)
+	assert.Equal(t, map[int64]string{1: RelayStarted, 2: RelayLine, 3: RelayLine, 4: RelayEnded}, held)
 }
