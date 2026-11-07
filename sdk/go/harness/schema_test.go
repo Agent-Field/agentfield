@@ -327,7 +327,7 @@ func TestTheSchemaNamesTheElementTypes(t *testing.T) {
 		Kids []node `json:"kids,omitempty"`
 	}
 	type findings struct {
-		Files  []string          `json:"files"`
+		Files  []string          `json:"files" description:"paths, relative"`
 		Counts map[string]int64  `json:"counts"`
 		Where  []file            `json:"where"`
 		Tree   node              `json:"tree"`
@@ -336,7 +336,7 @@ func TestTheSchemaNamesTheElementTypes(t *testing.T) {
 	schema, err := StructToJSONSchema(findings{})
 	require.NoError(t, err)
 	props := schema["properties"].(map[string]any)
-	assert.Equal(t, map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, props["files"])
+	assert.Equal(t, map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "paths, relative"}, props["files"])
 	assert.Equal(t, map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "integer"}}, props["counts"])
 	where := props["where"].(map[string]any)["items"].(map[string]any)
 	assert.Equal(t, map[string]any{"path": map[string]any{"type": "string"}}, where["properties"])

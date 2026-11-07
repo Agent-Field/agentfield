@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math"
 	"math/rand"
 	"os"
@@ -707,7 +708,13 @@ func structSchema(t reflect.Type, seen map[reflect.Type]bool) map[string]any {
 				isRequired = false
 			}
 		}
-		properties[name] = typeSchema(field.Type, seen)
+		prop := typeSchema(field.Type, seen)
+		// The field's own words for the model, from a `description` tag.
+		if d := strings.TrimSpace(field.Tag.Get("description")); d != "" {
+			prop = maps.Clone(prop)
+			prop["description"] = d
+		}
+		properties[name] = prop
 		if isRequired {
 			required = append(required, name)
 		}
