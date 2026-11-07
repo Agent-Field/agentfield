@@ -579,8 +579,12 @@ type Agent struct {
 	// the matching cancel func to short-circuit the reasoner's context.
 	// Reasoners are responsible for honoring ctx.Done() — most idiomatic
 	// Go code does this through net/http, database/sql, etc.
-	cancelMu     sync.Mutex
-	cancelFuncs  map[string]context.CancelFunc
+	cancelMu    sync.Mutex
+	cancelFuncs map[string]context.CancelFunc
+	// steer holds the mailbox of every execution running the codeaf harness
+	// right now, keyed by execution_id (harness_live.go). An execution not in
+	// it cannot be steered.
+	steer        steerBoxes
 	executionWG  sync.WaitGroup
 	shutdownMu   sync.Mutex
 	shuttingDown bool
@@ -934,7 +938,7 @@ func (a *Agent) handler() http.Handler {
 		mux.HandleFunc("/execute/", a.handleExecute)
 		mux.HandleFunc("/reasoners/", a.handleReasoner)
 		mux.HandleFunc("/skills/", a.handleSkill)
-		mux.HandleFunc("/_internal/executions/", a.handleInternalCancel)
+		mux.HandleFunc("/_internal/executions/", a.handleInternalExecution)
 		mux.HandleFunc("/webhooks/approval", a.handleApprovalWebhook)
 		mux.HandleFunc("/shutdown", a.handleShutdown)
 

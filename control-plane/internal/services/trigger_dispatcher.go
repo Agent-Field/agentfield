@@ -83,7 +83,7 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("target node %q not found: %v", trig.TargetNodeID, err))
 		return
 	}
-	linked := d.link != nil && d.link.Live(node.ID)
+	linked := d.link != nil && d.link.LiveFor(node.ID, nodelink.KindDispatch)
 	// A linked node is reached down its link, so an HTTP health probe that
 	// cannot reach it (it is behind NAT, or has no base_url) says nothing.
 	if !linked && (node.HealthStatus == types.HealthStatusInactive || node.LifecycleStatus == types.AgentStatusOffline) {

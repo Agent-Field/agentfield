@@ -61,6 +61,10 @@ type Frame struct {
 const (
 	KindDispatch = "dispatch"
 	KindCancel   = "cancel"
+	// KindHTTP carries one HTTP request the control plane would have dialed
+	// (agenturl's link carrier): the node serves it on its own handler and
+	// acks with the response. A node takes it only if its hello accepts it.
+	KindHTTP = "http"
 )
 
 // DeliverBody is a deliver frame's body.
@@ -73,6 +77,17 @@ type DeliverBody struct {
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	// Cancel.
 	Reason string `json:"reason,omitempty"`
+	// HTTP.
+	Method string `json:"method,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Body   []byte `json:"body,omitempty"`
+}
+
+// HTTPResult is an http delivery's ack result: the node's response.
+type HTTPResult struct {
+	Code    int               `json:"code"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    []byte            `json:"body,omitempty"`
 }
 
 // Ack outcomes.
@@ -97,6 +112,9 @@ type Hello struct {
 	SDK        string   `json:"sdk,omitempty"`
 	Version    string   `json:"version,omitempty"`
 	Inflight   []string `json:"inflight,omitempty"`
+	// Accepts is the delivery kinds this node serves. Empty is the original
+	// set (dispatch, cancel), which is what the codeaf factory's node speaks.
+	Accepts []string `json:"accepts,omitempty"`
 }
 
 // Heartbeat renews the lease and keeps inflight executions alive.

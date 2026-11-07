@@ -376,9 +376,28 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	if runCLI == nil {
 		runCLI = runCodeAFCLI
 	}
+	// A WATCHED RUN IS ARMED ONLY ON exec, the door that has --events and
+	// --steer (codeaf_live.go). `do` stays a silent run, as before.
+	var live *liveRun
+	if command == "exec" && options.Live != nil {
+		run, flags, err := startLive(options.Live)
+		if err != nil {
+			log.Printf("WARNING CodeAF live transcript unavailable: %v", err)
+		} else {
+			live = run
+			cmd = append(cmd, flags...)
+		}
+	}
 	// The context is the exact deadline; the integer CLI cap rounds up so it cannot shorten it.
 	outerTimeout := int(math.Ceil(time.Until(deadline).Seconds()))
 	cli, err := runCLI(runCtx, cmd, env, "", outerTimeout, 0, input)
+	live.finish()
+	// AN OLDER CODEAF THAT HAS NO --events IS RUN AGAIN WITHOUT THEM: watching
+	// a run is a convenience, and must never cost the run itself.
+	if live != nil && err == nil && cli != nil && cli.ReturnCode != 0 && strings.Contains(cli.Stderr, "-events") && strings.Contains(cli.Stderr, "not defined") {
+		cmd = cmd[:len(cmd)-4]
+		cli, err = runCLI(runCtx, cmd, env, "", int(math.Ceil(time.Until(deadline).Seconds())), 0, input)
+	}
 	elapsed := int(time.Since(started).Milliseconds())
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		return &RawResult{Provider: ProviderCodeAF, IsError: true, FailureType: FailureTimeout,

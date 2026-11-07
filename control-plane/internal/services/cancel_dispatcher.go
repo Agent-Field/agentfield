@@ -186,7 +186,7 @@ func (d *CancelDispatcher) dispatch(ctx context.Context, ev events.ExecutionEven
 		logger.Logger.Debug().Str("agent_node_id", agentNodeID).Str("execution_id", executionID).Msg("cancel-dispatcher: agent not registered, skipping")
 		return
 	}
-	if d.link != nil && (d.link.Live(agent.ID) || agent.BaseURL == "") {
+	if d.link != nil && (d.link.LiveFor(agent.ID, nodelink.KindCancel) || agent.BaseURL == "") {
 		reason := ""
 		if m, ok := ev.Data.(map[string]interface{}); ok {
 			if r, ok := m["reason"].(string); ok {

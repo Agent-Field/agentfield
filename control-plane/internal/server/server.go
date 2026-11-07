@@ -582,6 +582,8 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		Link:          linkHub,
 	})
 	linkHub.Router = Router
+	// A node with no address is reached down its link (agenturl/link.go).
+	agenturl.SetLinkCarrier(linkHub)
 
 	// Native RAG knowledge store: pick the embedding provider from config,
 	// falling back to the deterministic FakeEmbedder when no OpenAI key is set.

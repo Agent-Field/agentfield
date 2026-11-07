@@ -29,6 +29,15 @@ type Dispatch struct {
 	Headers  map[string]string
 }
 
+// HTTPRequest is an http delivery's request: method, path with query,
+// headers and body.
+type HTTPRequest struct {
+	Method  string
+	Path    string
+	Headers map[string]string
+	Body    []byte
+}
+
 // Outcome is how a delivery ended: the node's ack, or expiry.
 type Outcome struct {
 	Outcome string
@@ -45,6 +54,8 @@ type Delivery struct {
 	Dedupe   string
 	Dispatch *Dispatch
 	Reason   string
+	// HTTP is an http delivery's request.
+	HTTP *HTTPRequest
 	// TTL is how long the delivery waits for an ack; zero is the kind's
 	// default (dispatch 10 minutes, cancel 1 hour).
 	TTL time.Duration
@@ -100,6 +111,7 @@ type link struct {
 	node     string
 	instance string
 	version  string
+	accepts  map[string]bool
 	conn     *websocket.Conn
 	wmu      sync.Mutex
 	done     chan struct{}
@@ -154,6 +166,22 @@ func (h *Hub) Live(node string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.links[node] != nil
+}
+
+// LiveFor says node holds a link now that serves deliveries of kind. A link
+// whose hello named no kinds serves the original two, dispatch and cancel.
+func (h *Hub) LiveFor(node, kind string) bool {
+	h.init()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	l := h.links[node]
+	if l == nil {
+		return false
+	}
+	if l.accepts == nil {
+		return kind == KindDispatch || kind == KindCancel
+	}
+	return l.accepts[kind]
 }
 
 // Links is every node with a live link and its instance, for status pages.
@@ -214,6 +242,9 @@ func (h *Hub) push(l *link, p *pending) {
 	body := DeliverBody{Kind: p.d.Kind, IdempotencyKey: p.d.Dedupe, Reason: p.d.Reason}
 	if p.d.Dispatch != nil {
 		body.Reasoner, body.Input, body.Headers = p.d.Dispatch.Reasoner, p.d.Dispatch.Input, p.d.Dispatch.Headers
+	}
+	if p.d.HTTP != nil {
+		body.Method, body.Path, body.Headers, body.Body = p.d.HTTP.Method, p.d.HTTP.Path, p.d.HTTP.Headers, p.d.HTTP.Body
 	}
 	raw, err := Encode(Frame{T: TDeliver, ID: p.id, Exec: p.d.ExecutionID}, body)
 	if err != nil {
@@ -412,6 +443,12 @@ func (h *Hub) serve(node, instance string, conn *websocket.Conn) {
 				l.instance = hello.InstanceID
 			}
 			l.version = hello.Version
+			if len(hello.Accepts) > 0 {
+				l.accepts = map[string]bool{}
+				for _, k := range hello.Accepts {
+					l.accepts[k] = true
+				}
+			}
 			h.adopt(l)
 			helloed = true
 			logger.Logger.Info().Str("node_id", node).Str("instance_id", l.instance).Str("link_id", l.id).Int("inflight", len(hello.Inflight)).Msg("nodelink: link up")

@@ -204,6 +204,9 @@ func (r *Runner) buildProvider(opts Options) (Provider, error) {
 func (r *Runner) mergeOptions(overrides Options) Options {
 	merged := r.DefaultOptions
 
+	if overrides.Live != nil {
+		merged.Live = overrides.Live
+	}
 	if overrides.Provider != "" {
 		merged.Provider = overrides.Provider
 	}

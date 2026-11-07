@@ -74,6 +74,7 @@ func (a *Agent) Initialize(ctx context.Context) error {
 	}
 
 	a.startLeaseLoop()
+	a.startLink()
 	a.initialized = true
 	a.logExecutionInfo(ctx, "agent.initialize.complete", "agent initialized", map[string]any{
 		"node_id": a.cfg.NodeID,
