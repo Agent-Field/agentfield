@@ -116,7 +116,9 @@ func (r *research) research(ctx context.Context, in map[string]any) (any, error)
 		wg.Add(1)
 		go func(i int, o map[string]any) {
 			defer wg.Done()
-			results[i], errs[i] = r.app.Call(ctx, "investigate", map[string]any{"question": question, "plan": planned, "option": o})
+			// "subject" names this call among its siblings: WorkAF labels each
+			// parallel investigation by it ("Investigate goccy/go-json").
+			results[i], errs[i] = r.app.Call(ctx, "investigate", map[string]any{"subject": str(o, "name"), "question": question, "plan": planned, "option": o})
 		}(i, o)
 	}
 	wg.Wait()
