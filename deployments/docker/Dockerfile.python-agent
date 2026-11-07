@@ -1,6 +1,11 @@
+# Base images are build args so a deployment can pin them (for example by digest)
+# without patching this file. The defaults are the images this build has always used.
+ARG DEBIAN_IMAGE=debian:bookworm-slim
+ARG PYTHON_IMAGE=python:3.11-slim
+
 # CodeAF is the default harness. Raw assets are authenticated against embedded
 # release pins; any download or verification failure fails the image build.
-FROM debian:bookworm-slim AS codeaf-dist
+FROM ${DEBIAN_IMAGE} AS codeaf-dist
 ARG TARGETARCH
 ARG CODEAF_VERSION=v0.8.2
 ARG CODEAF_BASE_URL=https://github.com/Agent-Field/CodeAF/releases/download
@@ -32,7 +37,7 @@ RUN set -eu; \
 # UNCOMPRESSED binary, so the hash is taken after gunzip.
 #
 # Pin overrides (both are build args): AFORGE_BASE_URL, AFORGE_VERSION.
-FROM debian:bookworm-slim AS aforge-dist
+FROM ${DEBIAN_IMAGE} AS aforge-dist
 ARG TARGETARCH
 ARG AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge
 ARG AFORGE_VERSION=v0.1.0
@@ -53,7 +58,7 @@ RUN set -eu; \
     fi; \
     rm -f aforge.gz checksums.txt
 
-FROM python:3.11-slim
+FROM ${PYTHON_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
