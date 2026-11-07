@@ -29,6 +29,7 @@ import (
 	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/knowledge"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/Agent-Field/agentfield/control-plane/internal/observability"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/apicatalog"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/knowledgebase"
@@ -107,6 +108,8 @@ type AgentFieldServer struct {
 	// workers so they can cooperatively short-circuit in-flight reasoner
 	// code (raise CancelledError / abort signals / cancel contexts).
 	cancelDispatcher *services.CancelDispatcher
+	// linkHub holds every node-initiated link (internal/nodelink).
+	linkHub *nodelink.Hub
 	// Agentic API
 	apiCatalog *apicatalog.Catalog
 	kb         *knowledgebase.KB
@@ -560,14 +563,25 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		}
 	}
 
-	triggerDispatcher := services.NewTriggerDispatcher(storageProvider, vcService)
+	// The node link hub. Router is filled in once the router exists below;
+	// up-frames re-enter it as the HTTP calls they replace.
+	linkHub := &nodelink.Hub{
+		APIKey:        cfg.API.Auth.APIKey,
+		InternalToken: cfg.Features.DID.Authorization.InternalToken,
+		Agents:        storageProvider,
+	}
+	triggerDispatcher := services.NewTriggerDispatcher(storageProvider, vcService).
+		WithInternalToken(cfg.Features.DID.Authorization.InternalToken).
+		WithLink(linkHub)
 	sourceManager := services.NewSourceManager(storageProvider, triggerDispatcher)
 	triggerHandlers := handlers.NewTriggerHandlers(storageProvider, triggerDispatcher, sourceManager)
 	handlers.SetTriggerSourceManager(sourceManager)
 
 	cancelDispatcher := services.NewCancelDispatcher(storageProvider, services.CancelDispatcherConfig{
 		InternalToken: cfg.Features.DID.Authorization.InternalToken,
+		Link:          linkHub,
 	})
+	linkHub.Router = Router
 
 	// Native RAG knowledge store: pick the embedding provider from config,
 	// falling back to the deterministic FakeEmbedder when no OpenAI key is set.
@@ -623,6 +637,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		sourceManager:          sourceManager,
 		triggerHandlers:        triggerHandlers,
 		cancelDispatcher:       cancelDispatcher,
+		linkHub:                linkHub,
 		apiCatalog:             initAPICatalog(),
 		kb:                     initKnowledgeBase(),
 		knowledgeService:       knowledgeService,
@@ -1000,6 +1015,9 @@ func (s *AgentFieldServer) Stop() error {
 	// Stop cancel dispatcher
 	if s.cancelDispatcher != nil {
 		s.cancelDispatcher.Stop()
+	}
+	if s.linkHub != nil {
+		s.linkHub.Close()
 	}
 
 	// Stop rate limiter eviction goroutines

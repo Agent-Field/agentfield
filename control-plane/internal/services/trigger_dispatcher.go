@@ -11,6 +11,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -31,6 +32,26 @@ type TriggerDispatcher struct {
 	storage    storage.StorageProvider
 	vcService  *VCService
 	httpClient *http.Client
+	// internalToken is sent as Authorization: Bearer on every dispatch,
+	// exactly as the execute controller and the cancel dispatcher send it,
+	// so a node running with origin auth can refuse anyone else.
+	internalToken string
+	// link is the node-initiated link hub. When the target node holds a live
+	// link (or has no base_url to reach it on), the dispatch goes down the
+	// link instead of over HTTP. nil keeps HTTP for every node.
+	link *nodelink.Hub
+}
+
+// WithInternalToken sets the bearer every dispatch carries.
+func (d *TriggerDispatcher) WithInternalToken(token string) *TriggerDispatcher {
+	d.internalToken = token
+	return d
+}
+
+// WithLink routes dispatches to linked nodes down their link.
+func (d *TriggerDispatcher) WithLink(h *nodelink.Hub) *TriggerDispatcher {
+	d.link = h
+	return d
 }
 
 // NewTriggerDispatcher returns a dispatcher with sensible defaults.
@@ -62,7 +83,10 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("target node %q not found: %v", trig.TargetNodeID, err))
 		return
 	}
-	if node.HealthStatus == types.HealthStatusInactive || node.LifecycleStatus == types.AgentStatusOffline {
+	linked := d.link != nil && d.link.Live(node.ID)
+	// A linked node is reached down its link, so an HTTP health probe that
+	// cannot reach it (it is behind NAT, or has no base_url) says nothing.
+	if !linked && (node.HealthStatus == types.HealthStatusInactive || node.LifecycleStatus == types.AgentStatusOffline) {
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("target node %q unreachable (health=%s lifecycle=%s)", trig.TargetNodeID, node.HealthStatus, node.LifecycleStatus))
 		return
 	}
@@ -137,6 +161,14 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	dispatchExecutionID := utils.GenerateExecutionID()
 	requestID := utils.GenerateAgentFieldRequestID()
 
+	// Down the link: a node with a live link, or one with no address at all
+	// (it waits in the hub's queue for the node to connect, up to the
+	// dispatch expiry). Everything else is HTTP exactly as before.
+	if d.link != nil && (linked || node.BaseURL == "") {
+		d.dispatchOverLink(ctx, node, trig, ev, dispatchWorkflowID, dispatchExecutionID, requestID, parentVCID, body)
+		return
+	}
+
 	endpoint, err := agenturl.ForNode(node.ID, node.BaseURL, "reasoners", trig.TargetReasoner)
 	if err != nil {
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("build request: %v", err))
@@ -174,6 +206,9 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	if parentVCID != "" {
 		req.Header.Set("X-Parent-VC-ID", parentVCID)
 	}
+	if d.internalToken != "" {
+		req.Header.Set("Authorization", "Bearer "+d.internalToken)
+	}
 
 	resp, err := d.httpClient.Do(req)
 	agenturl.WarnNode(node.ID, err)
@@ -186,10 +221,18 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 
-	if resp.StatusCode >= 400 {
-		msg := fmt.Sprintf("agent returned %d: %s", resp.StatusCode, truncate(respBody, 256))
-		d.failDispatchExecution(ctx, dispatchExecutionID, msg)
-		d.markFailed(ctx, ev.ID, msg)
+	d.settle(ctx, ev.ID, dispatchExecutionID, parentVCID, resp.StatusCode, respBody)
+}
+
+// settle is what a node's answer to a dispatch means, whichever carrier
+// brought it: >=400 fails the execution and the event; 202 leaves the
+// execution running for the node to report on; any other 2xx completes it
+// with the answer as its result.
+func (d *TriggerDispatcher) settle(ctx context.Context, eventID, executionID, parentVCID string, status int, respBody []byte) {
+	if status >= 400 {
+		msg := fmt.Sprintf("agent returned %d: %s", status, truncate(respBody, 256))
+		d.failDispatchExecution(ctx, executionID, msg)
+		d.markFailed(ctx, eventID, msg)
 		return
 	}
 	// 2xx other than 202 means the node handled the work synchronously, so
@@ -197,16 +240,65 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	// the work and will report final status via a later async callback (the
 	// reasoner-result/event ingestion path), so we leave the execution in
 	// Running and let that path complete it.
-	if resp.StatusCode != http.StatusAccepted {
-		d.completeDispatchExecution(ctx, dispatchExecutionID, respBody)
+	if status != http.StatusAccepted {
+		d.completeDispatchExecution(ctx, executionID, respBody)
 	}
 
-	if err := d.storage.MarkInboundEventProcessed(ctx, ev.ID, types.InboundEventStatusDispatched, "", parentVCID); err != nil {
+	if err := d.storage.MarkInboundEventProcessed(ctx, eventID, types.InboundEventStatusDispatched, "", parentVCID); err != nil {
 		logger.Logger.Warn().
 			Err(err).
-			Str("event_id", ev.ID).
+			Str("event_id", eventID).
 			Msg("failed to mark inbound event dispatched")
 	}
+}
+
+// dispatchOverLink writes the same execution records the HTTP path writes and
+// hands the same body and headers to the node's link. The node's ack settles
+// it the way an HTTP answer would: accepted is 202, done is 200 with its
+// result, rejected is 422 with its error. A delivery no link took before it
+// expired fails the way an unreachable node does today.
+func (d *TriggerDispatcher) dispatchOverLink(ctx context.Context, node *types.AgentNode, trig *types.Trigger, ev *types.InboundEvent, workflowID, executionID, requestID, parentVCID string, body []byte) {
+	if err := d.createDispatchRecords(ctx, node, trig, ev, workflowID, executionID, requestID, body); err != nil {
+		d.markFailed(ctx, ev.ID, fmt.Sprintf("create dispatch execution record: %v", err))
+		return
+	}
+	if err := d.storage.SetInboundEventDispatchedWorkflow(ctx, ev.ID, workflowID); err != nil {
+		logger.Logger.Warn().Err(err).Str("event_id", ev.ID).Msg("failed to record dispatched workflow id on inbound event")
+	}
+	headers := map[string]string{
+		"X-Workflow-ID":           workflowID,
+		"X-Execution-ID":          executionID,
+		"X-AgentField-Request-ID": requestID,
+		"X-Trigger-ID":            trig.ID,
+		"X-Source-Name":           trig.SourceName,
+		"X-Event-Type":            ev.EventType,
+		"X-Event-ID":              ev.ID,
+	}
+	if parentVCID != "" {
+		headers["X-Parent-VC-ID"] = parentVCID
+	}
+	eventID := ev.ID
+	settleCtx := context.WithoutCancel(ctx)
+	d.link.Deliver(node.ID, nodelink.Delivery{
+		Kind:        nodelink.KindDispatch,
+		ExecutionID: executionID,
+		Dedupe:      ev.IdempotencyKey,
+		Dispatch:    &nodelink.Dispatch{Reasoner: trig.TargetReasoner, Input: body, Headers: headers},
+		OnSettle: func(o nodelink.Outcome) {
+			switch o.Outcome {
+			case nodelink.OutcomeAccepted, nodelink.OutcomeDuplicate:
+				d.settle(settleCtx, eventID, executionID, parentVCID, http.StatusAccepted, nil)
+			case nodelink.OutcomeDone:
+				d.settle(settleCtx, eventID, executionID, parentVCID, http.StatusOK, o.Result)
+			case nodelink.OutcomeExpired:
+				msg := "dispatch request failed: no link from node " + node.ID + " took it before it expired"
+				d.failDispatchExecution(settleCtx, executionID, msg)
+				d.markFailed(settleCtx, eventID, msg)
+			default:
+				d.settle(settleCtx, eventID, executionID, parentVCID, http.StatusUnprocessableEntity, []byte(o.Error))
+			}
+		},
+	})
 }
 
 func (d *TriggerDispatcher) createDispatchRecords(ctx context.Context, node *types.AgentNode, trig *types.Trigger, ev *types.InboundEvent, workflowID, executionID, requestID string, input []byte) error {
