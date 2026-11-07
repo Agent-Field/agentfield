@@ -672,20 +672,30 @@ func StructToJSONSchema(v any) (map[string]any, error) {
 	if t.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("StructToJSONSchema expects a struct or pointer to struct, got %s", t.Kind())
 	}
+	return structSchema(t, map[reflect.Type]bool{}), nil
+}
 
+var (
+	timeType       = reflect.TypeOf(time.Time{})
+	rawMessageType = reflect.TypeOf(json.RawMessage(nil))
+)
+
+// structSchema is one struct's object schema. seen holds the structs being
+// described above this one, so a type that contains itself ends in a plain
+// object instead of recursing forever.
+func structSchema(t reflect.Type, seen map[reflect.Type]bool) map[string]any {
+	seen[t] = true
+	defer delete(seen, t)
 	properties := make(map[string]any, t.NumField())
 	required := make([]string, 0, t.NumField())
-
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if field.PkgPath != "" {
 			continue
 		}
-
 		name := field.Name
 		isRequired := true
-		tag := field.Tag.Get("json")
-		if tag != "" {
+		if tag := field.Tag.Get("json"); tag != "" {
 			parts := strings.Split(tag, ",")
 			if parts[0] == "-" {
 				continue
@@ -697,38 +707,50 @@ func StructToJSONSchema(v any) (map[string]any, error) {
 				isRequired = false
 			}
 		}
-
-		fieldType := field.Type
-		for fieldType.Kind() == reflect.Pointer {
-			fieldType = fieldType.Elem()
-		}
-
-		propType := "object"
-		switch fieldType.Kind() {
-		case reflect.String:
-			propType = "string"
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			propType = "integer"
-		case reflect.Float32, reflect.Float64:
-			propType = "number"
-		case reflect.Bool:
-			propType = "boolean"
-		case reflect.Slice, reflect.Array:
-			propType = "array"
-		case reflect.Struct:
-			propType = "object"
-		}
-
-		properties[name] = map[string]any{"type": propType}
+		properties[name] = typeSchema(field.Type, seen)
 		if isRequired {
 			required = append(required, name)
 		}
 	}
+	return map[string]any{"type": "object", "properties": properties, "required": required}
+}
 
-	return map[string]any{
-		"type":       "object",
-		"properties": properties,
-		"required":   required,
-	}, nil
+// typeSchema is the schema of one Go type, ELEMENTS INCLUDED. An array said
+// only "array" and a map only "object", so a model told `files: array` wrote
+// objects where the struct wanted strings, failed to decode, and spent a
+// schema retry finding out (the live support run did exactly that).
+func typeSchema(t reflect.Type, seen map[reflect.Type]bool) map[string]any {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch {
+	case t == timeType:
+		return map[string]any{"type": "string", "format": "date-time"}
+	case t == rawMessageType || t.Kind() == reflect.Interface:
+		return map[string]any{}
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return map[string]any{"type": "string"}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return map[string]any{"type": "integer"}
+	case reflect.Float32, reflect.Float64:
+		return map[string]any{"type": "number"}
+	case reflect.Bool:
+		return map[string]any{"type": "boolean"}
+	case reflect.Slice, reflect.Array:
+		if t.Elem().Kind() == reflect.Uint8 {
+			return map[string]any{"type": "string"} // []byte travels as base64
+		}
+		return map[string]any{"type": "array", "items": typeSchema(t.Elem(), seen)}
+	case reflect.Map:
+		return map[string]any{"type": "object", "additionalProperties": typeSchema(t.Elem(), seen)}
+	case reflect.Struct:
+		if seen[t] {
+			return map[string]any{"type": "object"}
+		}
+		return structSchema(t, seen)
+	}
+	return map[string]any{"type": "object"}
 }

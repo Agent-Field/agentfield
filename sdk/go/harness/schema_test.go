@@ -316,3 +316,35 @@ func TestStructToJSONSchema(t *testing.T) {
 	_, err = json.Marshal(schema)
 	assert.NoError(t, err)
 }
+
+// THE SCHEMA NAMES WHAT GOES INSIDE. `files: array` let the model write
+// objects where the result type wanted strings.
+func TestTheSchemaNamesTheElementTypes(t *testing.T) {
+	type file struct {
+		Path string `json:"path"`
+	}
+	type node struct {
+		Kids []node `json:"kids,omitempty"`
+	}
+	type findings struct {
+		Files  []string          `json:"files"`
+		Counts map[string]int64  `json:"counts"`
+		Where  []file            `json:"where"`
+		Tree   node              `json:"tree"`
+		Extra  map[string]string `json:"extra,omitempty"`
+	}
+	schema, err := StructToJSONSchema(findings{})
+	require.NoError(t, err)
+	props := schema["properties"].(map[string]any)
+	assert.Equal(t, map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, props["files"])
+	assert.Equal(t, map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "integer"}}, props["counts"])
+	where := props["where"].(map[string]any)["items"].(map[string]any)
+	assert.Equal(t, map[string]any{"path": map[string]any{"type": "string"}}, where["properties"])
+	kids := props["tree"].(map[string]any)["properties"].(map[string]any)["kids"].(map[string]any)
+	assert.Equal(t, map[string]any{"type": "object"}, kids["items"], "a type that holds itself stops")
+	assert.ElementsMatch(t, []string{"files", "counts", "where", "tree"}, schema["required"])
+
+	path := filepath.Join(t.TempDir(), "out.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"files":[{"path":"a.go"}],"counts":{},"where":[],"tree":{}}`), 0o644))
+	assert.Contains(t, DiagnoseOutputFailureFor(path, schema, &findings{}), "/files/0")
+}
