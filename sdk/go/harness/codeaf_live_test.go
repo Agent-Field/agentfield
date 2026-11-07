@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -64,6 +65,13 @@ func TestCodeAFLiveStreamsWhileRunningAndDeliversASteer(t *testing.T) {
 		require.NotEmpty(t, cwd)
 		require.NotEmpty(t, events)
 		require.NotEmpty(t, steerPath)
+		// Its own conversation: named beside the run's other files and not
+		// yet there, so codeaf starts it fresh instead of resuming the last
+		// one in a reused checkout.
+		sessionPath := flagValue(cmd, "--session")
+		require.Equal(t, filepath.Dir(events), filepath.Dir(sessionPath))
+		_, statErr := os.Stat(sessionPath)
+		require.True(t, os.IsNotExist(statErr), "the run's session must not exist before codeaf starts")
 		appendLine(t, events, first+"\n")
 		// The run is still going: the watcher must already have the line.
 		select {

@@ -40,10 +40,13 @@ type liveRun struct {
 	dir        string
 	eventsPath string
 	steerPath  string
-	stop       chan struct{}
-	wg         sync.WaitGroup
-	offset     int64
-	partial    []byte
+	// sessionPath is the run's own conversation (--session), never created
+	// beforehand so codeaf starts it fresh.
+	sessionPath string
+	stop        chan struct{}
+	wg          sync.WaitGroup
+	offset      int64
+	partial     []byte
 }
 
 // startLive makes the run's two files and starts tailing and steering. The
@@ -56,7 +59,8 @@ func startLive(live *Live) (*liveRun, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	r := &liveRun{live: live, dir: dir, eventsPath: filepath.Join(dir, "events.ndjson"), steerPath: filepath.Join(dir, "steer.ndjson"), stop: make(chan struct{})}
+	r := &liveRun{live: live, dir: dir, eventsPath: filepath.Join(dir, "events.ndjson"), steerPath: filepath.Join(dir, "steer.ndjson"),
+		sessionPath: filepath.Join(dir, "transcript.jsonl"), stop: make(chan struct{})}
 	// Both files exist before codeaf starts, so neither side races a create.
 	for _, p := range []string{r.eventsPath, r.steerPath} {
 		f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o600)
@@ -75,7 +79,13 @@ func startLive(live *Live) (*liveRun, []string, error) {
 		r.wg.Add(1)
 		go r.steer()
 	}
-	return r, []string{"--events", r.eventsPath, "--steer", r.steerPath}, nil
+	// EVERY WATCHED RUN IS ITS OWN CONVERSATION. A `chat --once` that names no
+	// session resumes the newest one in its directory, and a node reuses its
+	// clone of a repository from run to run — so the second ticket's step
+	// opened on the first ticket's whole turn. The session file is named in
+	// the run's own directory and not created, so codeaf starts it fresh; the
+	// watcher (WorkAF) keeps the record, and the run's directory goes with it.
+	return r, []string{"--events", r.eventsPath, "--steer", r.steerPath, "--session", r.sessionPath}, nil
 }
 
 func (r *liveRun) tail() {
