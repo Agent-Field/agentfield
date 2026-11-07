@@ -1,7 +1,13 @@
+# Base images are build args so a deployment can pin them (for example by digest)
+# without patching this file. The defaults are the images this build has always used.
+ARG NODE_BUILD_IMAGE=node:20-bookworm-slim
+ARG GO_BUILD_IMAGE=golang:1.25-bookworm
+ARG RUNTIME_IMAGE=gcr.io/distroless/base-debian12
+
 # bookworm-slim (glibc) instead of alpine (musl): Vite's lightningcss
 # optional native binding is flaky under npm ci on musl when the lockfile
 # lacks libc metadata, which intermittently breaks `vite build` in CI.
-FROM --platform=$BUILDPLATFORM node:20-bookworm-slim AS ui-builder
+FROM --platform=$BUILDPLATFORM ${NODE_BUILD_IMAGE} AS ui-builder
 WORKDIR /app/web
 
 COPY control-plane/web/client/package*.json ./
@@ -15,7 +21,7 @@ COPY control-plane/web/client/ .
 # regression.
 RUN npx vite build
 
-FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS go-builder
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-builder
 WORKDIR /app
 
 ARG TARGETOS
@@ -50,7 +56,7 @@ RUN cd control-plane && \
 # has UID/GID 65532 in the base image, so match that here.
 RUN mkdir -p /tmp/agentfield-data && chown 65532:65532 /tmp/agentfield-data
 
-FROM gcr.io/distroless/base-debian12
+FROM ${RUNTIME_IMAGE}
 COPY --from=go-builder /app/bin/agentfield-server /usr/local/bin/agentfield-server
 COPY --from=go-builder /app/control-plane/config /etc/agentfield/config
 COPY --from=go-builder --chown=nonroot:nonroot /tmp/agentfield-data /data
