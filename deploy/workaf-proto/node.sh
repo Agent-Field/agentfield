@@ -106,7 +106,7 @@ prove() {
 
 stop() {
   remote "for f in node tunnel; do p=\$(cat $RN/\$f.pid 2>/dev/null) && kill \$p 2>/dev/null; rm -f $RN/\$f.pid; done; \
-    pkill -f '$KIT/bin/codeaf' 2>/dev/null; true"
+    pkill -f '$KIT/bin/$EX' 2>/dev/null; pkill -f '$KIT/bin/codeaf' 2>/dev/null; true"
   say "$EX stopped on $NODE_HOST"
 }
 
