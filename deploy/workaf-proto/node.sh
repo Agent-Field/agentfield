@@ -17,9 +17,11 @@
 set -euo pipefail
 HERE=${0:A:h}; source $HERE/env.sh
 EX=${2:-workaf-support}
+# The binary is the example's directory name; the NODE ID is the short word
+# the desk shows ("AgentField · support"), never the example's directory name.
 case $EX in
-  workaf-support) PORT=$NODE_PORT;;
-  workaf-research) PORT=$((NODE_PORT + 1));;
+  workaf-support) PORT=$NODE_PORT; ID=support;;
+  workaf-research) PORT=$((NODE_PORT + 1)); ID=research;;
   *) die "unknown example $EX";;
 esac
 R="\$HOME/$KIT"          # the kit directory, expanded on the node box
@@ -69,9 +71,9 @@ start() {
   if running; then say "$EX already up on $NODE_HOST pid $(remote "cat $RN/node.pid")"; return; fi
   # LINK ONLY: the SDK serves every control-plane request down the link it
   # dials, listens on an ephemeral loopback port nobody else can reach, and
-  # registers http://$EX.nodelink. No tunnel, no inbound port.
+  # registers http://$ID.nodelink. No tunnel, no inbound port.
   remote "cd $RN/work; env -i HOME=\$HOME USER=\$USER PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
-    AGENT_NODE_ID=$EX AGENTFIELD_NODE_LINK_ONLY=1 \
+    AGENT_NODE_ID=$ID AGENTFIELD_NODE_LINK_ONLY=1 AGENTFIELD_NODE_HOST=$NODE_HOST \
     AGENTFIELD_URL=$CP_URL AGENTFIELD_API_KEY_FILE=$R/secrets/cpkey \
     OPENROUTER_API_KEY_FILE=$R/secrets/openrouter GITHUB_TOKEN_FILE=$R/secrets/github \
     AGENTFIELD_HOME=$RN/home CODEAF_BIN=$R/bin/codeaf SUPPORT_MODEL=$MODEL RESEARCH_MODEL=$MODEL \
@@ -80,7 +82,7 @@ start() {
     nohup $R/bin/$EX > $R/logs/$EX.log 2>&1 < /dev/null & echo \$! > $RN/node.pid"
   local key=$(<$LOCAL/cp/secrets/cpkey)
   for i in {1..60}; do
-    curl -fsS -H "X-API-Key: $key" http://127.0.0.1:$CP_PORT/api/v1/nodes/$EX 2>/dev/null | grep -q '"id"' && break
+    curl -fsS -H "X-API-Key: $key" http://127.0.0.1:$CP_PORT/api/v1/nodes/$ID 2>/dev/null | grep -q '"id"' && break
     sleep 0.5
   done
   say "$EX up on $NODE_HOST pid $(remote "cat $RN/node.pid"), registered with the control plane"
@@ -100,7 +102,7 @@ prove() {
       if nc -z -w 3 $ip $p 2>/dev/null; then say "  REACHABLE from spark: $ip:$p"; bad=1; else say "  not reachable from spark: $ip:$p"; fi
     done
   done
-  curl -fsS -H "X-API-Key: $(<$LOCAL/cp/secrets/cpkey)" http://127.0.0.1:$CP_PORT/api/v1/nodes/$EX 2>/dev/null | jq -c '{id, base_url, health_status}' || true
+  curl -fsS -H "X-API-Key: $(<$LOCAL/cp/secrets/cpkey)" http://127.0.0.1:$CP_PORT/api/v1/nodes/$ID 2>/dev/null | jq -c '{id, base_url, health_status}' || true
   (( bad == 0 )) || die "the node is reachable from the control-plane host"
 }
 

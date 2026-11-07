@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Send one support ticket to the workaf-support trigger, the way a help desk's
+# Send one support ticket to the support node's trigger, the way a help desk's
 # webhook would, and print the inbound event the control plane recorded.
 # Usage: fire.sh ["ticket text"] [ticket-id]
 set -euo pipefail
@@ -8,8 +8,8 @@ TEXT=${1:-"Hi, the ledger CLI's total is wrong after I add a refund. I ran: ledg
 ID=${2:-T-$(date +%s)}
 K=$(<$LOCAL/cp/secrets/cpkey)
 TRIG=$(curl -fsS -H "X-API-Key: $K" http://127.0.0.1:$CP_PORT/api/v1/triggers \
-  | jq -r '.triggers[] | select(.target_node_id=="workaf-support" and .target_reasoner=="handle_ticket") | .id' | head -1)
-[[ -n $TRIG ]] || die "no workaf-support trigger; is the node up?"
+  | jq -r '.triggers[] | select(.target_node_id=="support" and .target_reasoner=="handle_ticket") | .id' | head -1)
+[[ -n $TRIG ]] || die "no support trigger; is the node up?"
 BODY=$(jq -nc --arg id $ID --arg t $TEXT '{id:$id, subject:"ledger total wrong", ticket:$t}')
 say "POST $CP_URL/sources/$TRIG  (ticket $ID)"
 # The bearer is read from its file by curl's own config reader, never argv.

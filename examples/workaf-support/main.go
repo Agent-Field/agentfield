@@ -17,7 +17,7 @@
 //
 //	AGENTFIELD_URL        control plane (default http://localhost:8080)
 //	AGENTFIELD_API_KEY    control plane API key, or AGENTFIELD_API_KEY_FILE
-//	AGENT_NODE_ID         node id (default workaf-support)
+//	AGENT_NODE_ID         node id (default support)
 //	AGENT_LISTEN          listen address (default 127.0.0.1:8002)
 //	AGENT_CALLBACK_URL    URL the control plane dispatches to (default http://<AGENT_LISTEN>)
 //	SUPPORT_MODEL         harness model (default deepseek/deepseek-v4.1-flash)
@@ -39,7 +39,7 @@ import (
 )
 
 func main() {
-	nodeID := envOr("AGENT_NODE_ID", "workaf-support")
+	nodeID := envOr("AGENT_NODE_ID", "support")
 	listen := envOr("AGENT_LISTEN", "127.0.0.1:8002")
 
 	app, err := agent.New(agent.Config{

@@ -14,7 +14,7 @@
 //
 // Configuration is environment only:
 //
-//	AGENTFIELD_URL, AGENTFIELD_API_KEY (or _FILE), AGENT_NODE_ID (default workaf-research),
+//	AGENTFIELD_URL, AGENTFIELD_API_KEY (or _FILE), AGENT_NODE_ID (default research),
 //	AGENT_LISTEN (default 127.0.0.1:8003), AGENT_CALLBACK_URL,
 //	RESEARCH_MODEL (default deepseek/deepseek-v4.1-flash), CODEAF_BIN,
 //	OPENROUTER_API_KEY (or _FILE), RESEARCH_WORKDIR (default: a temp dir)
@@ -43,7 +43,7 @@ var drivers = []struct{ reasoner, module, sqlName, note string }{
 func main() {
 	listen := envOr("AGENT_LISTEN", "127.0.0.1:8003")
 	app, err := agent.New(agent.Config{
-		NodeID:        envOr("AGENT_NODE_ID", "workaf-research"),
+		NodeID:        envOr("AGENT_NODE_ID", "research"),
 		Version:       "0.1.0",
 		AgentFieldURL: envOr("AGENTFIELD_URL", "http://localhost:8080"),
 		APIKey:        secret("AGENTFIELD_API_KEY"),

@@ -186,6 +186,7 @@ func (a *Agent) registerNode(ctx context.Context) error {
 				},
 				"sessions": a.SessionDefinitions(),
 				"tags":     a.cfg.Tags,
+				"host":     nodeHost(),
 			},
 		},
 		Features:       map[string]any{},
@@ -473,4 +474,20 @@ func (a *Agent) registeredHeartbeatInterval() string {
 		return "0s"
 	}
 	return formatHeartbeatInterval(a.cfg.LeaseRefreshInterval)
+}
+
+// nodeHost is the machine this node says it runs on, for a person reading
+// where a run happened ("support · dumb"): AGENTFIELD_NODE_HOST when set,
+// else this machine's hostname up to its first dot. It is a display word, not
+// an identity, and nothing authorizes on it.
+func nodeHost() string {
+	if h := strings.TrimSpace(os.Getenv("AGENTFIELD_NODE_HOST")); h != "" {
+		return h
+	}
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	h, _, _ = strings.Cut(strings.TrimSpace(h), ".")
+	return h
 }

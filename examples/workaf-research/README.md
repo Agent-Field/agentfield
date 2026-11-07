@@ -13,5 +13,5 @@ default question compares three Go SQLite drivers for a small CLI.
 ```sh
 export AGENTFIELD_URL=http://localhost:8080 OPENROUTER_API_KEY=…
 go run .
-curl -X POST $AGENTFIELD_URL/api/v1/execute/async/workaf-research.research -d '{"input":{}}'
+curl -X POST $AGENTFIELD_URL/api/v1/execute/async/research.research -d '{"input":{}}'
 ```

@@ -9,8 +9,8 @@ and `clean`. Everything lives under `~/af-workaf-proto` on each box, and
 ```
   mac-studio: codeaf app ──link (ws, outbound)──►┐
                                                   CONTROL PLANE  spark 0.0.0.0:18741
-  dumb: workaf-support ──link (ws, outbound)─────►┘   ▲
-        127.0.0.1:18742 ◄── ssh -R, dialed by dumb ───┘ (dispatch, see below)
+  dumb: support ──link (ws, outbound)────────────►┘
+        (binds only an ephemeral 127.0.0.1 port; no tunnel)
 ```
 
 | Box | OS | Reaches spark on |
@@ -25,7 +25,7 @@ and `clean`. Everything lives under `~/af-workaf-proto` on each box, and
 cd deploy/workaf-proto
 ./build.sh                      # CP (native, cgo), nodes and codeaf (darwin/arm64), ~4 min cold
 ./cp.sh start
-./node.sh start                 # workaf-support; `node.sh start workaf-research` for the other
+./node.sh start                 # node id `support`; `node.sh start workaf-research` starts `research`
 ./engine.sh start               # optional: codeaf app on mac-studio, linked to the CP
 ./fire.sh                       # one ticket through the generic_bearer trigger
 ./down.sh                       # stop and remove everything on all three boxes
@@ -34,17 +34,17 @@ cd deploy/workaf-proto
 `node.sh prove` and `engine.sh prove` print every TCP listener the process
 holds and try each one from spark on every address the box has.
 
-## Why the node still has a loopback port
+## The node is link only
 
-The Go SDK on `proto/harness-watch` takes dispatches over HTTP; its node link
-carries only `steer` and `cancel`, and answers any other delivery
-"this node takes … over HTTP". So the node binds `127.0.0.1` only, and dumb
-dials an `ssh -R` to spark that puts the port on spark's loopback, where the
-control plane reaches it. Every connection is opened by dumb. When the SDK
-answers `http` deliveries on the link (the control plane's carrier for
-`<node>.nodelink` hosts is already there), set
-`AGENT_CALLBACK_URL=http://workaf-support.nodelink` and drop `tunnel()` in
-`node.sh`.
+The node runs with `AGENTFIELD_NODE_LINK_ONLY=1`: the Go SDK dials the control
+plane's node link, registers `http://<node>.nodelink`, and answers every
+dispatch, nested call, cancel and steer that the control plane sends down that
+link (`accepts: ["http", "steer", "cancel"]`). Its own listener is an ephemeral
+loopback port that `node.sh prove` shows nothing outside can reach. There is
+no tunnel.
+
+Node ids are the short words the desk shows: `support` and `research`. The
+binaries keep their example names (`workaf-support`, `workaf-research`).
 
 ## Secrets
 
