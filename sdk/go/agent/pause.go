@@ -179,7 +179,9 @@ func (m *PauseManager) PendingCount() int {
 // Python SDK's Agent.pause().
 type PauseOptions struct {
 	// ApprovalRequestID is the ID of the approval request the agent already
-	// created on an external service. Required.
+	// created on an external service (hax), or one of its own. Optional:
+	// with none, the control plane mints one and the request lives only
+	// there, answered through its approval-response route.
 	ApprovalRequestID string
 	// ApprovalRequestURL is where a human can review the request. Optional.
 	ApprovalRequestURL string
@@ -192,7 +194,25 @@ type PauseOptions struct {
 	// ExecutionID overrides the current execution. Defaults to the execution
 	// carried on ctx.
 	ExecutionID string
+
+	// Kind is how a door shows the request: "plan_review" (a plan to read
+	// and judge), "question" (choices) or "approval" (go/no-go, the default).
+	Kind string
+	// Question is the one-line title a person is asked.
+	Question string
+	// Body is the full markdown a person must read to judge — the whole plan.
+	Body string
+	// Options are the answer labels; empty is approve, request_changes, reject.
+	Options []string
+
+	// PollInterval is how often Pause also reads approval-status, so it
+	// resumes even when the control plane's callback never reaches the
+	// node. Zero is 5s; negative turns the poll off.
+	PollInterval time.Duration
 }
+
+// defaultPausePoll is the fallback poll's interval when none is given.
+const defaultPausePoll = 5 * time.Second
 
 // Pause pauses the current execution for external approval.
 //
@@ -221,9 +241,6 @@ func (a *Agent) Pause(ctx context.Context, opts PauseOptions) (*ApprovalResult, 
 	if executionID == "" {
 		return nil, errors.New("no execution_id available — cannot pause")
 	}
-	if strings.TrimSpace(opts.ApprovalRequestID) == "" {
-		return nil, errors.New("approval_request_id is required — cannot pause")
-	}
 	if a.client == nil {
 		return nil, errors.New("agent is not connected to a control plane — cannot pause")
 	}
@@ -244,25 +261,46 @@ func (a *Agent) Pause(ctx context.Context, opts PauseOptions) (*ApprovalResult, 
 
 	// Register the pending pause BEFORE telling the control plane, so a fast
 	// callback that arrives before RequestApproval returns is not missed.
-	future := a.pauseManager.Register(opts.ApprovalRequestID, executionID)
+	// With no id of our own the control plane mints one, so the pause is
+	// registered once it answers; a person answers in seconds at the
+	// soonest, and the poll below resumes it if a callback still beats it.
+	requestID := strings.TrimSpace(opts.ApprovalRequestID)
+	var future <-chan ApprovalResult
+	if requestID != "" {
+		future = a.pauseManager.Register(requestID, executionID)
+	}
 
-	if _, err := a.client.RequestApproval(ctx, a.cfg.NodeID, executionID, client.RequestApprovalRequest{
-		ApprovalRequestID:  opts.ApprovalRequestID,
+	resp, err := a.client.RequestApproval(ctx, a.cfg.NodeID, executionID, client.RequestApprovalRequest{
+		ApprovalRequestID:  requestID,
 		ApprovalRequestURL: opts.ApprovalRequestURL,
 		CallbackURL:        callbackURL,
 		ExpiresInHours:     expiresInHours,
-	}); err != nil {
+		Kind:               opts.Kind,
+		Question:           opts.Question,
+		Body:               opts.Body,
+		Options:            opts.Options,
+	})
+	if err != nil {
 		// Clean up the pending pause if we could not even notify the CP.
-		a.pauseManager.Resolve(opts.ApprovalRequestID, ApprovalResult{
-			Decision:          ApprovalError,
-			Feedback:          "failed to notify control plane",
-			ExecutionID:       executionID,
-			ApprovalRequestID: opts.ApprovalRequestID,
-		})
+		if requestID != "" {
+			a.pauseManager.Resolve(requestID, ApprovalResult{
+				Decision:          ApprovalError,
+				Feedback:          "failed to notify control plane",
+				ExecutionID:       executionID,
+				ApprovalRequestID: requestID,
+			})
+		}
 		return nil, fmt.Errorf("pause: request approval: %w", err)
 	}
+	if requestID == "" {
+		requestID = strings.TrimSpace(resp.ApprovalRequestID)
+		if requestID == "" {
+			return nil, errors.New("pause: the control plane named no approval request")
+		}
+		future = a.pauseManager.Register(requestID, executionID)
+	}
 
-	a.Note(ctx, fmt.Sprintf("Execution paused — waiting for approval %s", opts.ApprovalRequestID), "approval", "waiting")
+	a.Note(ctx, fmt.Sprintf("Execution paused — waiting for approval %s", requestID), "approval", "waiting")
 
 	timeout := opts.Timeout
 	if timeout <= 0 {
@@ -271,32 +309,82 @@ func (a *Agent) Pause(ctx context.Context, opts PauseOptions) (*ApprovalResult, 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	select {
-	case result := <-future:
-		return &result, nil
-	case <-timer.C:
-		// Timeout is a normal outcome — return an "expired" result rather than
-		// erroring, matching the Python SDK. Resolve the pending pause so a
-		// late callback does not leak a resolved-but-unawaited entry.
-		expired := ApprovalResult{
-			Decision:          ApprovalExpired,
-			Feedback:          "timed out waiting for approval",
-			ExecutionID:       executionID,
-			ApprovalRequestID: opts.ApprovalRequestID,
-		}
-		a.pauseManager.Resolve(opts.ApprovalRequestID, expired)
-		return &expired, nil
-	case <-ctx.Done():
-		// Cooperative cancellation — drop the pending pause and surface the
-		// context error to the caller (idiomatic Go).
-		a.pauseManager.Resolve(opts.ApprovalRequestID, ApprovalResult{
-			Decision:          ApprovalCancelled,
-			Feedback:          "context cancelled",
-			ExecutionID:       executionID,
-			ApprovalRequestID: opts.ApprovalRequestID,
-		})
-		return nil, ctx.Err()
+	// THE POLL IS THE FLOOR UNDER THE CALLBACK. The control plane retries
+	// its callback, but a node that was relinking, or a callback refused on
+	// the way, would otherwise leave this reasoner blocked until expiry.
+	pollEvery := opts.PollInterval
+	if pollEvery == 0 {
+		pollEvery = defaultPausePoll
 	}
+	var poll <-chan time.Time
+	if pollEvery > 0 {
+		ticker := time.NewTicker(pollEvery)
+		defer ticker.Stop()
+		poll = ticker.C
+	}
+
+	for {
+		select {
+		case result := <-future:
+			return &result, nil
+		case <-poll:
+			if res, ok := a.pollApproval(ctx, executionID, requestID); ok {
+				// Resolve through the manager so a callback landing now
+				// cannot deliver a second result; whichever won is read.
+				a.pauseManager.Resolve(requestID, res)
+				result := <-future
+				return &result, nil
+			}
+			continue
+		case <-timer.C:
+			// Timeout is a normal outcome — return an "expired" result rather than
+			// erroring, matching the Python SDK. Resolve the pending pause so a
+			// late callback does not leak a resolved-but-unawaited entry.
+			expired := ApprovalResult{
+				Decision:          ApprovalExpired,
+				Feedback:          "timed out waiting for approval",
+				ExecutionID:       executionID,
+				ApprovalRequestID: requestID,
+			}
+			a.pauseManager.Resolve(requestID, expired)
+			return &expired, nil
+		case <-ctx.Done():
+			// Cooperative cancellation — drop the pending pause and surface the
+			// context error to the caller (idiomatic Go).
+			a.pauseManager.Resolve(requestID, ApprovalResult{
+				Decision:          ApprovalCancelled,
+				Feedback:          "context cancelled",
+				ExecutionID:       executionID,
+				ApprovalRequestID: requestID,
+			})
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// pollApproval reads approval-status once and answers the round's result
+// when it has been decided. A status for another round (an older id) is not
+// this pause's answer.
+func (a *Agent) pollApproval(ctx context.Context, executionID, requestID string) (ApprovalResult, bool) {
+	st, err := a.client.GetApprovalStatus(ctx, a.cfg.NodeID, executionID)
+	if err != nil || st == nil {
+		return ApprovalResult{}, false
+	}
+	if st.ApprovalRequestID != "" && st.ApprovalRequestID != requestID {
+		return ApprovalResult{}, false
+	}
+	switch st.Status {
+	case ApprovalApproved, ApprovalRejected, ApprovalRequestChanges, ApprovalExpired:
+	default:
+		return ApprovalResult{}, false // pending, or nothing this pause can act on
+	}
+	return ApprovalResult{
+		Decision:          st.Status,
+		Feedback:          st.Feedback,
+		ExecutionID:       executionID,
+		ApprovalRequestID: requestID,
+		RawResponse:       parseRawApprovalResponse(st.Response),
+	}, true
 }
 
 // handleApprovalWebhook is the worker side of the approval callback transport.

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -10,11 +11,19 @@ import (
 )
 
 // RequestApprovalRequest is the payload for requesting human approval.
+//
+// ApprovalRequestID may be empty: the control plane then mints one and
+// returns it. Kind, Question, Body and Options carry the question itself so a
+// door with no external approval service can show it in full.
 type RequestApprovalRequest struct {
-	ApprovalRequestID  string `json:"approval_request_id"`
-	ApprovalRequestURL string `json:"approval_request_url,omitempty"`
-	CallbackURL        string `json:"callback_url,omitempty"`
-	ExpiresInHours     int    `json:"expires_in_hours,omitempty"`
+	ApprovalRequestID  string   `json:"approval_request_id,omitempty"`
+	ApprovalRequestURL string   `json:"approval_request_url,omitempty"`
+	CallbackURL        string   `json:"callback_url,omitempty"`
+	ExpiresInHours     int      `json:"expires_in_hours,omitempty"`
+	Kind               string   `json:"kind,omitempty"` // plan_review | question | approval
+	Question           string   `json:"question,omitempty"`
+	Body               string   `json:"body,omitempty"` // markdown
+	Options            []string `json:"options,omitempty"`
 }
 
 // RequestApprovalResponse is returned after tracking an approval request.
@@ -24,12 +33,23 @@ type RequestApprovalResponse struct {
 }
 
 // ApprovalStatusResponse is returned by the approval status endpoint.
+//
+// It describes the latest approval round. Response is the raw response the
+// control plane holds — a JSON string of JSON text, or an object — which is
+// why it is raw: as a map it failed to decode the control plane's string.
 type ApprovalStatusResponse struct {
-	Status      string                 `json:"status"` // pending, approved, rejected, expired
-	Response    map[string]interface{} `json:"response,omitempty"`
-	RequestURL  string                 `json:"request_url,omitempty"`
-	RequestedAt string                 `json:"requested_at,omitempty"`
-	RespondedAt string                 `json:"responded_at,omitempty"`
+	Status            string          `json:"status"` // pending, approved, request_changes, rejected, expired
+	ApprovalRequestID string          `json:"approval_request_id,omitempty"`
+	Kind              string          `json:"kind,omitempty"`
+	Question          string          `json:"question,omitempty"`
+	Body              string          `json:"body,omitempty"`
+	Options           []string        `json:"options,omitempty"`
+	Feedback          string          `json:"feedback,omitempty"`
+	Response          json.RawMessage `json:"response,omitempty"`
+	RequestURL        string          `json:"request_url,omitempty"`
+	RequestedAt       string          `json:"requested_at,omitempty"`
+	RespondedAt       string          `json:"responded_at,omitempty"`
+	ExpiresAt         string          `json:"expires_at,omitempty"`
 }
 
 // WaitForApprovalOptions configures the blocking WaitForApproval helper.
