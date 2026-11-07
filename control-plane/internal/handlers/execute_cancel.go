@@ -79,9 +79,7 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 			}
 			previousStatus = current.Status
 			current.Status = types.ExecutionStatusCancelled
-			if reasonPtr != nil {
-				current.StatusReason = reasonPtr
-			}
+			current.StatusReason = cancelStatusReason(reasonPtr)
 			return current, nil
 		})
 		if err != nil {
@@ -105,9 +103,7 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 					return nil, fmt.Errorf("execution %s not found", executionID)
 				}
 				current.Status = types.ExecutionStatusCancelled
-				if reasonPtr != nil {
-					current.StatusReason = reasonPtr
-				}
+				current.StatusReason = cancelStatusReason(reasonPtr)
 				return current, nil
 			})
 			if err != nil {
@@ -165,4 +161,15 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, response)
 	}
+}
+
+// cancelStatusReason is the status_reason a cancelled execution carries: the
+// caller's reason, or ExecutionReasonCancelled. NEVER the reason it had
+// before, which describes something that is no longer true.
+func cancelStatusReason(reason *string) *string {
+	if reason != nil && strings.TrimSpace(*reason) != "" {
+		return reason
+	}
+	r := types.ExecutionReasonCancelled
+	return &r
 }

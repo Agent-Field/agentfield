@@ -29,6 +29,13 @@ const (
 // fail the very execution that was waiting for it.
 const ExecutionReasonAwaitingAgentRestart = "awaiting_agent_restart"
 
+// ExecutionReasonCancelled is the status_reason of an execution cancelled
+// without a reason of its own (a person's Stop). Cancelling always writes a
+// reason: leaving the field alone kept whatever the run said last, and a run
+// stopped after its plan was approved reported "approval_granted" as its
+// root error category (WorkAF live run, 2026-11-07).
+const ExecutionReasonCancelled = "cancelled"
+
 const (
 	// ExecutionReasonAgentShutdownCancelled identifies an execution cancelled by
 	// an SDK while its agent process was draining for shutdown.
