@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.20] - 2026-11-07
+
+
+### Fixed
+
+- Fix(sdk-go): route StreamComplete through the rate limiter (#1165)
+
+StreamComplete called the HTTP client directly, so 429/503 responses
+were never retried even with a rate limiter configured, unlike Complete.
+Extract the header phase into openStream and run it through
+rateLimiter.Execute. (d5323cc)
+
+- Fix(sdk-python): raise max_completion_tokens on empty-reasoning structured retry (#1164)
+
+_increase_retry_max_tokens only looked at max_tokens, but for OpenAI models
+the param is renamed to max_completion_tokens, so the retry reused the same
+budget. Handle both keys.
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (bfcb004)
+
+- Fix(sdk-ts): scope polling pause time to each wait (#1163) (62a8c6e)
+
 ## [0.1.146-rc.19] - 2026-11-07
 
 
