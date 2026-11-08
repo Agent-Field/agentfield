@@ -8,7 +8,7 @@ A research agent that uses recursive planning to break down research questions i
 - **Task Deduplication** – Merges redundant tasks
 - **Smart Search Strategy** – Decides synthesis-only vs enhanced search for parent tasks
 - **Topological Execution** – Parallel execution with dependency management
-- **Web Search** – Tavily by default, or setup-free Parallel Search, Google-backed Serply or keyless Keenable by explicit opt-in
+- **Web Search** – Tavily by default, or setup-free Parallel Search, Google-backed Serply, keyless Keenable or Outcrawl by explicit opt-in
 
 ## Quick Start
 
@@ -39,6 +39,14 @@ To use [Keenable](https://keenable.ai) instead, which needs no account or API ke
 
 ```bash
 export SEARCH_PROVIDER=keenable
+```
+
+To use [Outcrawl](https://outcrawl.ai) instead, which needs an API key (the free
+plan includes 1,000 credits a month):
+
+```bash
+export SEARCH_PROVIDER=outcrawl
+export OUTCRAWL_API_KEY="your-outcrawl-api-key"
 ```
 
 ### 2. Run Agent
@@ -95,9 +103,10 @@ curl -X POST http://localhost:8080/reasoners/planning_execute_deep_research \
 
 | Variable            | Description                                       | Default                                      |
 | ------------------- | ------------------------------------------------- | -------------------------------------------- |
-| `SEARCH_PROVIDER`   | Web search backend: `tavily`, `parallel`, `serply`, `keenable` | `tavily`                                     |
+| `SEARCH_PROVIDER`   | Web search backend: `tavily`, `parallel`, `serply`, `keenable`, `outcrawl` | `tavily`                                     |
 | `TAVILY_API_KEY`    | Tavily API key (required when using Tavily)       | -                                            |
 | `SERPLY_API_KEY`    | Serply API key (required when using Serply)       | -                                            |
 | `KEENABLE_API_KEY`  | Keenable API key (optional, lifts the keyless rate limit) | -                                            |
+| `OUTCRAWL_API_KEY`  | Outcrawl API key (required when using Outcrawl)   | -                                            |
 | `AGENTFIELD_SERVER` | Control plane URL                                 | `http://localhost:8080`                      |
 | `AI_MODEL`          | LLM model                                         | `openrouter/deepseek/deepseek-v3.1-terminus` |

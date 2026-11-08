@@ -34,6 +34,7 @@ if __name__ == "__main__":
         "parallel": "Parallel Search",
         "serply": "Serply Search",
         "keenable": "Keenable Search",
+        "outcrawl": "Outcrawl Search",
     }.get(search_provider, search_provider)
     print("🔬 Deep Research Agent")
     print("🧠 Node ID: deep-research")
