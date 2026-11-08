@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -96,10 +96,10 @@ func TestOpenCodeContextCancellation(t *testing.T) {
 }
 
 // TestOpenCodeConcurrencyLimit_RealSubprocess exercises the semaphore against
-// real RunCLI subprocesses (no runCLI mock). The fake opencode binary records
-// a start/end timestamp for every invocation; afterwards we sweep the timeline
-// to compute the maximum number of subprocesses that were actually overlapping
-// in wall-clock time and assert it never exceeds the configured limit.
+// real RunCLI subprocesses (no runCLI mock). The fake opencode binary appends a
+// "+" line to a shared log when it starts and a "-" line when it ends; replaying
+// the log in order gives the maximum number of subprocesses that were actually
+// overlapping, which must never exceed the configured limit.
 func TestOpenCodeConcurrencyLimit_RealSubprocess(t *testing.T) {
 	const limit = 2
 	const callers = 6
@@ -109,18 +109,19 @@ func TestOpenCodeConcurrencyLimit_RealSubprocess(t *testing.T) {
 	semOnce = sync.Once{}
 
 	dir := t.TempDir()
-	logDir := t.TempDir()
+	eventLog := filepath.Join(t.TempDir(), "events")
 
-	// Each invocation writes a "<start_ns> <end_ns>" line to a file named by
-	// $$ (subprocess pid) so we can later compute the overlap count.
+	// Each line is a single short write to a file opened with O_APPEND, so lines
+	// never interleave and the file order is the order the events happened. This
+	// needs no clock: BusyBox date (Alpine) ignores %N, so nanosecond timestamps
+	// collapse to whole seconds there and every span looks back-to-back.
 	script := writeTestScript(t, dir, "opencode", fmt.Sprintf(
 		"#!/bin/sh\n"+
-			"start=$(date +%%s%%N)\n"+
+			"echo + >> %[1]q\n"+
 			"sleep 0.2\n"+
-			"end=$(date +%%s%%N)\n"+
-			"echo \"$start $end\" > %q/$$.span\n"+
+			"echo - >> %[1]q\n"+
 			"echo ok\n",
-		logDir,
+		eventLog,
 	))
 
 	p := NewOpenCodeProvider(script, "")
@@ -142,48 +143,25 @@ func TestOpenCodeConcurrencyLimit_RealSubprocess(t *testing.T) {
 	}
 	wg.Wait()
 
-	type span struct{ start, end int64 }
-	entries, err := os.ReadDir(logDir)
+	data, err := os.ReadFile(eventLog)
 	if err != nil {
-		t.Fatalf("read logDir: %v", err)
+		t.Fatalf("read event log: %v", err)
 	}
-	if len(entries) != callers {
-		t.Fatalf("expected %d span files, got %d", callers, len(entries))
-	}
-
-	spans := make([]span, 0, len(entries))
-	for _, e := range entries {
-		b, err := os.ReadFile(filepath.Join(logDir, e.Name()))
-		if err != nil {
-			t.Fatalf("read span: %v", err)
-		}
-		var s, en int64
-		if _, err := fmt.Sscanf(string(b), "%d %d", &s, &en); err != nil {
-			t.Fatalf("parse span %q: %v", string(b), err)
-		}
-		spans = append(spans, span{s, en})
+	events := strings.Fields(string(data))
+	if len(events) != 2*callers {
+		t.Fatalf("expected %d events, got %d: %q", 2*callers, len(events), events)
 	}
 
-	// Sweep-line: at every start +1, at every end -1. Track running max.
-	type ev struct {
-		t     int64
-		delta int
-	}
-	evs := make([]ev, 0, 2*len(spans))
-	for _, s := range spans {
-		evs = append(evs, ev{s.start, +1}, ev{s.end, -1})
-	}
-	sort.Slice(evs, func(i, j int) bool {
-		if evs[i].t != evs[j].t {
-			return evs[i].t < evs[j].t
-		}
-		// Process -1 before +1 at the same instant so back-to-back spans
-		// don't look like overlap.
-		return evs[i].delta < evs[j].delta
-	})
 	cur, max := 0, 0
-	for _, e := range evs {
-		cur += e.delta
+	for _, e := range events {
+		switch e {
+		case "+":
+			cur++
+		case "-":
+			cur--
+		default:
+			t.Fatalf("unexpected event %q", e)
+		}
 		if cur > max {
 			max = cur
 		}
