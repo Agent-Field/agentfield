@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.21] - 2026-11-08
+
+
+### Build
+
+- Build(docker): overridable base-image build args; UI build on Node 24 LTS (#1159)
+
+* build(docker): make base images overridable build args
+
+Each third-party base image in the published Dockerfiles (control-plane, control-plane-cloud, python-agent, go-agent) is now a build arg whose default is the image used today, so a default build resolves exactly the same images. Deployments that pin bases by digest, or need a mirror registry, can pass --build-arg instead of patching the Dockerfiles.
+
+The uv binaries in the cloud image now come from a named stage (uv-dist), because COPY --from cannot expand a build arg.
+
+* build(docker): build the web UI on Node 24 LTS
+
+Node 20 reached end of life on 2026-04-30, and react-router@8.3.0 declares engines node >=22.22.0, so npm ci on node:20-bookworm-slim warns EBADENGINE. node:24-bookworm-slim builds the UI cleanly with no engine warning; the Go and runtime stages are unchanged.
+
+* fix(docker): give the go-agent image's sdk/go tests the CodeAF auth contract
+
+Dockerfile.go-agent runs go test ./... on a copy of sdk/go at /tmp/go-sdk. Since #1130 the harness and agent tests read ../../codeaf-auth-contract.json (sdk/codeaf-auth-contract.json), which is not in the image, so the build fails on main with 'open ../../codeaf-auth-contract.json: no such file or directory'. Copy sdk/go and the contract into the same relative layout.
+
+---------
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (7f3dc1a)
+
+
+
+### Testing
+
+- Test(sdk-go): order opencode concurrency events by an append log, not date +%N (#1161)
+
+TestOpenCodeConcurrencyLimit_RealSubprocess timed each fake opencode run with date +%s%N. BusyBox date (Alpine, which Dockerfile.go-agent tests on) ignores %N, so every timestamp is whole seconds, start equals end, the sweep sees no overlap and the test fails with 'no overlap observed at all'. The fake binary now appends + and - lines to one O_APPEND log and the test replays them in order. It passes 5/5 on golang:1.25-alpine and -bookworm, and with OPENCODE_MAX_CONCURRENT forced to 6 it still fails with 'observed 6 concurrent subprocesses, want <= 2'.
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (684b2ae)
+
 ## [0.1.146-rc.20] - 2026-11-07
 
 
