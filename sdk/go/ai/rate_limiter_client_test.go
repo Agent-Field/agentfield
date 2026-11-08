@@ -129,3 +129,77 @@ func TestClientNoRateLimiterWhenDisabled(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, client.rateLimiter)
 }
+
+func drainStream(t *testing.T, chunkCh <-chan StreamChunk, errCh <-chan error) ([]StreamChunk, error) {
+	t.Helper()
+	var chunks []StreamChunk
+	for c := range chunkCh {
+		chunks = append(chunks, c)
+	}
+	var err error
+	for e := range errCh {
+		if e != nil {
+			err = e
+		}
+	}
+	return chunks, err
+}
+
+func TestStreamCompleteRetriesOn429ThenSucceeds(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded","type":"rate_limit_error"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(&Config{
+		APIKey:              "test-key",
+		BaseURL:             server.URL,
+		Model:               "gpt-4o",
+		Timeout:             5 * time.Second,
+		RateLimitMaxRetries: 5,
+		RateLimitBaseDelay:  time.Millisecond,
+		RateLimitMaxDelay:   10 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	chunkCh, errCh := client.StreamComplete(context.Background(), "hi")
+	chunks, err := drainStream(t, chunkCh, errCh)
+	require.NoError(t, err)
+	assert.Len(t, chunks, 1)
+	assert.Equal(t, int32(3), atomic.LoadInt32(&calls))
+}
+
+func TestStreamCompleteReturnsAPIErrorAfterRetriesExhausted(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"overloaded"}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(&Config{
+		APIKey:              "test-key",
+		BaseURL:             server.URL,
+		Model:               "gpt-4o",
+		Timeout:             5 * time.Second,
+		RateLimitMaxRetries: 2,
+		RateLimitBaseDelay:  time.Millisecond,
+		RateLimitMaxDelay:   10 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	chunkCh, errCh := client.StreamComplete(context.Background(), "hi")
+	_, err = drainStream(t, chunkCh, errCh)
+	require.Error(t, err)
+	assert.Greater(t, atomic.LoadInt32(&calls), int32(1))
+}
