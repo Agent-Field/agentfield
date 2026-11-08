@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.22] - 2026-11-08
+
+
+### Added
+
+- Feat(sdk/go/ai): support the CloudGPU provider (#1162)
+
+DefaultConfig selects CloudGPU from CLOUDGPU_API_KEY only when no
+higher-precedence provider key is set, defaults the model to
+deepseek-v4-flash, and strips a cloudgpu/ routing prefix before the
+request is sent.
+
+Signed-off-by: mrhy7176 <129925370+mrhy7176@users.noreply.github.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: CloudGPU <mrhy7176@users.noreply.github.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (9398681)
+
+
+
+### Testing
+
+- Test(sdk-python): use a shell stub for the real CodeAF version probe (#1160)
+
+test_managed_availability_and_doctor_version runs harness_doctor without a version_probe override, so the real _probe_version runs the stub with its 2 s VERSION_PROBE_TIMEOUT_SECONDS. The stub was a Python script, and under pytest-cov (on by default through addopts) the child inherits COV_CORE_* and starts coverage first. On a constrained runner that start exceeds 2 s: with --cpus=0.5 the probe takes 2.06 s and times out (0.01 s with --no-cov), giving version None and issues=('version_probe_failed',). A /bin/sh stub prints the same line without starting an interpreter.
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (60268b6)
+
 ## [0.1.146-rc.21] - 2026-11-08
 
 
