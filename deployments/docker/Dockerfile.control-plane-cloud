@@ -11,10 +11,22 @@
 # Runs as root: cloud platforms (Railway) mount volumes root-owned, and
 # agent installs write venvs/binaries under $AGENTFIELD_HOME=/data.
 
+# Base images are build args so a deployment can pin them (for example by digest)
+# without patching this file. The defaults are the images this build has always used.
+ARG NODE_BUILD_IMAGE=node:24-bookworm-slim
+ARG GO_BUILD_IMAGE=golang:1.25-bookworm
+ARG DEBIAN_IMAGE=debian:bookworm-slim
+ARG NODE_RUNTIME_IMAGE=node:22-bookworm-slim
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
+
+# uv is copied from an image, and COPY --from cannot expand a build arg, so it gets
+# a named stage of its own.
+FROM ${UV_IMAGE} AS uv-dist
+
 # bookworm-slim (glibc) instead of alpine (musl): Vite's lightningcss
 # optional native binding is flaky under npm ci on musl when the lockfile
 # lacks libc metadata, which intermittently breaks `vite build` in CI.
-FROM --platform=$BUILDPLATFORM node:20-bookworm-slim AS ui-builder
+FROM --platform=$BUILDPLATFORM ${NODE_BUILD_IMAGE} AS ui-builder
 WORKDIR /app/web
 
 COPY control-plane/web/client/package*.json ./
@@ -23,7 +35,7 @@ COPY control-plane/web/client/ .
 # See Dockerfile.control-plane for why vite runs without the tsc precheck.
 RUN npx vite build
 
-FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS go-builder
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-builder
 WORKDIR /app
 
 ARG TARGETOS
@@ -58,7 +70,7 @@ RUN cd control-plane && \
 
 # CodeAF is the default harness. Raw assets are authenticated against embedded
 # release pins; any download or verification failure fails the image build.
-FROM debian:bookworm-slim AS codeaf-dist
+FROM ${DEBIAN_IMAGE} AS codeaf-dist
 ARG TARGETARCH
 ARG CODEAF_VERSION=v0.8.2
 ARG CODEAF_BASE_URL=https://github.com/Agent-Field/CodeAF/releases/download
@@ -90,7 +102,7 @@ RUN set -eu; \
 # UNCOMPRESSED binary, so the hash is taken after gunzip.
 #
 # Pin overrides (both are build args): AFORGE_BASE_URL, AFORGE_VERSION.
-FROM debian:bookworm-slim AS aforge-dist
+FROM ${DEBIAN_IMAGE} AS aforge-dist
 ARG TARGETARCH
 ARG AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge
 ARG AFORGE_VERSION=v0.1.0
@@ -112,10 +124,10 @@ RUN set -eu; \
     rm -f aforge.gz checksums.txt
 
 # Toolchain donors — same arch as the runtime stage (no --platform pin).
-FROM node:22-bookworm-slim AS node-dist
-FROM golang:1.25-bookworm AS go-dist
+FROM ${NODE_RUNTIME_IMAGE} AS node-dist
+FROM ${GO_BUILD_IMAGE} AS go-dist
 
-FROM debian:bookworm-slim
+FROM ${DEBIAN_IMAGE}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -145,7 +157,7 @@ ENV PATH=/usr/local/go/bin:$PATH
 # Downloaded interpreters go under /data: venvs on the volume symlink back
 # to them, and an interpreter left in $HOME would vanish with the container
 # on the next deploy, breaking every venv built from it.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=uv-dist /uv /uvx /usr/local/bin/
 ENV UV_PYTHON_INSTALL_DIR=/data/uv/python
 
 COPY --from=go-builder /app/bin/af /usr/local/bin/af
