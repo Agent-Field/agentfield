@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.25] - 2026-11-09
+
+
+### Other
+
+- WorkAF harness watch: node link, relay pipe and steer, streamed only for owned runs (#1174)
+
+Lands proto/harness-watch (node-initiated link, the control plane as a pipe for codeaf harness transcripts, steer, pauses that carry their question) with the live path armed only for runs whose run has an owner (X-AgentField-Run-Watched), no relay rows kept for unowned runs, prune at most once a minute, and tests for the relay, run owners, approval questions and their routes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com> (5739844)
+
 ## [0.1.146-rc.24] - 2026-11-09
 
 
