@@ -108,7 +108,10 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 		exec.ResultURI,
 		exec.SessionID,
 		exec.ActorID,
-		exec.StartedAt,
+		// started_at is stored in UTC: SQLite compares it as stored text,
+		// so a row written in another zone would sort and filter by the
+		// wrong instant.
+		exec.StartedAt.UTC(),
 		exec.CompletedAt,
 		exec.DurationMS,
 		notesJSON,
@@ -311,7 +314,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 		updated.ResultURI,
 		updated.SessionID,
 		updated.ActorID,
-		updated.StartedAt,
+		updated.StartedAt.UTC(),
 		updated.CompletedAt,
 		updated.DurationMS,
 		notesJSON,
