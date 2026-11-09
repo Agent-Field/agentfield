@@ -108,6 +108,20 @@ type StorageProvider interface {
 	// The ctx scopes the query, and filter describes the records to include.
 	// Returns matching execution records or an error if the query fails.
 	QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error)
+	// CountExecutionsByStatus returns exact counts of executions that started
+	// in [start, end), split by outcome, without a row limit.
+	CountExecutionsByStatus(ctx context.Context, start, end time.Time) (types.ExecutionStatusCounts, error)
+	// QueryRecentFailures returns the newest failed, timed-out or cancelled
+	// executions that started in [start, end), newest first.
+	QueryRecentFailures(ctx context.Context, start, end time.Time, limit int) ([]*types.Execution, error)
+	// QueryDeveloperHome computes the Home page aggregates for one window.
+	QueryDeveloperHome(ctx context.Context, q types.DeveloperHomeQuery) (*types.DeveloperHomeData, error)
+	// QueryBlastRadius returns the entry reasoners whose runs in [start, end)
+	// had an execution on the agent.
+	QueryBlastRadius(ctx context.Context, agentNodeID string, start, end time.Time) ([]types.DeveloperHomeEntryPoint, error)
+	// CountForwarderDeadLetters returns the observability forwarder's
+	// dead-letter queue depth.
+	CountForwarderDeadLetters(ctx context.Context) (int64, error)
 	// QueryRunSummaries aggregates execution records into run-level summaries.
 	// The ctx scopes the query, and filter limits which executions are aggregated.
 	// Returns summaries, a total count, and an error if aggregation fails.

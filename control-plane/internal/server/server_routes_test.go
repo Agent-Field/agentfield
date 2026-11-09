@@ -860,3 +860,23 @@ func (m *stubStorage) GetInboundEventByWorkflowID(context.Context, string) (*typ
 func (s *stubStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) {
 	return &types.TriggerMetrics{}, nil
 }
+
+func (m *stubStorage) CountExecutionsByStatus(ctx context.Context, start, end time.Time) (types.ExecutionStatusCounts, error) {
+	return types.ExecutionStatusCounts{}, nil
+}
+
+func (m *stubStorage) QueryRecentFailures(ctx context.Context, start, end time.Time, limit int) ([]*types.Execution, error) {
+	return nil, nil
+}
+
+func (m *stubStorage) QueryDeveloperHome(ctx context.Context, q types.DeveloperHomeQuery) (*types.DeveloperHomeData, error) {
+	return &types.DeveloperHomeData{}, nil
+}
+
+func (m *stubStorage) QueryBlastRadius(ctx context.Context, agentNodeID string, start, end time.Time) ([]types.DeveloperHomeEntryPoint, error) {
+	return nil, nil
+}
+
+func (m *stubStorage) CountForwarderDeadLetters(ctx context.Context) (int64, error) {
+	return 0, nil
+}

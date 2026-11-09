@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -151,31 +152,35 @@ func TestDashboardSummaryHandlerAdditionalCoverage(t *testing.T) {
 func TestExecutionsSummarySuccessRateRolling24h(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	store := &dashboardOverrideStorage{overrideStorage: &overrideStorage{StorageProvider: setupTestStorage(t)}}
+	base := setupTestStorage(t)
+	store := &dashboardOverrideStorage{overrideStorage: &overrideStorage{StorageProvider: base}}
 	handler := NewDashboardHandler(store, &mockLifecycleAgentService{})
 
 	// 01:00 UTC: the calendar-today window is only an hour old, so most of the
 	// rolling 24h window falls in yesterday's calendar window.
 	now := time.Date(2026, 7, 17, 1, 0, 0, 0, time.UTC)
-	today := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
 
-	runningToday := &types.Execution{Status: string(types.ExecutionStatusRunning), StartedAt: now.Add(-15 * time.Minute)}
-	failedWithin24h := &types.Execution{Status: string(types.ExecutionStatusFailed), StartedAt: now.Add(-23 * time.Hour)}
-	succeededWithin24h := &types.Execution{Status: string(types.ExecutionStatusSucceeded), StartedAt: now.Add(-23*time.Hour - 30*time.Minute)}
-	succeededOutside24h := &types.Execution{Status: string(types.ExecutionStatusSucceeded), StartedAt: now.Add(-24*time.Hour - 30*time.Minute)}
-
-	store.queryExecutionRecordsFn = func(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error) {
-		if filter.StartTime != nil && filter.StartTime.Equal(today) {
-			return []*types.Execution{runningToday}, nil
-		}
-		return []*types.Execution{failedWithin24h, succeededWithin24h, succeededOutside24h}, nil
+	for i, rec := range []struct {
+		status  types.ExecutionStatus
+		started time.Time
+	}{
+		{types.ExecutionStatusRunning, now.Add(-15 * time.Minute)},                // today, in flight
+		{types.ExecutionStatusFailed, now.Add(-23 * time.Hour)},                   // yesterday, in the 24h window
+		{types.ExecutionStatusSucceeded, now.Add(-23*time.Hour - 30*time.Minute)}, // yesterday, in the 24h window
+		{types.ExecutionStatusSucceeded, now.Add(-24*time.Hour - 30*time.Minute)}, // yesterday, before the 24h window
+	} {
+		id := fmt.Sprintf("rolling-%d", i)
+		require.NoError(t, base.CreateExecutionRecord(context.Background(), &types.Execution{
+			ExecutionID: id, RunID: id, AgentNodeID: "agent", ReasonerID: "r", NodeID: "agent",
+			Status: string(rec.status), StartedAt: rec.started,
+		}))
 	}
 
 	summary, rate, err := handler.getExecutionsSummaryAndSuccessRate(context.Background(), now)
 	require.NoError(t, err)
 	require.Equal(t, 1, summary.Today)
 	require.Equal(t, 3, summary.Yesterday)
-	// Rate basis: failedWithin24h + succeededWithin24h. The in-flight run does
-	// not count against the rate and the pre-window success is excluded.
+	// Rate basis: the failure and the success inside the window. The in-flight
+	// run does not count against the rate and the pre-window success is excluded.
 	require.Equal(t, 50.0, rate)
 }

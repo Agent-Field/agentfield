@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"sync"
@@ -21,6 +22,9 @@ type DashboardHandler struct {
 	agentService  interfaces.AgentService
 	cache         *DashboardCache
 	enhancedCache *EnhancedDashboardCache
+	homeCache     homeCache
+	// now overrides the clock in tests.
+	now func() time.Time
 }
 
 // NewDashboardHandler creates a new DashboardHandler.
@@ -239,19 +243,33 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 		return
 	}
 
-	// Query executions for the specified time range
-	filters := types.ExecutionFilter{
-		StartTime:       &startTime,
-		EndTime:         &endTime,
-		Limit:           50000,
-		SortBy:          "started_at",
-		SortDescending:  false,
-		ExcludePayloads: true,
-	}
-
-	executions, err := h.store.QueryExecutionRecords(ctx, filters)
+	// The per-reasoner breakdowns (trends, hotspots, heatmap, top workflows)
+	// are built from a sample of the window's executions. The sample is the
+	// NEWEST rows, so a window with more executions than the sample holds
+	// still describes the latest part of the window, and detail_sampled says
+	// so. The counts and incidents below never come from the sample.
+	executions, sampled, err := h.queryDashboardSample(ctx, startTime, endTime)
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("failed to query workflow executions for enhanced dashboard")
+		RespondInternalError(c, "failed to load workflow execution data")
+		return
+	}
+
+	rangeCounts, err := h.storage.CountExecutionsByStatus(ctx, startTime, endTime)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("failed to count executions for enhanced dashboard")
+		RespondInternalError(c, "failed to load workflow execution data")
+		return
+	}
+	weekCounts, err := h.storage.CountExecutionsByStatus(ctx, endTime.AddDate(0, 0, -7), endTime)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("failed to count executions for enhanced dashboard")
+		RespondInternalError(c, "failed to load workflow execution data")
+		return
+	}
+	recentFailures, err := h.storage.QueryRecentFailures(ctx, startTime, endTime, 10)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("failed to query incidents for enhanced dashboard")
 		RespondInternalError(c, "failed to load workflow execution data")
 		return
 	}
@@ -324,10 +342,11 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 	}
 
 	overview := h.buildEnhancedOverviewForRange(agents, executions, startTime, endTime)
+	applyExactCounts(&overview, rangeCounts, weekCounts)
 	trends := buildExecutionTrendsForRange(executions, startTime, endTime, preset)
 	agentHealth := h.buildAgentHealthSummary(ctx, agents)
 	workflows := buildWorkflowInsights(executions, activeExecutions)
-	incidents := buildIncidentItems(executions, 10)
+	incidents := buildIncidentItems(recentFailures, 10)
 	hotspots := buildHotspotSummary(executions)
 	activityPatterns := buildActivityPatterns(executions)
 
@@ -341,27 +360,60 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 		Incidents:        incidents,
 		Hotspots:         hotspots,
 		ActivityPatterns: activityPatterns,
+		DetailSampled:    sampled,
 	}
 
 	// Calculate comparison data if requested
 	if enableComparison {
 		prevStart, prevEnd := calculateComparisonPeriod(startTime, endTime)
-		prevFilters := types.ExecutionFilter{
-			StartTime:       &prevStart,
-			EndTime:         &prevEnd,
-			Limit:           50000,
-			SortBy:          "started_at",
-			SortDescending:  false,
-			ExcludePayloads: true,
-		}
-
-		prevExecutions, err := h.store.QueryExecutionRecords(ctx, prevFilters)
+		prevExecutions, _, err := h.queryDashboardSample(ctx, prevStart, prevEnd)
 		if err == nil {
 			prevOverview := h.buildEnhancedOverviewForRange(agents, prevExecutions, prevStart, prevEnd)
-			response.Comparison = buildComparisonData(overview, prevOverview, prevStart, prevEnd)
+			prevCounts, countErr := h.storage.CountExecutionsByStatus(ctx, prevStart, prevEnd)
+			prevWeek, weekErr := h.storage.CountExecutionsByStatus(ctx, prevEnd.AddDate(0, 0, -7), prevEnd)
+			if countErr == nil && weekErr == nil {
+				applyExactCounts(&prevOverview, prevCounts, prevWeek)
+				response.Comparison = buildComparisonData(overview, prevOverview, prevStart, prevEnd)
+			}
 		}
 	}
 
 	h.enhancedCache.Set(cacheKey, response)
 	c.JSON(http.StatusOK, response)
+}
+
+// dashboardSampleLimit bounds how many executions the enhanced dashboard
+// loads to build its per-reasoner breakdowns.
+const dashboardSampleLimit = 50000
+
+// queryDashboardSample loads the newest executions of a window, oldest first,
+// and reports whether the window held more than the sample.
+func (h *DashboardHandler) queryDashboardSample(ctx context.Context, start, end time.Time) ([]*types.Execution, bool, error) {
+	executions, err := h.store.QueryExecutionRecords(ctx, types.ExecutionFilter{
+		StartTime:       &start,
+		EndTime:         &end,
+		Limit:           dashboardSampleLimit,
+		SortBy:          "started_at",
+		SortDescending:  true,
+		ExcludePayloads: true,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	for i, j := 0, len(executions)-1; i < j; i, j = i+1, j-1 {
+		executions[i], executions[j] = executions[j], executions[i]
+	}
+	return executions, len(executions) >= dashboardSampleLimit, nil
+}
+
+// applyExactCounts replaces the sample-derived counts in an overview with
+// COUNT results: executions in the requested range, executions in the seven
+// days ending with it, and the range's success rate.
+func applyExactCounts(overview *EnhancedOverview, inRange, lastWeek types.ExecutionStatusCounts) {
+	overview.ExecutionsLast24h = int(inRange.Total)
+	overview.ExecutionsLast7d = int(lastWeek.Total)
+	overview.SuccessRate24h = 0
+	if inRange.Total > 0 {
+		overview.SuccessRate24h = float64(inRange.Succeeded) / float64(inRange.Total) * 100
+	}
 }
