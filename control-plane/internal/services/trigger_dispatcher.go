@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
@@ -40,6 +42,8 @@ type TriggerDispatcher struct {
 	// link (or has no base_url to reach it on), the dispatch goes down the
 	// link instead of over HTTP. nil keeps HTTP for every node.
 	link *nodelink.Hub
+	// watchedRuns caches positive RunOwner answers because an owner never moves.
+	watchedRuns sync.Map
 }
 
 // WithInternalToken sets the bearer every dispatch carries.
@@ -57,6 +61,33 @@ func (d *TriggerDispatcher) WithLink(h *nodelink.Hub) *TriggerDispatcher {
 // runOwnerSetter is the store's record of who owns a run (storage/relay.go).
 type runOwnerSetter interface {
 	SetRunOwner(ctx context.Context, runID, owner string) error
+}
+
+type runOwnerReader interface {
+	RunOwner(ctx context.Context, runID string) (string, error)
+}
+
+// isRunWatched reports whether runID has a recorded owner. Positive answers are
+// cached in memory because a run's owner never moves; negative answers stay
+// uncached.
+func (d *TriggerDispatcher) isRunWatched(ctx context.Context, runID string) bool {
+	runID = strings.TrimSpace(runID)
+	if runID == "" || d.storage == nil {
+		return false
+	}
+	if _, ok := d.watchedRuns.Load(runID); ok {
+		return true
+	}
+	owners, ok := d.storage.(runOwnerReader)
+	if !ok {
+		return false
+	}
+	owner, err := owners.RunOwner(ctx, runID)
+	if err != nil || strings.TrimSpace(owner) == "" {
+		return false
+	}
+	d.watchedRuns.Store(runID, struct{}{})
+	return true
 }
 
 // NewTriggerDispatcher returns a dispatcher with sensible defaults.
@@ -209,6 +240,9 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	// parent, so a trigger-started run had a one-node tree.
 	req.Header.Set("X-Run-ID", dispatchWorkflowID)
 	req.Header.Set("X-Execution-ID", dispatchExecutionID)
+	if d.isRunWatched(ctx, dispatchWorkflowID) {
+		req.Header.Set(nodelink.RunWatchedHeader, "1")
+	}
 	// Record the workflow ID against the inbound event so the runs-list
 	// and run-dag handlers can correlate a triggered run back to this
 	// event without walking the DID/VC chain (which only exists when DID
@@ -299,6 +333,9 @@ func (d *TriggerDispatcher) dispatchOverLink(ctx context.Context, node *types.Ag
 	}
 	if parentVCID != "" {
 		headers["X-Parent-VC-ID"] = parentVCID
+	}
+	if d.isRunWatched(ctx, workflowID) {
+		headers[nodelink.RunWatchedHeader] = "1"
 	}
 	eventID := ev.ID
 	settleCtx := context.WithoutCancel(ctx)

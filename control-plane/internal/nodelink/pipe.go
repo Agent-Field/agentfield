@@ -79,13 +79,14 @@ type Pipe struct {
 	// Now is the clock the retention ceiling is read against; tests move it.
 	Now func() time.Time
 
-	mu    sync.Mutex
-	subs  map[string]*subscriber // owner node → its live subscription
-	acked map[string]int64       // execution → highest seq acked since start
-	owner map[string]string      // execution → run owner, once known
-	runOf map[string]string      // execution → run id
-	stop  chan struct{}
-	once  sync.Once
+	mu        sync.Mutex
+	subs      map[string]*subscriber // owner node → its live subscription
+	acked     map[string]int64       // execution → highest seq acked since start
+	owner     map[string]string      // execution → run owner, once known
+	runOf     map[string]string      // execution → run id
+	lastPrune time.Time              // when RelayPrune last ran on this pipe
+	stop      chan struct{}
+	once      sync.Once
 }
 
 type subscriber struct {
@@ -147,6 +148,20 @@ func (p *Pipe) retention() time.Duration {
 	return 24 * time.Hour
 }
 
+// pruneIfDue prunes the relay to the retention ceiling at most once per minute
+// on p's clock, so a burst of Puts does not sweep the table on every batch.
+func (p *Pipe) pruneIfDue(ctx context.Context) {
+	now := p.now()
+	p.mu.Lock()
+	if !p.lastPrune.IsZero() && now.Sub(p.lastPrune) < time.Minute {
+		p.mu.Unlock()
+		return
+	}
+	p.lastPrune = now
+	p.mu.Unlock()
+	_ = p.Store.RelayPrune(ctx, now.Add(-p.retention()))
+}
+
 // Start follows the execution event bus, so tree and status changes reach
 // owners as they happen, and prunes the relay to the retention ceiling once a
 // minute. Stop ends both.
@@ -179,7 +194,7 @@ func (p *Pipe) Start() {
 			case <-p.stop:
 				return
 			case <-t.C:
-				_ = p.Store.RelayPrune(context.Background(), p.now().Add(-p.retention()))
+				p.pruneIfDue(context.Background())
 			}
 		}
 	}()
@@ -200,7 +215,9 @@ func (p *Pipe) Stop() {
 // ── IN: ENTRIES FROM THE NODE ───────────────────────────────────────────────
 
 // Put holds entries for exec and pushes them on to the run's owner. It
-// answers how many were new and the highest seq the node may now forget.
+// answers how many were new and the highest seq the node may now forget; when
+// exec's run has no owner nobody will ever ack them, so nothing is stored and
+// through = max seq lets the node drop the batch without retrying.
 func (p *Pipe) Put(ctx context.Context, exec string, entries []Entry) (int, int64, error) {
 	p.init()
 	if strings.TrimSpace(exec) == "" {
@@ -226,6 +243,14 @@ func (p *Pipe) Put(ctx context.Context, exec string, entries []Entry) (int, int6
 		}
 		rows = append(rows, storage.RelayEntry{Seq: e.Seq, Kind: e.Kind, Data: e.Data})
 	}
+	_, owner, err := p.ownerOf(ctx, exec)
+	if err != nil {
+		return 0, 0, err
+	}
+	if owner == "" {
+		p.pruneIfDue(ctx)
+		return 0, through, nil
+	}
 	stored := 0
 	if len(rows) > 0 {
 		n, err := p.Store.RelayPut(ctx, exec, rows)
@@ -234,7 +259,7 @@ func (p *Pipe) Put(ctx context.Context, exec string, entries []Entry) (int, int6
 		}
 		stored = n
 	}
-	_ = p.Store.RelayPrune(ctx, p.now().Add(-p.retention()))
+	p.pruneIfDue(ctx)
 	if stored > 0 {
 		go p.forward(context.WithoutCancel(ctx), exec)
 	}

@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -190,4 +192,93 @@ func TestTriggerDispatchCarriesHTTPToALinkOnlySDKNode(t *testing.T) {
 	owner, err := owners.RunOwner(ctx, exec.RunID)
 	require.NoError(t, err)
 	require.Equal(t, node.ID, owner, "the node a trigger routed the run to owns it")
+}
+
+// unownedDispatchStore hides SetRunOwner and RunOwner from TriggerDispatcher so
+// a test can exercise the dispatcher when a run has no recorded owner.
+type unownedDispatchStore struct {
+	storage.StorageProvider
+}
+
+// Contract C5: TRIGGER DISPATCH SETS X-AgentField-Run-Watched: 1 ON BOTH ITS
+// HTTP AND LINK CARRIERS WHEN THE RUN HAS AN OWNER, AND OMITS IT WHEN NOT.
+func TestTriggerDispatchSetsRunWatchedOnlyWhenRunHasOwner(t *testing.T) {
+	var mu sync.Mutex
+	var lastWatched, lastOwner []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		lastWatched = append([]string(nil), r.Header.Values(nodelink.RunWatchedHeader)...)
+		lastOwner = append([]string(nil), r.Header.Values("X-AgentField-Run-Owner")...)
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	// 1. HTTP path with LocalStorage: createDispatchRecords sets the target node
+	//    as the run's owner, so HTTP carries X-AgentField-Run-Watched: 1.
+	node, trig, ev := dispatcherTrigger(srv.URL, []types.ReasonerDefinition{{ID: "handle"}})
+	ctx, provider, d := storeDispatchFixture(t, node, trig, ev)
+	d.DispatchEvent(ctx, trig, ev)
+	mu.Lock()
+	require.Equal(t, []string{"1"}, lastWatched)
+	require.Empty(t, lastOwner)
+	mu.Unlock()
+
+	// 2. HTTP path when the store records no owner: X-AgentField-Run-Watched is absent.
+	evUnowned := *ev
+	evUnowned.ID = "ev-unowned"
+	evUnowned.IdempotencyKey = "idem-unowned"
+	require.NoError(t, provider.InsertInboundEvent(ctx, &evUnowned))
+	dUnowned := NewTriggerDispatcher(unownedDispatchStore{StorageProvider: d.storage}, nil)
+	dUnowned.DispatchEvent(ctx, trig, &evUnowned)
+	mu.Lock()
+	require.Empty(t, lastWatched)
+	require.Empty(t, lastOwner)
+	mu.Unlock()
+
+	// 3. KindDispatch link path with owned run: headers carry X-AgentField-Run-Watched: 1.
+	evLink := *ev
+	evLink.ID = "ev-link"
+	evLink.IdempotencyKey = "idem-link"
+	require.NoError(t, provider.InsertInboundEvent(ctx, &evLink))
+
+	gin.SetMode(gin.TestMode)
+	hub := &nodelink.Hub{Sweep: 10 * time.Millisecond}
+	r := gin.New()
+	r.GET("/api/v1/nodes/:node_id/link", hub.Handler())
+	cp := httptest.NewServer(r)
+	defer cp.Close()
+	defer hub.Close()
+	d.WithLink(hub)
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(cp.URL, "http")+"/api/v1/nodes/"+node.ID+"/link", nil)
+	require.NoError(t, err)
+	defer conn.Close()
+	read := func() nodelink.Frame {
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_, raw, err := conn.ReadMessage()
+		require.NoError(t, err)
+		f, err := nodelink.Decode(raw)
+		require.NoError(t, err)
+		return f
+	}
+	send := func(f nodelink.Frame, body any) {
+		raw, err := nodelink.Encode(f, body)
+		require.NoError(t, err)
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw))
+	}
+	require.Equal(t, nodelink.TWelcome, read().T)
+	send(nodelink.Frame{T: nodelink.THello}, nodelink.Hello{InstanceID: "i1"})
+	require.Equal(t, nodelink.TOK, read().T)
+	require.Eventually(t, func() bool { return hub.Live(node.ID) }, 3*time.Second, 5*time.Millisecond)
+
+	d.DispatchEvent(ctx, trig, &evLink)
+	f := read()
+	require.Equal(t, nodelink.TDeliver, f.T)
+	var b nodelink.DeliverBody
+	require.NoError(t, json.Unmarshal(f.Body, &b))
+	require.Equal(t, nodelink.KindDispatch, b.Kind)
+	require.Equal(t, "1", b.Headers[nodelink.RunWatchedHeader])
+	require.Empty(t, b.Headers["X-AgentField-Run-Owner"])
+	send(nodelink.Frame{T: nodelink.TAck, ID: f.ID}, nodelink.Ack{Outcome: nodelink.OutcomeAccepted})
 }

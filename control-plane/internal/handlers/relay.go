@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/gin-gonic/gin"
@@ -27,6 +29,47 @@ import (
 // that node the run's owner; on a relay read, ack or steer it scopes the
 // call to the runs that node owns.
 const RunOwnerHeader = "X-AgentField-Run-Owner"
+
+// RunWatchedHeader tells an agent node that the execution's run has an owner
+// watching its live harness transcript. Never forward RunOwnerHeader to nodes:
+// on requests to the control plane it claims or scopes ownership, and echoing
+// it down to a node would conflate the two directions.
+const RunWatchedHeader = nodelink.RunWatchedHeader
+
+type runOwnerReader interface {
+	RunOwner(ctx context.Context, runID string) (string, error)
+}
+
+type runOwnerSetter interface {
+	SetRunOwner(ctx context.Context, runID, owner string) error
+}
+
+// lookupRunWatched reports whether runID has an owner in store. Positive
+// answers are cached in memory because a run's owner never moves; negative
+// answers are never cached beyond the single call.
+func lookupRunWatched(ctx context.Context, store any, cache *sync.Map, runID string) bool {
+	runID = strings.TrimSpace(runID)
+	if runID == "" || store == nil {
+		return false
+	}
+	if cache != nil {
+		if _, ok := cache.Load(runID); ok {
+			return true
+		}
+	}
+	reader, ok := store.(runOwnerReader)
+	if !ok {
+		return false
+	}
+	owner, err := reader.RunOwner(ctx, runID)
+	if err != nil || strings.TrimSpace(owner) == "" {
+		return false
+	}
+	if cache != nil {
+		cache.Store(runID, struct{}{})
+	}
+	return true
+}
 
 func pipeRefusal(c *gin.Context, err error) {
 	c.JSON(nodelink.CodeOf(err), gin.H{"error": err.Error()})

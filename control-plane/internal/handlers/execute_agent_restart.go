@@ -264,6 +264,9 @@ func (c *executionController) newAgentRequest(ctx context.Context, plan *prepare
 	req.Header.Set("X-Run-ID", plan.exec.RunID)
 	req.Header.Set("X-Execution-ID", plan.exec.ExecutionID)
 	req.Header.Set("X-Workflow-ID", plan.exec.RunID)
+	if lookupRunWatched(ctx, c.store, &c.watchedRuns, plan.exec.RunID) {
+		req.Header.Set(RunWatchedHeader, "1")
+	}
 	if plan.exec.ParentExecutionID != nil {
 		req.Header.Set("X-Parent-Execution-ID", *plan.exec.ParentExecutionID)
 	}

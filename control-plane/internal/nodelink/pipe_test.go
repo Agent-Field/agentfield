@@ -698,3 +698,102 @@ func TestSteerToANodeThatTakesOnlySteerDeliveries(t *testing.T) {
 	_, err = r.pipe.Steer(ctx, "other", "exec_s", "not yours")
 	require.Equal(t, 403, CodeOf(err))
 }
+
+type instrumentedPipeStore struct {
+	PipeStore
+	prunes   atomic.Int32
+	ownerErr error
+}
+
+func (s *instrumentedPipeStore) RelayPrune(ctx context.Context, before time.Time) error {
+	s.prunes.Add(1)
+	return s.PipeStore.RelayPrune(ctx, before)
+}
+
+func (s *instrumentedPipeStore) RunOwner(ctx context.Context, runID string) (string, error) {
+	if s.ownerErr != nil {
+		return "", s.ownerErr
+	}
+	return s.PipeStore.RunOwner(ctx, runID)
+}
+
+// Contract C4: Put FOR AN EXECUTION WHOSE RUN HAS NO OWNER STORES ZERO ROWS
+// AND ANSWERS through = MAX SEQ SO THE NODE FORGETS THE BATCH WITHOUT RETRYING;
+// OWNED RUNS STORE AND FORWARD AS BEFORE, AND A STORE ERROR PROPAGATES.
+func TestPutDropsUnownedEntriesWithoutRetryAndHoldsOwnedEntries(t *testing.T) {
+	r := newRig(t, t.TempDir())
+	ctx := context.Background()
+	r.run("run_unowned", "", [2]string{"exec_unowned", ""})
+	r.run("run_owned", "codeaf-factory", [2]string{"exec_owned", ""})
+
+	stored, through, err := r.pipe.Put(ctx, "exec_unowned", entries(1, 2, 3))
+	require.NoError(t, err)
+	require.Equal(t, 0, stored)
+	require.EqualValues(t, 3, through)
+	require.Zero(t, r.held("exec_unowned"))
+	require.Zero(t, r.held(""))
+
+	node := r.dial("worker", []string{KindHTTP}, nil)
+	ok := node.call(Frame{T: TEntries, Exec: "exec_unowned"}, EntriesUp{Entries: entries(4, 5)})
+	require.Equal(t, 200, ok.Code)
+	require.EqualValues(t, 5, ok.Through)
+	require.Zero(t, r.held("exec_unowned"))
+
+	// A store error looking up the owner must fail Put so the node retries
+	// rather than mistaking the failure for an unowned run.
+	errPipe := &Pipe{Store: &instrumentedPipeStore{PipeStore: r.store, ownerErr: io.ErrUnexpectedEOF}}
+	stored, through, err = errPipe.Put(ctx, "exec_unowned", entries(6, 7))
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Equal(t, 0, stored)
+	require.Zero(t, through)
+
+	owner := r.dial("codeaf-factory", nil, nil)
+	require.Equal(t, 200, owner.call(Frame{T: TSubscribe}, Subscribe{}).Code)
+	stored, through, err = r.pipe.Put(ctx, "exec_owned", entries(1, 2, 3))
+	require.NoError(t, err)
+	require.Equal(t, 3, stored)
+	require.EqualValues(t, 3, through)
+	require.EqualValues(t, 3, r.held("exec_owned"))
+	got := owner.collect(map[string]int64{"exec_owned": 3}, 50*time.Millisecond)
+	require.Equal(t, []int64{1, 2, 3}, got["exec_owned"])
+}
+
+// Contract C6: RelayPrune RUNS AT MOST ONCE PER MINUTE PER PIPE HOWEVER MANY
+// PUTS ARRIVE WITHIN THAT MINUTE.
+func TestRelayPruneRunsAtMostOncePerMinute(t *testing.T) {
+	r := newRig(t, t.TempDir())
+	ctx := context.Background()
+	r.run("run_1", "codeaf-factory", [2]string{"exec_1", ""})
+
+	store := &instrumentedPipeStore{PipeStore: r.store}
+	var clockMu sync.Mutex
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	p := &Pipe{
+		Store:     store,
+		Retention: func() time.Duration { return time.Hour },
+		Now: func() time.Time {
+			clockMu.Lock()
+			defer clockMu.Unlock()
+			return now
+		},
+	}
+
+	for i := int64(1); i <= 25; i++ {
+		clockMu.Lock()
+		now = time.Date(2026, 1, 1, 12, 0, int(i*2), 0, time.UTC) // 2s..50s
+		clockMu.Unlock()
+		_, _, err := p.Put(ctx, "exec_1", entries(i))
+		require.NoError(t, err)
+	}
+	require.EqualValues(t, 1, store.prunes.Load(), "bursts within a minute prune once")
+
+	// Advance past a full minute from the first prune (12:00:02 -> 12:01:02).
+	for i := int64(26); i <= 35; i++ {
+		clockMu.Lock()
+		now = time.Date(2026, 1, 1, 12, 1, int(i-24), 0, time.UTC) // 12:01:02..12:01:11
+		clockMu.Unlock()
+		_, _, err := p.Put(ctx, "exec_1", entries(i))
+		require.NoError(t, err)
+	}
+	require.EqualValues(t, 2, store.prunes.Load(), "the next minute allows one more prune")
+}

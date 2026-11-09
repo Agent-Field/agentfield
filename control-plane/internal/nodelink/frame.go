@@ -29,6 +29,11 @@ const Version = 1
 // MaxFrame is the largest frame either side accepts.
 const MaxFrame = 1 << 20
 
+// RunWatchedHeader is set to "1" on execution deliveries whose run has an
+// owner watching its live harness transcript; X-AgentField-Run-Owner itself is
+// never forwarded to nodes because on inbound requests it scopes ownership.
+const RunWatchedHeader = "X-AgentField-Run-Watched"
+
 // Frame types. Down is control plane → node, up is node → control plane.
 const (
 	// Down.
