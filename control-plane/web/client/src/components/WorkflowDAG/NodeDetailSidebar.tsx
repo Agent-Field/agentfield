@@ -1,3 +1,4 @@
+import { authHeaders } from "@/services/api";
 import { Close } from "@/components/ui/icon-bridge";
 import { GitBranch, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -354,7 +355,7 @@ function TriggersSection({ nodeId }: { nodeId: string }) {
         `/api/v1/triggers?target_node_id=${encodeURIComponent(nodeId)}`,
         {
           headers: {
-            "X-API-Key": sessionStorage.getItem("apiKey") || "",
+            ...authHeaders(),
           },
         },
       );
