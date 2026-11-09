@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
   getExecutionDetails: vi.fn<(executionId: string) => Promise<{ input_data: unknown }>>(),
   retryExecutionWebhook: vi.fn<(executionId: string) => Promise<void>>(),
   getWorkflowVCChain: vi.fn<(workflowId: string) => Promise<any>>(),
+  getWorkflowVCChainSummary: vi.fn<(workflowId: string) => Promise<any>>(),
   downloadWorkflowShareFile: vi.fn<(workflowId: string) => Promise<void>>(),
   downloadWorkflowVCAuditFile: vi.fn<(workflowId: string) => Promise<void>>(),
   navigateSpy: vi.fn(),
@@ -69,6 +70,7 @@ vi.mock("@/services/executionsApi", () => ({
 
 vi.mock("@/services/vcApi", () => ({
   getWorkflowVCChain: (workflowId: string) => state.getWorkflowVCChain(workflowId),
+  getWorkflowVCChainSummary: (workflowId: string) => state.getWorkflowVCChainSummary(workflowId),
   downloadWorkflowShareFile: (workflowId: string) => state.downloadWorkflowShareFile(workflowId),
   downloadWorkflowVCAuditFile: (workflowId: string) => state.downloadWorkflowVCAuditFile(workflowId),
 }));
@@ -392,9 +394,23 @@ describe("RunDetailPage", () => {
     state.getExecutionDetails.mockReset();
     state.retryExecutionWebhook.mockReset();
     state.getWorkflowVCChain.mockReset();
+    state.getWorkflowVCChainSummary.mockReset();
     state.downloadWorkflowShareFile.mockReset();
     state.downloadWorkflowVCAuditFile.mockReset();
     state.navigateSpy.mockReset();
+  });
+
+  it("asks for the chain summary on open, never the full per-step chain", async () => {
+    state.runDag = { data: buildDag(), isLoading: false, isError: false, error: null };
+    state.queryData = undefined;
+    state.getWorkflowVCChainSummary.mockResolvedValue({ workflow_vc: { issuer_did: "did:example:issuer" } });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(state.getWorkflowVCChainSummary).toHaveBeenCalled();
+    });
+    expect(state.getWorkflowVCChain).not.toHaveBeenCalled();
   });
 
   it("renders loading state then populated trace/log surfaces and replay action", async () => {

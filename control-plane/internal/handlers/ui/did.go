@@ -390,7 +390,29 @@ func (h *DIDHandler) GetWorkflowVCChainHandler(c *gin.Context) {
 	}
 
 	handlers.SetVCChainVerifiabilityHeader(c, response)
+	if c.Query("view") == "summary" {
+		c.JSON(http.StatusOK, summarizeWorkflowVCChain(response))
+		return
+	}
 	c.JSON(http.StatusOK, response)
+}
+
+// summarizeWorkflowVCChain drops the per-step credentials, their documents and
+// the DID resolution bundle from a chain, keeping its status, step counts,
+// verifiability and the workflow credential's issuer. A run page shows only
+// those, and the full chain grows by a signed document per step — megabytes
+// for a run of a few thousand steps — so the page asks for this view and the
+// full chain is fetched only when someone downloads or verifies it.
+func summarizeWorkflowVCChain(chain *types.WorkflowVCChainResponse) *types.WorkflowVCChainResponse {
+	if chain == nil {
+		return nil
+	}
+	summary := *chain
+	summary.ComponentVCs = []types.ExecutionVC{}
+	summary.DIDResolutionBundle = nil
+	summary.WorkflowVC.ComponentVCs = []string{}
+	summary.WorkflowVC.VCDocument = nil
+	return &summary
 }
 
 // DownloadVCHandler handles requests to download a VC document.

@@ -140,6 +140,17 @@ export async function getWorkflowVCChain(workflowId: string): Promise<WorkflowVC
 }
 
 /**
+ * The chain's status, step counts, verifiability and workflow issuer, without
+ * the per-step credentials (`component_vcs` is empty and the DID resolution
+ * bundle is absent). What a run page shows; the full chain grows by a signed
+ * document per step, so fetch it with getWorkflowVCChain only to download or
+ * verify it.
+ */
+export async function getWorkflowVCChainSummary(workflowId: string): Promise<WorkflowVCChainResponse> {
+  return fetchWrapper<WorkflowVCChainResponse>(`/workflows/${workflowId}/vc-chain?view=summary`);
+}
+
+/**
  * Same JSON shape as GET /api/ui/v1/workflows/:id/vc-chain — valid input for `af verify <file.json>`
  * (legacy WorkflowVCChainResponse; CLI normalizes to EnhancedVCChain).
  */
