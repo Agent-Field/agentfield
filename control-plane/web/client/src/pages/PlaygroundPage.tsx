@@ -406,9 +406,12 @@ export function PlaygroundPage() {
         input: stripInputEnvelope(parsed) as Record<string, unknown>,
       });
       setResult(data.result ?? data);
+      // "View run" opens /runs/:runId, which is keyed by the run, not by the
+      // execution; an execution id there is a 404.
       const runId =
-        (data as any).execution_id ??
         (data as any).run_id ??
+        (data as any).workflow_id ??
+        (data as any).execution_id ??
         null;
       setLastRunId(runId);
       setResultStatus((data as any).status ?? "succeeded");
