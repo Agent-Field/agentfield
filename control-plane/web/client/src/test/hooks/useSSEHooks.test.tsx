@@ -10,7 +10,11 @@ import {
   useSSE,
   useUnifiedStatusSSE,
 } from "@/hooks/useSSE";
-import { SSESyncProvider, useSSESync } from "@/hooks/useSSEQuerySync";
+import {
+  HOME_REFRESH_INTERVAL_MS,
+  SSESyncProvider,
+  useSSESync,
+} from "@/hooks/useSSEQuerySync";
 
 const apiState = vi.hoisted(() => ({
   getGlobalApiKey: vi.fn(),
@@ -271,5 +275,44 @@ describe("SSE hooks", () => {
     renderHook(() => useSSESync(), { wrapper });
 
     expect(invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it("useSSESync folds bursts of execution events into one Home refresh per interval", async () => {
+    const queryClient = new QueryClient();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const exec = (n: number) => ({
+      latestEvent: { type: "execution_updated", data: { type: "execution_updated", execution_id: `exec-${n}` } },
+      connected: true,
+      reconnecting: false,
+    });
+    const idle = { latestEvent: null, connected: false, reconnecting: false };
+    sseSyncState.responses = [1, 2, 3, 4].flatMap((n) => [exec(n), idle, idle]);
+
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <SSESyncProvider>{children}</SSESyncProvider>
+      </QueryClientProvider>
+    );
+    const homeCalls = () =>
+      invalidateQueries.mock.calls.filter(([arg]) => arg?.queryKey?.[0] === "dashboard-home").length;
+
+    const { rerender, unmount } = renderHook(() => useSSESync(), { wrapper });
+    expect(homeCalls()).toBe(1);
+
+    rerender();
+    rerender();
+    expect(homeCalls()).toBe(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(HOME_REFRESH_INTERVAL_MS);
+    });
+    expect(homeCalls()).toBe(2);
+
+    rerender();
+    unmount();
+    await act(async () => {
+      vi.advanceTimersByTime(HOME_REFRESH_INTERVAL_MS);
+    });
+    expect(homeCalls()).toBe(2);
   });
 });
