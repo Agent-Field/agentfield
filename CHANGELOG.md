@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.23] - 2026-11-09
+
+
+### Added
+
+- Feat(examples): add optional Outcrawl search backend to deep_research (#1167)
+
+Adds `SEARCH_PROVIDER=outcrawl` alongside the Tavily default and the
+Parallel, Serply and Keenable opt-ins, in the same shape as the Serply
+backend: one normalizer, one error message builder, one async executor,
+one dispatch branch, and no new entry in requirements.txt.
+
+Outcrawl needs OUTCRAWL_API_KEY (the free plan includes 1,000 credits a
+month). Each query posts `{query, limit}` to
+https://api.outcrawl.ai/v1/search with a bearer key and maps the `hits`
+rows (title, url, snippet) into the existing {title, url, content,
+raw_content} rows, five per query like the Tavily path. (f1af4ff)
+
+
+
+### Fixed
+
+- Fix(go-sdk): accept CRLF delimiters and 'data:' without space in SSE decoder (#1166)
+
+The SSEDecoder only split events on "\n\n" and required the literal
+prefix "data: ", so a server using CRLF line endings or "data:" with no
+space yielded zero chunks and StreamComplete silently lost the whole stream. (0dc4f14)
+
 ## [0.1.146-rc.22] - 2026-11-08
 
 
