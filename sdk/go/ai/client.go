@@ -383,14 +383,16 @@ func NewSSEDecoder(r io.Reader) *SSEDecoder {
 func (d *SSEDecoder) Decode() (StreamChunk, error) {
 	for {
 		// First check if we already have a complete message in accumulated buffer
-		data := string(d.accumulated)
+		// SSE allows CRLF line endings; normalize so "\r\n\r\n" separates events too.
+		data := strings.ReplaceAll(string(d.accumulated), "\r\n", "\n")
 		if idx := strings.Index(data, "\n\n"); idx >= 0 {
 			message := data[:idx]
 			d.accumulated = []byte(data[idx+2:])
 
 			// Parse SSE message
-			if strings.HasPrefix(message, "data: ") {
-				jsonData := strings.TrimPrefix(message, "data: ")
+			// The SSE field is "data:" with an optional single space after the colon.
+			if strings.HasPrefix(message, "data:") {
+				jsonData := strings.TrimPrefix(message, "data:")
 				jsonData = strings.TrimSpace(jsonData)
 
 				// Check for stream end
