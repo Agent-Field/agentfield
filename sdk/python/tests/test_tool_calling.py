@@ -489,9 +489,10 @@ class TestExecuteToolCallLoop:
         assert trace.calls == []
         tool_messages = [m for m in messages if m.get("role") == "tool"]
         assert len(tool_messages) == 1
-        assert "invalid or truncated JSON arguments" in json.loads(
-            tool_messages[0]["content"]
-        )["error"]
+        assert (
+            "invalid or truncated JSON arguments"
+            in json.loads(tool_messages[0]["content"])["error"]
+        )
 
     @pytest.mark.asyncio
     async def test_empty_string_arguments_run_with_no_args(self):
