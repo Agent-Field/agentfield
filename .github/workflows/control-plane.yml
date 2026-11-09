@@ -123,7 +123,7 @@ jobs:
   # so without this job a type error in tray_darwin.go would only surface at
   # release time on the goreleaser macOS runner.
   tray-darwin:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
