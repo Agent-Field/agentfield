@@ -769,3 +769,33 @@ func TestStreamComplete_TimeoutAppliesWhileWaitingForResponse(t *testing.T) {
 	assert.Error(t, streamErr)
 	assert.Less(t, time.Since(start), 2*time.Second)
 }
+
+func TestSSEDecoder_CRLFAndNoSpaceDataField(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"CRLF delimiters", "data: {\"id\":\"a\"}\r\n\r\ndata: {\"id\":\"b\"}\r\n\r\ndata: [DONE]\r\n\r\n"},
+		{"no space after data colon", "data:{\"id\":\"a\"}\n\ndata:{\"id\":\"b\"}\n\ndata:[DONE]\n\n"},
+		{"CRLF and no space", "data:{\"id\":\"a\"}\r\n\r\ndata:{\"id\":\"b\"}\r\n\r\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decoder := NewSSEDecoder(strings.NewReader(tt.input))
+			var ids []string
+			for {
+				chunk, err := decoder.Decode()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				ids = append(ids, chunk.ID)
+			}
+			if len(ids) != 2 || ids[0] != "a" || ids[1] != "b" {
+				t.Fatalf("expected chunks [a b], got %v", ids)
+			}
+		})
+	}
+}

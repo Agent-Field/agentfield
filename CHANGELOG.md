@@ -6,6 +6,137 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.23] - 2026-11-09
+
+
+### Added
+
+- Feat(examples): add optional Outcrawl search backend to deep_research (#1167)
+
+Adds `SEARCH_PROVIDER=outcrawl` alongside the Tavily default and the
+Parallel, Serply and Keenable opt-ins, in the same shape as the Serply
+backend: one normalizer, one error message builder, one async executor,
+one dispatch branch, and no new entry in requirements.txt.
+
+Outcrawl needs OUTCRAWL_API_KEY (the free plan includes 1,000 credits a
+month). Each query posts `{query, limit}` to
+https://api.outcrawl.ai/v1/search with a bearer key and maps the `hits`
+rows (title, url, snippet) into the existing {title, url, content,
+raw_content} rows, five per query like the Tavily path. (f1af4ff)
+
+
+
+### Fixed
+
+- Fix(go-sdk): accept CRLF delimiters and 'data:' without space in SSE decoder (#1166)
+
+The SSEDecoder only split events on "\n\n" and required the literal
+prefix "data: ", so a server using CRLF line endings or "data:" with no
+space yielded zero chunks and StreamComplete silently lost the whole stream. (0dc4f14)
+
+## [0.1.146-rc.22] - 2026-11-08
+
+
+### Added
+
+- Feat(sdk/go/ai): support the CloudGPU provider (#1162)
+
+DefaultConfig selects CloudGPU from CLOUDGPU_API_KEY only when no
+higher-precedence provider key is set, defaults the model to
+deepseek-v4-flash, and strips a cloudgpu/ routing prefix before the
+request is sent.
+
+Signed-off-by: mrhy7176 <129925370+mrhy7176@users.noreply.github.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: CloudGPU <mrhy7176@users.noreply.github.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (9398681)
+
+
+
+### Testing
+
+- Test(sdk-python): use a shell stub for the real CodeAF version probe (#1160)
+
+test_managed_availability_and_doctor_version runs harness_doctor without a version_probe override, so the real _probe_version runs the stub with its 2 s VERSION_PROBE_TIMEOUT_SECONDS. The stub was a Python script, and under pytest-cov (on by default through addopts) the child inherits COV_CORE_* and starts coverage first. On a constrained runner that start exceeds 2 s: with --cpus=0.5 the probe takes 2.06 s and times out (0.01 s with --no-cov), giving version None and issues=('version_probe_failed',). A /bin/sh stub prints the same line without starting an interpreter.
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (60268b6)
+
+## [0.1.146-rc.21] - 2026-11-08
+
+
+### Build
+
+- Build(docker): overridable base-image build args; UI build on Node 24 LTS (#1159)
+
+* build(docker): make base images overridable build args
+
+Each third-party base image in the published Dockerfiles (control-plane, control-plane-cloud, python-agent, go-agent) is now a build arg whose default is the image used today, so a default build resolves exactly the same images. Deployments that pin bases by digest, or need a mirror registry, can pass --build-arg instead of patching the Dockerfiles.
+
+The uv binaries in the cloud image now come from a named stage (uv-dist), because COPY --from cannot expand a build arg.
+
+* build(docker): build the web UI on Node 24 LTS
+
+Node 20 reached end of life on 2026-04-30, and react-router@8.3.0 declares engines node >=22.22.0, so npm ci on node:20-bookworm-slim warns EBADENGINE. node:24-bookworm-slim builds the UI cleanly with no engine warning; the Go and runtime stages are unchanged.
+
+* fix(docker): give the go-agent image's sdk/go tests the CodeAF auth contract
+
+Dockerfile.go-agent runs go test ./... on a copy of sdk/go at /tmp/go-sdk. Since #1130 the harness and agent tests read ../../codeaf-auth-contract.json (sdk/codeaf-auth-contract.json), which is not in the image, so the build fails on main with 'open ../../codeaf-auth-contract.json: no such file or directory'. Copy sdk/go and the contract into the same relative layout.
+
+---------
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (7f3dc1a)
+
+
+
+### Testing
+
+- Test(sdk-go): order opencode concurrency events by an append log, not date +%N (#1161)
+
+TestOpenCodeConcurrencyLimit_RealSubprocess timed each fake opencode run with date +%s%N. BusyBox date (Alpine, which Dockerfile.go-agent tests on) ignores %N, so every timestamp is whole seconds, start equals end, the sweep sees no overlap and the test fails with 'no overlap observed at all'. The fake binary now appends + and - lines to one O_APPEND log and the test replays them in order. It passes 5/5 on golang:1.25-alpine and -bookworm, and with OPENCODE_MAX_CONCURRENT forced to 6 it still fails with 'observed 6 concurrent subprocesses, want <= 2'.
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (684b2ae)
+
+## [0.1.146-rc.20] - 2026-11-07
+
+
+### Fixed
+
+- Fix(sdk-go): route StreamComplete through the rate limiter (#1165)
+
+StreamComplete called the HTTP client directly, so 429/503 responses
+were never retried even with a rate limiter configured, unlike Complete.
+Extract the header phase into openStream and run it through
+rateLimiter.Execute. (d5323cc)
+
+- Fix(sdk-python): raise max_completion_tokens on empty-reasoning structured retry (#1164)
+
+_increase_retry_max_tokens only looked at max_tokens, but for OpenAI models
+the param is renamed to max_completion_tokens, so the retry reused the same
+budget. Handle both keys.
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (bfcb004)
+
+- Fix(sdk-ts): scope polling pause time to each wait (#1163) (62a8c6e)
+
+## [0.1.146-rc.19] - 2026-11-07
+
+
+### Fixed
+
+- Fix(sdk-python): omit temperature for models that reject it (#1158)
+
+AIConfig.get_litellm_params forwarded a user-set temperature to gpt-5,
+o-series and newer Claude models, which reject it. Mirror the Go SDK's
+rejectsTemperature criterion and drop the field for those models. (f499137)
+
+- Fix(sdk-python): omit rejected temperature in schema repair (#1157) (be5b193)
+
+- Fix(sdk-ts): default searchVector to the handle's scope (#1156)
+
+MemoryInterface.searchVector forwarded only the caller's options, so
+session()/workflow()/actor() handles searched the wrong scope. Default
+scope/scopeId from the handle like set/get/delete; explicit options win. (11f0a76)
+
 ## [0.1.146-rc.18] - 2026-11-06
 
 

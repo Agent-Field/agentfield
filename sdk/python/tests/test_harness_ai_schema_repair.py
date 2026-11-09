@@ -167,10 +167,51 @@ async def test_ai_schema_repair_respects_timeout():
         await asyncio.sleep(3600)  # would hang for an hour
 
     # Patch the module-level timeout to something the test can wait for.
-    with patch(
-        "agentfield.harness._runner._SCHEMA_REPAIR_TIMEOUT_SECONDS", 0.1
-    ):
+    with patch("agentfield.harness._runner._SCHEMA_REPAIR_TIMEOUT_SECONDS", 0.1):
         with patch("litellm.acompletion", side_effect=_hang):
             result = await _ai_schema_repair("some text", _Schema, options)
 
     assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    [
+        "o3-mini",
+        "openai/gpt-5",
+        "openrouter/anthropic/claude-opus-4-7",
+        "claude-opus-5",
+        "gpt-5.5",
+        "gpt-5.1-codex",
+        "gpt-4o",
+        "gpt-5.1",
+        "gpt-5.2",
+        "gpt-5.4",
+        "claude-sonnet-4-6",
+    ],
+)
+async def test_ai_schema_repair_omits_rejected_temperature(model):
+    # Match the Go SDK policy: these default-mode models still accept zero.
+    accepts_temperature = model in {
+        "gpt-4o",
+        "gpt-5.1",
+        "gpt-5.2",
+        "gpt-5.4",
+        "claude-sonnet-4-6",
+    }
+
+    async def complete(**kwargs):
+        if not accepts_temperature and "temperature" in kwargs:
+            raise ValueError("400: temperature is not supported")
+        assert kwargs.get("temperature") == (0.0 if accepts_temperature else None)
+        assert kwargs["model"] == model
+        return _make_litellm_response('{"name": "repaired", "count": 7}')
+
+    with patch("litellm.acompletion", side_effect=complete) as completion:
+        result = await _ai_schema_repair(
+            "name: repaired, count: 7", _Schema, {"model": model}
+        )
+
+    assert result == _Schema(name="repaired", count=7)
+    completion.assert_called_once()

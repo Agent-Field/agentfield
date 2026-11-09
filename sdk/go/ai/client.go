@@ -215,6 +215,69 @@ func (c *Client) sendRequest(ctx context.Context, req *Request, body []byte) (*R
 	return &response, nil
 }
 
+// openStream performs a single streaming chat completion request and returns
+// the response once the headers have arrived with a 2xx status. Non-2xx
+// responses are returned as API errors with the body already closed. The
+// returned cancel func must be called once the body has been consumed.
+func (c *Client) openStream(ctx context.Context, req *Request, body []byte) (*http.Response, context.CancelFunc, error) {
+	url := strings.TrimSuffix(c.config.BaseURL, "/") + "/chat/completions"
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	apiKey := c.config.APIKey
+	if strings.TrimSpace(req.APIKeyOverride) != "" {
+		apiKey = req.APIKeyOverride
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	// Add gateway-specific attribution headers if applicable
+	switch {
+	case c.config.IsOpenRouter():
+		applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+	case c.config.IsInfron():
+		applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+	}
+
+	// http.Client.Timeout covers reading the whole body, which would cut off
+	// a stream that is still delivering chunks. Bound only the wait for the
+	// response headers with the same duration instead.
+	streamClient := c.httpClient
+	cancel := context.CancelFunc(func() {})
+	var headerTimer *time.Timer
+	if headerTimeout := c.httpClient.Timeout; headerTimeout > 0 {
+		clone := *c.httpClient
+		clone.Timeout = 0
+		streamClient = &clone
+
+		var reqCtx context.Context
+		reqCtx, cancel = context.WithCancel(ctx)
+		headerTimer = time.AfterFunc(headerTimeout, cancel)
+		httpReq = httpReq.WithContext(reqCtx)
+	}
+
+	httpResp, err := streamClient.Do(httpReq)
+	if headerTimer != nil {
+		headerTimer.Stop()
+	}
+	if err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("execute request: %w", err)
+	}
+
+	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+		respBody, _ := io.ReadAll(httpResp.Body)
+		httpResp.Body.Close()
+		cancel()
+		return nil, nil, newAPIError(httpResp.StatusCode, respBody)
+	}
+	return httpResp, cancel, nil
+}
+
 // StreamComplete makes a streaming chat completion request.
 // Returns a channel of response chunks.
 func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Option) (<-chan StreamChunk, <-chan error) {
@@ -257,66 +320,26 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 			return
 		}
 
-		// Build URL
-		url := strings.TrimSuffix(c.config.BaseURL, "/") + "/chat/completions"
-
-		// Create HTTP request
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-		if err != nil {
-			errCh <- fmt.Errorf("create request: %w", err)
-			return
+		// Open the stream. The header phase goes through the rate limiter so
+		// 429/503 responses are retried like in Complete.
+		var httpResp *http.Response
+		var cancel context.CancelFunc
+		open := func() error {
+			var openErr error
+			httpResp, cancel, openErr = c.openStream(ctx, req, body)
+			return openErr
 		}
-
-		// Set headers
-		httpReq.Header.Set("Content-Type", "application/json")
-		apiKey := c.config.APIKey
-		if strings.TrimSpace(req.APIKeyOverride) != "" {
-			apiKey = req.APIKeyOverride
-		}
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-		httpReq.Header.Set("Accept", "text/event-stream")
-
-		// Add gateway-specific attribution headers if applicable
-		switch {
-		case c.config.IsOpenRouter():
-			applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
-		case c.config.IsInfron():
-			applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
-		}
-
-		// http.Client.Timeout covers reading the whole body, which would cut off
-		// a stream that is still delivering chunks. Bound only the wait for the
-		// response headers with the same duration instead.
-		streamClient := c.httpClient
-		var headerTimer *time.Timer
-		if headerTimeout := c.httpClient.Timeout; headerTimeout > 0 {
-			clone := *c.httpClient
-			clone.Timeout = 0
-			streamClient = &clone
-
-			reqCtx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			headerTimer = time.AfterFunc(headerTimeout, cancel)
-			httpReq = httpReq.WithContext(reqCtx)
-		}
-
-		// Execute request
-		httpResp, err := streamClient.Do(httpReq)
-		if headerTimer != nil {
-			headerTimer.Stop()
+		if c.rateLimiter == nil {
+			err = open()
+		} else {
+			err = c.rateLimiter.Execute(ctx, open)
 		}
 		if err != nil {
-			errCh <- fmt.Errorf("execute request: %w", err)
+			errCh <- err
 			return
 		}
+		defer cancel()
 		defer httpResp.Body.Close()
-
-		// Check for errors
-		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-			respBody, _ := io.ReadAll(httpResp.Body)
-			errCh <- newAPIError(httpResp.StatusCode, respBody)
-			return
-		}
 
 		// Parse SSE stream
 		decoder := NewSSEDecoder(httpResp.Body)
@@ -360,14 +383,16 @@ func NewSSEDecoder(r io.Reader) *SSEDecoder {
 func (d *SSEDecoder) Decode() (StreamChunk, error) {
 	for {
 		// First check if we already have a complete message in accumulated buffer
-		data := string(d.accumulated)
+		// SSE allows CRLF line endings; normalize so "\r\n\r\n" separates events too.
+		data := strings.ReplaceAll(string(d.accumulated), "\r\n", "\n")
 		if idx := strings.Index(data, "\n\n"); idx >= 0 {
 			message := data[:idx]
 			d.accumulated = []byte(data[idx+2:])
 
 			// Parse SSE message
-			if strings.HasPrefix(message, "data: ") {
-				jsonData := strings.TrimPrefix(message, "data: ")
+			// The SSE field is "data:" with an optional single space after the colon.
+			if strings.HasPrefix(message, "data:") {
+				jsonData := strings.TrimPrefix(message, "data:")
 				jsonData = strings.TrimSpace(jsonData)
 
 				// Check for stream end
