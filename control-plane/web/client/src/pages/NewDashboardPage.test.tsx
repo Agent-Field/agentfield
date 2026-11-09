@@ -115,9 +115,9 @@ describe("NewDashboardPage", () => {
     vi.clearAllMocks();
     queryClient.clear();
 
-    // Default healthy state
+    // Default healthy state, with LLM health monitoring switched on.
     vi.mocked(useLLMHealth).mockReturnValue({
-      data: { endpoints: [{ name: "test-llm", healthy: true }] },
+      data: { enabled: true, healthy: true, endpoints: [{ name: "test-llm", healthy: true }] },
       isLoading: false,
     });
     vi.mocked(useQueueStatus).mockReturnValue({
@@ -203,8 +203,21 @@ describe("NewDashboardPage", () => {
 
     expect(screen.getByText("System issues")).toBeInTheDocument();
     expect(screen.getByText("LLM backend health")).toBeInTheDocument();
-    expect(screen.getByText("Healthy")).toBeInTheDocument();
+    expect(screen.getAllByText("Healthy").length).toBeGreaterThan(0);
     expect(screen.getByText(/Queue at capacity for agent: agent-1/i)).toBeInTheDocument();
+  });
+
+  it("leaves out the LLM card when LLM health monitoring is not enabled", () => {
+    vi.mocked(useLLMHealth).mockReturnValue({
+      data: { enabled: false, healthy: false, endpoints: [] },
+      isLoading: false,
+    });
+    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [], total_count: 0 } });
+
+    render(<NewDashboardPage />, { wrapper });
+
+    expect(screen.queryByText("LLM backend health")).not.toBeInTheDocument();
+    expect(screen.queryByText("System issues")).not.toBeInTheDocument();
   });
 
   it("renders queue card disabled state when limiter is off", () => {
