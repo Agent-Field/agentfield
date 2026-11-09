@@ -10,7 +10,7 @@ import {
   useSSE,
   useUnifiedStatusSSE,
 } from "@/hooks/useSSE";
-import { SSESyncProvider, useSSESync } from "@/hooks/useSSEQuerySync";
+import { LIVE_REFRESH_INTERVAL_MS, SSESyncProvider, useSSESync } from "@/hooks/useSSEQuerySync";
 
 const apiState = vi.hoisted(() => ({
   getGlobalApiKey: vi.fn(),
@@ -234,12 +234,16 @@ describe("SSE hooks", () => {
     expect(result.current.execConnected).toBe(true);
     expect(result.current.anyConnected).toBe(true);
     expect(result.current.reconnecting).toBe(true);
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["runs"] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["dashboard-summary"] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["run-dag", "run-1"] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["step-detail", "exec-1"] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agents"] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reasoners"] });
+    // Events in one burst are flushed together within the refresh interval.
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS);
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["runs"] }, { cancelRefetch: false });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["dashboard-summary"] }, { cancelRefetch: false });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["run-dag", "run-1"] }, { cancelRefetch: false });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["step-detail", "exec-1"] }, { cancelRefetch: false });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agents"] }, { cancelRefetch: false });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reasoners"] }, { cancelRefetch: false });
 
     await act(async () => {
       result.current.refreshAllLiveQueries();
@@ -271,5 +275,43 @@ describe("SSE hooks", () => {
     renderHook(() => useSSESync(), { wrapper });
 
     expect(invalidateQueries).not.toHaveBeenCalled();
+  });
+  it("useSSESync coalesces a burst of execution events into one refresh per interval", async () => {
+    const queryClient = new QueryClient();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const exec = (n: number) => ({
+      latestEvent: {
+        type: "execution_updated",
+        data: { run_id: "run-1", execution_id: `exec-${n}`, type: "execution_updated", n },
+      },
+      connected: true,
+      reconnecting: false,
+    });
+    const quiet = { latestEvent: null, connected: false, reconnecting: false };
+    let n = 0;
+    sseSyncState.responses = [exec(n), quiet, quiet];
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <SSESyncProvider>{children}</SSESyncProvider>
+      </QueryClientProvider>
+    );
+    const { rerender } = renderHook(() => useSSESync(), { wrapper });
+    const runsCalls = () =>
+      invalidateQueries.mock.calls.filter(([f]) => JSON.stringify((f as { queryKey: unknown }).queryKey) === '["runs"]').length;
+    // The first event after a quiet spell refreshes at once.
+    expect(runsCalls()).toBe(1);
+    // Twenty more events inside the interval: nothing until it elapses.
+    for (let i = 0; i < 20; i++) {
+      n += 1;
+      sseSyncState.callIndex = 0;
+      sseSyncState.responses = [exec(n), quiet, quiet];
+      rerender();
+    }
+    expect(runsCalls()).toBe(1);
+    await act(async () => {
+      vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS);
+    });
+    expect(runsCalls()).toBe(2);
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["step-detail", "exec-20"] }, { cancelRefetch: false });
   });
 });
