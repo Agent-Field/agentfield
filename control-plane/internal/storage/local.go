@@ -637,6 +637,10 @@ func (ls *LocalStorage) createSchema(ctx context.Context) error {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
+	if err := ls.normalizeExecutionVCTimestamps(ctx); err != nil {
+		return fmt.Errorf("failed to normalize execution VC timestamps: %w", err)
+	}
+
 	if err := ls.setupWorkflowExecutionFTS(); err != nil {
 		if strings.Contains(err.Error(), "no such module: fts5") {
 			ls.ftsEnabled = false
