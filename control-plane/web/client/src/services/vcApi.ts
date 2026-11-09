@@ -13,7 +13,7 @@ import type {
   ProvenanceVerificationResponse
 } from '../types/did';
 import { normalizeExecutionStatus, isSuccessStatus, isFailureStatus } from '../utils/status';
-import { getGlobalApiKey } from './api';
+import { authHeaders, getGlobalApiKey } from './api';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
 
@@ -795,7 +795,7 @@ export async function getDIDResolutionBundle(did: string): Promise<{
 export async function downloadDIDResolutionBundle(did: string): Promise<void> {
   try {
 
-    const response = await fetch(`${API_BASE_URL}/did/${encodeURIComponent(did)}/resolution-bundle/download`);
+    const response = await fetch(`${API_BASE_URL}/did/${encodeURIComponent(did)}/resolution-bundle/download`, { headers: authHeaders() });
 
     if (!response.ok) {
       throw new Error(`Failed to download DID resolution bundle: ${response.status}`);

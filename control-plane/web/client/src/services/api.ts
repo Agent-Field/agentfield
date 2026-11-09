@@ -47,6 +47,14 @@ export function getGlobalApiKey(): string | null {
   return globalApiKey;
 }
 
+/**
+ * The API key header for code that calls fetch directly instead of going
+ * through fetchWrapper. With auth on, a request without it is a 401.
+ */
+export function authHeaders(): Record<string, string> {
+  return globalApiKey ? { "X-API-Key": globalApiKey } : {};
+}
+
 // Admin token for accessing admin-only permission management routes.
 // Stored separately from the API key since it provides elevated privileges.
 const ADMIN_TOKEN_STORAGE_KEY = "af_admin_token";

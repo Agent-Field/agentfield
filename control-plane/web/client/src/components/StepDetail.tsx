@@ -1,3 +1,4 @@
+import { authHeaders } from "@/services/api";
 import { useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from 'react-router';
@@ -249,7 +250,7 @@ export function StepDetail({ executionId }: { executionId: string }) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-API-Key": localStorage.getItem("agentfield_api_key") ?? "",
+            ...authHeaders(),
           },
           body: JSON.stringify({
             requestId: execution.approval_request_id,

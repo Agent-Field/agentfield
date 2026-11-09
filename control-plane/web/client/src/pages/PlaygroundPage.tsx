@@ -91,6 +91,32 @@ function statusVariant(
   return "secondary";
 }
 
+/**
+ * A stored run's input is the whole execute request body, so it arrives as
+ * `{"input": {...}}`. The box holds what goes INSIDE `input`; sending the
+ * envelope again would hand the reasoner `input.input` and every required
+ * field would be missing. Strings are parsed first so a pasted body is
+ * unwrapped too.
+ */
+function stripInputEnvelope(value: unknown): unknown {
+  let v = value;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return value;
+    }
+  }
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const keys = Object.keys(v as Record<string, unknown>);
+    const inner = (v as Record<string, unknown>).input;
+    if (keys.length === 1 && keys[0] === "input" && inner && typeof inner === "object" && !Array.isArray(inner)) {
+      return inner;
+    }
+  }
+  return v;
+}
+
 function buildCurlCommand(
   target: string,
   input: string,
@@ -162,9 +188,10 @@ export function PlaygroundPage() {
   const [input, setInput] = useState(() => {
     if (replayInput != null) {
       try {
-        return typeof replayInput === "string"
-          ? replayInput
-          : JSON.stringify(replayInput, null, 2);
+        const unwrapped = stripInputEnvelope(replayInput);
+        return typeof unwrapped === "string"
+          ? unwrapped
+          : JSON.stringify(unwrapped, null, 2);
       } catch {
         return "{}";
       }
@@ -376,7 +403,7 @@ export function PlaygroundPage() {
 
     try {
       const data = await reasonersApi.executeReasoner(selectedId, {
-        input: parsed as Record<string, unknown>,
+        input: stripInputEnvelope(parsed) as Record<string, unknown>,
       });
       setResult(data.result ?? data);
       const runId =
@@ -493,7 +520,7 @@ export function PlaygroundPage() {
   function handleLoadInput(run: RecentRun) {
     if (run.input_data !== undefined && run.input_data !== null) {
       try {
-        setInput(JSON.stringify(run.input_data, null, 2));
+        setInput(JSON.stringify(stripInputEnvelope(run.input_data), null, 2));
         setInputError(null);
       } catch {
         // ignore
