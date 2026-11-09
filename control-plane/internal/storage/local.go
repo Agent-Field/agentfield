@@ -607,6 +607,7 @@ func (ls *LocalStorage) createSchema(ctx context.Context) error {
 		if err := ls.ensurePostgresIndexes(ctx); err != nil {
 			return err
 		}
+		ls.ensureRunActivityIndex(ctx)
 		if err := ls.runPostgresMigrations(ctx); err != nil {
 			return fmt.Errorf("failed to run postgres migrations: %w", err)
 		}
@@ -655,6 +656,7 @@ func (ls *LocalStorage) createSchema(ctx context.Context) error {
 	if err := ls.ensureSQLiteIndexes(); err != nil {
 		return err
 	}
+	ls.ensureRunActivityIndex(ctx)
 
 	if ls.vectorConfig.isEnabled() {
 		if err := ls.ensureVectorSchema(ctx); err != nil {
@@ -831,6 +833,22 @@ func (ls *LocalStorage) ensurePostgresIndexes(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// runActivityIndexStatement orders executions by the activity expression the
+// runs list sorts by, so an unfiltered "latest activity" page is read from the
+// newest end of one index instead of grouping the whole table. The expression
+// must stay byte-for-byte the one recentRunIDsByActivity orders by, or the
+// planner will not use it. The doubled parentheses are what PostgreSQL needs
+// for an expression column; SQLite accepts them too.
+const runActivityIndexStatement = "CREATE INDEX IF NOT EXISTS idx_executions_run_activity ON executions ((COALESCE(updated_at, started_at)), run_id)"
+
+// ensureRunActivityIndex creates the runs-list activity index. A failure is
+// logged, not fatal: the list returns the same page without it, only slower.
+func (ls *LocalStorage) ensureRunActivityIndex(ctx context.Context) {
+	if _, err := ls.db.ExecContext(ctx, runActivityIndexStatement); err != nil {
+		logger.Logger.Warn().Err(err).Msg("failed to create executions run activity index; the runs list will be slower")
+	}
 }
 
 func (ls *LocalStorage) setupWorkflowExecutionFTS() error {
