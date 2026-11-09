@@ -27,7 +27,11 @@ KEENABLE_PUBLIC_SEARCH_URL = "https://api.keenable.ai/v1/search/public"
 KEENABLE_SEARCH_URL = "https://api.keenable.ai/v1/search"
 KEENABLE_APP_TITLE = "agentfield"
 KEENABLE_MAX_RESULTS = 5
-SUPPORTED_SEARCH_PROVIDERS = ("tavily", "parallel", "serply", "keenable")
+# Outcrawl search needs a bearer key (OUTCRAWL_API_KEY). Five results per query
+# matches the Tavily path.
+OUTCRAWL_SEARCH_URL = "https://api.outcrawl.ai/v1/search"
+OUTCRAWL_MAX_RESULTS = 5
+SUPPORTED_SEARCH_PROVIDERS = ("tavily", "parallel", "serply", "keenable", "outcrawl")
 
 
 def _search_provider() -> str:
@@ -213,6 +217,50 @@ def _keenable_results(response: object) -> list[dict]:
     return normalized
 
 
+def _outcrawl_error(status: int, response: object) -> str:
+    """Prefer Outcrawl's own `message` text over a bare status code, when it sends one."""
+    message = f"Outcrawl returned HTTP status {status}"
+    if isinstance(response, dict):
+        text = response.get("message")
+        if isinstance(text, str) and text.strip():
+            return f"{message}: {text.strip()}"
+    return message
+
+
+def _outcrawl_results(response: object) -> list[dict]:
+    """Decode one Outcrawl search response into the example's existing result shape."""
+    if not isinstance(response, dict):
+        raise ValueError("Outcrawl returned an invalid JSON response")
+
+    hits = response.get("hits")
+    if not isinstance(hits, list):
+        raise ValueError("Outcrawl returned no hits array")
+
+    normalized = []
+    for item in hits:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url")
+        title = item.get("title")
+        if not isinstance(url, str) or not url.strip():
+            continue
+        if not isinstance(title, str) or not title.strip():
+            continue
+
+        snippet = item.get("snippet")
+        text = snippet.strip() if isinstance(snippet, str) else ""
+        normalized.append(
+            {
+                "title": title,
+                "url": url,
+                "content": text,
+                "raw_content": text,
+            }
+        )
+
+    return normalized
+
+
 def _execute_tavily_search(queries: List[str]) -> list[dict]:
     try:
         from tavily import TavilyClient
@@ -345,6 +393,44 @@ async def _execute_keenable_search(queries: List[str]) -> list[dict]:
     return all_results
 
 
+async def _execute_outcrawl_search(queries: List[str]) -> list[dict]:
+    import aiohttp
+
+    api_key = os.getenv("OUTCRAWL_API_KEY")
+    if not api_key:
+        raise ValueError("OUTCRAWL_API_KEY environment variable not set")
+
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    timeout = aiohttp.ClientTimeout(total=30)
+    all_results = []
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for query in queries:
+            try:
+                async with session.post(
+                    OUTCRAWL_SEARCH_URL,
+                    json={"query": query, "limit": OUTCRAWL_MAX_RESULTS},
+                    headers=headers,
+                ) as response:
+                    status = response.status
+                    try:
+                        payload = await response.json(content_type=None)
+                    except Exception:
+                        payload = None
+                    if status < 200 or status >= 300:
+                        raise ValueError(_outcrawl_error(status, payload))
+                all_results.append(
+                    {"results": _outcrawl_results(payload)[:OUTCRAWL_MAX_RESULTS]}
+                )
+            except Exception as e:
+                all_results.append({"error": str(e), "query": query})
+
+    return all_results
+
+
 @research_router.reasoner()
 async def generate_search_queries(
     task_description: str,
@@ -401,6 +487,8 @@ async def execute_search(queries: List[str]) -> dict:
         all_results = await _execute_serply_search(queries)
     elif provider == "keenable":
         all_results = await _execute_keenable_search(queries)
+    elif provider == "outcrawl":
+        all_results = await _execute_outcrawl_search(queries)
     else:
         all_results = _execute_tavily_search(queries)
 
