@@ -30,6 +30,10 @@ import (
 
 type executionContextKey struct{}
 
+// RunWatchedHeader is set to "1" by the control plane on execution deliveries
+// whose run has an owner watching its live harness transcript.
+const RunWatchedHeader = "X-AgentField-Run-Watched"
+
 // ExecutionContext captures the headers AgentField sends with each execution request.
 type ExecutionContext struct {
 	RunID             string
@@ -44,6 +48,7 @@ type ExecutionContext struct {
 	AgentNodeID       string
 	ReasonerName      string
 	StartedAt         time.Time
+	RunWatched        bool
 
 	// DID fields — populated when DID authentication is enabled.
 	CallerDID    string
@@ -769,6 +774,7 @@ func (ec ExecutionContext) ChildContext(agentNodeID, reasonerName string) Execut
 		AgentNodeID:       agentNodeID,
 		ReasonerName:      reasonerName,
 		StartedAt:         time.Now(),
+		RunWatched:        ec.RunWatched,
 		CallerDID:         ec.CallerDID,
 		TargetDID:         ec.TargetDID,
 		AgentNodeDID:      ec.AgentNodeDID,
@@ -1366,6 +1372,7 @@ func (a *Agent) buildExecutionContextFromServerless(r *http.Request, payload map
 		AgentNodeID:       a.cfg.NodeID,
 		ReasonerName:      reasonerName,
 		StartedAt:         time.Now(),
+		RunWatched:        strings.TrimSpace(r.Header.Get(RunWatchedHeader)) == "1",
 		CallerDID:         strings.TrimSpace(r.Header.Get("X-Caller-DID")),
 		TargetDID:         strings.TrimSpace(r.Header.Get("X-Target-DID")),
 		AgentNodeDID:      strings.TrimSpace(r.Header.Get("X-Agent-Node-DID")),
@@ -1449,6 +1456,7 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		AgentNodeID:       a.cfg.NodeID,
 		ReasonerName:      name,
 		StartedAt:         time.Now(),
+		RunWatched:        strings.TrimSpace(r.Header.Get(RunWatchedHeader)) == "1",
 		CallerDID:         r.Header.Get("X-Caller-DID"),
 		TargetDID:         r.Header.Get("X-Target-DID"),
 		AgentNodeDID:      r.Header.Get("X-Agent-Node-DID"),

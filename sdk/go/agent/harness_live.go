@@ -2,7 +2,8 @@ package agent
 
 // ── A CODEAF HARNESS RUN, WATCHED AND STEERED WITH NOTHING WRITTEN FOR IT ──
 //
-// A reasoner that calls a.Harness(...) on the codeaf provider gets, for free:
+// Inside a watched run (X-AgentField-Run-Watched: 1), a reasoner that calls
+// a.Harness(...) on the codeaf provider gets, for free:
 //
 //   - WATCH: every line codeaf streams while it works — one line of the run's
 //     own conversation record, carried VERBATIM — is relayed to the control
@@ -88,11 +89,13 @@ func (a *Agent) Steer(executionID, text string) error {
 	return nil
 }
 
-// liveHarness arms harness.Live for the execution in ctx, or returns nil when
-// there is none (a harness call outside a reasoner).
+// liveHarness arms harness.Live for the execution in ctx when the control
+// plane marked its run as watched. An unwatched run, or a harness call outside
+// a reasoner, gets nil so codeaf runs its plain non-streaming exec path.
 func (a *Agent) liveHarness(ctx context.Context) (*harness.Live, func()) {
-	id := strings.TrimSpace(executionContextFrom(ctx).ExecutionID)
-	if a == nil || id == "" {
+	ec := executionContextFrom(ctx)
+	id := strings.TrimSpace(ec.ExecutionID)
+	if a == nil || id == "" || !ec.RunWatched {
 		return nil, func() {}
 	}
 	relay := a.relayFor(id)

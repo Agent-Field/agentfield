@@ -39,10 +39,12 @@ printf '%s\n' '{"ok":true,"stop":"done","answer":"wrote it"}'
 `
 
 type cpRecorder struct {
-	mu      sync.Mutex
-	entries []RelayEntry
-	seen    map[int64]bool
-	down    bool
+	mu         sync.Mutex
+	entries    []RelayEntry
+	seen       map[int64]bool
+	down       bool
+	relayPosts int
+	completed  map[string]bool
 }
 
 func (c *cpRecorder) handler(t *testing.T) http.Handler {
@@ -50,6 +52,7 @@ func (c *cpRecorder) handler(t *testing.T) http.Handler {
 		if strings.HasSuffix(r.URL.Path, "/relay") {
 			c.mu.Lock()
 			defer c.mu.Unlock()
+			c.relayPosts++
 			if c.down {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
@@ -72,6 +75,14 @@ func (c *cpRecorder) handler(t *testing.T) http.Handler {
 			}
 			_, _ = w.Write([]byte(fmt.Sprintf(`{"through":%d}`, through)))
 			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/status") {
+			c.mu.Lock()
+			if c.completed == nil {
+				c.completed = map[string]bool{}
+			}
+			c.completed[r.URL.Path] = true
+			c.mu.Unlock()
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
@@ -112,7 +123,7 @@ func TestHarnessOnCodeAFStreamsItsTranscriptAndTakesASteer(t *testing.T) {
 		HarnessConfig: &HarnessConfig{Provider: "codeaf", BinPath: script}})
 	require.NoError(t, err)
 
-	ctx := contextWithExecution(context.Background(), ExecutionContext{ExecutionID: "exec-write", RunID: "run-1", WorkflowID: "run-1", AgentNodeID: "demo", ReasonerName: "write"})
+	ctx := contextWithExecution(context.Background(), ExecutionContext{ExecutionID: "exec-write", RunID: "run-1", WorkflowID: "run-1", AgentNodeID: "demo", ReasonerName: "write", RunWatched: true})
 	done := make(chan error, 1)
 	go func() {
 		res, err := a.Harness(ctx, "write a function", nil, nil, harness.Options{})
@@ -209,7 +220,7 @@ func TestHarnessOnAnotherProviderIsNeverSteerable(t *testing.T) {
 	a, err := New(Config{NodeID: "demo", Version: "1", AgentFieldURL: "http://127.0.0.1:1", Logger: log.New(io.Discard, "", 0),
 		HarnessConfig: &HarnessConfig{Provider: "opencode", BinPath: "/nonexistent/opencode"}})
 	require.NoError(t, err)
-	ctx := contextWithExecution(context.Background(), ExecutionContext{ExecutionID: "exec-x"})
+	ctx := contextWithExecution(context.Background(), ExecutionContext{ExecutionID: "exec-x", RunWatched: true})
 	_, _ = a.Harness(ctx, "x", nil, nil, harness.Options{Timeout: 2})
 	assert.Nil(t, a.steer.get("exec-x"))
 	assert.ErrorIs(t, a.Steer("exec-x", "hi"), ErrNotSteerable)
@@ -386,4 +397,234 @@ func TestRelayRidesTheLinkAndFallsBackToHTTP(t *testing.T) {
 	defer mu.Unlock()
 	assert.Positive(t, overHTTP)
 	assert.Equal(t, map[int64]string{1: RelayStarted, 2: RelayLine, 3: RelayLine, 4: RelayEnded}, held)
+}
+
+// recordingCodeAF records its argv and stdin into REC_DIR so a test can prove
+// whether codeaf ran on the origin/main exec path or the watched chat path.
+const recordingCodeAF = `#!/bin/sh
+: > "$REC_DIR/argv"
+for arg in "$@"; do
+  printf '%s\n' "$arg" >> "$REC_DIR/argv"
+done
+cat > "$REC_DIR/stdin"
+: > "$REC_DIR/running"
+events=""; steer=""
+while [ $# -gt 0 ]; do
+  case "$1" in --events) events="$2"; shift;; --steer) steer="$2"; shift;; esac
+  shift
+done
+if [ -n "$events" ]; then
+  printf '%s\n' '{"kind":"assistant","turn":1,"text":"looking at main.go"}' >> "$events"
+  if [ "$WAIT_FOR_STEER" = "1" ]; then
+    i=0
+    while [ $i -lt 100 ] && [ ! -s "$steer" ]; do sleep 0.05; i=$((i+1)); done
+    printf '{"kind":"note","turn":1,"text":"steered: %s"}\n' "$(sed -e 's/.*"text":"//' -e 's/"}$//' "$steer")" >> "$events"
+  fi
+elif [ -n "$HOLD_FILE" ]; then
+  i=0
+  while [ $i -lt 100 ] && [ -e "$HOLD_FILE" ]; do sleep 0.05; i=$((i+1)); done
+fi
+printf '%s\n' '{"ok":true,"stop":"done","answer":"wrote it"}'
+`
+
+func readRecordedArgv(t *testing.T, dir string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "argv"))
+	require.NoError(t, err)
+	trimmed := strings.TrimSuffix(string(raw), "\n")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "\n")
+}
+
+// Contract C1, C2: ONLY AN EXECUTION MARKED X-AgentField-Run-Watched: 1 ARMS
+// THE LIVE HARNESS. Without the header, the Agent runs plain `codeaf exec`,
+// makes zero relay POSTs, and refuses steers with ErrNotSteerable; with the
+// header on the same Agent and reasoner, it runs `chat --once` with --events
+// and --steer, streams started/line/ended to the relay, and takes a steer.
+func TestAgentStreamsOnlyWatchedRuns(t *testing.T) {
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("AGENTFIELD_LOG_STDOUT", "off")
+	script := filepath.Join(t.TempDir(), "codeaf")
+	require.NoError(t, os.WriteFile(script, []byte(recordingCodeAF), 0o755))
+
+	cp := &cpRecorder{}
+	server := httptest.NewServer(cp.handler(t))
+	defer server.Close()
+	a, err := New(Config{
+		NodeID:        "demo",
+		Version:       "1",
+		AgentFieldURL: server.URL,
+		Logger:        log.New(io.Discard, "", 0),
+		HarnessConfig: &HarnessConfig{Provider: "codeaf", BinPath: script},
+	})
+	require.NoError(t, err)
+	a.RegisterReasoner("write", func(ctx context.Context, input map[string]any) (any, error) {
+		env := map[string]string{"REC_DIR": input["rec_dir"].(string)}
+		if hold, ok := input["hold_file"].(string); ok && hold != "" {
+			env["HOLD_FILE"] = hold
+		}
+		if wait, ok := input["wait_for_steer"].(string); ok && wait != "" {
+			env["WAIT_FOR_STEER"] = wait
+		}
+		res, err := a.Harness(ctx, "write a function", nil, nil, harness.Options{Env: env})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"answer": res.Result, "watched": executionContextFrom(ctx).ChildContext("demo", "nested").RunWatched}, nil
+	})
+
+	// C2: without X-AgentField-Run-Watched, /reasoners/write runs plain codeaf
+	// exec, refuses steers while working, and never posts to /relay.
+	unwatchedDir := t.TempDir()
+	holdFile := filepath.Join(unwatchedDir, "hold")
+	require.NoError(t, os.WriteFile(holdFile, []byte("1"), 0o600))
+	body, _ := json.Marshal(map[string]any{"rec_dir": unwatchedDir, "hold_file": holdFile})
+	req := httptest.NewRequest(http.MethodPost, "/reasoners/write", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Execution-ID", "exec-unwatched")
+	req.Header.Set("X-Run-ID", "run-unwatched")
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(unwatchedDir, "running"))
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond, "the unwatched codeaf invocation never started")
+
+	assert.ErrorIs(t, a.Steer("exec-unwatched", "do not steer"), ErrNotSteerable)
+	steerRec := steerRequest(a, "exec-unwatched", "do not steer")
+	assert.Equal(t, http.StatusConflict, steerRec.Code)
+	assert.Contains(t, steerRec.Body.String(), "not running the codeaf harness")
+
+	require.NoError(t, os.Remove(holdFile))
+	require.Eventually(t, func() bool {
+		cp.mu.Lock()
+		defer cp.mu.Unlock()
+		return cp.completed["/api/v1/executions/exec-unwatched/status"]
+	}, 5*time.Second, 10*time.Millisecond, "the unwatched execution never reported completion")
+
+	unwatchedArgv := readRecordedArgv(t, unwatchedDir)
+	require.GreaterOrEqual(t, len(unwatchedArgv), 8)
+	assert.Equal(t, []string{"exec", "--json", "--dir", ".", "--model", harness.DefaultCodeAFModel, "--timeout"}, unwatchedArgv[:7])
+	assert.NotContains(t, unwatchedArgv, "chat")
+	assert.NotContains(t, unwatchedArgv, "--events")
+	assert.NotContains(t, unwatchedArgv, "--steer")
+	stdinBytes, err := os.ReadFile(filepath.Join(unwatchedDir, "stdin"))
+	require.NoError(t, err)
+	assert.Equal(t, "write a function", string(stdinBytes))
+
+	// C2 on /execute/write (buildExecutionContextFromServerless): still plain exec and 0 relay POSTs.
+	serverlessUnwatchedDir := t.TempDir()
+	execPayload, _ := json.Marshal(map[string]any{"input": map[string]any{"rec_dir": serverlessUnwatchedDir}})
+	execReq := httptest.NewRequest(http.MethodPost, "/execute/write", strings.NewReader(string(execPayload)))
+	execReq.Header.Set("Content-Type", "application/json")
+	execReq.Header.Set("X-Execution-ID", "exec-serverless-unwatched")
+	execReq.Header.Set("X-Run-ID", "run-unwatched")
+	execRec := httptest.NewRecorder()
+	a.ServeHTTP(execRec, execReq)
+	require.Equal(t, http.StatusOK, execRec.Code, execRec.Body.String())
+	assert.Equal(t, "exec", readRecordedArgv(t, serverlessUnwatchedDir)[0])
+	assert.Contains(t, execRec.Body.String(), `"watched":false`)
+
+	cp.mu.Lock()
+	assert.Equal(t, 0, cp.relayPosts, "an unwatched run must make zero relay requests")
+	assert.Empty(t, cp.entries)
+	cp.mu.Unlock()
+
+	// C1: the same /reasoners/write request WITH X-AgentField-Run-Watched: 1
+	// runs chat --once with --events/--steer, streams started/line/ended, and
+	// accepts a steer while working.
+	watchedDir := t.TempDir()
+	watchedBody, _ := json.Marshal(map[string]any{"rec_dir": watchedDir, "wait_for_steer": "1"})
+	wReq := httptest.NewRequest(http.MethodPost, "/reasoners/write", strings.NewReader(string(watchedBody)))
+	wReq.Header.Set("Content-Type", "application/json")
+	wReq.Header.Set("X-Execution-ID", "exec-watched")
+	wReq.Header.Set("X-Run-ID", "run-watched")
+	wReq.Header.Set(RunWatchedHeader, "1")
+	wRec := httptest.NewRecorder()
+	a.ServeHTTP(wRec, wReq)
+	require.Equal(t, http.StatusAccepted, wRec.Code, wRec.Body.String())
+
+	require.Eventually(t, func() bool { return a.steer.get("exec-watched") != nil }, 5*time.Second, 10*time.Millisecond, "the watched run never became steerable")
+	require.Equal(t, http.StatusOK, steerRequest(a, "exec-watched", "also add a doc comment").Code)
+
+	require.Eventually(t, func() bool {
+		cp.mu.Lock()
+		defer cp.mu.Unlock()
+		return cp.completed["/api/v1/executions/exec-watched/status"] && len(cp.entries) >= 5
+	}, 5*time.Second, 20*time.Millisecond, "the watched execution did not finish and flush its relay entries")
+
+	watchedArgv := readRecordedArgv(t, watchedDir)
+	require.GreaterOrEqual(t, len(watchedArgv), 4)
+	assert.Equal(t, []string{"chat", "--once", "write a function"}, watchedArgv[:3])
+	assert.Contains(t, watchedArgv, "--events")
+	assert.Contains(t, watchedArgv, "--steer")
+
+	kinds := cp.kinds()
+	assert.Equal(t, RelayStarted, kinds[0])
+	assert.Contains(t, kinds, RelayLine)
+	assert.Equal(t, RelayEnded, kinds[len(kinds)-1])
+
+	// C1 on /execute/write: X-AgentField-Run-Watched: 1 also arms buildExecutionContextFromServerless and ChildContext.
+	serverlessWatchedDir := t.TempDir()
+	execWatchedPayload, _ := json.Marshal(map[string]any{"input": map[string]any{"rec_dir": serverlessWatchedDir}})
+	execWatchedReq := httptest.NewRequest(http.MethodPost, "/execute/write", strings.NewReader(string(execWatchedPayload)))
+	execWatchedReq.Header.Set("Content-Type", "application/json")
+	execWatchedReq.Header.Set("X-Execution-ID", "exec-serverless-watched")
+	execWatchedReq.Header.Set("X-Run-ID", "run-watched")
+	execWatchedReq.Header.Set(RunWatchedHeader, "1")
+	execWatchedRec := httptest.NewRecorder()
+	a.ServeHTTP(execWatchedRec, execWatchedReq)
+	require.Equal(t, http.StatusOK, execWatchedRec.Code, execWatchedRec.Body.String())
+	assert.Equal(t, "chat", readRecordedArgv(t, serverlessWatchedDir)[0])
+	assert.Contains(t, execWatchedRec.Body.String(), `"watched":true`)
+}
+
+// Contract C3: A HARNESS CALL WITH NO EXECUTION CONTEXT LEAVES Live NIL,
+// whether called on an Agent outside a reasoner or directly on harness.Runner.
+func TestHarnessOutsideExecutionContextLeavesLiveNil(t *testing.T) {
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("AGENTFIELD_LOG_STDOUT", "off")
+	script := filepath.Join(t.TempDir(), "codeaf")
+	require.NoError(t, os.WriteFile(script, []byte(recordingCodeAF), 0o755))
+
+	cp := &cpRecorder{}
+	server := httptest.NewServer(cp.handler(t))
+	defer server.Close()
+	a, err := New(Config{
+		NodeID:        "demo",
+		Version:       "1",
+		AgentFieldURL: server.URL,
+		Logger:        log.New(io.Discard, "", 0),
+		HarnessConfig: &HarnessConfig{Provider: "codeaf", BinPath: script},
+	})
+	require.NoError(t, err)
+
+	live, flush := a.liveHarness(context.Background())
+	flush()
+	assert.Nil(t, live)
+
+	agentDir := t.TempDir()
+	res, err := a.Harness(context.Background(), "outside reasoner", nil, nil, harness.Options{Env: map[string]string{"REC_DIR": agentDir}})
+	require.NoError(t, err)
+	assert.Equal(t, "wrote it", res.Result)
+	assert.Equal(t, "exec", readRecordedArgv(t, agentDir)[0])
+	assert.NotContains(t, readRecordedArgv(t, agentDir), "--events")
+
+	runnerDir := t.TempDir()
+	runner := harness.NewRunner(harness.Options{Provider: "codeaf", BinPath: script})
+	res, err = runner.Run(context.Background(), "outside agent", nil, nil, harness.Options{Env: map[string]string{"REC_DIR": runnerDir}})
+	require.NoError(t, err)
+	assert.Equal(t, "wrote it", res.Result)
+	assert.Equal(t, "exec", readRecordedArgv(t, runnerDir)[0])
+	assert.NotContains(t, readRecordedArgv(t, runnerDir), "--events")
+
+	cp.mu.Lock()
+	assert.Equal(t, 0, cp.relayPosts)
+	cp.mu.Unlock()
 }
