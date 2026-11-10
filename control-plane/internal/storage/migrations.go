@@ -2,7 +2,10 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // migrateAgentNodesCompositePK recreates the agent_nodes table with a composite
@@ -244,5 +247,99 @@ func (ls *LocalStorage) autoMigrateSchema(ctx context.Context) error {
 		return fmt.Errorf("failed to auto-migrate schema: %w", err)
 	}
 
+	// THESE TABLES ARE CREATED WITH THE SCHEMA, NOT ON FIRST USE. Running the
+	// same guarded DDL helpers here creates execution_relay, run_owners, and
+	// execution_approval_questions at startup for both SQLite and PostgreSQL
+	// and marks ls.db ready so steady-state operations issue no DDL.
+	if err := ls.ensureRelayAndApprovalTables(ctx); err != nil {
+		return fmt.Errorf("failed to ensure relay and approval tables: %w", err)
+	}
+
 	return nil
+}
+
+type guardedSchemaTable struct {
+	name        string
+	ddl         string
+	existsQuery string
+}
+
+func (ls *LocalStorage) ensureRelayAndApprovalTables(ctx context.Context) error {
+	if err := ls.relayTable(ctx); err != nil {
+		return err
+	}
+	if err := ls.runOwnerTable(ctx); err != nil {
+		return err
+	}
+	return ls.approvalQuestionTable(ctx)
+}
+
+// ensureSchemaTable creates t on ls.db if it has not yet been confirmed on
+// this database handle.
+//
+// THESE TABLES ARE CREATED WITH THE SCHEMA, NOT ON FIRST USE, via
+// autoMigrateSchema; this guard remains only so stores constructed in tests
+// without autoMigrateSchema still work on first call. Creation is serialized
+// per *sqlDatabase with tableCreateMu so goroutines in one process never race
+// CREATE TABLE IF NOT EXISTS. A FAILED CREATE IS NEVER CACHED: tablesCreated
+// records only confirmed tables, so a transient failure is retried on the next
+// call instead of breaking the store until restart. On PostgreSQL, another
+// process running CREATE TABLE IF NOT EXISTS at the same moment can trip
+// pg_type_typname_nsp_index (SQLSTATE 23505) or pg_class (SQLSTATE 42P07); if
+// the table is present afterward, that peer finished creating it and the guard
+// records success.
+func (ls *LocalStorage) ensureSchemaTable(ctx context.Context, t guardedSchemaTable) error {
+	if ls == nil || ls.db == nil || ls.db.DB == nil {
+		return fmt.Errorf("create %s: sql database is not initialized", t.name)
+	}
+	if _, ok := ls.db.tablesCreated.Load(t.name); ok {
+		return nil
+	}
+
+	ls.db.tableCreateMu.Lock()
+	defer ls.db.tableCreateMu.Unlock()
+
+	if _, ok := ls.db.tablesCreated.Load(t.name); ok {
+		return nil
+	}
+
+	if _, err := ls.db.ExecContext(ctx, t.ddl); err != nil {
+		if ls.isPostgresMode() && isPostgresConcurrentTableCreateError(err) && ls.tableExistsAfterRace(ctx, t) {
+			ls.db.tablesCreated.Store(t.name, struct{}{})
+			return nil
+		}
+		return fmt.Errorf("create %s: %w", t.name, err)
+	}
+
+	ls.db.tablesCreated.Store(t.name, struct{}{})
+	return nil
+}
+
+func (ls *LocalStorage) isPostgresMode() bool {
+	return ls != nil && (ls.mode == "postgres" || ls.db.Mode() == "postgres")
+}
+
+func isPostgresConcurrentTableCreateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505" || pgErr.Code == "42P07"
+	}
+	var stateErr interface{ SQLState() string }
+	if errors.As(err, &stateErr) {
+		code := stateErr.SQLState()
+		return code == "23505" || code == "42P07"
+	}
+	return false
+}
+
+func (ls *LocalStorage) tableExistsAfterRace(ctx context.Context, t guardedSchemaTable) bool {
+	rows, err := ls.db.QueryContext(ctx, t.existsQuery)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	return rows.Err() == nil
 }

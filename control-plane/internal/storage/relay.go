@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -35,29 +34,24 @@ type RelayEntry struct {
 	At   time.Time       `json:"at"`
 }
 
-var relayTableOnce sync.Map // *sqlDatabase → error
-
-func (ls *LocalStorage) relayTable(ctx context.Context) error {
-	if v, ok := relayTableOnce.Load(ls.db); ok {
-		if v == nil {
-			return nil
-		}
-		return v.(error)
-	}
-	_, err := ls.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS execution_relay (
+var executionRelaySchemaTable = guardedSchemaTable{
+	name: "execution_relay",
+	ddl: `CREATE TABLE IF NOT EXISTS execution_relay (
 		execution_id TEXT NOT NULL,
 		seq BIGINT NOT NULL,
 		kind TEXT NOT NULL,
 		data TEXT,
 		recorded_at TIMESTAMP NOT NULL,
-		PRIMARY KEY (execution_id, seq))`)
-	if err != nil {
-		err = fmt.Errorf("create execution_relay: %w", err)
-		relayTableOnce.Store(ls.db, err)
-		return err
-	}
-	relayTableOnce.Store(ls.db, nil)
-	return nil
+		PRIMARY KEY (execution_id, seq))`,
+	existsQuery: `SELECT 1 FROM execution_relay LIMIT 0`,
+}
+
+// relayTable ensures execution_relay exists. THESE TABLES ARE CREATED WITH THE
+// SCHEMA, NOT ON FIRST USE; this guard catches stores built without
+// autoMigrateSchema, serializes creation per db, and caches only success —
+// A FAILED CREATE IS NEVER CACHED.
+func (ls *LocalStorage) relayTable(ctx context.Context) error {
+	return ls.ensureSchemaTable(ctx, executionRelaySchemaTable)
 }
 
 // RelayPut holds entries for executionID. A seq already held is ignored. It
@@ -183,18 +177,21 @@ func (ls *LocalStorage) RelayExecutions(ctx context.Context) ([]string, error) {
 // carries the header again cannot move a run to another subscriber. This is
 // control data, like the execution tree itself, so it is durable.
 
-func (ls *LocalStorage) runOwnerTable(ctx context.Context) error {
-	if err := ls.relayTable(ctx); err != nil {
-		return err
-	}
-	_, err := ls.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS run_owners (
+var runOwnersSchemaTable = guardedSchemaTable{
+	name: "run_owners",
+	ddl: `CREATE TABLE IF NOT EXISTS run_owners (
 		run_id TEXT PRIMARY KEY,
 		owner_node_id TEXT NOT NULL,
-		created_at TIMESTAMP NOT NULL)`)
-	if err != nil {
-		return fmt.Errorf("create run_owners: %w", err)
-	}
-	return nil
+		created_at TIMESTAMP NOT NULL)`,
+	existsQuery: `SELECT 1 FROM run_owners LIMIT 0`,
+}
+
+// runOwnerTable ensures run_owners exists without issuing DDL on steady-state
+// lookups (such as lookupRunWatched on ordinary executions). THESE TABLES ARE
+// CREATED WITH THE SCHEMA, NOT ON FIRST USE, and A FAILED CREATE IS NEVER
+// CACHED.
+func (ls *LocalStorage) runOwnerTable(ctx context.Context) error {
+	return ls.ensureSchemaTable(ctx, runOwnersSchemaTable)
 }
 
 // SetRunOwner records owner for runID unless the run already has one.
