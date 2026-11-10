@@ -1242,6 +1242,10 @@ func parseTimeString(value string) (time.Time, error) {
 // drains.
 // The conditional UPDATE re-evaluates the staleness predicates so a row that
 // gains activity after selection is left alone.
+//
+// A row held for its offline node (status_reason node_offline, offline_hold.go)
+// is never stale: its node said it would come back for it, and the hold has
+// its own endings. The workflow sweep and the retry sweep skip it the same way.
 func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
 	return ls.markStaleExecutions(ctx, staleAfter, limit, nil)
 }
@@ -1273,6 +1277,7 @@ func (ls *LocalStorage) markStaleExecutions(ctx context.Context, staleAfter time
 		FROM executions e
 		WHERE status IN ('running', 'pending', 'queued')
 		  AND `+tsExpr+` <= `+cutoffExpr+`
+		  AND COALESCE(e.status_reason, '') <> `+heldReasonSQL+`
 		  AND NOT EXISTS (
 		      SELECT 1 FROM executions c
 		      WHERE c.parent_execution_id = e.execution_id
@@ -1327,6 +1332,7 @@ func (ls *LocalStorage) markStaleExecutions(ctx context.Context, staleAfter time
 		WHERE e.execution_id = ?
 		  AND e.status IN ('running', 'pending', 'queued')
 		  AND `+executionUpdateTSExpr+` <= `+cutoffExpr+`
+		  AND COALESCE(e.status_reason, '') <> `+heldReasonSQL+`
 		  AND NOT EXISTS (
 		      SELECT 1 FROM executions c
 		      WHERE c.parent_execution_id = e.execution_id
@@ -1430,6 +1436,7 @@ func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAf
 		  AND `+workflowTSExpr+` <= `+cutoffExpr+`
 		  AND (e.execution_id IS NULL OR `+executionTSExpr+` <= `+cutoffExpr+`)
 		  AND COALESCE(w.approval_status, '') != 'pending'
+		  AND COALESCE(w.status_reason, '') <> `+heldReasonSQL+`
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
@@ -1498,6 +1505,7 @@ func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAf
 		      )
 		  )
 		  AND COALESCE(w.approval_status, '') != 'pending'
+		  AND COALESCE(w.status_reason, '') <> `+heldReasonSQL+`
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
@@ -1740,6 +1748,7 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 		  AND `+workflowTSExpr+` <= `+cutoffExpr+`
 		  AND (e.execution_id IS NULL OR `+executionTSExpr+` <= `+cutoffExpr+`)
 		  AND COALESCE(w.approval_status, '') != 'pending'
+		  AND COALESCE(w.status_reason, '') <> `+heldReasonSQL+`
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
@@ -1811,6 +1820,7 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 		      )
 		  )
 		  AND COALESCE(w.approval_status, '') != 'pending'
+		  AND COALESCE(w.status_reason, '') <> `+heldReasonSQL+`
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
@@ -1836,6 +1846,7 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 		    updated_at = ?
 		WHERE e.execution_id = ?
 		  AND e.status IN ('running', 'pending', 'queued')
+		  AND COALESCE(e.status_reason, '') <> `+heldReasonSQL+`
 		  AND `+executionTSExpr+` <= `+cutoffExpr)
 	if err != nil {
 		return nil, fmt.Errorf("prepare execution retry statement: %w", err)
