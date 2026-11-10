@@ -81,6 +81,9 @@ func mergeDBConfig(target, dbCfg *config.Config) {
 	if dbCfg.AgentField.ExecutionCleanup.StaleExecutionTimeout != 0 {
 		target.AgentField.ExecutionCleanup.StaleExecutionTimeout = dbCfg.AgentField.ExecutionCleanup.StaleExecutionTimeout
 	}
+	if dbCfg.AgentField.ExecutionCleanup.OfflineHoldCeiling != 0 {
+		target.AgentField.ExecutionCleanup.OfflineHoldCeiling = dbCfg.AgentField.ExecutionCleanup.OfflineHoldCeiling
+	}
 	// Enabled is a bool — only override if cleanup config is present in DB at all
 	if dbCfg.AgentField.ExecutionCleanup.RetentionPeriod != 0 || dbCfg.AgentField.ExecutionCleanup.CleanupInterval != 0 {
 		target.AgentField.ExecutionCleanup.Enabled = dbCfg.AgentField.ExecutionCleanup.Enabled

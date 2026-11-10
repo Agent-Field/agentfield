@@ -291,7 +291,16 @@ type ExecutionCleanupConfig struct {
 	MaxRetries             int           `yaml:"max_retries" mapstructure:"max_retries" default:"0"`
 	RetryBackoff           time.Duration `yaml:"retry_backoff" mapstructure:"retry_backoff" default:"30s"`
 	PayloadOrphanGrace     time.Duration `yaml:"payload_orphan_grace" mapstructure:"payload_orphan_grace"`
+	// OfflineHoldCeiling is how long an execution may be held for an opted-in
+	// node that is offline (metadata.custom.holds_executions_offline) before
+	// it is failed anyway, so nothing waits forever on a node that never
+	// returns. Zero or less is the default, DefaultOfflineHoldCeiling.
+	OfflineHoldCeiling time.Duration `yaml:"offline_hold_ceiling" mapstructure:"offline_hold_ceiling" default:"168h"`
 }
+
+// DefaultOfflineHoldCeiling is a week: a laptop asleep over a long weekend
+// still finds its work waiting.
+const DefaultOfflineHoldCeiling = 7 * 24 * time.Hour
 
 // UnmarshalYAML records whether enabled was explicitly configured, including
 // the otherwise indistinguishable enabled: false value.
@@ -678,6 +687,9 @@ func ApplyDefaults(cfg *Config) {
 	if cleanup.PayloadOrphanGrace <= 0 {
 		cleanup.PayloadOrphanGrace = time.Hour
 	}
+	if cleanup.OfflineHoldCeiling <= 0 {
+		cleanup.OfflineHoldCeiling = DefaultOfflineHoldCeiling
+	}
 	if !cfg.AgentField.ExecutionQueue.agentCallTimeoutSet && cfg.AgentField.ExecutionQueue.AgentCallTimeout == 0 {
 		cfg.AgentField.ExecutionQueue.AgentCallTimeout = DefaultAgentCallTimeout
 	}
@@ -942,6 +954,7 @@ func ApplyEnvOverrides(cfg *Config) {
 	applyIntEnv("AGENTFIELD_EXECUTION_CLEANUP_BATCH_SIZE", &cfg.AgentField.ExecutionCleanup.BatchSize)
 	applyDurationEnv("AGENTFIELD_EXECUTION_PRESERVE_RECENT", &cfg.AgentField.ExecutionCleanup.PreserveRecentDuration)
 	applyDurationEnv("AGENTFIELD_PAYLOAD_ORPHAN_GRACE", &cfg.AgentField.ExecutionCleanup.PayloadOrphanGrace)
+	applyDurationEnv("AGENTFIELD_EXECUTION_OFFLINE_HOLD_CEILING", &cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling)
 	applyDurationEnv("AGENTFIELD_AGENT_CALL_TIMEOUT", &cfg.AgentField.ExecutionQueue.AgentCallTimeout)
 	if val := os.Getenv("AGENTFIELD_EXECUTION_MAX_RETRIES"); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {

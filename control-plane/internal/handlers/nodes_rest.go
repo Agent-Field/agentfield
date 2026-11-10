@@ -135,12 +135,17 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 			presenceManager.Touch(nodeID, agent.Version, now)
 		}
 
+		// Settle what was held while the node was away before touching: a
+		// held execution it lists carries on, one it does not was lost.
+		released, lost := ResolveOfflineHolds(ctx, storageProvider, nodeID, payload.Inflight)
 		touched := TouchInflightExecutions(ctx, storageProvider, nodeID, payload.Inflight)
 
 		c.JSON(http.StatusOK, gin.H{
 			"lease_seconds":      int(leaseTTL.Seconds()),
 			"next_lease_renewal": now.Add(leaseTTL).Format(time.RFC3339),
 			"inflight_touched":   touched,
+			"held_released":      released,
+			"held_lost":          lost,
 		})
 	}
 }
