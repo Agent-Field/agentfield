@@ -92,10 +92,10 @@ func TestApprovalQuestionStorage_S8_PutGetUpdateSeparateRoundsAndUnknown(t *test
 }
 
 // Contract S9: execution_approval_questions is created lazily on the first call
-// to a fresh store without a schema migration, and surfaces errors when the
+// to a store constructed without autoMigrateSchema, and surfaces errors when the
 // context or database is closed.
 func TestApprovalQuestionStorage_S9_LazyTableCreationWithoutMigration(t *testing.T) {
-	ls, ctx := setupLocalStorage(t)
+	ls, ctx := newUnmigratedLocalStorage(t)
 
 	var before int
 	err := ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'execution_approval_questions'`).Scan(&before)
@@ -122,8 +122,8 @@ func TestApprovalQuestionStorage_S9_LazyTableCreationWithoutMigration(t *testing
 	_, err = ls.GetApprovalQuestion(cancelledCtx, "exec-lazy", "apr-lazy")
 	require.Error(t, err)
 
-	// A closed fresh store surfaces and remembers the lazy DDL error on its db handle.
-	closedLS, closedCtx := setupLocalStorage(t)
+	// A closed unmigrated store surfaces the lazy DDL error on its db handle.
+	closedLS, closedCtx := newUnmigratedLocalStorage(t)
 	require.NoError(t, closedLS.Close(closedCtx))
 	require.Error(t, closedLS.PutApprovalQuestion(closedCtx, types.ApprovalQuestion{
 		ExecutionID:       "exec-closed",

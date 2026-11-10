@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -20,20 +19,13 @@ import (
 // read what they approve, so the control plane now keeps the question beside
 // the approval — its kind, a one-line title, the full markdown body (a plan)
 // and the option labels — keyed by (execution_id, approval_request_id), one
-// row per round. It lives in its own table, created lazily like the relay's,
-// so the workflow_executions column lists and their migrations stay as they
-// were.
+// row per round. It lives in its own table, created with the schema alongside
+// the relay's, so the workflow_executions column lists and their migrations
+// stay as they were.
 
-var approvalQuestionTableOnce sync.Map // *sqlDatabase → error
-
-func (ls *LocalStorage) approvalQuestionTable(ctx context.Context) error {
-	if v, ok := approvalQuestionTableOnce.Load(ls.db); ok {
-		if v == nil {
-			return nil
-		}
-		return v.(error)
-	}
-	_, err := ls.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS execution_approval_questions (
+var approvalQuestionsSchemaTable = guardedSchemaTable{
+	name: "execution_approval_questions",
+	ddl: `CREATE TABLE IF NOT EXISTS execution_approval_questions (
 		execution_id TEXT NOT NULL,
 		approval_request_id TEXT NOT NULL,
 		kind TEXT NOT NULL,
@@ -41,14 +33,16 @@ func (ls *LocalStorage) approvalQuestionTable(ctx context.Context) error {
 		body TEXT,
 		options TEXT,
 		recorded_at TIMESTAMP NOT NULL,
-		PRIMARY KEY (execution_id, approval_request_id))`)
-	if err != nil {
-		err = fmt.Errorf("create execution_approval_questions: %w", err)
-		approvalQuestionTableOnce.Store(ls.db, err)
-		return err
-	}
-	approvalQuestionTableOnce.Store(ls.db, nil)
-	return nil
+		PRIMARY KEY (execution_id, approval_request_id))`,
+	existsQuery: `SELECT 1 FROM execution_approval_questions LIMIT 0`,
+}
+
+// approvalQuestionTable ensures execution_approval_questions exists. THESE
+// TABLES ARE CREATED WITH THE SCHEMA, NOT ON FIRST USE; this guard catches
+// stores built without autoMigrateSchema, serializes creation per db, and
+// caches only success — A FAILED CREATE IS NEVER CACHED.
+func (ls *LocalStorage) approvalQuestionTable(ctx context.Context) error {
+	return ls.ensureSchemaTable(ctx, approvalQuestionsSchemaTable)
 }
 
 // PutApprovalQuestion keeps q for one approval round. A round asked twice
