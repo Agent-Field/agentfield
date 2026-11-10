@@ -116,6 +116,12 @@ jobs:
         sdk_spec:
           - python-main
           - go-main
+        include:
+          # Stable-SDK controls against the old cloud control plane.
+          - cp_tag: v0.1.57
+            sdk_spec: py-0.1.145
+          - cp_tag: v0.1.57
+            sdk_spec: go-v0.1.130
     steps:
       - name: Checkout
         uses: actions/checkout@v4

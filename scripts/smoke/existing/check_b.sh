@@ -46,6 +46,22 @@ case "${SDK_SPEC}" in
     start_python_node "${VENV_DIR}" "${NODE_ID}" "${CP_URL}" "${NODE_PORT}" 5
     add_evidence "Python SDK from source (\`sdk/python\`, version \`${PY_VER}\`) started as \`${NODE_ID}\`"
     ;;
+  # Controls: today's stable SDKs against the same control plane. When the
+  # new SDKs fail on one, these tell a regression in the new SDKs (controls
+  # pass) apart from that control plane's own behaviour in this harness
+  # (controls fail the same way).
+  py-0.1.145)
+    VENV_DIR="${SMOKE_WORK_DIR}/venv-py-0145"
+    PY_VER="$(setup_python_venv "${VENV_DIR}" "0.1.145")"
+    start_python_node "${VENV_DIR}" "${NODE_ID}" "${CP_URL}" "${NODE_PORT}" 5
+    add_evidence "Control: Python SDK \`${PY_VER}\` (stable) started as \`${NODE_ID}\`"
+    ;;
+  go-v0.1.130)
+    GO_BIN="${SMOKE_WORK_DIR}/go-node-v0130"
+    build_go_node "go-v0.1.130" "${GO_BIN}"
+    start_go_node "${GO_BIN}" "${NODE_ID}" "${CP_URL}" "${NODE_PORT}" "5s"
+    add_evidence "Control: Go SDK \`v0.1.130\` (pr-af's pin) started as \`${NODE_ID}\`"
+    ;;
   go-main)
     GO_BIN="${SMOKE_WORK_DIR}/go-node-main"
     build_go_node "go-main" "${GO_BIN}"

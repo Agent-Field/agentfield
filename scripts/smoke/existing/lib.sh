@@ -452,6 +452,11 @@ PY
   done
 
   log_err "Node ${node_id} did not appear active in ${cp_url}/api/v1/nodes"
+  # The default node list hides every node that is not active, so show what
+  # the control plane really holds for this node, and what the node answers
+  # on /status, the path older control planes probe for "running".
+  log_err "Control plane's record (show_all=true): $(curl -fsS --max-time 3 "${cp_url}/api/v1/nodes?show_all=true" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print([{k:n.get(k) for k in ("id","base_url","health_status","lifecycle_status","last_heartbeat")} for n in (d.get("nodes") or []) if n.get("id")==sys.argv[1]])' "${node_id}" 2>/dev/null || echo unavailable)"
+  log_err "Node /status: $(curl -sS --max-time 3 "http://127.0.0.1:${node_port}/status" 2>&1 | head -c 400)"
   return 1
 }
 
