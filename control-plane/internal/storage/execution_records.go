@@ -1018,7 +1018,10 @@ func (ls *LocalStorage) runSummaryPageRunIDs(
 	}
 	defer rows.Close()
 
-	runIDs := make([]string, 0, limit)
+	// No capacity hint from limit: allocation size must not depend on caller
+	// input (CodeQL go/uncontrolled-allocation-size), and a page is small
+	// enough that append's growth costs nothing measurable.
+	var runIDs []string
 	for rows.Next() {
 		var (
 			runID   string
