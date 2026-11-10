@@ -50,12 +50,12 @@ query_table_count() {
     ensure_world_rw "${DATA_DIR}"
     local db_file="${DATA_DIR}/agentfield.db"
     local exists
-    exists="$(sqlite3 "${db_file}" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='${table_name}';")"
+    exists="$(host_sqlite "${db_file}" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='${table_name}';")"
     if [[ "${exists}" == "0" ]]; then
       printf '0'
       return 0
     fi
-    sqlite3 "${db_file}" "SELECT COUNT(*) FROM ${table_name};" | tr -d '[:space:]'
+    host_sqlite "${db_file}" "SELECT COUNT(*) FROM ${table_name};" | tr -d '[:space:]'
   else
     local exists
     exists="$(psql "${PG_DSN}" -t -A -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='${table_name}';")"
@@ -187,7 +187,7 @@ fi
 
 if [[ "${STORAGE_MODE}" == "local" ]]; then
   ensure_world_rw "${DATA_DIR}"
-  OWNER_DB_ROW="$(sqlite3 "${DATA_DIR}/agentfield.db" "SELECT run_id || ':' || owner_node_id FROM run_owners WHERE run_id='${OWNED_RUN_ID}';")"
+  OWNER_DB_ROW="$(host_sqlite "${DATA_DIR}/agentfield.db" "SELECT run_id || ':' || owner_node_id FROM run_owners WHERE run_id='${OWNED_RUN_ID}';")"
 else
   OWNER_DB_ROW="$(psql "${PG_DSN}" -t -A -c "SELECT run_id || ':' || owner_node_id FROM run_owners WHERE run_id='${OWNED_RUN_ID}';" | tr -d '[:space:]')"
 fi

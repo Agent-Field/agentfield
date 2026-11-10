@@ -201,10 +201,29 @@ ensure_world_rw() {
   fi
 }
 
+# The control-plane images run as the distroless nonroot user (UID 65532) and
+# tighten their own key directory to 0700 on start. That chmod fails with
+# "operation not permitted" on a directory the runner created, even a 0777 one,
+# so the data directory is handed to 65532 empty and the control plane creates
+# its own subdirectories. Host-side reads then go through host_sqlite.
 prepare_data_dir() {
   local dir="$1"
-  mkdir -p "${dir}/agentfield/data/keys" "${dir}/agentfield/data/payloads"
-  ensure_world_rw "${dir}"
+  mkdir -p "${dir}"
+  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    sudo -n chown -R 65532:65532 "${dir}"
+  else
+    chmod 0777 "${dir}"
+  fi
+}
+
+# The store the control plane writes belongs to UID 65532, and opening a WAL
+# database needs write access beside it, so the runner reads it with sudo.
+host_sqlite() {
+  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    sudo -n sqlite3 "$@"
+  else
+    sqlite3 "$@"
+  fi
 }
 
 start_postgres() {
