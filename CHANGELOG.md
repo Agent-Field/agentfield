@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.27] - 2026-11-10
+
+
+### Fixed
+
+- Fix(sdk): return an error to the model for malformed tool-call arguments (#1168)
+
+* fix(sdk): return an error to the model for malformed tool-call arguments
+
+When an LLM tool call carried invalid or truncated JSON arguments, both the
+Python and Go SDKs silently replaced them with {} and still executed the
+tool, so the tool ran with missing/default inputs and the model never learned
+its call was broken. Report the parse error back as a tool message (like the
+existing missing-"arguments" case) and skip execution. An empty arguments
+string is still accepted as "no arguments", since some providers send that for
+parameterless tools.
+
+* style(sdk): format malformed-arguments assertion
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com>
+
+* test(sdk): update error-path tests for invalid tool-call arguments
+
+Invalid arguments no longer create a tool-call record, so assert on the
+tool error message fed back to the model instead of trace.calls.
+
+---------
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com> (bcef6b5)
+
 ## [0.1.146-rc.26] - 2026-11-10
 
 
