@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from agentfield.agent import Agent
-from agentfield.client import ApprovalResult
+from agentfield.client import ApprovalResult, ApprovalStatusResponse
 from agentfield.execution_context import ExecutionContext
 from agentfield.exceptions import AgentFieldClientError
 
@@ -110,9 +110,13 @@ async def test_pause_resolves_error_when_control_plane_request_fails():
 async def test_wait_for_resume_falls_back_to_status_poll(monkeypatch):
     agent = make_agent()
     agent._pause_manager.register.return_value = asyncio.Future()
-    agent.client.get_approval_status.return_value = SimpleNamespace(
+    # The real response type, not a stand-in: the fallback reads the round's
+    # id and the answerer's words off it, and a stand-in missing a field the
+    # client always sets fails for a reason no control plane can produce.
+    agent.client.get_approval_status.return_value = ApprovalStatusResponse(
         status="approved",
         response={"decision": "approved"},
+        approval_request_id="approval-3",
     )
 
     async def raise_timeout(awaitable, timeout):

@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.25] - 2026-11-09
+
+
+### Other
+
+- WorkAF harness watch: node link, relay pipe and steer, streamed only for owned runs (#1174)
+
+Lands proto/harness-watch (node-initiated link, the control plane as a pipe for codeaf harness transcripts, steer, pauses that carry their question) with the live path armed only for runs whose run has an owner (X-AgentField-Run-Watched), no relay rows kept for unowned runs, prune at most once a minute, and tests for the relay, run owners, approval questions and their routes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com> (5739844)
+
+## [0.1.146-rc.24] - 2026-11-09
+
+
+### CI
+
+- Ci: move macOS jobs from macos-14 to macos-15 (#1176)
+
+GitHub now refuses the macos-14 runner ("The configuration
+'macos-14-arm64-us-default' is not supported"), so every job pinned to it
+is cancelled within a second. That cancels the control-plane tray build
+and with it the Control Plane CI gate on every pull request, and the
+darwin build in release.yml, so no release has published since
+2026-11-08. macos-15 is the same arm64 runner family one release on.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (08635c2)
+
 ## [0.1.146-rc.23] - 2026-11-09
 
 

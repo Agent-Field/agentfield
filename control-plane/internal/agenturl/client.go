@@ -129,5 +129,5 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 
 // NewClient preserves the caller's total timeout (zero permits streaming).
 func NewClient(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: NewTransport(30 * time.Second), CheckRedirect: checkRedirect}
+	return &http.Client{Timeout: timeout, Transport: linkAware{base: NewTransport(30 * time.Second)}, CheckRedirect: checkRedirect}
 }

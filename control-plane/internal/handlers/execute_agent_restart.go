@@ -203,6 +203,11 @@ func ensureAgentDispatchable(agent *types.AgentNode, nodeID string) error {
 	if _, extended := agentRestartGraceFor(nodeID); extended {
 		return nil
 	}
+	// A node holding a live link is reached down it: an HTTP health probe
+	// that cannot reach it (behind NAT, no base_url) says nothing about it.
+	if agenturl.LinkLive(agent.ID) {
+		return nil
+	}
 	if agent.HealthStatus == types.HealthStatusInactive {
 		return &executionPreconditionError{
 			code:      http.StatusServiceUnavailable,
@@ -259,6 +264,9 @@ func (c *executionController) newAgentRequest(ctx context.Context, plan *prepare
 	req.Header.Set("X-Run-ID", plan.exec.RunID)
 	req.Header.Set("X-Execution-ID", plan.exec.ExecutionID)
 	req.Header.Set("X-Workflow-ID", plan.exec.RunID)
+	if lookupRunWatched(ctx, c.store, &c.watchedRuns, plan.exec.RunID) {
+		req.Header.Set(RunWatchedHeader, "1")
+	}
 	if plan.exec.ParentExecutionID != nil {
 		req.Header.Set("X-Parent-Execution-ID", *plan.exec.ParentExecutionID)
 	}

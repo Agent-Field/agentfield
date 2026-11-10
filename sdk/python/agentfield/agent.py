@@ -5181,11 +5181,15 @@ class Agent(FastAPI):
 
     async def pause(
         self,
-        approval_request_id: str,
+        approval_request_id: Optional[str] = None,
         approval_request_url: str = "",
         expires_in_hours: int = 72,
         timeout: Optional[float] = None,
         execution_id: Optional[str] = None,
+        kind: Optional[str] = None,
+        question: Optional[str] = None,
+        body: Optional[str] = None,
+        options: Optional[List[str]] = None,
     ) -> ApprovalResult:
         """Pause the current execution for external approval.
 
@@ -5203,6 +5207,15 @@ class Agent(FastAPI):
             expires_in_hours: Expiry passed to the control plane.
             timeout: Max seconds to wait.  ``None`` defaults to ``expires_in_hours``.
             execution_id: Override the current execution.  Defaults to active context.
+            kind: ``plan_review``, ``question`` or ``approval`` (the default).
+            question: The one-line question a person is asked.
+            body: The full markdown a person reads to judge (a plan).
+            options: Answer labels; default approve, request_changes, reject.
+
+        With no ``approval_request_id`` the control plane mints one, so a run
+        with no external approval service can still pause; any door (WorkAF,
+        the CP's approval-response route) answers it. On ``request_changes``
+        the result's ``feedback`` is the person's words: revise and pause again.
 
         Returns:
             ApprovalResult with the human's decision and feedback.
@@ -5231,30 +5244,45 @@ class Agent(FastAPI):
             )
         callback_url = f"{self.base_url}/webhooks/approval"
 
-        # Register a future *before* telling the CP, so we don't miss a fast callback
-        future = await self._pause_manager.register(approval_request_id, execution_id)
+        # Register a future *before* telling the CP, so we don't miss a fast
+        # callback. With no id of our own the CP mints one, so the future is
+        # registered once it answers (a person answers in seconds at the
+        # soonest; wait_for_resume's poll covers anything faster).
+        future = None
+        if approval_request_id:
+            future = await self._pause_manager.register(approval_request_id, execution_id)
 
         # Tell the CP to transition to "waiting"
         try:
-            await self.client.request_approval(
+            resp = await self.client.request_approval(
                 execution_id=execution_id,
                 approval_request_id=approval_request_id,
                 approval_request_url=approval_request_url,
                 callback_url=callback_url,
                 expires_in_hours=expires_in_hours,
+                kind=kind,
+                question=question,
+                body=body,
+                options=options,
             )
         except Exception:
             # Clean up the future if we couldn't even tell the CP
-            await self._pause_manager.resolve(
-                approval_request_id,
-                ApprovalResult(
-                    decision="error",
-                    feedback="failed to notify control plane",
-                    execution_id=execution_id,
-                    approval_request_id=approval_request_id,
-                ),
-            )
+            if approval_request_id:
+                await self._pause_manager.resolve(
+                    approval_request_id,
+                    ApprovalResult(
+                        decision="error",
+                        feedback="failed to notify control plane",
+                        execution_id=execution_id,
+                        approval_request_id=approval_request_id,
+                    ),
+                )
             raise
+        if not approval_request_id:
+            approval_request_id = resp.approval_request_id
+            if not approval_request_id:
+                raise AgentFieldClientError("The control plane named no approval request")
+            future = await self._pause_manager.register(approval_request_id, execution_id)
 
         self.note(
             f"Execution paused — waiting for approval {approval_request_id}",
@@ -5337,9 +5365,14 @@ class Agent(FastAPI):
         # Fallback: poll CP once
         try:
             status_resp = await self.client.get_approval_status(execution_id or "")
-            if status_resp.status != "pending":
+            same_round = (
+                not status_resp.approval_request_id
+                or status_resp.approval_request_id == approval_request_id
+            )
+            if status_resp.status != "pending" and same_round:
                 return ApprovalResult(
                     decision=status_resp.status,
+                    feedback=status_resp.feedback or "",
                     execution_id=execution_id or "",
                     approval_request_id=approval_request_id,
                     raw_response=status_resp.response,
