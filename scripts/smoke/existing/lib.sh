@@ -595,10 +595,13 @@ verify_heartbeat_survival() {
   log_info "Waiting ${wait_secs}s (>1 heartbeat + health sweep) to verify ${node_id} stays active (initial last_heartbeat=${hb_before})"
   sleep "${wait_secs}"
 
-  list_json="$(curl -fsS --max-time 5 "${cp_url}/api/v1/nodes")"
+  list_json="$(curl -fsS --max-time 5 "${cp_url}/api/v1/nodes?show_all=true")"
   after_json="$(curl -fsS --max-time 5 "${cp_url}/api/v1/nodes/${node_id}")"
 
-  python3 - "${node_id}" "${before_json}" "${after_json}" "${list_json}" <<'PY'
+  # The same SMOKE_ACCEPT_HEALTH as registration: "active", except on control
+  # plane v0.1.57, which keeps every node (stable SDKs included) at "unknown"
+  # in this harness. The advancing heartbeat below is the survival proof there.
+  python3 - "${node_id}" "${before_json}" "${after_json}" "${list_json}" "${SMOKE_ACCEPT_HEALTH:-active}" <<'PY'
 import json
 import sys
 
@@ -606,15 +609,16 @@ node_id = sys.argv[1]
 before = json.loads(sys.argv[2])
 after = json.loads(sys.argv[3])
 node_list = json.loads(sys.argv[4]).get("nodes") or []
+accept = set(sys.argv[5].split())
 
-active_ids = [n.get("id") for n in node_list if n.get("health_status") == "active"]
-if node_id not in active_ids:
-    raise SystemExit(f"node {node_id} missing from active node list after heartbeat wait: {node_list}")
+listed = [n.get("id") for n in node_list if n.get("health_status") in accept]
+if node_id not in listed:
+    raise SystemExit(f"node {node_id} not listed with health in {sorted(accept)} after heartbeat wait: {node_list}")
 
 health = after.get("health_status")
 lifecycle = after.get("lifecycle_status")
-if health != "active":
-    raise SystemExit(f"node {node_id} health_status={health!r} (expected 'active'): {after}")
+if health not in accept:
+    raise SystemExit(f"node {node_id} health_status={health!r} (expected one of {sorted(accept)}): {after}")
 if lifecycle in ("offline", "degraded", "error"):
     raise SystemExit(f"node {node_id} lifecycle_status={lifecycle!r}: {after}")
 

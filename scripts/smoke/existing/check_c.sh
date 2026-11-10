@@ -122,6 +122,9 @@ add_evidence "Direct \`${STORAGE_MODE}\` query after unwatched executions: \`exe
 BURST=8
 BURST_DIR="${SMOKE_WORK_DIR}/owned-burst"
 mkdir -p "${BURST_DIR}"
+# Wait on the burst's own PIDs only: a bare `wait` would also wait on the test
+# nodes this shell started in the background, which never exit.
+BURST_PIDS=()
 for i in $(seq 1 "${BURST}"); do
   (
     run_sync_execute \
@@ -130,8 +133,9 @@ for i in $(seq 1 "${BURST}"); do
       '{"message":"owned-burst","seq":'"$((100 + i))"'}' \
       "X-AgentField-Run-Owner: smoke-burst-${i}" > "${BURST_DIR}/${i}.json" 2> "${BURST_DIR}/${i}.err"
   ) &
+  BURST_PIDS+=("$!")
 done
-wait
+wait "${BURST_PIDS[@]}" || true
 
 python3 - "${BURST_DIR}" "${BURST}" <<'PY'
 import json
