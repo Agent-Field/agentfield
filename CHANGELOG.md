@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.26] - 2026-11-10
+
+
+### Fixed
+
+- Fix(storage): create the relay and approval tables with the schema, never cache a failed create (#1177)
+
+The three tables #1174 added (execution_relay, run_owners, execution_approval_questions) were created lazily with CREATE TABLE IF NOT EXISTS. On Postgres two first uses raced on pg_type_typname_nsp_index, and the store cached the error, so run ownership and relay writes stayed broken until a restart; ordinary executions also ran DDL on every call.
+
+The tables are now created at startup in autoMigrateSchema for SQLite and Postgres. The remaining guard serializes creation per db, caches only success, runs no DDL in steady state, and treats a concurrent create by another process as success.
+
+Proved by the existing-deployments smoke suite (15/15 on main plus this change).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com> (186f695)
+
 ## [0.1.146-rc.25] - 2026-11-09
 
 
