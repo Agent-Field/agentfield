@@ -223,7 +223,7 @@ jobs:
           - os: ubuntu-latest
             label: linux
             goreleaser_ids: '--id agentfield-linux-amd64 --id agentfield-linux-arm64'
-          - os: macos-14
+          - os: macos-15
             label: darwin
             goreleaser_ids: '--id agentfield-darwin-amd64 --id agentfield-darwin-arm64 --id agentfield-tray-darwin-amd64 --id agentfield-tray-darwin-arm64'
     runs-on: ${{ matrix.os }}
@@ -638,7 +638,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             assets: desktop/release/*.dmg desktop/release/*.zip
           - os: windows-latest
             assets: desktop/release/*.exe

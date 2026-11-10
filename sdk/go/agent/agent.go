@@ -30,6 +30,10 @@ import (
 
 type executionContextKey struct{}
 
+// RunWatchedHeader is set to "1" by the control plane on execution deliveries
+// whose run has an owner watching its live harness transcript.
+const RunWatchedHeader = "X-AgentField-Run-Watched"
+
 // ExecutionContext captures the headers AgentField sends with each execution request.
 type ExecutionContext struct {
 	RunID             string
@@ -44,6 +48,7 @@ type ExecutionContext struct {
 	AgentNodeID       string
 	ReasonerName      string
 	StartedAt         time.Time
+	RunWatched        bool
 
 	// DID fields — populated when DID authentication is enabled.
 	CallerDID    string
@@ -579,8 +584,14 @@ type Agent struct {
 	// the matching cancel func to short-circuit the reasoner's context.
 	// Reasoners are responsible for honoring ctx.Done() — most idiomatic
 	// Go code does this through net/http, database/sql, etc.
-	cancelMu     sync.Mutex
-	cancelFuncs  map[string]context.CancelFunc
+	cancelMu    sync.Mutex
+	cancelFuncs map[string]context.CancelFunc
+	// steer holds the mailbox of every execution running the codeaf harness
+	// right now, keyed by execution_id (harness_live.go). An execution not in
+	// it cannot be steered.
+	steer        steerBoxes
+	relays       relays
+	link         linkState
 	executionWG  sync.WaitGroup
 	shutdownMu   sync.Mutex
 	shuttingDown bool
@@ -606,6 +617,13 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		cfg.APIKey = strings.TrimSpace(os.Getenv("AGENTFIELD_API_KEY"))
+	}
+	// A LINK-ONLY NODE HAS NO INBOUND PORT (link.go): it listens on loopback
+	// only and registers the link host, so the control plane reaches it down
+	// the link it opens and nothing else can reach it at all.
+	if LinkOnly() {
+		cfg.ListenAddress = "127.0.0.1:0"
+		cfg.PublicURL = linkOnlyURL(cfg.NodeID)
 	}
 	if cfg.ListenAddress == "" {
 		cfg.ListenAddress = ":8001"
@@ -756,6 +774,7 @@ func (ec ExecutionContext) ChildContext(agentNodeID, reasonerName string) Execut
 		AgentNodeID:       agentNodeID,
 		ReasonerName:      reasonerName,
 		StartedAt:         time.Now(),
+		RunWatched:        ec.RunWatched,
 		CallerDID:         ec.CallerDID,
 		TargetDID:         ec.TargetDID,
 		AgentNodeDID:      ec.AgentNodeDID,
@@ -934,7 +953,7 @@ func (a *Agent) handler() http.Handler {
 		mux.HandleFunc("/execute/", a.handleExecute)
 		mux.HandleFunc("/reasoners/", a.handleReasoner)
 		mux.HandleFunc("/skills/", a.handleSkill)
-		mux.HandleFunc("/_internal/executions/", a.handleInternalCancel)
+		mux.HandleFunc("/_internal/executions/", a.handleInternalExecution)
 		mux.HandleFunc("/webhooks/approval", a.handleApprovalWebhook)
 		mux.HandleFunc("/shutdown", a.handleShutdown)
 
@@ -1353,6 +1372,7 @@ func (a *Agent) buildExecutionContextFromServerless(r *http.Request, payload map
 		AgentNodeID:       a.cfg.NodeID,
 		ReasonerName:      reasonerName,
 		StartedAt:         time.Now(),
+		RunWatched:        strings.TrimSpace(r.Header.Get(RunWatchedHeader)) == "1",
 		CallerDID:         strings.TrimSpace(r.Header.Get("X-Caller-DID")),
 		TargetDID:         strings.TrimSpace(r.Header.Get("X-Target-DID")),
 		AgentNodeDID:      strings.TrimSpace(r.Header.Get("X-Agent-Node-DID")),
@@ -1436,6 +1456,7 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		AgentNodeID:       a.cfg.NodeID,
 		ReasonerName:      name,
 		StartedAt:         time.Now(),
+		RunWatched:        strings.TrimSpace(r.Header.Get(RunWatchedHeader)) == "1",
 		CallerDID:         r.Header.Get("X-Caller-DID"),
 		TargetDID:         r.Header.Get("X-Target-DID"),
 		AgentNodeDID:      r.Header.Get("X-Agent-Node-DID"),
@@ -2002,6 +2023,12 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 
 	execCtx := executionContextFrom(ctx)
 	runID := execCtx.RunID
+	if runID == "" {
+		// A run a trigger started arrives with its workflow id and no run id.
+		// The child belongs to that same run, or its parent link is lost and
+		// every call would start a tree of its own.
+		runID = execCtx.WorkflowID
+	}
 	if runID == "" {
 		runID = generateRunID()
 	}

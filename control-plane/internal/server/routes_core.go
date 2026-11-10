@@ -73,6 +73,11 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	agentAPI.POST("/nodes/:node_id/stop", handlers.StopNodeHandler(s.statusManager, s.storage))
 	agentAPI.POST("/nodes/:node_id/lifecycle/status", handlers.UpdateLifecycleStatusHandler(s.storage, s.uiService, s.statusManager))
 	agentAPI.PATCH("/nodes/:node_id/status", handlers.NodeStatusLeaseHandler(s.storage, s.statusManager, s.healthMonitor, s.presenceManager, handlers.DefaultLeaseTTL))
+	// The node-initiated link. It authenticates the upgrade itself (API key
+	// or internal token, header only), so the global key check skips it.
+	if s.linkHub != nil {
+		agentAPI.GET("/nodes/:node_id/link", s.linkHub.Handler())
+	}
 	agentAPI.POST("/nodes/:node_id/actions/ack", handlers.NodeActionAckHandler(s.storage, s.presenceManager, handlers.DefaultLeaseTTL))
 	agentAPI.POST("/nodes/:node_id/shutdown", handlers.NodeShutdownHandler(s.storage, s.statusManager, s.presenceManager))
 	agentAPI.POST("/actions/claim", handlers.ClaimActionsHandler(s.storage, s.presenceManager, handlers.DefaultLeaseTTL))
@@ -130,6 +135,14 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 		return s.config.AgentField.ExecutionLogs
 	}))
 	agentAPI.POST("/executions/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
+	// The codeaf harness relay and the steer (handlers/relay.go).
+	if s.pipe != nil {
+		agentAPI.POST("/executions/:execution_id/relay", handlers.RelayPutHandler(s.pipe))
+		agentAPI.GET("/executions/:execution_id/relay", handlers.RelayReadHandler(s.pipe))
+		agentAPI.POST("/executions/:execution_id/relay/ack", handlers.RelayAckHandler(s.pipe))
+		agentAPI.GET("/relay/count", handlers.RelayCountHandler(s.pipe))
+		agentAPI.POST("/executions/:execution_id/steer", handlers.SteerExecutionHandler(s.pipe))
+	}
 	agentAPI.POST("/executions/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/restart", handlers.RestartExecutionHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
@@ -143,7 +156,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// Authenticated approval resolution by execution ID — same resolution
 	// logic as the HMAC webhook below, for operators/CLIs that hold an API
 	// key rather than the webhook secret.
-	agentAPI.POST("/executions/:execution_id/approval-response", handlers.ResolveApprovalHandler(s.storage))
+	agentAPI.POST("/executions/:execution_id/approval-response", handlers.ResolveApprovalHandler(s.storage, s.approvalScope()))
 
 	// Agent-scoped approval routes — enforce that the execution belongs to the requesting agent.
 	agentAPI.POST("/agents/:node_id/executions/:execution_id/request-approval", handlers.AgentScopedRequestApprovalHandler(s.storage))
@@ -442,4 +455,13 @@ func rateLimitKeyFromContext(c *gin.Context) string {
 		}
 	}
 	return "ip:" + c.ClientIP()
+}
+
+// approvalScope is the run-owner rule the approval answer route applies, or
+// nil when there is no pipe (a nil *Pipe in the interface would not be nil).
+func (s *AgentFieldServer) approvalScope() handlers.ApprovalScope {
+	if s.pipe == nil {
+		return nil
+	}
+	return s.pipe
 }
