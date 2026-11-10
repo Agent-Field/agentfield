@@ -291,3 +291,61 @@ async def test_aclose_cleans_up_manager_and_http_client(client: AgentFieldClient
     assert client._async_http_client is None
     # The slot is free again: the next loop to ask can own it.
     assert client._async_http_client_loop is None
+
+
+@pytest.mark.asyncio
+async def test_request_approval_without_an_id_carries_the_question(client: AgentFieldClient):
+    """With no hax there is no external id: the CP mints one, and the
+    question itself (kind, title, markdown body, options) rides the request."""
+    http_client = SimpleNamespace(
+        post=AsyncMock(return_value=FakeResponse(payload={"approval_request_id": "apr_1"}))
+    )
+    client.get_async_http_client = AsyncMock(return_value=http_client)
+
+    result = await client.request_approval(
+        execution_id=EXECUTION_ID,
+        callback_url="http://node.nodelink/webhooks/approval",
+        kind="plan_review",
+        question="Approve the plan?",
+        body="# Plan\n1. migrate",
+        options=["approve", "request_changes", "reject"],
+    )
+
+    assert result.approval_request_id == "apr_1"
+    assert http_client.post.await_args.kwargs["json"] == {
+        "callback_url": "http://node.nodelink/webhooks/approval",
+        "expires_in_hours": 72,
+        "kind": "plan_review",
+        "question": "Approve the plan?",
+        "body": "# Plan\n1. migrate",
+        "options": ["approve", "request_changes", "reject"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_approval_status_returns_the_question_and_the_words(client: AgentFieldClient):
+    http_client = SimpleNamespace(
+        get=AsyncMock(
+            return_value=FakeResponse(
+                payload={
+                    "status": "request_changes",
+                    "approval_request_id": "apr_1",
+                    "kind": "plan_review",
+                    "question": "Approve the plan?",
+                    "body": "# Plan",
+                    "options": ["approve", "request_changes", "reject"],
+                    "feedback": "split the migration",
+                    "response": '{"feedback":"split the migration"}',
+                }
+            )
+        )
+    )
+    client.get_async_http_client = AsyncMock(return_value=http_client)
+
+    st = await client.get_approval_status(EXECUTION_ID)
+
+    assert st.status == "request_changes"
+    assert st.approval_request_id == "apr_1"
+    assert st.kind == "plan_review" and st.body == "# Plan"
+    assert st.options == ["approve", "request_changes", "reject"]
+    assert st.feedback == "split the migration"

@@ -234,8 +234,31 @@ func TestDiagnoseOutputFailure(t *testing.T) {
 		path := filepath.Join(dir, "wrong.json")
 		os.WriteFile(path, []byte(`{"other": "field"}`), 0o644)
 		result := DiagnoseOutputFailure(path, schema)
-		assert.Contains(t, result, "top-level keys")
+		assert.Contains(t, result, "Missing top-level keys: [name]")
 	})
+}
+
+// THE DIAGNOSIS NAMES THE REAL FAILURE. Right keys, wrong value type: the old
+// message listed two equal key sets in different orders and nothing to fix.
+func TestTheDiagnosisNamesTheValueThatIsWrongNotTheKeys(t *testing.T) {
+	type finding struct {
+		Driver   string            `json:"driver"`
+		Stars    int64             `json:"stars"`
+		Features map[string]string `json:"features"`
+	}
+	schema, err := StructToJSONSchema(finding{})
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "out.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"features":{"cgo":false},"stars":"4k","driver":"ncruces"}`), 0o644))
+
+	got := DiagnoseOutputFailureFor(path, schema, &finding{})
+	assert.NotContains(t, got, "top-level keys")
+	assert.Contains(t, got, "stars", got)
+	assert.Contains(t, got, "features", got)
+
+	var untouched finding
+	_ = DiagnoseOutputFailureFor(path, schema, &untouched)
+	assert.Equal(t, finding{}, untouched, "the diagnosis never writes to dest")
 }
 
 func TestBuildFollowupPrompt(t *testing.T) {
@@ -292,4 +315,36 @@ func TestStructToJSONSchema(t *testing.T) {
 	// Verify it's valid JSON
 	_, err = json.Marshal(schema)
 	assert.NoError(t, err)
+}
+
+// THE SCHEMA NAMES WHAT GOES INSIDE. `files: array` let the model write
+// objects where the result type wanted strings.
+func TestTheSchemaNamesTheElementTypes(t *testing.T) {
+	type file struct {
+		Path string `json:"path"`
+	}
+	type node struct {
+		Kids []node `json:"kids,omitempty"`
+	}
+	type findings struct {
+		Files  []string          `json:"files" description:"paths, relative"`
+		Counts map[string]int64  `json:"counts"`
+		Where  []file            `json:"where"`
+		Tree   node              `json:"tree"`
+		Extra  map[string]string `json:"extra,omitempty"`
+	}
+	schema, err := StructToJSONSchema(findings{})
+	require.NoError(t, err)
+	props := schema["properties"].(map[string]any)
+	assert.Equal(t, map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "paths, relative"}, props["files"])
+	assert.Equal(t, map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "integer"}}, props["counts"])
+	where := props["where"].(map[string]any)["items"].(map[string]any)
+	assert.Equal(t, map[string]any{"path": map[string]any{"type": "string"}}, where["properties"])
+	kids := props["tree"].(map[string]any)["properties"].(map[string]any)["kids"].(map[string]any)
+	assert.Equal(t, map[string]any{"type": "object"}, kids["items"], "a type that holds itself stops")
+	assert.ElementsMatch(t, []string{"files", "counts", "where", "tree"}, schema["required"])
+
+	path := filepath.Join(t.TempDir(), "out.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"files":[{"path":"a.go"}],"counts":{},"where":[],"tree":{}}`), 0o644))
+	assert.Contains(t, DiagnoseOutputFailureFor(path, schema, &findings{}), "/files/0")
 }

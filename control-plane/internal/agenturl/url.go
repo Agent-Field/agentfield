@@ -160,7 +160,16 @@ var warnedNodes sync.Map
 
 // ForNode joins a stored endpoint and warns once per node when legacy data is
 // refused. Storage reads and listing deliberately do not validate endpoints.
+//
+// A NODE WITH NO base_url IS REACHED DOWN ITS LINK. When a link carrier is
+// installed, an empty base becomes the node's link host (link.go), so every
+// caller — execute, a nested call, a steer — reaches a node that has no
+// inbound port without learning that it has none. With no carrier installed
+// an empty base is refused as before.
 func ForNode(nodeID, base string, segments ...string) (*url.URL, error) {
+	if strings.TrimSpace(base) == "" && nodeID != "" && carrierInstalled() {
+		base = "http://" + LinkHost(nodeID)
+	}
 	u, err := Join(base, segments...)
 	if err != nil {
 		err = fmt.Errorf("invalid agent endpoint: %w", err)

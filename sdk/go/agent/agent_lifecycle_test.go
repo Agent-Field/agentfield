@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -644,4 +645,29 @@ func TestRegisteredHeartbeatInterval(t *testing.T) {
 	assert.Equal(t, "15s", a.registeredHeartbeatInterval())
 	a.cfg.DisableLeaseLoop = true
 	assert.Equal(t, "0s", a.registeredHeartbeatInterval())
+}
+
+// A NODE SAYS WHICH MACHINE IT RUNS ON, so a person reading a run sees
+// "support · dumb" rather than the watcher's own machine.
+func TestRegisterNode_SaysWhichMachineItRunsOn(t *testing.T) {
+	var payload types.NodeRegistrationRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"registered"}`))
+	}))
+	defer server.Close()
+	t.Setenv("AGENTFIELD_NODE_HOST", "dumb")
+	a, err := New(Config{NodeID: "support", Version: "1.0.0", AgentFieldURL: server.URL, Logger: log.New(io.Discard, "", 0)})
+	require.NoError(t, err)
+	require.NoError(t, a.registerNode(context.Background()))
+	custom, _ := payload.Metadata["custom"].(map[string]any)
+	assert.Equal(t, "dumb", custom["host"])
+
+	t.Setenv("AGENTFIELD_NODE_HOST", "")
+	want, _ := os.Hostname()
+	want, _, _ = strings.Cut(want, ".")
+	assert.Equal(t, want, nodeHost())
 }
