@@ -523,3 +523,259 @@ func TestRelayTable_R4_ConcurrentFirstUseSerializesCreation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(workers), held)
 }
+
+type stubSQLStateError struct {
+	code string
+	msg  string
+}
+
+func (e stubSQLStateError) Error() string    { return e.msg }
+func (e stubSQLStateError) SQLState() string { return e.code }
+
+// Branch coverage (migrations.go:292-294): ensureSchemaTable nil-db guard on a
+// nil LocalStorage, an uninitialized LocalStorage (ls.db == nil), an empty
+// sqlDatabase wrapper (ls.db.DB == nil), and a closed postgres-mode store.
+func TestRelayTable_Branch_EnsureSchemaTableUninitializedAndClosedStore(t *testing.T) {
+	ctx := context.Background()
+
+	var nilLS *LocalStorage
+	_, err := nilLS.RelayPut(ctx, "exec-nil", []RelayEntry{{Seq: 1, Kind: "assistant"}})
+	require.EqualError(t, err, "create execution_relay: sql database is not initialized")
+
+	uninitLS := NewLocalStorage(LocalStorageConfig{})
+	_, err = uninitLS.RunOwner(ctx, "run-uninit")
+	require.EqualError(t, err, "create run_owners: sql database is not initialized")
+	_, err = uninitLS.GetApprovalQuestion(ctx, "exec-uninit", "apr-uninit")
+	require.EqualError(t, err, "create execution_approval_questions: sql database is not initialized")
+
+	nilInnerDBLS := &LocalStorage{
+		db:   &sqlDatabase{mode: "local"},
+		mode: "local",
+	}
+	_, err = nilInnerDBLS.RelayCount(ctx, "")
+	require.EqualError(t, err, "create execution_relay: sql database is not initialized")
+
+	rawDB, _, closedPgLS := newInterceptingSQLiteDB(t, "postgres")
+	require.NoError(t, rawDB.Close())
+	_, err = closedPgLS.RelayCount(ctx, "")
+	require.ErrorContains(t, err, "create execution_relay")
+}
+
+// Branch coverage (migrations.go:268-274): ensureRelayAndApprovalTables error
+// returns when the first (execution_relay), second (run_owners), or third
+// (execution_approval_questions) CREATE TABLE fails, followed by clean retry.
+func TestRelayTable_Branch_EnsureRelayAndApprovalTablesSecondAndThirdCreateErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("first CREATE fails on execution_relay", func(t *testing.T) {
+		_, conn, ls := newInterceptingSQLiteDB(t, "local")
+		injected := errors.New("relay DDL failed")
+		var creates int
+		conn.setHook(func(_ driver.Conn, query string) error {
+			if strings.Contains(strings.ToUpper(query), "CREATE TABLE") {
+				creates++
+				if creates == 1 {
+					return injected
+				}
+			}
+			return nil
+		})
+
+		err := ls.ensureRelayAndApprovalTables(ctx)
+		require.ErrorIs(t, err, injected)
+		require.ErrorContains(t, err, "create execution_relay")
+		require.Equal(t, 1, creates)
+	})
+
+	t.Run("second CREATE fails on run_owners then retry completes remaining tables", func(t *testing.T) {
+		_, conn, ls := newInterceptingSQLiteDB(t, "local")
+		injected := errors.New("run_owners DDL failed")
+		var creates int
+		conn.setHook(func(_ driver.Conn, query string) error {
+			if strings.Contains(strings.ToUpper(query), "CREATE TABLE") {
+				creates++
+				if creates == 2 {
+					return injected
+				}
+			}
+			return nil
+		})
+
+		err := ls.ensureRelayAndApprovalTables(ctx)
+		require.ErrorIs(t, err, injected)
+		require.ErrorContains(t, err, "create run_owners")
+		require.Equal(t, 2, creates)
+
+		conn.setHook(nil)
+		require.NoError(t, ls.ensureRelayAndApprovalTables(ctx))
+	})
+
+	t.Run("third CREATE fails on execution_approval_questions then retry completes", func(t *testing.T) {
+		_, conn, ls := newInterceptingSQLiteDB(t, "local")
+		injected := errors.New("approval_questions DDL failed")
+		var creates int
+		conn.setHook(func(_ driver.Conn, query string) error {
+			if strings.Contains(strings.ToUpper(query), "CREATE TABLE") {
+				creates++
+				if creates == 3 {
+					return injected
+				}
+			}
+			return nil
+		})
+
+		err := ls.ensureRelayAndApprovalTables(ctx)
+		require.ErrorIs(t, err, injected)
+		require.ErrorContains(t, err, "create execution_approval_questions")
+		require.Equal(t, 3, creates)
+
+		conn.setHook(nil)
+		require.NoError(t, ls.ensureRelayAndApprovalTables(ctx))
+	})
+}
+
+// Branch coverage (migrations.go:254-256): autoMigrateSchema wraps errors from
+// ensureRelayAndApprovalTables as "failed to ensure relay and approval tables".
+func TestRelayTable_Branch_AutoMigrateSchemaWrapsEnsureTablesError(t *testing.T) {
+	ctx := context.Background()
+
+	for _, failTable := range []string{
+		"execution_relay",
+		"run_owners",
+		"execution_approval_questions",
+	} {
+		t.Run(failTable, func(t *testing.T) {
+			_, conn, ls := newInterceptingSQLiteDB(t, "local")
+			injected := fmt.Errorf("injected %s failure", failTable)
+			conn.setHook(func(_ driver.Conn, query string) error {
+				if strings.Contains(strings.ToUpper(query), "CREATE TABLE") && strings.Contains(query, failTable) {
+					return injected
+				}
+				return nil
+			})
+
+			err := ls.autoMigrateSchema(ctx)
+			require.ErrorIs(t, err, injected)
+			require.ErrorContains(t, err, "failed to ensure relay and approval tables")
+			require.ErrorContains(t, err, "create "+failTable)
+
+			conn.setHook(nil)
+			require.NoError(t, ls.autoMigrateSchema(ctx))
+		})
+	}
+}
+
+// Branch coverage (migrations.go:318-336): isPostgresConcurrentTableCreateError
+// nil-error branch, plain non-SQLState error fallback, and SQLState() interface
+// branch (both matching 23505/42P07 and non-matching codes) via postgres mode.
+func TestRelayTable_Branch_PostgresConcurrentCreateErrorNilPlainAndSQLState(t *testing.T) {
+	ctx := context.Background()
+
+	// Nil error branch (migrations.go:323-325).
+	require.False(t, isPostgresConcurrentTableCreateError(nil))
+
+	t.Run("plain non-SQLState error on postgres store returns error without caching", func(t *testing.T) {
+		_, conn, ls := newInterceptingSQLiteDB(t, "postgres")
+		// Leave ls.mode blank to also exercise the ls.db.Mode() == "postgres"
+		// fallback in isPostgresMode (migrations.go:319).
+		ls.mode = ""
+
+		plainErr := errors.New("plain network reset without sqlstate")
+		conn.setHook(func(_ driver.Conn, query string) error {
+			if strings.Contains(strings.ToUpper(query), "CREATE TABLE") {
+				return plainErr
+			}
+			return nil
+		})
+
+		_, err := ls.RelayPut(ctx, "exec-plain", []RelayEntry{{Seq: 1, Kind: "assistant"}})
+		require.ErrorIs(t, err, plainErr)
+		require.ErrorContains(t, err, "create execution_relay")
+
+		conn.setHook(nil)
+		stored, err := ls.RelayPut(ctx, "exec-plain", []RelayEntry{{Seq: 1, Kind: "assistant"}})
+		require.NoError(t, err)
+		require.Equal(t, 1, stored)
+	})
+
+	t.Run("non-PgError SQLState implementation covers non-matching and 23505/42P07 codes", func(t *testing.T) {
+		_, conn, ls := newInterceptingSQLiteDB(t, "postgres")
+
+		syntaxErr := stubSQLStateError{code: "42601", msg: "simulated syntax error"}
+		conn.setHook(func(_ driver.Conn, query string) error {
+			if strings.Contains(strings.ToUpper(query), "CREATE TABLE") {
+				return syntaxErr
+			}
+			return nil
+		})
+
+		err := ls.SetRunOwner(ctx, "run-sqlstate", "workaf")
+		require.ErrorIs(t, err, syntaxErr)
+		require.ErrorContains(t, err, "create run_owners")
+
+		// Peer creates the table concurrently while this caller receives a
+		// non-PgError SQLState() carrier with 23505 or 42P07.
+		conn.setHook(func(inner driver.Conn, query string) error {
+			if !strings.Contains(strings.ToUpper(query), "CREATE TABLE") {
+				return nil
+			}
+			stmt, prepErr := inner.Prepare(query)
+			if prepErr != nil {
+				return prepErr
+			}
+			_, execErr := stmt.Exec(nil)
+			_ = stmt.Close()
+			if execErr != nil {
+				return execErr
+			}
+			if strings.Contains(query, "run_owners") {
+				return stubSQLStateError{code: "23505", msg: "concurrent unique_violation"}
+			}
+			return stubSQLStateError{code: "42P07", msg: "concurrent duplicate_table"}
+		})
+
+		require.NoError(t, ls.SetRunOwner(ctx, "run-sqlstate", "workaf"))
+		owner, err := ls.RunOwner(ctx, "run-sqlstate")
+		require.NoError(t, err)
+		require.Equal(t, "workaf", owner)
+
+		require.NoError(t, ls.PutApprovalQuestion(ctx, types.ApprovalQuestion{
+			ExecutionID:       "exec-sqlstate",
+			ApprovalRequestID: "apr-sqlstate",
+			Kind:              types.ApprovalKindApproval,
+			Question:          "Continue?",
+		}))
+		gotQ, err := ls.GetApprovalQuestion(ctx, "exec-sqlstate", "apr-sqlstate")
+		require.NoError(t, err)
+		require.NotNil(t, gotQ)
+		require.Equal(t, "Continue?", gotQ.Question)
+	})
+}
+
+// Branch coverage (migrations.go:338-345): tableExistsAfterRace returns false
+// when the probe query errors because the table is still absent after a 23505
+// or 42P07 error, leaving the failure uncached so a later call succeeds.
+func TestRelayTable_Branch_TableExistsAfterRaceFalseWhenTableAbsent(t *testing.T) {
+	ctx := context.Background()
+	_, conn, ls := newInterceptingSQLiteDB(t, "postgres")
+
+	require.False(t, ls.tableExistsAfterRace(ctx, runOwnersSchemaTable))
+
+	conn.setHook(func(_ driver.Conn, query string) error {
+		if strings.Contains(strings.ToUpper(query), "CREATE TABLE") {
+			return &pgconn.PgError{Code: "42P07", Message: "relation already exists"}
+		}
+		return nil
+	})
+
+	_, err := ls.RunOwner(ctx, "run-absent")
+	require.ErrorContains(t, err, "create run_owners")
+	require.False(t, ls.tableExistsAfterRace(ctx, runOwnersSchemaTable))
+
+	conn.setHook(nil)
+	require.NoError(t, ls.SetRunOwner(ctx, "run-absent", "workaf"))
+	require.True(t, ls.tableExistsAfterRace(ctx, runOwnersSchemaTable))
+	owner, err := ls.RunOwner(ctx, "run-absent")
+	require.NoError(t, err)
+	require.Equal(t, "workaf", owner)
+}
