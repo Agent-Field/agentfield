@@ -19,6 +19,7 @@ case "${CP_TAG}" in
   v0.1.57|old-cloud)
     CP_IMAGE="${OLD_CLOUD_IMAGE}"
     CP_LABEL="v0.1.57"
+    export SMOKE_ACCEPT_HEALTH="active unknown"
     ;;
   *)
     CP_IMAGE="agentfield/control-plane:${CP_TAG}"
@@ -75,7 +76,7 @@ case "${SDK_SPEC}" in
 esac
 
 wait_for_node_registered "${CP_URL}" "${NODE_ID}" "${NODE_PORT}"
-add_evidence "Node \`${NODE_ID}\` registered and appeared active in \`GET /api/v1/nodes\` on \`${CP_IMAGE}\`"
+add_evidence "Node \`${NODE_ID}\` registered on \`${CP_IMAGE}\` (health accepted: ${SMOKE_ACCEPT_HEALTH:-active}; lifecycle ready)"
 
 SYNC_RESP="$(run_sync_execute "${CP_URL}" "${NODE_ID}.echo" '{"message":"check-b-sync","seq":31,"extra":{"cp":"'"${CP_LABEL}"'"}}')"
 assert_echo_result "${SYNC_RESP}" "check-b-sync" 31 "${NODE_ID}"

@@ -428,21 +428,28 @@ wait_for_node_registered() {
   while [[ "${attempt}" -lt 60 ]]; do
     if curl -fsS --max-time 2 "http://127.0.0.1:${node_port}/health" >/dev/null 2>&1; then
       local nodes_json=""
-      if nodes_json="$(curl -fsS --max-time 3 "${cp_url}/api/v1/nodes" 2>/dev/null)"; then
-        if python3 - "${node_id}" "${nodes_json}" <<'PY'
+      # SMOKE_ACCEPT_HEALTH lists the health states that count as registered.
+      # It is "active" except against control plane v0.1.57, which keeps every
+      # node at "unknown" in this harness: today's stable SDKs (the ones
+      # production runs against it) stay there exactly like the new ones, with
+      # heartbeats answered and /status saying "running". There the sync and
+      # async executes that follow are what prove the node works.
+      if nodes_json="$(curl -fsS --max-time 3 "${cp_url}/api/v1/nodes?show_all=true" 2>/dev/null)"; then
+        if python3 - "${node_id}" "${nodes_json}" "${SMOKE_ACCEPT_HEALTH:-active}" <<'PY'
 import json
 import sys
 
 want = sys.argv[1]
 data = json.loads(sys.argv[2])
+accept = set(sys.argv[3].split())
 nodes = data.get("nodes") or []
 for n in nodes:
-    if n.get("id") == want and n.get("health_status") == "active":
+    if n.get("id") == want and n.get("health_status") in accept and n.get("lifecycle_status") in (None, "", "ready"):
         sys.exit(0)
 sys.exit(1)
 PY
         then
-          log_info "Node ${node_id} registered and active in ${cp_url}/api/v1/nodes"
+          log_info "Node ${node_id} registered in ${cp_url}/api/v1/nodes (health accepted: ${SMOKE_ACCEPT_HEALTH:-active})"
           return 0
         fi
       fi
