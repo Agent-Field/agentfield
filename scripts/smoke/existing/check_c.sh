@@ -113,6 +113,54 @@ if [[ "${OWNERS_ROWS_UNWATCHED}" != "0" ]]; then
 fi
 add_evidence "Direct \`${STORAGE_MODE}\` query after unwatched executions: \`execution_relay = ${RELAY_ROWS_UNWATCHED}\`, \`run_owners = ${OWNERS_ROWS_UNWATCHED}\`"
 
+# ── Part 1b: Concurrent owned executions ────────────────────────────────────
+# Before the relay tables were created with the schema, two requests reaching
+# them at once raced CREATE TABLE IF NOT EXISTS on Postgres, lost the run's
+# owner, and the cached error kept every later owned run unwatched until a
+# restart. So the first owned executions this control plane ever sees arrive
+# together: each must be watched and each run must get exactly one owner.
+BURST=8
+BURST_DIR="${SMOKE_WORK_DIR}/owned-burst"
+mkdir -p "${BURST_DIR}"
+for i in $(seq 1 "${BURST}"); do
+  (
+    run_sync_execute \
+      "${CP_URL}" \
+      "${GO_NODE}.echo" \
+      '{"message":"owned-burst","seq":'"$((100 + i))"'}' \
+      "X-AgentField-Run-Owner: smoke-burst-${i}" > "${BURST_DIR}/${i}.json" 2> "${BURST_DIR}/${i}.err"
+  ) &
+done
+wait
+
+python3 - "${BURST_DIR}" "${BURST}" <<'PY'
+import json
+import pathlib
+import sys
+
+d, n = pathlib.Path(sys.argv[1]), int(sys.argv[2])
+runs = set()
+for i in range(1, n + 1):
+    raw = (d / f"{i}.json").read_text().strip()
+    if not raw:
+        raise SystemExit(f"owned burst call {i} returned nothing: {(d / f'{i}.err').read_text()[:400]}")
+    resp = json.loads(raw)
+    res = resp.get("result") or {}
+    if res.get("run_watched") is not True:
+        raise SystemExit(f"owned burst call {i} was not watched: {res}")
+    runs.add(resp.get("run_id"))
+if len(runs) != n or None in runs or "" in runs:
+    raise SystemExit(f"expected {n} distinct run ids from the burst, got {runs}")
+(d / "runs.txt").write_text("\n".join(sorted(runs)))
+PY
+
+OWNERS_AFTER_BURST="$(query_table_count "run_owners")"
+if [[ "${OWNERS_AFTER_BURST}" != "${BURST}" ]]; then
+  log_err "Expected exactly ${BURST} run_owners rows after ${BURST} concurrent owned executions, got ${OWNERS_AFTER_BURST}"
+  exit 1
+fi
+add_evidence "${BURST} concurrent owned executions on a fresh \`${STORAGE_MODE}\` control plane: every one watched (\`RunWatched == true\`), ${OWNERS_AFTER_BURST} owner rows, one per run"
+
 # ── Part 2: Positive control (X-AgentField-Run-Owner + POST /executions/:id/relay) ──
 OWNED_RESP="$(run_sync_execute \
   "${CP_URL}" \
