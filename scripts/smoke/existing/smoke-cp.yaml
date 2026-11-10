@@ -1,0 +1,57 @@
+agentfield:
+  port: 18080
+  shutdown_timeout: 15s
+  execution_cleanup:
+    enabled: true
+    retention_period: 24h
+    cleanup_interval: 1h
+    batch_size: 100
+    preserve_recent_duration: 30m
+    stale_execution_timeout: 10m
+  execution_queue:
+    agent_call_timeout: 90s
+    webhook_timeout: 10s
+    webhook_max_attempts: 3
+    webhook_retry_backoff: 1s
+    webhook_max_retry_backoff: 5s
+
+telemetry:
+  enabled: false
+
+ui:
+  enabled: true
+  mode: "embedded"
+
+storage:
+  mode: "local"
+  local:
+    database_path: "/data/agentfield.db"
+    kv_store_path: "/data/agentfield.bolt"
+  vector:
+    enabled: false
+    distance: "cosine"
+
+features:
+  did:
+    enabled: true
+    method: "did:key"
+    key_algorithm: "Ed25519"
+    derivation_method: "BIP32"
+    key_rotation_days: 90
+    vc_requirements:
+      require_vc_registration: false
+      require_vc_execution: false
+      require_vc_cross_agent: false
+      persist_execution_vc: false
+      storage_mode: "inline"
+      store_input_output: false
+      hash_sensitive_data: true
+    keystore:
+      type: "local"
+      path: "/data/agentfield/data/keys"
+      encryption: "AES-256-GCM"
+      backup_enabled: false
+      backup_interval: "24h"
+    authorization:
+      enabled: false
+      did_auth_enabled: false

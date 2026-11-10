@@ -1,0 +1,333 @@
+name: Smoke Existing Deployments (#1174)
+
+on:
+  push:
+    branches:
+      - smoke/existing-deployments
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_IMAGE: agentfield-control-plane:candidate
+  STABLE_IMAGE: agentfield/control-plane:v0.1.145
+  OLD_CLOUD_IMAGE: agentfield/control-plane:v0.1.57
+  POSTGRES_IMAGE: postgres:16
+
+jobs:
+  build-candidate:
+    name: Build Candidate Control Plane
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build candidate control plane image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployments/docker/Dockerfile.control-plane
+          load: true
+          tags: ${{ env.CANDIDATE_IMAGE }}
+          build-args: |
+            VERSION=v0.1.146-rc.25-smoke
+            COMMIT=${{ github.sha }}
+
+      - name: Smoke test candidate binary inside image
+        run: |
+          docker run --rm "${CANDIDATE_IMAGE}" --help >/dev/null
+          ver="$(docker run --rm "${CANDIDATE_IMAGE}" version)"
+          echo "${ver}"
+          echo "${ver}" | grep -q "v0.1.146-rc.25-smoke"
+
+      - name: Export candidate image tarball
+        run: |
+          mkdir -p .smoke-work
+          docker save "${CANDIDATE_IMAGE}" -o .smoke-work/candidate-cp.tar
+
+      - name: Upload candidate image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-control-plane-image
+          path: .smoke-work/candidate-cp.tar
+          retention-days: 1
+
+  check-a:
+    name: Check A (${{ matrix.node_spec }} -> candidate)
+    needs: build-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node_spec:
+          - py-0.1.130
+          - py-0.1.145
+          - go-v0.1.130
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Download candidate control plane image
+        uses: actions/download-artifact@v4
+        with:
+          name: candidate-control-plane-image
+          path: .smoke-work
+
+      - name: Load candidate control plane image
+        run: docker load -i .smoke-work/candidate-cp.tar
+
+      - name: Run Check A (${{ matrix.node_spec }})
+        run: bash scripts/smoke/existing/check_a.sh "${{ matrix.node_spec }}"
+
+      - name: Upload Check A evidence and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-check-a-${{ matrix.node_spec }}
+          path: smoke-artifacts/check-a-${{ matrix.node_spec }}/
+          retention-days: 7
+
+  check-b:
+    name: Check B (${{ matrix.sdk_spec }} -> ${{ matrix.cp_tag }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        cp_tag:
+          - v0.1.145
+          - v0.1.57
+        sdk_spec:
+          - python-main
+          - go-main
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Run Check B (${{ matrix.sdk_spec }} -> ${{ matrix.cp_tag }})
+        run: bash scripts/smoke/existing/check_b.sh "${{ matrix.cp_tag }}" "${{ matrix.sdk_spec }}"
+
+      - name: Upload Check B evidence and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-check-b-${{ matrix.cp_tag }}-${{ matrix.sdk_spec }}
+          path: smoke-artifacts/check-b-${{ matrix.cp_tag }}-${{ matrix.sdk_spec }}/
+          retention-days: 7
+
+  check-c:
+    name: Check C (relay gate [${{ matrix.storage_mode }}])
+    needs: build-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        storage_mode:
+          - local
+          - postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure SQLite and Postgres CLI clients
+        run: |
+          if ! command -v sqlite3 >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y --no-install-recommends sqlite3 postgresql-client
+          fi
+          sqlite3 --version
+          psql --version
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Download candidate control plane image
+        uses: actions/download-artifact@v4
+        with:
+          name: candidate-control-plane-image
+          path: .smoke-work
+
+      - name: Load candidate control plane image
+        run: docker load -i .smoke-work/candidate-cp.tar
+
+      - name: Run Check C (${{ matrix.storage_mode }})
+        run: bash scripts/smoke/existing/check_c.sh "${{ matrix.storage_mode }}"
+
+      - name: Upload Check C evidence and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-check-c-${{ matrix.storage_mode }}
+          path: smoke-artifacts/check-c-${{ matrix.storage_mode }}/
+          retention-days: 7
+
+  check-d:
+    name: Check D (migrations & rollback [${{ matrix.storage_mode }}])
+    needs: build-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        storage_mode:
+          - local
+          - postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download candidate control plane image
+        uses: actions/download-artifact@v4
+        with:
+          name: candidate-control-plane-image
+          path: .smoke-work
+
+      - name: Load candidate control plane image
+        run: docker load -i .smoke-work/candidate-cp.tar
+
+      - name: Run Check D (${{ matrix.storage_mode }})
+        run: bash scripts/smoke/existing/check_d.sh "${{ matrix.storage_mode }}"
+
+      - name: Upload Check D evidence and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-check-d-${{ matrix.storage_mode }}
+          path: smoke-artifacts/check-d-${{ matrix.storage_mode }}/
+          retention-days: 7
+
+  final-gate:
+    name: Existing Deployments Checklist Gate
+    needs: [build-candidate, check-a, check-b, check-c, check-d]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download all check evidence artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: evidence-check-*
+          path: collected-evidence
+        continue-on-error: true
+
+      - name: Assemble checklist report
+        env:
+          RES_BUILD: ${{ needs.build-candidate.result }}
+          RES_A: ${{ needs.check-a.result }}
+          RES_B: ${{ needs.check-b.result }}
+          RES_C: ${{ needs.check-c.result }}
+          RES_D: ${{ needs.check-d.result }}
+        run: |
+          mkdir -p checklist-report
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+
+          job_results = {
+              "build-candidate": os.environ.get("RES_BUILD", "unknown"),
+              "check-a": os.environ.get("RES_A", "unknown"),
+              "check-b": os.environ.get("RES_B", "unknown"),
+              "check-c": os.environ.get("RES_C", "unknown"),
+              "check-d": os.environ.get("RES_D", "unknown"),
+          }
+
+          records = []
+          for path in sorted(glob.glob("collected-evidence/*/evidence.json")):
+              with open(path, "r", encoding="utf-8") as fh:
+                  records.append(json.load(fh))
+
+          overall_ok = all(v == "success" for v in job_results.values())
+          overall_word = "PASS" if overall_ok else "FAIL"
+
+          lines = [
+              f"## Existing Deployments Checklist (#1174) — **{overall_word}**",
+              "",
+              "| Job | Result |",
+              "| --- | --- |",
+          ]
+          for job, res in job_results.items():
+              lines.append(f"| `{job}` | `{res}` |")
+
+          if records:
+              lines.extend([
+                  "",
+                  "| Check Leg | Status | Headline |",
+                  "| --- | --- | --- |",
+              ])
+              for rec in records:
+                  lines.append(
+                      f"| `{rec.get('check_id')}` | **{rec.get('status')}** | {rec.get('headline')} |"
+                  )
+
+          md = "\n".join(lines) + "\n"
+          with open("checklist-report/checklist.md", "w", encoding="utf-8") as fh:
+              fh.write(md)
+          with open("checklist-report/checklist.json", "w", encoding="utf-8") as fh:
+              json.dump({"overall": overall_word, "jobs": job_results, "checks": records}, fh, indent=2)
+              fh.write("\n")
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as fh:
+                  fh.write(md)
+
+          print(md)
+          if not overall_ok:
+              raise SystemExit(1)
+          PY
+        id: gate
+        continue-on-error: true
+
+      - name: Upload consolidated checklist report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-existing-deployments-checklist
+          path: checklist-report/
+          retention-days: 14
+
+      - name: Enforce final gate
+        if: steps.gate.outcome != 'success'
+        run: |
+          echo "::error::One or more existing-deployment smoke checks failed"
+          exit 1
