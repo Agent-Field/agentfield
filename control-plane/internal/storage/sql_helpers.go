@@ -4,13 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 
 	"github.com/jmoiron/sqlx"
 )
 
 type sqlDatabase struct {
 	*sql.DB
-	mode string
+	mode          string
+	tableCreateMu sync.Mutex
+	tablesCreated sync.Map // table name (string) -> struct{}{}
 }
 
 func newSQLDatabase(db *sql.DB, mode string) *sqlDatabase {

@@ -299,10 +299,10 @@ func TestRelayStorage_S7_RunsOwnedByScopingAndSinceFilter(t *testing.T) {
 }
 
 // Contract S9: Both execution_relay and run_owners are created lazily on first
-// use of a fresh store without needing a schema migration, and propagate database
+// use of a store constructed without autoMigrateSchema, and propagate database
 // errors when the context or store is closed.
 func TestRelayStorage_S9_LazyTableCreationWithoutMigration(t *testing.T) {
-	ls, ctx := setupLocalStorage(t)
+	ls, ctx := newUnmigratedLocalStorage(t)
 
 	tableExists := func(s *LocalStorage, name string) bool {
 		var count int
@@ -311,7 +311,7 @@ func TestRelayStorage_S9_LazyTableCreationWithoutMigration(t *testing.T) {
 		return count == 1
 	}
 
-	// Neither table exists right after Initialize and migrations finish.
+	// Neither table exists on a store that skipped schema migration.
 	require.False(t, tableExists(ls, "execution_relay"))
 	require.False(t, tableExists(ls, "run_owners"))
 
@@ -348,8 +348,8 @@ func TestRelayStorage_S9_LazyTableCreationWithoutMigration(t *testing.T) {
 	_, err = ls.RunsOwnedBy(cancelledCtx, "owner-c", time.Now())
 	require.Error(t, err)
 
-	// A closed fresh store surfaces and remembers the lazy DDL error on its db handle.
-	closedLS, closedCtx := setupLocalStorage(t)
+	// A closed unmigrated store surfaces the lazy DDL error on its db handle.
+	closedLS, closedCtx := newUnmigratedLocalStorage(t)
 	require.NoError(t, closedLS.Close(closedCtx))
 	_, err = closedLS.RelayPut(closedCtx, "exec-closed", []RelayEntry{{Seq: 1, Kind: "k"}})
 	require.Error(t, err)
