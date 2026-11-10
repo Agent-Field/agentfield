@@ -457,6 +457,75 @@ class TestExecuteToolCallLoop:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_args", ['{"text": "trunca', "not json", "[1, 2]"])
+    async def test_malformed_arguments_are_not_executed(self, bad_args):
+        agent = make_mock_agent()
+        agent.call = AsyncMock(return_value={"result": "ok"})
+
+        messages = [{"role": "user", "content": "test"}]
+        tools = capabilities_to_tool_schemas([make_reasoner()])
+        config = ToolCallConfig(max_turns=5)
+
+        tool_resp = make_llm_response(tool_calls=[make_tool_call(arguments=bad_args)])
+        final_resp = make_llm_response(content="Please retry")
+        call_count = 0
+
+        async def mock_completion(params):
+            nonlocal call_count
+            call_count += 1
+            return tool_resp if call_count == 1 else final_resp
+
+        resp, trace = await execute_tool_call_loop(
+            agent=agent,
+            messages=messages,
+            tools=tools,
+            config=config,
+            needs_lazy_hydration=False,
+            litellm_params={"model": "openai/gpt-4"},
+            make_completion=mock_completion,
+        )
+
+        agent.call.assert_not_called()
+        assert trace.calls == []
+        tool_messages = [m for m in messages if m.get("role") == "tool"]
+        assert len(tool_messages) == 1
+        assert (
+            "invalid or truncated JSON arguments"
+            in json.loads(tool_messages[0]["content"])["error"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_empty_string_arguments_run_with_no_args(self):
+        agent = make_mock_agent()
+        agent.call = AsyncMock(return_value={"result": "ok"})
+
+        messages = [{"role": "user", "content": "test"}]
+        tools = capabilities_to_tool_schemas([make_reasoner()])
+        config = ToolCallConfig(max_turns=5)
+
+        tool_resp = make_llm_response(tool_calls=[make_tool_call(arguments="")])
+        final_resp = make_llm_response(content="Done")
+        call_count = 0
+
+        async def mock_completion(params):
+            nonlocal call_count
+            call_count += 1
+            return tool_resp if call_count == 1 else final_resp
+
+        await execute_tool_call_loop(
+            agent=agent,
+            messages=messages,
+            tools=tools,
+            config=config,
+            needs_lazy_hydration=False,
+            litellm_params={"model": "openai/gpt-4"},
+            make_completion=mock_completion,
+        )
+
+        agent.call.assert_awaited_once()
+        assert agent.call.await_args.kwargs == {}
+
+    @pytest.mark.asyncio
     async def test_max_tool_calls_limit(self):
         agent = make_mock_agent()
         agent.call = AsyncMock(return_value={"result": "ok"})
