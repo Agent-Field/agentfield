@@ -1,0 +1,28 @@
+{
+  "input": {
+    "goal": "Add slugify(text: str) -> str to textutil.py that lowercases text, strips leading and trailing whitespace, replaces contiguous non-alphanumeric characters with single hyphens, and strips leading or trailing hyphens (returning '' for empty or symbol-only input). Add unit tests for slugify in test_textutil.py.",
+    "repo_path": "/workspaces/fixture",
+    "additional_context": "Single-module standard-library Python package in textutil.py with tests in test_textutil.py. Decompose into a single vertical-slice issue covering both implementation and tests. Keep tests compatible with both `python3 -m unittest -v` (zero external dependencies) and `pytest -q`.",
+    "max_turns": 30,
+    "enable_learning": false,
+    "config": {
+      "max_review_iterations": 0,
+      "max_coding_iterations": 2,
+      "max_retries_per_issue": 0,
+      "max_replans": 0,
+      "enable_replanning": false,
+      "max_verify_fix_cycles": 0,
+      "git_init_max_retries": 2,
+      "max_integration_test_retries": 0,
+      "enable_integration_testing": false,
+      "max_advisor_invocations": 0,
+      "enable_issue_advisor": false,
+      "max_concurrent_issues": 1,
+      "agent_max_turns": 30,
+      "agent_timeout_seconds": 600,
+      "check_ci": false,
+      "max_ci_fix_cycles": 0,
+      "ci_wait_seconds": 10
+    }
+  }
+}

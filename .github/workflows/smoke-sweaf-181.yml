@@ -1,0 +1,57 @@
+name: Smoke SWE-AF 181 Real Build
+
+on:
+  push:
+    branches:
+      - smoke/sweaf-181
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  realbuild:
+    name: Plain Build (New vs Baseline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout agentfield
+        uses: actions/checkout@v4
+
+      - name: Checkout SWE-AF new (PR #181)
+        uses: actions/checkout@v4
+        with:
+          repository: Agent-Field/SWE-AF
+          ref: 9501e897f56e70e4d91992398aa573852851448d
+          path: sweaf-new
+
+      - name: Checkout SWE-AF baseline
+        uses: actions/checkout@v4
+        with:
+          repository: Agent-Field/SWE-AF
+          ref: da78a77d49a0084bce9283acb565832d083e0945
+          path: sweaf-base
+
+      - name: Run plain build comparison (new vs baseline)
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SMOKE_OUT_DIR: ${{ runner.temp }}/sweaf-realbuild-out
+        run: bash scripts/smoke/sweaf-realbuild.sh
+
+      # GitHub masks secrets in logs but NOT in artifacts. The script sanitizes
+      # each response before keeping it, but an abort between writing a raw
+      # response and replacing it would leave the raw file behind, so nothing
+      # unsanitized is ever uploaded.
+      - name: Drop any unsanitized temporary files
+        if: always()
+        run: find "${{ runner.temp }}/sweaf-realbuild-out" -name '*.tmp' -type f -delete 2>/dev/null || true
+
+      - name: Upload comparison summary and sanitized logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweaf-181-realbuild-comparison
+          path: ${{ runner.temp }}/sweaf-realbuild-out/
+          if-no-files-found: warn
+          retention-days: 14

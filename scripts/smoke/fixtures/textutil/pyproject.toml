@@ -1,0 +1,9 @@
+[project]
+name = "textutil"
+version = "0.1.0"
+description = "Tiny standard-library text utility helpers"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["."]

@@ -1,0 +1,67 @@
+# Minimal AgentField v0.1.57 configuration for the SWE-AF plain-build smoke run.
+# Validated against v0.1.57:control-plane/internal/config/config.go and
+# v0.1.57:control-plane/cmd/agentfield-server/main.go.
+#
+# Key settings vs baked-in /etc/agentfield/config/agentfield.yaml:
+# - storage.mode: local (SQLite + Bolt under /data/agentfield, writable by UID 65532)
+# - agent_call_timeout: 2400s (avoids the 90s zero-value fallback in execute.go:201
+#   during multi-minute OpenCode sub-reasoner calls)
+# - stale_execution_timeout: 45m (avoids the baked config's 10m stale sweep
+#   during a 30m build poll budget)
+# - features.did.authorization.enabled: false (no demo access_policies; API auth
+#   is enforced via the per-job throwaway AGENTFIELD_API_KEY env override)
+
+agentfield:
+  port: 8080
+  execution_cleanup:
+    enabled: true
+    retention_period: 24h
+    cleanup_interval: 5m
+    batch_size: 200
+    preserve_recent_duration: 1h
+    stale_execution_timeout: 45m
+  execution_queue:
+    agent_call_timeout: 2400s
+    webhook_timeout: 10s
+    webhook_max_attempts: 3
+    webhook_retry_backoff: 1s
+    webhook_max_retry_backoff: 5s
+
+ui:
+  enabled: true
+  mode: "embedded"
+
+storage:
+  mode: "local"
+  local:
+    database_path: "/data/agentfield/data/agentfield.db"
+    kv_store_path: "/data/agentfield/data/agentfield.bolt"
+  vector:
+    enabled: false
+    distance: "cosine"
+
+features:
+  did:
+    enabled: true
+    method: "did:key"
+    key_algorithm: "Ed25519"
+    derivation_method: "BIP32"
+    key_rotation_days: 90
+    vc_requirements:
+      require_vc_registration: true
+      require_vc_execution: true
+      require_vc_cross_agent: true
+      persist_execution_vc: true
+      storage_mode: "inline"
+      store_input_output: false
+      hash_sensitive_data: true
+    keystore:
+      type: "local"
+      path: "/data/agentfield/data/keys"
+      encryption: "AES-256-GCM"
+      backup_enabled: false
+      backup_interval: "24h"
+    authorization:
+      enabled: false
+  connector:
+    enabled: false
