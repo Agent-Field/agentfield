@@ -13,6 +13,10 @@ agentfield:
     batch_size: 200
     preserve_recent_duration: 1h
     stale_execution_timeout: 10m
+    # A node registered with metadata.custom.holds_executions_offline: true has
+    # its quiet executions held (not timed out) while it is offline, until it
+    # comes back or this ceiling passes.
+    offline_hold_ceiling: 168h
     # max_retries only rewinds stale workflow rows to pending; no dispatcher
     # re-enqueues them, so do not rely on it for execution retries.
     max_retries: 0
