@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -251,3 +252,164 @@ func TestHoldsExecutionsOfflineReadsTheRegistrationFlag(t *testing.T) {
 	}
 	require.False(t, (*types.AgentNode)(nil).HoldsExecutionsOffline())
 }
+
+// A NODE THAT RE-REGISTERS WITHOUT OPTING IN RETURNS TO THE ORDINARY STALE
+// RULES: its held execution is released on the next cleanup pass and timed out
+// once quiet past the stale window.
+func TestNodeReRegisteredWithoutOfflineHoldOptInHasHeldWorkReleasedToSweep(t *testing.T) {
+	w := newOfflineHoldWorld(t, time.Hour)
+	laptop := w.node("laptop", true)
+	waitPastStale()
+	w.sweep.performCleanup(w.ctx)
+	require.Equal(t, types.ExecutionReasonNodeOffline, reasonOf(w.exec(laptop)))
+
+	// Re-register laptop without holds_executions_offline.
+	require.NoError(t, w.store.RegisterAgent(w.ctx, &types.AgentNode{
+		ID: "laptop", Version: "1", LifecycleStatus: types.AgentStatusReady,
+	}))
+	w.sweep.performCleanup(w.ctx)
+
+	released := w.exec(laptop)
+	require.Equal(t, types.ExecutionStatusRunning, released.Status)
+	require.Empty(t, reasonOf(released))
+
+	// Now that the hold is cleared, waiting past the stale window lets the
+	// ordinary sweep time it out.
+	waitPastStale()
+	w.sweep.performCleanup(w.ctx)
+	require.Equal(t, types.ExecutionStatusTimeout, w.exec(laptop).Status)
+	require.Equal(t, types.ExecutionStatusTimeout, w.workflowStatus(laptop))
+}
+
+// MULTIPLE VERSIONS OF ONE NODE SHARE ONE OFFLINE DECISION (opted in when any
+// version is, using the latest heartbeat), and an unset ceiling defaults to
+// DefaultOfflineHoldCeiling.
+func TestMultiVersionNodeUsesLatestHeartbeatAndDefaultCeilingWhenUnset(t *testing.T) {
+	w := newOfflineHoldWorld(t, 0) // 0 exercises DefaultOfflineHoldCeiling fallback
+	laptop := w.node("laptop", true)
+	require.NoError(t, w.store.RegisterAgent(w.ctx, &types.AgentNode{
+		ID: "laptop", Version: "2", LifecycleStatus: types.AgentStatusReady,
+	}))
+	require.NoError(t, w.store.UpdateAgentHeartbeat(w.ctx, "laptop", "2", time.Now().UTC().Add(-30*time.Minute)))
+
+	waitPastStale()
+	w.sweep.performCleanup(w.ctx)
+	waitPastStale()
+	w.sweep.performCleanup(w.ctx)
+
+	held := w.exec(laptop)
+	require.Equal(t, types.ExecutionStatusRunning, held.Status)
+	require.Equal(t, types.ExecutionReasonNodeOffline, reasonOf(held))
+}
+
+type nonOfflineHolderStore struct {
+	storage.StorageProvider
+}
+
+type failingOfflineHolderStore struct {
+	storage.StorageProvider
+	agents     []*types.AgentNode
+	listAgErr  error
+	held       []storage.HeldExecution
+	listHeldEr error
+	releaseErr error
+	failErr    error
+	holdErr    error
+}
+
+func (f *failingOfflineHolderStore) ListAgents(_ context.Context, _ types.AgentFilters) ([]*types.AgentNode, error) {
+	return f.agents, f.listAgErr
+}
+
+func (f *failingOfflineHolderStore) HoldOfflineNodeExecutions(_ context.Context, _ string, _ time.Duration, _ int) (int, error) {
+	return 0, f.holdErr
+}
+
+func (f *failingOfflineHolderStore) ListHeldExecutions(_ context.Context, _ string) ([]storage.HeldExecution, error) {
+	return f.held, f.listHeldEr
+}
+
+func (f *failingOfflineHolderStore) ReleaseHeldExecutions(_ context.Context, _ string, _ []string) (int, error) {
+	return 0, f.releaseErr
+}
+
+func (f *failingOfflineHolderStore) FailHeldExecutions(_ context.Context, _ []string, _, _ string) (int, error) {
+	return 0, f.failErr
+}
+
+// STORES WITHOUT offlineHolder OR RETURNING STORAGE ERRORS ARE HANDLED WITHOUT
+// PANICKING OR DROPPING EXISTING STATE.
+func TestOfflineHoldHandlersTolerateNonHolderAndStorageFailures(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("storage unavailable")
+
+	// 1. Store that does not implement offlineHolder is a no-op.
+	rel, lost := ResolveOfflineHolds(ctx, &nonOfflineHolderStore{}, "laptop", []string{"exec-1"})
+	require.Zero(t, rel)
+	require.Zero(t, lost)
+
+	nonHolderSweep := NewExecutionCleanupService(&nonOfflineHolderStore{}, config.ExecutionCleanupConfig{
+		Enabled: true, StaleExecutionTimeout: holdStale, BatchSize: 10,
+	})
+	nonHolderSweep.holdOfflineNodes(ctx)
+
+	// 2. ResolveOfflineHolds when ListHeldExecutions, ReleaseHeldExecutions, or FailHeldExecutions errors.
+	stub := &failingOfflineHolderStore{listHeldEr: boom}
+	rel, lost = ResolveOfflineHolds(ctx, stub, "laptop", []string{"exec-keep"})
+	require.Zero(t, rel)
+	require.Zero(t, lost)
+
+	stub = &failingOfflineHolderStore{
+		held: []storage.HeldExecution{
+			{ExecutionID: "exec-keep", AgentNodeID: "laptop", HeldSince: time.Now().UTC()},
+			{ExecutionID: "exec-drop", AgentNodeID: "laptop", HeldSince: time.Now().UTC()},
+		},
+		releaseErr: boom,
+		failErr:    boom,
+	}
+	rel, lost = ResolveOfflineHolds(ctx, stub, "laptop", []string{"exec-keep"})
+	require.Zero(t, rel)
+	require.Zero(t, lost)
+
+	// 3. holdOfflineNodes when ListAgents errors.
+	sweep := NewExecutionCleanupService(&failingOfflineHolderStore{listAgErr: boom}, config.ExecutionCleanupConfig{
+		Enabled: true, StaleExecutionTimeout: holdStale, BatchSize: 10,
+	})
+	sweep.holdOfflineNodes(ctx)
+
+	// 4. holdOfflineNodes when ListHeldExecutions errors and HoldOfflineNodeExecutions errors, with nil agent entry.
+	optedInOffline := &types.AgentNode{
+		ID:            "laptop",
+		Version:       "1",
+		LastHeartbeat: time.Now().UTC().Add(-time.Hour),
+		Metadata:      types.AgentMetadata{Custom: map[string]interface{}{types.AgentMetadataHoldsExecutionsOffline: true}},
+	}
+	sweep = NewExecutionCleanupService(&failingOfflineHolderStore{
+		agents:     []*types.AgentNode{nil, optedInOffline},
+		listHeldEr: boom,
+		holdErr:    boom,
+	}, config.ExecutionCleanupConfig{
+		Enabled: true, StaleExecutionTimeout: holdStale, BatchSize: 10,
+	})
+	sweep.holdOfflineNodes(ctx)
+
+	// 5. holdOfflineNodes when ReleaseHeldExecutions (for opted-out node) and FailHeldExecutions error.
+	optedOutNode := &types.AgentNode{
+		ID:            "opted-out",
+		Version:       "1",
+		LastHeartbeat: time.Now().UTC(),
+	}
+	sweep = NewExecutionCleanupService(&failingOfflineHolderStore{
+		agents: []*types.AgentNode{optedOutNode},
+		held: []storage.HeldExecution{
+			{ExecutionID: "exec-removed", AgentNodeID: "gone-node", HeldSince: time.Now().UTC()},
+			{ExecutionID: "exec-opted-out", AgentNodeID: "opted-out", HeldSince: time.Now().UTC()},
+		},
+		releaseErr: boom,
+		failErr:    boom,
+	}, config.ExecutionCleanupConfig{
+		Enabled: true, StaleExecutionTimeout: holdStale, BatchSize: 10,
+	})
+	sweep.holdOfflineNodes(ctx)
+}
+
