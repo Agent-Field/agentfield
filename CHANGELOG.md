@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.28] - 2026-11-11
+
+
+### Other
+
+- Control-plane: an offline node keeps its executions until it comes back
+
+A node that registers with metadata.custom.holds_executions_offline = true
+(the codeaf factory on a laptop that sleeps) no longer has its running work
+timed out by the stale sweep just because nothing renewed it while it was
+away. Before the sweeps run, each cleanup pass marks the quiet executions of
+an opted-in, registered node whose lease has lapsed as held: status stays
+running, status_reason is node_offline, and the stale, workflow-stale and
+stale-retry sweeps all skip it.
+
+A hold ends four ways. The node's next lease lists the execution as inflight:
+released, it carries on. The lease does not list it: failed now as
+node_lost_execution. The node is no longer registered: failed as
+node_removed. The hold outlives offline_hold_ceiling (default 168h, env
+AGENTFIELD_EXECUTION_OFFLINE_HOLD_CEILING): failed as node_offline_too_long.
+Nodes that did not opt in are reaped exactly as before, and an opted-in node
+that is online but stops listing an execution is still reaped.
+
+Assisted-by: CodeAF
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com> (246bfc7)
+
+
+
+### Testing
+
+- Test(control-plane): cover offline hold opt-in, config, handlers, and storage (87726a1)
+
 ## [0.1.146-rc.27] - 2026-11-10
 
 
