@@ -402,18 +402,34 @@ async def run_cli(
                     break
                 # Spurious wakeup (progress reset the idle window): loop again.
     finally:
-        if not completed:
-            # Timeout, cancellation, or an internal error: stop the child so
-            # nothing keeps running and the exit wait below can conclude.
-            # (Previously only the timeout paths killed; a cancelled run_cli
-            # left the child running and awaited its natural exit.)
-            _kill_group()
-        drain.cancel()
-        try:
-            await drain
-        except BaseException:
-            pass
-        fallback_returncode = await _wait_process_exit(proc, _kill_group)
+
+        async def cleanup() -> Optional[int]:
+            if not completed:
+                _kill_group()
+            drain.cancel()
+            try:
+                await drain
+            except BaseException:
+                pass
+            return await _wait_process_exit(proc, _kill_group)
+
+        # Pipe EOF does not mean the child has exited. Keep ownership until
+        # the bounded exit wait finishes, even if cancellation arrives here
+        # or is repeated while cleanup is already running.
+        cleanup_task = asyncio.create_task(cleanup())
+        cleanup_cancelled: Optional[asyncio.CancelledError] = None
+        while True:
+            try:
+                fallback_returncode = await asyncio.shield(cleanup_task)
+                break
+            except asyncio.CancelledError as exc:
+                if cleanup_task.cancelled():
+                    raise
+                if cleanup_cancelled is None:
+                    cleanup_cancelled = exc
+                    _kill_group()
+        if cleanup_cancelled is not None:
+            raise cleanup_cancelled
 
     if idle_timed_out:
         raise TimeoutError(
