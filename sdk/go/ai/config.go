@@ -27,6 +27,9 @@ const defaultRuncrateBaseURL = "https://api.runcrate.ai/v1"
 // names, e.g. "deepseek-v4-flash".
 const defaultCloudGPUBaseURL = "https://cloudgpu.app/v1"
 
+const defaultMaxTokens = 4096
+const defaultTimeout = 30 * time.Second
+
 // Config holds AI/LLM configuration for making API calls.
 type Config struct {
 	// API Key for the selected provider: OpenAI, Infron,
@@ -48,10 +51,10 @@ type Config struct {
 	// Default temperature for responses (0.0 to 2.0)
 	Temperature float64
 
-	// Default max tokens for responses
+	// Default max tokens for responses. Zero uses 4096.
 	MaxTokens int
 
-	// HTTP timeout for requests
+	// HTTP timeout for requests. Zero uses 30 seconds.
 	Timeout time.Duration
 
 	// Optional: Site URL for OpenRouter rankings
@@ -151,8 +154,8 @@ func DefaultConfig() *Config {
 		BaseURL:     baseURL,
 		Model:       model,
 		Temperature: 0.7,
-		MaxTokens:   4096,
-		Timeout:     30 * time.Second,
+		MaxTokens:   defaultMaxTokens,
+		Timeout:     defaultTimeout,
 	}
 	switch {
 	case cfg.IsOpenRouter():

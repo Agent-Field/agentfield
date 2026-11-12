@@ -306,6 +306,11 @@ Any zero-value field falls back to a sensible default (5 retries, 500ms base,
 #### `ai.NewClient(config *Config, opts ...ClientOption) (*Client, error)`
 Creates a new AI client with the given configuration.
 
+Zero `MaxTokens` and `Timeout` fields are filled with the SDK defaults (4096
+tokens and 30 seconds), including in partial configurations. Nonzero limits
+and a temperature of zero are preserved. `WithMaxTokens` overrides the token
+cap for a request; `WithHTTPClient` retains the supplied client's timeout.
+
 Use `ai.WithHTTPClient` to provide a custom `*http.Client`, or
 `ai.WithTransport` to provide a custom `http.RoundTripper` while retaining the
 default client's timeout.
