@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.29] - 2026-11-12
+
+
+### Other
+
+- Repair a workflow row left running after a failed terminal event; optional control plane bind host (#1187)
+
+* fix(sdk/go): apply default token and timeout caps to partial AI config (#1184)
+
+* fix: recover terminal event delivery and workflow projection writes (#1182)
+
+* fix(control-plane): allow selecting the HTTP and admin gRPC bind host (#1185)
+
+* Keep partial AI configs uncapped by default (withdraws the #1184 change)
+
+The #1184 change gave a partial ai.Config the SDK's default limits (4096
+output tokens, 30 seconds). Nodes that build a partial config today run with
+no cap, and a 30-second limit would cut off completions that succeed now.
+Existing deployments must keep their behaviour, so the default stays as it
+is; #1184 remains open for an explicit, opt-in way to ask for the caps.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5.2 <noreply@anthropic.com> (4fb8f0d)
+
 ## [0.1.146-rc.28] - 2026-11-11
 
 
