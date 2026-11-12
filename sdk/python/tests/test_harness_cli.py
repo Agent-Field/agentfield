@@ -267,8 +267,11 @@ async def test_run_cli_cancellation_after_pipe_eof_reaps_child(
             await asyncio.sleep(0)
             assert not task.done()
             release_wait.set()
-        with pytest.raises(asyncio.CancelledError, match="stop after EOF"):
+        with pytest.raises(asyncio.CancelledError) as cancelled:
             await asyncio.wait_for(task, timeout=2)
+        # Task cancellation messages reach awaiters starting with Python 3.11.
+        if sys.version_info >= (3, 11):
+            assert str(cancelled.value) == "stop after EOF"
         assert process is not None
         assert process.returncode is not None
     finally:
