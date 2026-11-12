@@ -1,4 +1,5 @@
 agentfield:
+  # host: ""  # HTTP and admin gRPC bind host; empty binds all interfaces. Use 127.0.0.1 for local-only access.
   port: 8080
   shutdown_timeout: 30s  # Graceful shutdown drain timeout for in-flight requests
   registration:

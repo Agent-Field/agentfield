@@ -76,7 +76,12 @@ func WorkflowExecutionEventHandler(store ExecutionStore, resumeDependencies ...I
 				// approval endpoints (which query workflow_executions) work
 				// for executions reported through this event-based path.
 				wfExec := buildWorkflowExecutionFromEvent(&req, now)
+				mirrorTerminalExecution(wfExec, created)
 				if storeErr := store.StoreWorkflowExecution(ctx, wfExec); storeErr != nil {
+					if types.IsTerminalExecutionStatus(created.Status) {
+						lastErr = storeErr
+						continue
+					}
 					// Non-fatal: the lightweight record was already created.
 					// Log but don't fail the request.
 					fmt.Printf("WARN: failed to create workflow execution record for %s: %v\n", req.ExecutionID, storeErr)
@@ -116,16 +121,19 @@ func WorkflowExecutionEventHandler(store ExecutionStore, resumeDependencies ...I
 					return nil, fmt.Errorf("workflow execution %s not found", req.ExecutionID)
 				}
 				applyEventToWorkflowExecution(current, &req, now)
+				mirrorTerminalExecution(current, updated)
 				return current, nil
 			}); err != nil {
 				if strings.Contains(strings.ToLower(err.Error()), "not found") {
-					if storeErr := store.StoreWorkflowExecution(ctx, buildWorkflowExecutionFromEvent(&req, now)); storeErr != nil {
+					projection := buildWorkflowExecutionFromEvent(&req, now)
+					mirrorTerminalExecution(projection, updated)
+					if storeErr := store.StoreWorkflowExecution(ctx, projection); storeErr != nil {
 						lastErr = storeErr
 						continue
 					}
 				} else {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update workflow execution: %v", err)})
-					return
+					lastErr = fmt.Errorf("failed to update workflow execution: %w", err)
+					continue
 				}
 			}
 
@@ -135,6 +143,22 @@ func WorkflowExecutionEventHandler(store ExecutionStore, resumeDependencies ...I
 
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to persist execution event after retries: %v", lastErr)})
 	}
+}
+
+// The execution row commits first. Replays and late starts must project that
+// persisted terminal outcome, including its original completion timestamp.
+func mirrorTerminalExecution(projection *types.WorkflowExecution, execution *types.Execution) {
+	if execution == nil || !types.IsTerminalExecutionStatus(execution.Status) {
+		return
+	}
+	projection.Status = execution.Status
+	projection.StatusReason = execution.StatusReason
+	projection.StartedAt = execution.StartedAt
+	projection.CompletedAt = execution.CompletedAt
+	projection.DurationMS = execution.DurationMS
+	projection.OutputData = execution.ResultPayload
+	projection.OutputSize = len(execution.ResultPayload)
+	projection.ErrorMessage = execution.ErrorMessage
 }
 
 func writeWorkflowExecutionEventSuccess(c *gin.Context, response gin.H, resumeController *executionController, persisted *types.Execution) {

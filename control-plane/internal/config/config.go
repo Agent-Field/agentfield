@@ -73,6 +73,8 @@ type UIConfig struct {
 
 // AgentFieldConfig holds the core AgentField server configuration.
 type AgentFieldConfig struct {
+	// Host selects the bind interface for HTTP and admin gRPC; empty binds all.
+	Host             string                 `yaml:"host" mapstructure:"host"`
 	Port             int                    `yaml:"port"`
 	ShutdownTimeout  time.Duration          `yaml:"shutdown_timeout" mapstructure:"shutdown_timeout"`
 	ShutdownMinDelay time.Duration          `yaml:"shutdown_min_delay" mapstructure:"shutdown_min_delay"`
@@ -724,6 +726,9 @@ func ApplyDefaults(cfg *Config) {
 // Exported so the main server startup (which uses Viper for file loading)
 // can call it after Viper unmarshal to apply the shorter env var names.
 func ApplyEnvOverrides(cfg *Config) {
+	if host, set := os.LookupEnv("AGENTFIELD_HOST"); set {
+		cfg.AgentField.Host = host
+	}
 	// Knowledge / embedding overrides. OPENAI_API_KEY is the standard OpenAI env
 	// var; AGENTFIELD_KNOWLEDGE_* allow explicit control.
 	if val := os.Getenv("OPENAI_API_KEY"); val != "" && cfg.Features.Knowledge.OpenAI.APIKey == "" {
