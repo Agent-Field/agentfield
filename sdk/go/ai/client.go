@@ -64,14 +64,6 @@ func NewClient(config *Config, opts ...ClientOption) (*Client, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
-	// A nonnil Config often supplies only connection settings. Fill omitted
-	// caps as for DefaultConfig, preserving every explicit nonzero limit.
-	if config.MaxTokens == 0 {
-		config.MaxTokens = defaultMaxTokens
-	}
-	if config.Timeout == 0 {
-		config.Timeout = defaultTimeout
-	}
 
 	client := &Client{
 		config: config,
