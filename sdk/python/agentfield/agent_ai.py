@@ -698,7 +698,12 @@ class AgentAI:
         # Handle flexible user input with intelligent processing. When both
         # input styles are used, keep the positional multimodal content and
         # append the keyword prompt to the final user message.
-        processed_content = self._process_multimodal_args(args) if args else []
+        # Message dictionaries may belong to the caller's reusable history.
+        processed_content = (
+            [dict(message) for message in self._process_multimodal_args(args)]
+            if args
+            else []
+        )
         if user and processed_content:
             user_message = next(
                 (
@@ -711,7 +716,7 @@ class AgentAI:
             if user_message is not None:
                 content = user_message.get("content")
                 if isinstance(content, list):
-                    content.append({"type": "text", "text": user})
+                    user_message["content"] = content + [{"type": "text", "text": user}]
                 else:
                     user_message["content"] = [
                         {"type": "text", "text": content},

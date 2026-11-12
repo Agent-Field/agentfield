@@ -2,6 +2,7 @@
 Comprehensive tests for AgentAI covering critical execution paths.
 """
 
+from copy import deepcopy
 import json
 import sys
 import types
@@ -242,6 +243,104 @@ async def test_ai_merges_user_keyword_with_positional_multimodal_args(
         {"type": "text", "text": "Positional context"},
         {"type": "text", "text": "Describe the image."},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_shape", ["message", "conversation", "mixed"])
+@pytest.mark.parametrize("multimodal", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_ai_user_keyword_does_not_mutate_reused_messages(
+    monkeypatch, agent_with_ai, input_shape, multimodal, stream
+):
+    """Each request appends only its own prompt without changing caller input."""
+    content = (
+        [
+            {"type": "text", "text": "Original context"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/image.jpg", "detail": "low"},
+            },
+        ]
+        if multimodal
+        else "Original context"
+    )
+    message = {"role": "user", "name": "caller", "content": content}
+    if input_shape == "conversation":
+        input_arg = [
+            {"role": "system", "content": "System instruction"},
+            message,
+            {"role": "assistant", "content": "Previous answer"},
+        ]
+    elif input_shape == "mixed":
+        input_arg = [{"text": "Earlier context"}, message]
+    else:
+        input_arg = message
+    original = deepcopy(input_arg)
+    original_parts = (
+        deepcopy(content) if multimodal else [{"type": "text", "text": content}]
+    )
+
+    litellm_module = setup_litellm_stub(monkeypatch)
+
+    async def complete(**kwargs):
+        async def chunks():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="response"))]
+            )
+
+        return chunks() if stream else make_chat_response("response")
+
+    litellm_module.acompletion.side_effect = complete
+    ai = AgentAI(agent_with_ai)
+
+    for prompt in ("First question", "Second question"):
+        response = await ai.ai(input_arg, user=prompt, stream=stream)
+        if stream:
+            assert [chunk.choices[0].delta.content async for chunk in response] == [
+                "response"
+            ]
+        else:
+            assert response.text == "response"
+        messages = litellm_module.acompletion.call_args.kwargs["messages"]
+        user_message = next(m for m in reversed(messages) if m["role"] == "user")
+        assert user_message == {
+            "role": "user",
+            "name": "caller",
+            "content": original_parts + [{"type": "text", "text": prompt}],
+        }
+        assert input_arg == original
+
+
+@pytest.mark.asyncio
+async def test_ai_tool_prompt_does_not_mutate_reused_system_message(
+    monkeypatch, agent_with_ai
+):
+    """Tool instructions are request-local when a conversation is reused."""
+    from agentfield.prompt_templates import PromptTemplates
+
+    agent_with_ai.ai_config.prompt_templates = PromptTemplates(
+        tool_system_prompt="Use tools when needed."
+    )
+    conversation = [
+        {"role": "system", "content": "Original instruction"},
+        {"role": "user", "content": "Question"},
+    ]
+    original = deepcopy(conversation)
+    litellm_module = setup_litellm_stub(monkeypatch)
+    litellm_module.acompletion.return_value = make_chat_response("response")
+    ai = AgentAI(agent_with_ai)
+
+    for _ in range(2):
+        response = await ai.ai(conversation, tools=[])
+        assert response.text == "response"
+        assert litellm_module.acompletion.call_args.kwargs["messages"] == [
+            {
+                "role": "system",
+                "content": "Original instruction\n\nUse tools when needed.",
+            },
+            {"role": "user", "content": "Question"},
+        ]
+        assert conversation == original
 
 
 @pytest.mark.asyncio
