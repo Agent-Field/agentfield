@@ -70,6 +70,7 @@ func loadServerConfig(cmd *cobra.Command) (*config.Config, error) {
 	// env var and logging.level in agentfield.yaml are only visible once the
 	// config has been read.
 	cli.ApplyConfiguredLogLevel(cmd, cfg.Logging.Level)
+	cli.ApplyServerHostFlag(cmd, cfg)
 	return cfg, nil
 }
 
