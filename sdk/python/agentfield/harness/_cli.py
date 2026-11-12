@@ -250,7 +250,9 @@ async def _wait_process_exit(
     """
     try:
         return await asyncio.wait_for(proc.wait(), timeout=_PROC_EXIT_GRACE_SECONDS)
-    except (asyncio.TimeoutError, TimeoutError):
+    except (asyncio.TimeoutError, TimeoutError, asyncio.CancelledError):
+        # Loop shutdown cancels the cleanup task too. Finish the same bounded
+        # kill/poll fallback; run_cli still propagates the caller's cancellation.
         pass
     # The notification may have landed while we grace-waited (in which case
     # the transport finalizer may already have dropped its Popen reference —
@@ -267,7 +269,11 @@ async def _wait_process_exit(
         returncode = popen.poll()
         if returncode is not None:
             return returncode
-        await asyncio.sleep(0.1)
+        try:
+            await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            # Do not restart the polling budget when shutdown cancels again.
+            pass
     return proc.returncode
 
 
@@ -423,11 +429,13 @@ async def run_cli(
                 fallback_returncode = await asyncio.shield(cleanup_task)
                 break
             except asyncio.CancelledError as exc:
-                if cleanup_task.cancelled():
-                    raise
                 if cleanup_cancelled is None:
                     cleanup_cancelled = exc
                     _kill_group()
+                if cleanup_task.cancelled():
+                    # Shutdown can cancel a task before its coroutine starts.
+                    fallback_returncode = await _wait_process_exit(proc, _kill_group)
+                    break
         if cleanup_cancelled is not None:
             raise cleanup_cancelled
 

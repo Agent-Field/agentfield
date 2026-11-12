@@ -296,6 +296,71 @@ async def test_run_cli_returns_exit_status_after_pipe_eof():
     assert (stdout, stderr, returncode) == ("done\n", "", 7)
 
 
+def test_run_cli_reaps_child_during_event_loop_shutdown(monkeypatch):
+    """asyncio.run cancels the runner and any cleanup tasks together."""
+    create_process = asyncio.create_subprocess_exec
+    process = None
+    runner = None
+    observed = {}
+
+    class ObservedPolicy(asyncio.DefaultEventLoopPolicy):
+        def new_event_loop(self):
+            loop = super().new_event_loop()
+            close = loop.close
+
+            def observed_close():
+                try:
+                    if process is not None:
+                        observed["child_alive"] = process.returncode is None
+                        observed["runner_cancelled"] = runner.cancelled()
+                        if process.returncode is None:
+                            process.kill()
+                            loop.run_until_complete(process.wait())
+                finally:
+                    close()
+
+            loop.close = observed_close
+            return loop
+
+    async def main():
+        nonlocal runner
+        waiting_for_exit = asyncio.Event()
+
+        async def spawn(*args, **kwargs):
+            nonlocal process
+            process = await create_process(*args, **kwargs)
+            wait = process.wait
+
+            async def observed_wait():
+                waiting_for_exit.set()
+                return await wait()
+
+            process.wait = observed_wait
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+        runner = asyncio.create_task(
+            run_cli(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os, time; os.close(1); os.close(2); time.sleep(60)",
+                ],
+                timeout=30,
+                idle_seconds=0,
+            )
+        )
+        await asyncio.wait_for(waiting_for_exit.wait(), timeout=5)
+
+    policy = asyncio.get_event_loop_policy()
+    asyncio.set_event_loop_policy(ObservedPolicy())
+    try:
+        asyncio.run(main())
+    finally:
+        asyncio.set_event_loop_policy(policy)
+    assert observed == {"child_alive": False, "runner_cancelled": True}
+
+
 @pytest.mark.asyncio
 async def test_run_cli_timeout():
     async def never_ready(_n):
