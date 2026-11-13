@@ -524,15 +524,38 @@ func TestMemoryRoutesEmptySessionWorkflowIDs(t *testing.T) {
 	}
 }
 
-// C4/C9: the legacy delete route historically selects scope from query/headers,
-// ignoring body.scope. Authorize exactly that selection and preserve it with auth off.
+// C4/C9: authorize the body scope on the legacy route while preserving explicit
+// query precedence and selecting the same storage scope when authorization is off.
 func TestMemoryLegacyVectorDeleteAuthorizesResolvedScope(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		store := &authorizedMemoryStore{}
-		r := memoryAuthorizationRouter(t, store, enabled)
-		w := memoryRequest(t, r, memoryRouteCase{method: "POST", path: "/vector/delete", body: `{"key":"k","scope":"actor"}`}, "session", "session-1", "agent-beta", map[string]string{"X-Actor-ID": "agent-alpha", "X-Memory-Scope": "actor"})
-		require.Equal(t, 204, w.Code)
-		require.Equal(t, []memoryTouch{{"delete vector", "session", "session-1"}}, store.touches)
+		t.Run(fmt.Sprintf("authorization=%t", enabled), func(t *testing.T) {
+			store := &authorizedMemoryStore{}
+			r := memoryAuthorizationRouter(t, store, enabled)
+			tc := memoryRouteCase{method: "POST", path: "/vector/delete", body: `{"key":"k","scope":"actor"}`}
+			headers := map[string]string{"X-Actor-ID": "agent-alpha", "X-Memory-Scope": "actor"}
+			w := memoryRequest(t, r, tc, "session", "session-1", "agent-beta", headers)
+			if enabled {
+				require.Equal(t, 403, w.Code, w.Body.String())
+				require.Contains(t, w.Body.String(), "scope_ownership_denied")
+				require.Empty(t, store.touches)
+			} else {
+				require.Equal(t, 204, w.Code, w.Body.String())
+				require.Equal(t, []memoryTouch{{"delete vector", "actor", "agent-alpha"}}, store.touches)
+			}
+
+			store.touches = nil
+			headers["X-Actor-ID"] = "agent-beta"
+			w = memoryRequest(t, r, tc, "session", "session-1", "agent-beta", headers)
+			require.Equal(t, 204, w.Code, w.Body.String())
+			require.Equal(t, []memoryTouch{{"delete vector", "actor", "agent-beta"}}, store.touches)
+
+			store.touches = nil
+			headers["X-Actor-ID"] = "agent-alpha"
+			tc.path += "?scope=session"
+			w = memoryRequest(t, r, tc, "session", "session-1", "agent-beta", headers)
+			require.Equal(t, 204, w.Code, w.Body.String())
+			require.Equal(t, []memoryTouch{{"delete vector", "session", "session-1"}}, store.touches)
+		})
 	}
 }
 
