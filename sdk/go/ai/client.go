@@ -404,6 +404,12 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 				if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 					continue // Skip malformed chunks
 				}
+				// Providers (e.g. OpenRouter) report mid-stream failures as a
+				// {"error":{...}} data event on an HTTP 200 stream. Surface it
+				// instead of yielding an empty chunk.
+				if streamErr := parseStreamError([]byte(jsonData)); streamErr != nil {
+					return StreamChunk{}, streamErr
+				}
 				chunk.normalizeNativeCost()
 
 				return chunk, nil
@@ -425,6 +431,30 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 			return StreamChunk{}, err
 		}
 	}
+}
+
+// parseStreamError returns an error when an SSE data payload is an in-stream
+// {"error":{...}} event, or nil for ordinary chunks.
+func parseStreamError(data []byte) error {
+	var probe struct {
+		Error *struct {
+			Message string          `json:"message"`
+			Type    string          `json:"type"`
+			Code    json.RawMessage `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil || probe.Error == nil {
+		return nil
+	}
+	msg := probe.Error.Message
+	if msg == "" {
+		msg = "unknown error"
+	}
+	code := strings.Trim(string(probe.Error.Code), `"`)
+	if code != "" && code != "null" {
+		return fmt.Errorf("stream error (code %s): %s", code, msg)
+	}
+	return fmt.Errorf("stream error: %s", msg)
 }
 
 // Convenience functions for common patterns
