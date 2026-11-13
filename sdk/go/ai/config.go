@@ -27,6 +27,11 @@ const defaultRuncrateBaseURL = "https://api.runcrate.ai/v1"
 // names, e.g. "deepseek-v4-flash".
 const defaultCloudGPUBaseURL = "https://cloudgpu.app/v1"
 
+const (
+	defaultMaxTokens      = 4096
+	defaultRequestTimeout = 30 * time.Second
+)
+
 // Config holds AI/LLM configuration for making API calls.
 type Config struct {
 	// API Key for the selected provider: OpenAI, Infron,
@@ -53,6 +58,13 @@ type Config struct {
 
 	// HTTP timeout for requests
 	Timeout time.Duration
+
+	// ApplyDefaultLimits opts a partial configuration into the SDK's finite
+	// limits: zero-value MaxTokens becomes 4096 and zero-value Timeout becomes
+	// 30 seconds when NewClient builds the client. Explicit non-zero values are
+	// preserved, so existing partial configurations keep their current
+	// uncapped behaviour unless they opt in.
+	ApplyDefaultLimits bool
 
 	// Optional: Site URL for OpenRouter rankings
 	SiteURL string
@@ -151,8 +163,8 @@ func DefaultConfig() *Config {
 		BaseURL:     baseURL,
 		Model:       model,
 		Temperature: 0.7,
-		MaxTokens:   4096,
-		Timeout:     30 * time.Second,
+		MaxTokens:   defaultMaxTokens,
+		Timeout:     defaultRequestTimeout,
 	}
 	switch {
 	case cfg.IsOpenRouter():
@@ -183,6 +195,17 @@ func DefaultConfig() *Config {
 		cfg.Model = defaultCloudGPUModel
 	}
 	return cfg
+}
+
+// applyDefaultLimits fills only omitted finite limits. It is called on a copy
+// so opting into defaults never mutates the caller's configuration.
+func (c *Config) applyDefaultLimits() {
+	if c.MaxTokens == 0 {
+		c.MaxTokens = defaultMaxTokens
+	}
+	if c.Timeout == 0 {
+		c.Timeout = defaultRequestTimeout
+	}
 }
 
 // Validate ensures the configuration is valid.

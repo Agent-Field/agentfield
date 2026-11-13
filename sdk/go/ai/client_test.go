@@ -135,6 +135,94 @@ func testCompletionResponse() *http.Response {
 	}
 }
 
+func TestNewClient_ApplyDefaultLimits(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *Config
+		wantTokens  int
+		wantTimeout time.Duration
+		wantWireCap int
+	}{
+		{
+			name: "partial config opts into defaults",
+			config: &Config{
+				APIKey:             "test-key",
+				BaseURL:            "https://api.example.com/v1",
+				Model:              "gpt-4o",
+				ApplyDefaultLimits: true,
+			},
+			wantTokens:  defaultMaxTokens,
+			wantTimeout: defaultRequestTimeout,
+			wantWireCap: defaultMaxTokens,
+		},
+		{
+			name: "explicit limits win over defaults",
+			config: &Config{
+				APIKey:             "test-key",
+				BaseURL:            "https://api.example.com/v1",
+				Model:              "gpt-4o",
+				MaxTokens:          321,
+				Timeout:            7 * time.Second,
+				ApplyDefaultLimits: true,
+			},
+			wantTokens:  321,
+			wantTimeout: 7 * time.Second,
+			wantWireCap: 321,
+		},
+		{
+			name: "partial config stays uncapped without opt-in",
+			config: &Config{
+				APIKey:  "test-key",
+				BaseURL: "https://api.example.com/v1",
+				Model:   "gpt-4o",
+			},
+			wantTokens:  0,
+			wantTimeout: 0,
+			wantWireCap: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transport := &roundTripFunc{fn: func(req *http.Request) (*http.Response, error) {
+				var body struct {
+					MaxTokens int `json:"max_tokens"`
+				}
+				require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+				assert.Equal(t, tt.wantWireCap, body.MaxTokens)
+				return testCompletionResponse(), nil
+			}}
+
+			client, err := NewClient(tt.config, WithTransport(transport))
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantTokens, client.config.MaxTokens)
+			assert.Equal(t, tt.wantTimeout, client.httpClient.Timeout)
+
+			_, err = client.Complete(context.Background(), "hello")
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestNewClient_ApplyDefaultLimitsDoesNotMutateCaller(t *testing.T) {
+	config := &Config{
+		APIKey:             "test-key",
+		BaseURL:            "https://api.example.com/v1",
+		Model:              "gpt-4o",
+		ApplyDefaultLimits: true,
+	}
+
+	client, err := NewClient(config, WithTransport(&roundTripFunc{fn: func(*http.Request) (*http.Response, error) {
+		return testCompletionResponse(), nil
+	}}))
+	require.NoError(t, err)
+
+	assert.Equal(t, defaultMaxTokens, client.config.MaxTokens)
+	assert.Equal(t, defaultRequestTimeout, client.httpClient.Timeout)
+	assert.Zero(t, config.MaxTokens)
+	assert.Zero(t, config.Timeout)
+}
+
 func TestComplete(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
