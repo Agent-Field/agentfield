@@ -9,6 +9,7 @@ AgentField uses Viper with the prefix `AGENTFIELD` and maps nested config keys u
 ### Core
 
 - `AGENTFIELD_PORT` (optional): HTTP port for the control plane (default: `8080`).
+- `AGENTFIELD_HOST` (optional): bind host for HTTP and admin gRPC. Empty or unset by default binds all interfaces. Overrides YAML `agentfield.host`; `--host` overrides both, including an explicitly empty value. Use `127.0.0.1` for IPv4 loopback or unbracketed `::1` for IPv6 loopback. Port settings and advertised URLs are unchanged.
 - `AGENTFIELD_CONFIG_FILE` (optional): Path to `agentfield.yaml` (in containers this is typically `/etc/agentfield/config/agentfield.yaml`).
 - `AGENTFIELD_HOME` (recommended in containers): Base directory where AgentField stores local state (SQLite DB, Bolt DB, keys, logs). In Kubernetes, mount a PVC and set `AGENTFIELD_HOME=/data`.
 

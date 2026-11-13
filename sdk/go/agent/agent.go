@@ -2598,35 +2598,46 @@ func (a *Agent) sendWorkflowEvent(event types.WorkflowExecutionEvent) error {
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+	attempts := 1
+	if types.IsTerminalStatus(event.Status) {
+		attempts = 3
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	a.applyControlPlaneAuth(req)
-
-	// Sign request with DID auth headers if configured
-	if a.client != nil {
-		a.client.SignHTTPRequest(req, body)
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		// Each delivery gets a fresh deadline: the previous request may have
+		// timed out after committing the execution but before its projection.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			cancel()
+			return fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		a.applyControlPlaneAuth(req)
+		if a.client != nil {
+			a.client.SignHTTPRequest(req, body)
+		}
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("send request: %w", err)
+			cancel()
+			continue
+		}
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		cancel()
+		if resp.StatusCode >= 400 {
+			lastErr = fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+			if !isTransientPollStatus(resp.StatusCode) {
+				return lastErr
+			}
+		} else if readErr != nil {
+			lastErr = fmt.Errorf("read event response: %w", readErr)
+		} else {
+			return nil
+		}
 	}
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	return nil
+	return lastErr
 }
 
 // CallLocal invokes a registered reasoner directly within this agent process,

@@ -786,7 +786,7 @@ func (s *AgentFieldServer) Start() error {
 	}
 
 	// Start HTTP server (using net/http.Server for graceful shutdown support)
-	addr := ":" + strconv.Itoa(s.config.AgentField.Port)
+	addr := net.JoinHostPort(s.config.AgentField.Host, strconv.Itoa(s.config.AgentField.Port))
 	httpServer := s.newHTTPServer(addr)
 	if !s.setHTTPServer(httpServer) {
 		return nil
@@ -927,7 +927,7 @@ func (s *AgentFieldServer) startAdminGRPCServer() error {
 		return nil
 	}
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.adminGRPCPort))
+	lis, err := net.Listen("tcp", net.JoinHostPort(s.config.AgentField.Host, strconv.Itoa(s.adminGRPCPort)))
 	if err != nil {
 		return err
 	}

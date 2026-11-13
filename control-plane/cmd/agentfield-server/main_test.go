@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 func TestFinishShutdownTreatsTimeoutAsSuccessfulExit(t *testing.T) {
@@ -318,6 +319,10 @@ func TestRunServer_AppliesFlagOverrides(t *testing.T) {
 	cmd.Flags().Bool("ui-dev", false, "")
 	cmd.Flags().Bool("open", true, "")
 	cmd.Flags().Int("port", 0, "")
+	cmd.Flags().String("host", "", "")
+	if err := cmd.Flags().Set("host", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
 	cmd.Flags().Bool("no-vc-execution", false, "")
 
 	if err := cmd.Flags().Set("backend-only", "true"); err != nil {
@@ -331,6 +336,7 @@ func TestRunServer_AppliesFlagOverrides(t *testing.T) {
 	}
 
 	t.Setenv("AGENTFIELD_PORT", "12345")
+	t.Setenv("AGENTFIELD_HOST", "127.0.0.2")
 
 	runServer(cmd, nil)
 
@@ -341,6 +347,17 @@ func TestRunServer_AppliesFlagOverrides(t *testing.T) {
 	}
 	if gotCfg.AgentField.Port != 12345 {
 		t.Fatalf("expected env override port 12345, got %d", gotCfg.AgentField.Port)
+	}
+	encoded, err := yaml.Marshal(gotCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]map[string]any
+	if err := yaml.Unmarshal(encoded, &value); err != nil {
+		t.Fatal(err)
+	}
+	if got := value["agentfield"]["host"]; got != "127.0.0.1" {
+		t.Fatalf("host flag must reach server config, got %v", got)
 	}
 	if gotCfg.Telemetry.AgentFieldVersion != version {
 		t.Fatalf("expected telemetry build version %q, got %q", version, gotCfg.Telemetry.AgentFieldVersion)

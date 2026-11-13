@@ -31,6 +31,7 @@ import {
   guessUrlMimeType,
   type MultimodalContent,
 } from './multimodal.js';
+import { temperatureForModel } from './modelParams.js';
 
 // zod 4 schemas, plus zod 3 schemas from apps that still pin zod 3.
 export type ZodSchema<T> = z.ZodType<T, any> | ZodV3Type<T, any, any>;
@@ -124,6 +125,7 @@ export class AIClient {
     const { provider, modelName, routingProvider } = this.resolveModelChoice(options);
     const model = this.buildModel(options);
     const requestPrompt = this.buildPrompt(prompt, options.content);
+    const temperature = temperatureForModel(modelName, options.temperature ?? this.config.temperature);
 
     if (options.schema) {
       const schema = options.schema;
@@ -133,7 +135,7 @@ export class AIClient {
           prompt: requestPrompt,
           output: 'object',
           system: options.system,
-          temperature: options.temperature ?? this.config.temperature,
+          temperature,
           maxOutputTokens: options.maxTokens ?? this.config.maxTokens,
           schema,
           experimental_repairText: async ({ text }) => repairJsonText(text)
@@ -149,7 +151,7 @@ export class AIClient {
         model: model,
         prompt: requestPrompt,
         system: options.system,
-        temperature: options.temperature ?? this.config.temperature,
+        temperature,
         maxOutputTokens: options.maxTokens ?? this.config.maxTokens
       });
 
@@ -167,7 +169,7 @@ export class AIClient {
       model: this.buildModel(options),
       prompt: this.buildPrompt(prompt, options.content),
       system: options.system,
-      temperature: options.temperature ?? this.config.temperature,
+      temperature: temperatureForModel(modelName, options.temperature ?? this.config.temperature),
       maxOutputTokens: options.maxTokens ?? this.config.maxTokens
     });
     if (!tracker) return streamResult.textStream;
