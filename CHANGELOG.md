@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.30] - 2026-11-13
+
+
+### Fixed
+
+- Fix(sdk-typescript): omit temperature for models that reject it (#1193)
+
+generate, stream, and the tool-call loop forwarded a configured
+temperature to gpt-5, the o-series, and newer Claude models, which
+reject it. Mirror the Go SDK rejectsTemperature criterion and leave
+the field unset for those models. (9679cb6)
+
+- Fix(memory): honor legacy vector delete body scope (#1192)
+
+* fix(memory): honor legacy vector delete body scope
+
+* test(memory): align legacy delete authorization contract (ab60871)
+
 ## [0.1.146-rc.29] - 2026-11-12
 
 
