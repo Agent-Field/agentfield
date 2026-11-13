@@ -38,7 +38,7 @@ export class MemoryInterface {
     this.metadata = params.metadata;
   }
 
-  async set(key: string, data: any, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeId) {
+  async set(key: string, data: any, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeIdFor(scope)) {
     await this.client.set(key, data, {
       scope,
       scopeId,
@@ -46,7 +46,7 @@ export class MemoryInterface {
     });
   }
 
-  get<T = any>(key: string, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeId) {
+  get<T = any>(key: string, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeIdFor(scope)) {
     // If caller uses defaults, perform hierarchical fallback lookup; otherwise fetch the explicit scope only.
     if (scope === this.defaultScope && scopeId === this.defaultScopeId) {
       return this.getWithFallback<T>(key);
@@ -76,7 +76,7 @@ export class MemoryInterface {
     embedding: number[],
     metadata?: any,
     scope: MemoryScope = this.defaultScope,
-    scopeId = this.defaultScopeId
+    scopeId = this.defaultScopeIdFor(scope)
   ) {
     await this.client.setVector(key, embedding, metadata, {
       scope,
@@ -85,7 +85,7 @@ export class MemoryInterface {
     });
   }
 
-  async deleteVector(key: string, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeId) {
+  async deleteVector(key: string, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeIdFor(scope)) {
     await this.client.deleteVector(key, {
       scope,
       scopeId,
@@ -98,7 +98,7 @@ export class MemoryInterface {
     // searches its own scope. An explicit scope in options wins, and the default
     // scopeId only applies to the default scope.
     const scope = options.scope ?? this.defaultScope;
-    const scopeId = options.scopeId ?? (scope === this.defaultScope ? this.defaultScopeId : undefined);
+    const scopeId = options.scopeId ?? this.defaultScopeIdFor(scope);
     return this.client.searchVector(queryEmbedding, {
       ...options,
       scope,
@@ -107,7 +107,7 @@ export class MemoryInterface {
     });
   }
 
-  delete(key: string, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeId) {
+  delete(key: string, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeIdFor(scope)) {
     return this.client.delete(key, {
       scope,
       scopeId,
@@ -115,7 +115,7 @@ export class MemoryInterface {
     });
   }
 
-  exists(key: string, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeId) {
+  exists(key: string, scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeIdFor(scope)) {
     return this.client.exists(key, {
       scope,
       scopeId,
@@ -123,7 +123,7 @@ export class MemoryInterface {
     });
   }
 
-  listKeys(scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeId) {
+  listKeys(scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeIdFor(scope)) {
     return this.client.listKeys(scope, {
       scope,
       scopeId,
@@ -150,7 +150,7 @@ export class MemoryInterface {
     text: string,
     metadata?: any,
     scope: MemoryScope = this.defaultScope,
-    scopeId = this.defaultScopeId,
+    scopeId = this.defaultScopeIdFor(scope),
     embeddingOptions?: AIEmbeddingOptions
   ) {
     const embedding = await this.embedText(text, embeddingOptions);
@@ -158,7 +158,7 @@ export class MemoryInterface {
     return embedding;
   }
 
-  async deleteVectors(keys: string[], scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeId) {
+  async deleteVectors(keys: string[], scope: MemoryScope = this.defaultScope, scopeId = this.defaultScopeIdFor(scope)) {
     for (const key of keys) {
       await this.deleteVector(key, scope, scopeId);
     }
@@ -214,6 +214,10 @@ export class MemoryInterface {
     });
 
     return order;
+  }
+
+  private defaultScopeIdFor(scope: MemoryScope) {
+    return scope === this.defaultScope ? this.defaultScopeId : undefined;
   }
 
   private resolveScopeId(scope: MemoryScope, metadata?: MemoryRequestMetadata) {
