@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -461,6 +462,83 @@ func TestDeleteVectorHandler_BackwardCompatibilityWithBody(t *testing.T) {
 	require.Equal(t, "session", storage.deleteScope)
 	require.Equal(t, "session-old", storage.deleteScopeID)
 	require.Equal(t, "legacy-vec", storage.deleteKey)
+}
+
+func TestDeleteVectorHandler_ScopeSelection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name    string
+		method  string
+		path    string
+		body    string
+		scope   string
+		scopeID string
+	}{
+		{"body_actor", http.MethodPost, "/vector/delete", `{"key":"doc","scope":"actor"}`, "actor", "actor-explicit"},
+		{"body_session", http.MethodPost, "/vector/delete", `{"key":"doc","scope":"session"}`, "session", "session-context"},
+		{"body_workflow", http.MethodPost, "/vector/delete", `{"key":"doc","scope":"workflow"}`, "workflow", "workflow-context"},
+		{"body_global", http.MethodPost, "/vector/delete", `{"key":"doc","scope":"global"}`, "global", "global"},
+		{"omitted_scope", http.MethodPost, "/vector/delete", `{"key":"doc"}`, "workflow", "workflow-context"},
+		{"null_scope", http.MethodPost, "/vector/delete", `{"key":"doc","scope":null}`, "workflow", "workflow-context"},
+		{"empty_query", http.MethodPost, "/vector/delete?scope=", `{"key":"doc","scope":"actor"}`, "actor", "actor-explicit"},
+		{"query_overrides_body", http.MethodPost, "/vector/delete?scope=session", `{"key":"doc","scope":"actor"}`, "session", "session-context"},
+		{"query_only", http.MethodPost, "/vector/delete?scope=actor", `{"key":"doc"}`, "actor", "actor-explicit"},
+		{"restful_query", http.MethodDelete, "/vector/doc?scope=session", `{"key":"other","scope":"actor"}`, "session", "session-context"},
+		{"restful_default", http.MethodDelete, "/vector/doc", `{"key":"other","scope":"actor"}`, "workflow", "workflow-context"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := &vectorStorageStub{}
+			router := gin.New()
+			router.POST("/vector/delete", DeleteVectorHandler(storage))
+			router.DELETE("/vector/:key", DeleteVectorHandler(storage))
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Workflow-ID", "workflow-context")
+			req.Header.Set("X-Session-ID", "session-context")
+			req.Header.Set("X-Actor-ID", "actor-explicit")
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+
+			require.Equal(t, http.StatusNoContent, resp.Code)
+			require.Equal(t, tt.scope, storage.deleteScope)
+			require.Equal(t, tt.scopeID, storage.deleteScopeID)
+			require.Equal(t, "doc", storage.deleteKey)
+		})
+	}
+}
+
+func TestDeleteVectorHandler_AuthorizesBodyScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, scope := range []string{"global", "actor"} {
+		t.Run(scope, func(t *testing.T) {
+			storage := &vectorStorageStub{}
+			router := gin.New()
+			router.Use(middleware.MemoryPermissionMiddleware(nil, nil, nil,
+				middleware.MemoryPermissionConfig{Enabled: true, EnforceScopeOwnership: true}))
+			router.POST("/vector/delete", DeleteVectorHandler(storage))
+			body, err := json.Marshal(DeleteVectorRequest{Key: "doc", Scope: &scope})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/vector/delete", strings.NewReader(string(body)))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Workflow-ID", "workflow-context")
+			req.Header.Set("X-Actor-ID", "actor-explicit")
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+
+			if scope == "global" {
+				require.Equal(t, http.StatusNoContent, resp.Code)
+				require.Equal(t, "global", storage.deleteScope)
+				require.Equal(t, "global", storage.deleteScopeID)
+				require.Equal(t, "doc", storage.deleteKey)
+			} else {
+				require.Equal(t, http.StatusForbidden, resp.Code)
+				require.Contains(t, resp.Body.String(), "memory_identity_required")
+				require.Contains(t, resp.Body.String(), "actor-scoped")
+				require.Empty(t, storage.deleteKey)
+			}
+		})
+	}
 }
 
 func TestDeleteVectorHandler_StorageError(t *testing.T) {

@@ -139,12 +139,14 @@ func GetVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 // DeleteVectorHandler removes a vector by key.
 func DeleteVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		var scopePtr *string
 		key := c.Param("key")
 		if key == "" {
-			// Fallback to body for backward compatibility if needed, but the plan says RESTful.
+			// Legacy POST requests carry both key and scope in the body.
 			var req DeleteVectorRequest
 			if err := c.ShouldBindJSON(&req); err == nil {
 				key = req.Key
+				scopePtr = req.Scope
 			} else {
 				c.JSON(http.StatusBadRequest, ErrorResponse{
 					Error:   "invalid_request",
@@ -155,8 +157,8 @@ func DeleteVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 			}
 		}
 
+		// Preserve query parameter precedence for legacy callers.
 		scopeParam := c.Query("scope")
-		var scopePtr *string
 		if scopeParam != "" {
 			scopePtr = &scopeParam
 		}
