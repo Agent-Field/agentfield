@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.31] - 2026-11-13
+
+
+### Fixed
+
+- Fix(sdk-ts): keep memory scope ids with their own scope (#1189) (47be6b8)
+
+- Fix(python): keep AI prompt augmentation out of caller history (#1186)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (f714089)
+
+- Fix(python): finish harness cleanup before propagating cancellation (#1180)
+
+* fix(python): finish harness cleanup before propagating cancellation
+
+* fix(python): retain harness cleanup during loop shutdown
+
+* test(python): respect cancellation message version contract (0145089)
+
 ## [0.1.146-rc.30] - 2026-11-13
 
 
