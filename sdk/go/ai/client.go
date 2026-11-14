@@ -389,14 +389,20 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 			message := data[:idx]
 			d.accumulated = []byte(data[idx+2:])
 
-			// Parse SSE message
-			// The SSE field is "data:" with an optional single space after the colon.
-			if strings.HasPrefix(message, "data:") {
-				jsonData := strings.TrimPrefix(message, "data:")
-				jsonData = strings.TrimSpace(jsonData)
+			// SSE fields may appear in any order. Join data fields with newlines,
+			// ignoring comments and metadata such as event, id, and retry.
+			var dataLines []string
+			for _, line := range strings.Split(message, "\n") {
+				field, value, _ := strings.Cut(line, ":")
+				if field == "data" {
+					dataLines = append(dataLines, strings.TrimPrefix(value, " "))
+				}
+			}
+			if len(dataLines) > 0 {
+				jsonData := strings.Join(dataLines, "\n")
 
 				// Check for stream end
-				if jsonData == "[DONE]" {
+				if strings.TrimSpace(jsonData) == "[DONE]" {
 					return StreamChunk{}, io.EOF
 				}
 
