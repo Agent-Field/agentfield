@@ -22,6 +22,7 @@ replaced accepted them.
 
 import base64
 from typing import Any
+from urllib.parse import unquote_to_bytes
 
 # Cap on how much of a rejected URL is echoed back in the error. Only the
 # metadata head (everything before the first comma) is ever reported, so a
@@ -32,7 +33,7 @@ _MAX_REPORTED_HEAD = 64
 # rejects it — but RFC 2045 encoders wrap payloads at 76 columns and some
 # producers pad the comma with a space. Deleting it keeps those decodable
 # while a genuinely corrupt payload still raises.
-_ASCII_WHITESPACE = {ord(c): None for c in " \t\n\r\v\f"}
+_ASCII_WHITESPACE = b" \t\n\r\v\f"
 
 
 def is_data_url(url: Any) -> bool:
@@ -60,8 +61,9 @@ def data_url_mime_type(url: str) -> str:
 def decode_data_url(url: str) -> bytes:
     """Return the decoded bytes carried inline by a base64 ``data:`` URL.
 
-    ASCII whitespace in the payload (line wrapping, a trailing newline, a space
-    after the comma) is ignored.
+    URL escapes in the payload are decoded before base64 validation. ASCII
+    whitespace (line wrapping, a trailing newline, a space after the comma)
+    is ignored.
 
     Raises:
         ValueError: if *url* has no ``,`` separator, its metadata head does not
@@ -78,7 +80,7 @@ def decode_data_url(url: str) -> bytes:
         raise ValueError(
             f"Unsupported data: URL (expected base64 payload): {reported!r}"
         )
-    payload = payload.translate(_ASCII_WHITESPACE)
-    if not payload:
+    decoded_payload = unquote_to_bytes(payload).translate(None, _ASCII_WHITESPACE)
+    if not decoded_payload:
         raise ValueError(f"Empty data: URL payload: {reported!r}")
-    return base64.b64decode(payload, validate=True)
+    return base64.b64decode(decoded_payload, validate=True)
