@@ -2177,6 +2177,7 @@ class AgentFieldClient:
             AgentFieldClientError: If polling encounters a non-retryable error.
             ExecutionTimeoutError: If timeout is reached.
         """
+
         async def poll() -> ApprovalStatusResponse:
             interval = poll_interval
             backoff_factor = 2.0
@@ -2199,7 +2200,9 @@ class AgentFieldClient:
         if timeout is None:
             return await poll()
 
-        timeout_message = f"Approval for execution {execution_id} timed out after {timeout}s"
+        timeout_message = (
+            f"Approval for execution {execution_id} timed out after {timeout}s"
+        )
         if timeout <= 0:
             raise ExecutionTimeoutError(timeout_message)
 
