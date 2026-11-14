@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.32] - 2026-11-14
+
+
+### Fixed
+
+- Fix(python): enforce total timeout while awaiting approval (#1198)
+
+* fix(python): enforce total timeout while awaiting approval
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* fix(python): preserve approval wait cancellation on supported runtimes
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* style(python): format approval polling additions
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+---------
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (c148bb5)
+
+- Fix(go-sdk): parse data fields in SSE events (#1197)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (07cbd29)
+
+- Fix(sdk/go): surface in-stream error events from StreamComplete (#1194)
+
+An SSE data event of the form {"error":{...}} was unmarshalled into an
+empty StreamChunk and yielded as a normal chunk, so the caller never saw
+the provider failure. Return it as an error so it reaches errCh.
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (fef65a5)
+
 ## [0.1.146-rc.31] - 2026-11-13
 
 
