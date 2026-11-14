@@ -478,3 +478,38 @@ func TestDefaultWaitForShutdown(t *testing.T) {
 		t.Fatal("defaultWaitForShutdown did not unblock after SIGINT")
 	}
 }
+
+// The documented AGENTFIELD_API_CORS_* variables must reach the config when
+// there is no config file (Railway, bare binary): viper's AutomaticEnv only
+// resolves keys it already knows from a file, so nothing else carries them.
+func TestLoadConfig_CORSFromEnvWithoutConfigFile(t *testing.T) {
+	t.Setenv("AGENTFIELD_CONFIG_FILE", "")
+	t.Setenv("AGENTFIELD_API_CORS_ALLOWED_ORIGINS", "https://app.example.com, https://admin.example.com")
+	t.Setenv("AGENTFIELD_API_CORS_ALLOWED_METHODS", "GET,POST")
+	t.Setenv("AGENTFIELD_API_CORS_ALLOWED_HEADERS", "Authorization,X-API-Key")
+	t.Setenv("AGENTFIELD_API_CORS_EXPOSED_HEADERS", "X-Total-Count")
+	t.Setenv("AGENTFIELD_API_CORS_ALLOW_CREDENTIALS", "true")
+	viper.Reset()
+
+	cfg, err := loadConfig("/dev/null")
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+
+	cors := cfg.API.CORS
+	if got, want := fmt.Sprint(cors.AllowedOrigins), "[https://app.example.com https://admin.example.com]"; got != want {
+		t.Errorf("allowed origins = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(cors.AllowedMethods), "[GET POST]"; got != want {
+		t.Errorf("allowed methods = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(cors.AllowedHeaders), "[Authorization X-API-Key]"; got != want {
+		t.Errorf("allowed headers = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(cors.ExposedHeaders), "[X-Total-Count]"; got != want {
+		t.Errorf("exposed headers = %s, want %s", got, want)
+	}
+	if !cors.AllowCredentials {
+		t.Error("expected allow credentials true from env")
+	}
+}
