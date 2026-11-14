@@ -2196,12 +2196,25 @@ class AgentFieldClient:
 
                 interval = min(interval * backoff_factor, max_interval)
 
+        if timeout is None:
+            return await poll()
+
+        timeout_message = f"Approval for execution {execution_id} timed out after {timeout}s"
+        if timeout <= 0:
+            raise ExecutionTimeoutError(timeout_message)
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        polling = asyncio.create_task(poll())
         try:
-            return await asyncio.wait_for(poll(), timeout=timeout)
-        except asyncio.TimeoutError as exc:
-            raise ExecutionTimeoutError(
-                f"Approval for execution {execution_id} timed out after {timeout}s"
-            ) from exc
+            done, _ = await asyncio.wait({polling}, timeout=timeout)
+            if not done or loop.time() >= deadline:
+                raise ExecutionTimeoutError(timeout_message)
+            return polling.result()
+        finally:
+            if not polling.done():
+                polling.cancel()
+            await asyncio.gather(polling, return_exceptions=True)
 
     async def post_execution_logs(
         self,

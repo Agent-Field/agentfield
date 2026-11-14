@@ -55,6 +55,7 @@ async def test_timeout_cancels_in_flight_status_request(client, router):
         try:
             await asyncio.Event().wait()
         finally:
+            await asyncio.sleep(0)
             cancelled.set()
 
     router.get(
@@ -154,5 +155,61 @@ async def test_caller_cancellation_cleans_up_status_request(client, router):
             await task
         assert cancelled.is_set()
     finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_wins_when_status_resolves(client, router):
+    waiting = asyncio.current_task()
+
+    async def approved_response(request):
+        assert waiting.cancel()
+        return httpx.Response(200, json={"status": "approved"})
+
+    route = router.get(
+        "https://control-plane.test/api/v1/agents/test-node/executions/exec-1/approval-status"
+    ).mock(side_effect=approved_response)
+
+    with pytest.raises(asyncio.CancelledError):
+        await client.wait_for_approval("exec-1", poll_interval=0, timeout=1)
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_does_not_leave_a_status_request(client, router):
+    started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    finish_cleanup = asyncio.Event()
+
+    async def slow_response(request):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            try:
+                await finish_cleanup.wait()
+            finally:
+                cleanup_finished.set()
+
+    router.get(
+        "https://control-plane.test/api/v1/agents/test-node/executions/exec-1/approval-status"
+    ).mock(side_effect=slow_response)
+    task = asyncio.create_task(
+        client.wait_for_approval("exec-1", poll_interval=0, timeout=10)
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=0.5)
+        task.cancel()
+        await asyncio.wait_for(cleanup_started.wait(), timeout=0.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.5)
+        assert cleanup_finished.is_set()
+    finally:
+        finish_cleanup.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
