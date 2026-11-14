@@ -364,14 +364,8 @@ class MemoryClient:
 
             # Extract the actual data from the memory response
             if isinstance(result, dict) and "data" in result:
-                # The server returns JSON-encoded data, so we need to decode it
-                data = result["data"]
-                if isinstance(data, str):
-                    try:
-                        return json.loads(data)
-                    except json.JSONDecodeError:
-                        return data
-                return data
+                # response.json() already decoded the value, including strings.
+                return result["data"]
 
             return result
         except MemoryAccessError:

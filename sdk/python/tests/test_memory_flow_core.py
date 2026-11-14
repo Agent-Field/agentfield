@@ -1,4 +1,3 @@
-import json
 from types import SimpleNamespace
 
 import httpx
@@ -57,11 +56,7 @@ async def test_memory_round_trip(monkeypatch, dummy_headers):
             data = store.get(scope, {}).get(json["key"])
             if data is None:
                 return DummyAsyncResponse(404, {})
-            payload = {
-                "data": json_module.dumps(data)
-                if not isinstance(data, (dict, list))
-                else data
-            }
+            payload = {"data": data}
             return DummyAsyncResponse(200, payload)
 
         async def request(
@@ -87,8 +82,6 @@ async def test_memory_round_trip(monkeypatch, dummy_headers):
             scope = (params or {}).get("scope") or "default"
             keys = [{"key": key} for key in sorted(store.get(scope, {}))]
             return DummyAsyncResponse(200, keys)
-
-    json_module = json
 
     monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: AsyncClientStub())
@@ -129,7 +122,7 @@ async def test_memory_client_uses_agentfield_async_request(dummy_headers):
         async def _async_request(self, method, url, **kwargs):
             calls.append((method, url, kwargs))
             if url.endswith("/memory/get"):
-                return DummyAsyncResponse(200, {"data": json.dumps({"value": 42})})
+                return DummyAsyncResponse(200, {"data": {"value": 42}})
             return DummyAsyncResponse(200, {"ok": True})
 
     context = SimpleNamespace(to_headers=lambda: dict(dummy_headers))

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -66,7 +65,7 @@ async def test_set_posts_payload(memory_client, monkeypatch, dummy_headers):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_get_decodes_json_payload(memory_client, monkeypatch):
+async def test_get_extracts_json_value(memory_client, monkeypatch):
     record = {}
 
     class DummyAsyncClient:
@@ -80,9 +79,8 @@ async def test_get_decodes_json_payload(memory_client, monkeypatch):
             record["url"] = url
             record["json"] = json
             record["headers"] = headers
-            return DummyResponse(200, {"data": json_module.dumps({"count": 1})})
+            return DummyResponse(200, {"data": {"count": 1}})
 
-    json_module = json
     monkeypatch.setattr(
         httpx, "AsyncClient", lambda *args, **kwargs: DummyAsyncClient()
     )
@@ -277,7 +275,7 @@ async def test_exists_is_true_for_a_stored_falsy_value(memory_client, monkeypatc
             return None
 
         def json(self):
-            return {"data": "null"}
+            return {"data": None}
 
     async def fake_request(method, url, json=None, headers=None, timeout=None):  # type: ignore[override]
         return StoredNullResponse()
