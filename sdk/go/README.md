@@ -122,6 +122,54 @@ result, err := approvalClient.WaitForApproval(waitCtx, nodeID, executionID,
 
 **Methods:** `RequestApproval()`, `GetApprovalStatus()`, `WaitForApproval()`
 
+## Memory Change Subscriptions
+
+With a `ControlPlaneMemoryBackend`, an agent can react to memory changes as they happen. Other backends return `agent.ErrMemoryEventsUnsupported`.
+
+```go
+a, err := agent.New(agent.Config{
+    NodeID:        "watcher",
+    Version:       "1.0.0",
+    AgentFieldURL: "http://localhost:8080",
+    MemoryBackend: agent.NewControlPlaneMemoryBackend("http://localhost:8080", apiKey, "watcher"),
+})
+
+sub, err := a.Memory().Watch(ctx, agent.WatchOptions{
+    Patterns: []string{"user_*", "config.*"},
+    Scope:    agent.ScopeSession, // empty = every scope
+    ScopeID:  sessionID,          // empty = every ID in the scope
+})
+if err != nil {
+    log.Fatal(err) // bad pattern, auth failure, or control plane unreachable
+}
+defer sub.Close()
+
+for ev := range sub.Events() {
+    switch ev.Action {
+    case agent.MemoryActionSet: // ev.PreviousData is empty on a first write
+        v, _ := ev.Value()
+        fmt.Printf("set %s = %v\n", ev.Key, v)
+    case agent.MemoryActionDelete:
+        fmt.Printf("deleted %s\n", ev.Key)
+    }
+}
+if err := sub.Err(); err != nil {
+    log.Printf("subscription ended: %v", err)
+}
+
+// Callback form: one handler goroutine, events delivered in order.
+sub2, err := a.Memory().OnChange(ctx, "user_*.preferences", func(ev agent.MemoryChangeEvent) {
+    fmt.Println("preferences changed:", ev.Key)
+})
+```
+
+- **Events:** `Action` is `set` or `delete`. `Data` and `PreviousData` are raw JSON; use `Value()` or `DecodeData(&dst)`. `Metadata` names the agent, actor and workflow behind the change. The `actor` scope is reported as `agent.ScopeUser`.
+- **Patterns:** filtered by the control plane with Go's `path/filepath.Match` rules: `*` matches any characters except `/`, `?` one character, `[...]` a class. `.` is literal, so `config.*` does not match `configX`. Invalid patterns and commas are rejected by `Watch`.
+- **Lifetime:** the subscription runs until `Close()` or until `ctx` is cancelled; then `Events()` closes and `Err()` is nil.
+- **Reconnects:** if the connection drops, the SDK reconnects with backoff (1s doubling to 30s), up to `MaxReconnectAttempts` (default 5; negative disables). A 4xx answer such as 401 or 403 stops it at once. When it gives up, `Events()` closes and `Err()` says why.
+- **No replay:** changes made while disconnected are not resent. Backfill with `Memory().History(ctx, agent.MemoryHistoryOptions{Since: lastEvent.Timestamp, ...})`.
+- **Backpressure:** `Events()` is buffered (`BufferSize`, default 64). When it is full, the stream waits for you rather than dropping events, so keep handlers fast or hand work to another goroutine.
+
 ## Logging
 
 - `AGENTFIELD_LOG_STDOUT` controls the on-by-default structured JSON mirror; `0`, `false`, `no`, or `off` disables it without disabling control-plane dispatch.
