@@ -715,3 +715,23 @@ func (m *configStorageMock) GetInboundEventByWorkflowID(context.Context, string)
 func (m *configStorageMock) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) {
 	return &types.TriggerMetrics{}, nil
 }
+
+func (m *configStorageMock) CountExecutionsByStatus(ctx context.Context, start, end time.Time) (types.ExecutionStatusCounts, error) {
+	return types.ExecutionStatusCounts{}, nil
+}
+
+func (m *configStorageMock) QueryRecentFailures(ctx context.Context, start, end time.Time, limit int) ([]*types.Execution, error) {
+	return nil, nil
+}
+
+func (m *configStorageMock) QueryDeveloperHome(ctx context.Context, q types.DeveloperHomeQuery) (*types.DeveloperHomeData, error) {
+	return &types.DeveloperHomeData{}, nil
+}
+
+func (m *configStorageMock) QueryBlastRadius(ctx context.Context, agentNodeID string, start, end time.Time) ([]types.DeveloperHomeEntryPoint, error) {
+	return nil, nil
+}
+
+func (m *configStorageMock) CountForwarderDeadLetters(ctx context.Context) (int64, error) {
+	return 0, nil
+}

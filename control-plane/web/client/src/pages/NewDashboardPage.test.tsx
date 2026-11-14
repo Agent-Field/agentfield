@@ -1,24 +1,15 @@
-// @ts-nocheck
-import { render, screen, fireEvent, within } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { MemoryRouter } from 'react-router';
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { NewDashboardPage } from "./NewDashboardPage";
-import { WorkflowSummary } from "@/types/workflows";
+import { homeFixture } from "@/components/home/homeFixture";
+import type { DeveloperHomeResponse } from "@/types/developerHome";
 
-// Mock ResizeObserver for recharts
-const ResizeObserverMock = vi.fn(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}));
-vi.stubGlobal('ResizeObserver', ResizeObserverMock);
-
-// Mock dependencies
 const mockNavigate = vi.fn();
 vi.mock("react-router", async () => ({
-  ...(await vi.importActual("react-router")),
+  ...(await vi.importActual<typeof import("react-router")>("react-router")),
   useNavigate: () => mockNavigate,
 }));
 
@@ -30,270 +21,248 @@ vi.mock("@/hooks/queries", () => ({
   useRuns: vi.fn(),
   useLLMHealth: vi.fn(),
   useQueueStatus: vi.fn(),
-  useAgents: vi.fn(),
 }));
 
 vi.mock("@/services/dashboardService", () => ({
-  getDashboardSummary: vi.fn(),
-  getTriggerMetrics: vi.fn(),
+  getDeveloperHome: vi.fn(),
 }));
 
-// Mock child components that might have complex internal logic
-vi.mock("@/components/dashboard/DashboardRunOutcomeStrip", () => ({
-  DashboardRunOutcomeStrip: () => <div data-testid="mock-outcome-strip" />,
-}));
-vi.mock("@/components/dashboard/DashboardActiveWorkload", () => ({
-  DashboardActiveWorkload: () => <div data-testid="mock-active-workload" />,
-}));
+import { useLLMHealth, useQueueStatus, useRuns } from "@/hooks/queries";
+import { getDeveloperHome } from "@/services/dashboardService";
+import { NewDashboardPage } from "./NewDashboardPage";
 
+function renderPage() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
+  return render(<NewDashboardPage />, { wrapper });
+}
 
-// Import mocks for manipulation
-import { useRuns, useLLMHealth, useQueueStatus, useAgents } from "@/hooks/queries";
-import { getDashboardSummary, getTriggerMetrics } from "@/services/dashboardService";
+const run = {
+  run_id: "run_9",
+  status: "failed",
+  root_execution_status: "failed",
+  started_at: "2026-11-09T11:58:00Z",
+  latest_activity: "2026-11-09T11:59:00Z",
+  completed_at: "2026-11-09T11:59:00Z",
+  display_name: "process_order",
+  root_reasoner: "process_order",
+  total_executions: 4,
+  duration_ms: 1200,
+  terminal: true,
+};
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: false,
-      cacheTime: 0,
-    },
-  },
-});
-
-const wrapper = ({ children }) => (
-  <QueryClientProvider client={queryClient}>
-    <MemoryRouter>{children}</MemoryRouter>
-  </QueryClientProvider>
-);
-
-const mockRuns: WorkflowSummary[] = [
-  {
-    run_id: "run-1",
-    status: "running",
-    root_execution_status: "running",
-    started_at: new Date().toISOString(),
-    latest_activity: new Date().toISOString(),
-    display_name: "Reasoner A",
-    root_reasoner: "Reasoner A",
-    current_task: "Doing something",
-    total_executions: 5,
-    duration_ms: null,
-    terminal: false,
-  },
-  {
-    run_id: "run-2",
-    status: "succeeded",
-    root_execution_status: "succeeded",
-    started_at: new Date(Date.now() - 3600 * 1000).toISOString(),
-    completed_at: new Date(Date.now() - 3500 * 1000).toISOString(),
-    latest_activity: new Date(Date.now() - 3500 * 1000).toISOString(),
-    display_name: "Reasoner B",
-    root_reasoner: "Reasoner B",
-    current_task: "Finished",
-    total_executions: 10,
-    duration_ms: 100000,
-    terminal: true,
-  },
-  {
-    run_id: "run-3",
-    status: "failed",
-    root_execution_status: "failed",
-    started_at: new Date(Date.now() - 7200 * 1000).toISOString(),
-    completed_at: new Date(Date.now() - 7100 * 1000).toISOString(),
-    latest_activity: new Date(Date.now() - 7100 * 1000).toISOString(),
-    display_name: "Reasoner C",
-    root_reasoner: "Reasoner C",
-    current_task: "It broke",
-    total_executions: 2,
-    duration_ms: 50000,
-    terminal: true,
-  },
-];
+function mockHome(data: DeveloperHomeResponse) {
+  vi.mocked(getDeveloperHome).mockResolvedValue(data);
+}
 
 describe("NewDashboardPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    queryClient.clear();
-
-    // Default healthy state
+    try {
+      window.localStorage.clear();
+    } catch {
+      // Storage may be missing in the test environment.
+    }
+    vi.mocked(useRuns).mockReturnValue({
+      data: { workflows: [run], total_count: 1 },
+      isLoading: false,
+    } as unknown as ReturnType<typeof useRuns>);
     vi.mocked(useLLMHealth).mockReturnValue({
-      data: { endpoints: [{ name: "test-llm", healthy: true }] },
-      isLoading: false,
-    });
+      data: { enabled: false, healthy: false, endpoints: [] },
+    } as unknown as ReturnType<typeof useLLMHealth>);
     vi.mocked(useQueueStatus).mockReturnValue({
-      data: { enabled: true, max_per_agent: 3, total_running: 0, agents: [] },
+      data: { enabled: false, max_per_agent: 0, agents: [], total_running: 0 },
+    } as unknown as ReturnType<typeof useQueueStatus>);
+  });
+
+  it("shows the outage: status line, alerts, figures, map, problems, endpoints and approvals", async () => {
+    mockHome(homeFixture());
+    renderPage();
+
+    expect(await screen.findByText("2 problems")).toBeInTheDocument();
+    expect(screen.getByText(/2 of 4 agents healthy/)).toBeInTheDocument();
+    expect(screen.getByText("orchestrator stopped sending heartbeats 20 min ago")).toBeInTheDocument();
+    expect(screen.getByText(/Failed calls at 21%, usual 1.0%/)).toBeInTheDocument();
+    expect(screen.getByText("Calls / hour")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Call map" })).toBeInTheDocument();
+    expect(screen.getByText(/connection refused to <id> after N attempts/)).toBeInTheDocument();
+    expect(screen.getByText("Endpoints")).toBeInTheDocument();
+    expect(screen.getByText(/registered, waiting for tag approval/)).toBeInTheDocument();
+    expect(screen.getByText("Recent runs")).toBeInTheDocument();
+    // Nothing configured, nothing shown.
+    expect(screen.queryByText("In and out")).not.toBeInTheDocument();
+    expect(screen.queryByText("Spend / hour")).not.toBeInTheDocument();
+    expect(getDeveloperHome).toHaveBeenCalledWith("1h");
+  });
+
+  it("links every row to its run or filter", async () => {
+    mockHome(homeFixture());
+    renderPage();
+    await screen.findByText("2 problems");
+
+    const failedRuns = screen.getAllByRole("link", { name: "Failed runs" });
+    expect(failedRuns[0]).toHaveAttribute("href", "/runs?status=failed&search=orchestrator");
+    expect(screen.getAllByRole("link", { name: "billing.charge" })[0]).toHaveAttribute("href", "/runs/run_9");
+
+    const endpoints = screen.getByText("Endpoints").closest("div.rounded-lg, div[class*='rounded']")!.parentElement!;
+    const row = within(endpoints).getByText("orchestrator.process_order").closest("tr")!;
+    fireEvent.click(row);
+    expect(mockNavigate).toHaveBeenCalledWith("/runs?search=process_order");
+
+    fireEvent.click(screen.getByText("run_9").closest("tr")!);
+    expect(mockNavigate).toHaveBeenCalledWith("/runs/run_9");
+  });
+
+  it("shows a healthy install without alerts", async () => {
+    mockHome(
+      homeFixture({
+        stopped_agents: [],
+        problems: [],
+        totals: { counts: { total: 100, succeeded: 100, failed: 0, cancelled: 0, terminal: 100 }, held: 0, running_now: 1 },
+        approvals: { total: 0, items: [] },
+        agents: homeFixture().agents.filter((a) => a.status === "running"),
+        agent_counts: { registered: 2, running: 2, offline: 0, degraded: 0, starting: 0, pending_approval: 0, unknown: 0 },
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("No problems")).toBeInTheDocument();
+    expect(screen.getByText(/No failed calls in the last hour/)).toBeInTheDocument();
+    expect(screen.queryByText("Waiting on people", { selector: "h3, [class*='CardTitle']" })).not.toBeInTheDocument();
+  });
+
+  it("shows only the first-agent panel on an empty install", async () => {
+    vi.mocked(useRuns).mockReturnValue({
+      data: { workflows: [], total_count: 0 },
       isLoading: false,
-    });
-    vi.mocked(useAgents).mockReturnValue({
-      data: { count: 1, nodes: [{ health_status: "ready" }] },
-      isLoading: false,
-    });
-    vi.mocked(getDashboardSummary).mockResolvedValue({
-      executions: { today: 10 },
-      success_rate: 90,
-      agents: { running: 1 },
-    });
-  });
-
-  it("renders loading skeletons", () => {
-    vi.mocked(useRuns).mockReturnValue({ isLoading: true, data: undefined });
-    const { container } = render(<NewDashboardPage />, { wrapper });
-
-    expect(screen.queryByText("Active runs")).toBeNull();
-    const skeletons = container.querySelectorAll('.animate-pulse');
-    expect(skeletons.length).toBeGreaterThan(0);
-  });
-
-  it("renders empty state when no runs are available", () => {
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [], total_count: 0 } });
-    render(<NewDashboardPage />, { wrapper });
-
-    expect(screen.getAllByText("No runs yet")[0]).toBeInTheDocument();
-    expect(screen.getByText(/Trigger a workflow from your agent or CLI/)).toBeInTheDocument();
-  });
-
-  it("renders active runs when there are active runs", () => {
-    const activeRun = { ...mockRuns[0] };
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [activeRun], total_count: 1 } });
-    render(<NewDashboardPage />, { wrapper });
-
-    expect(screen.getByText("Active runs")).toBeInTheDocument();
-    expect(screen.getAllByText("Reasoner A")[0]).toBeInTheDocument();
-    expect(screen.getByText("Doing something")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Open run" }));
-    expect(mockNavigate).toHaveBeenCalledWith("/runs/run-1");
-  });
-
-  it("renders latest completed run when no active runs", () => {
-    const completedRun = { ...mockRuns[1] };
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [completedRun], total_count: 1 } });
-    render(<NewDashboardPage />, { wrapper });
-    
-    expect(screen.getByText("Latest run")).toBeInTheDocument();
-    expect(screen.getAllByText("Reasoner B")[0]).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Open run" }));
-    expect(mockNavigate).toHaveBeenCalledWith("/runs/run-2");
-  });
-
-  it("renders issues banner for unhealthy LLM endpoints", () => {
-    vi.mocked(useLLMHealth).mockReturnValue({
-      data: { endpoints: [{ name: "bad-llm", healthy: false }] },
-      isLoading: false,
-    });
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [], total_count: 0 } });
-    render(<NewDashboardPage />, { wrapper });
-
-    expect(screen.getByText("System issues")).toBeInTheDocument();
-    expect(screen.getByText(/LLM circuit OPEN on endpoint: bad-llm/i)).toBeInTheDocument();
-  });
-
-  it("renders issues banner for overloaded agent queues", () => {
-    vi.mocked(useQueueStatus).mockReturnValue({
-      data: {
-        enabled: true,
-        max_per_agent: 10,
-        total_running: 10,
-        agents: [{ agent_node_id: "agent-1", running: 10, max: 10, available: 0 }],
-      },
-      isLoading: false,
-    });
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [], total_count: 0 } });
-
-    render(<NewDashboardPage />, { wrapper });
-
-    expect(screen.getByText("System issues")).toBeInTheDocument();
-    expect(screen.getByText("LLM backend health")).toBeInTheDocument();
-    expect(screen.getByText("Healthy")).toBeInTheDocument();
-    expect(screen.getByText(/Queue at capacity for agent: agent-1/i)).toBeInTheDocument();
-  });
-
-  it("renders queue card disabled state when limiter is off", () => {
-    vi.mocked(useQueueStatus).mockReturnValue({
-      data: {
-        enabled: false,
-        max_per_agent: 0,
-        total_running: 0,
+    } as unknown as ReturnType<typeof useRuns>);
+    mockHome(
+      homeFixture({
         agents: [],
-      },
+        agent_counts: { registered: 0, running: 0, offline: 0, degraded: 0, starting: 0, pending_approval: 0, unknown: 0 },
+        stopped_agents: [],
+        totals: { counts: { total: 0, succeeded: 0, failed: 0, cancelled: 0, terminal: 0 }, held: 0, running_now: 0 },
+        baseline: undefined,
+        series: [],
+        problems: [],
+        edges: [],
+        entries: [],
+        endpoints: [],
+        approvals: { total: 0, items: [] },
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("Connect your first agent")).toBeInTheDocument();
+    expect(screen.getByText("pip install agentfield")).toBeInTheDocument();
+    expect(screen.queryByText("Recent runs")).not.toBeInTheDocument();
+    expect(screen.queryByText("Calls / hour")).not.toBeInTheDocument();
+  });
+
+  it("shows in-and-out and spend only when they are in use", async () => {
+    mockHome(
+      homeFixture({
+        spend: { window_cost_usd: 2, window_tokens: 5000, window_rows: 3, baseline_rows: 0 },
+        triggers: { configured: 1, enabled: 1, events: 12, dispatched: 12, failed: 0, dead_letters: 0 },
+        webhooks: {
+          registered: 3,
+          delivered: 1,
+          failed: 2,
+          pending: 0,
+          recent_failures: [{ execution_id: "exec_w", url: "https://hooks.example.test/x", attempt_count: 3, last_error: "HTTP 500" }],
+        },
+        forwarder: { enabled: true, dead_letters: 4 },
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("In and out")).toBeInTheDocument();
+    expect(screen.getByText("Spend / hour")).toBeInTheDocument();
+    expect(screen.getByText("Trigger events in")).toBeInTheDocument();
+    expect(screen.getByText("2 failed")).toBeInTheDocument();
+    expect(screen.getByText(/latest to hooks.example.test: HTTP 500/)).toBeInTheDocument();
+    expect(screen.getByText("4 dropped")).toBeInTheDocument();
+  });
+
+  it("asks for another window and remembers it", async () => {
+    mockHome(homeFixture());
+    renderPage();
+    await screen.findByText("2 problems");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "24h" }));
+    fireEvent.click(screen.getByRole("tab", { name: "24h" }));
+    await waitFor(() => expect(getDeveloperHome).toHaveBeenCalledWith("24h"));
+    expect(window.localStorage.getItem("af_home_window")).toBe("24h");
+  });
+
+  it("opens an agent's runs from the call map and lists approvals with their expiry", async () => {
+    const base = homeFixture();
+    mockHome(
+      homeFixture({
+        approvals: {
+          total: 3,
+          items: [{ ...base.approvals.items[0], expires_at: "2026-11-09T15:00:00Z" }],
+        },
+      }),
+    );
+    renderPage();
+    await screen.findByText("2 problems");
+    const map = screen.getByRole("img", { name: "Call map" });
+    const billing = within(map).getByText("billing").closest("g")!;
+    fireEvent.click(billing);
+    expect(mockNavigate).toHaveBeenCalledWith("/runs?search=billing");
+    expect(screen.getByText(/expires 3 h from now/)).toBeInTheDocument();
+    expect(screen.getByText("and 2 more")).toBeInTheDocument();
+    expect(screen.getByText(/Not called in the last hour: spare/)).toBeInTheDocument();
+  });
+
+  it("copies the first-agent snippet", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.mocked(useRuns).mockReturnValue({
+      data: { workflows: [], total_count: 0 },
       isLoading: false,
-    });
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [], total_count: 0 } });
-
-    render(<NewDashboardPage />, { wrapper });
-
-    expect(screen.getByText("Queue concurrency")).toBeInTheDocument();
-    expect(screen.getByText("Concurrency limiter is disabled.")).toBeInTheDocument();
+    } as unknown as ReturnType<typeof useRuns>);
+    mockHome(
+      homeFixture({
+        agents: [],
+        agent_counts: { registered: 0, running: 0, offline: 0, degraded: 0, starting: 0, pending_approval: 0, unknown: 0 },
+        stopped_agents: [],
+        totals: { counts: { total: 0, succeeded: 0, failed: 0, cancelled: 0, terminal: 0 }, held: 0, running_now: 0 },
+      }),
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /Copy/ }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("from agentfield import Agent"));
+    expect(await screen.findByText("Copied")).toBeInTheDocument();
   });
 
-  it("computes total running from agents when API omits total_running", () => {
-    vi.mocked(useQueueStatus).mockReturnValue({
-      data: {
-        enabled: true,
-        max_per_agent: 3,
-        agents: [{ agent_node_id: "agent-fallback", running: 2, max: 3, available: 1 }],
-      },
-      isLoading: false,
-    });
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [], total_count: 0 } });
-
-    render(<NewDashboardPage />, { wrapper });
-
-    expect(screen.getByText("2 running")).toBeInTheDocument();
-    expect(screen.getByText("Max concurrency per agent: 3")).toBeInTheDocument();
-  });
-  
-  it("renders failures attention card with failed runs", () => {
-    const failedRun = { ...mockRuns[2] };
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [failedRun], total_count: 1 } });
-    render(<NewDashboardPage />, { wrapper });
-
-    expect(screen.getByText("Needs attention")).toBeInTheDocument();
-    expect(screen.getAllByText("Reasoner C")[0]).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Open" }));
-    expect(mockNavigate).toHaveBeenCalledWith("/runs/run-3");
+  it("keeps the endpoints table short until asked for all of them", async () => {
+    const many = Array.from({ length: 14 }, (_, i) => ({
+      agent_node_id: "svc",
+      reasoner_id: `r${String(i).padStart(2, "0")}`,
+      calls: 100 - i,
+      failed: 0,
+      terminal: 100 - i,
+      caller_agents: [],
+      direct_calls: 100 - i,
+      trigger_calls: 0,
+    }));
+    mockHome(homeFixture({ endpoints: many }));
+    renderPage();
+    await screen.findByText("2 problems");
+    expect(screen.getByText("svc.r11")).toBeInTheDocument();
+    expect(screen.queryByText("svc.r12")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show all 14 endpoints" }));
+    expect(screen.getByText("svc.r13")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+    expect(screen.queryByText("svc.r13")).not.toBeInTheDocument();
   });
 
-  it('navigates to all runs page on "View all" click', () => {
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: mockRuns, total_count: 3 } });
-    render(<NewDashboardPage />, { wrapper });
-
-    const viewAllButtons = screen.getAllByText("View all");
-    fireEvent.click(viewAllButtons[0]);
-    expect(mockNavigate).toHaveBeenCalledWith("/runs");
-  });
-  
-  it('navigates to all runs page on "All runs" click in failures card', () => {
-    const failedRun = { ...mockRuns[2] };
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [failedRun], total_count: 1 } });
-    render(<NewDashboardPage />, { wrapper });
-
-    fireEvent.click(screen.getByText("All runs"));
-    expect(mockNavigate).toHaveBeenCalledWith("/runs");
-  });
-
-  it("renders stats section correctly", async () => {
-    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: mockRuns, total_count: 3 } });
-    vi.mocked(useAgents).mockReturnValue({
-        data: { count: 1, nodes: [{ health_status: "ready" }] },
-        isLoading: false,
-    });
-    vi.mocked(getDashboardSummary).mockResolvedValue({
-        executions: { today: 123 },
-        success_rate: 88,
-        agents: { running: 5 },
-    });
-    
-    render(<NewDashboardPage />, { wrapper });
-
-    expect(await screen.findByText("123")).toBeInTheDocument();
-    expect(screen.getByText("runs today")).toBeInTheDocument();
-    
-    expect(await screen.findByText("88%")).toBeInTheDocument();
-    expect(screen.getByText("success")).toBeInTheDocument();
-
-    const agentsOnlineText = await screen.findByText('agents online');
-    const parentDiv = agentsOnlineText.parentElement;
-    const agentCount = within(parentDiv).getByText('1');
-    expect(agentCount).toBeInTheDocument();
+  it("offers a retry when the home data cannot load", async () => {
+    vi.mocked(getDeveloperHome).mockRejectedValue(new Error("boom"));
+    renderPage();
+    expect(await screen.findByText("Home could not load")).toBeInTheDocument();
+    expect(screen.getByText("boom")).toBeInTheDocument();
   });
 });

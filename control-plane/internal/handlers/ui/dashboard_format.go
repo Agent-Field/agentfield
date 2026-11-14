@@ -70,6 +70,9 @@ type EnhancedDashboardResponse struct {
 	Comparison       *ComparisonData    `json:"comparison,omitempty"`
 	Hotspots         HotspotSummary     `json:"hotspots"`
 	ActivityPatterns ActivityPatterns   `json:"activity_patterns"`
+	// DetailSampled is true when the window held more executions than the
+	// breakdowns sample. Overview counts and incidents are always exact.
+	DetailSampled bool `json:"detail_sampled"`
 }
 
 type EnhancedOverview struct {

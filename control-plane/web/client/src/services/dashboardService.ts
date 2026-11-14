@@ -1,4 +1,5 @@
 import type { DashboardSummary, EnhancedDashboardResponse } from '../types/dashboard';
+import type { DeveloperHomeResponse, HomeWindowPreset } from '../types/developerHome';
 import { getGlobalApiKey } from './api';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
@@ -178,4 +179,17 @@ export async function getTriggerMetrics(): Promise<TriggerMetrics> {
   return fetchWrapper<TriggerMetrics>('/triggers/metrics', {
     timeout: 8000
   });
+}
+
+/**
+ * Get the developer Home aggregates for a window ending now.
+ * GET /api/ui/v1/dashboard/home?window=1h|6h|24h|7d
+ */
+export async function getDeveloperHome(
+  window: HomeWindowPreset = '1h'
+): Promise<DeveloperHomeResponse> {
+  return fetchWrapper<DeveloperHomeResponse>(
+    `/dashboard/home?window=${encodeURIComponent(window)}`,
+    { timeout: 20000 }
+  );
 }

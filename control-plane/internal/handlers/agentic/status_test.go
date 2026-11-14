@@ -641,3 +641,23 @@ func (m *mockStatusStorage) GetInboundEventByWorkflowID(context.Context, string)
 func (m *mockStatusStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) {
 	return &types.TriggerMetrics{}, nil
 }
+
+func (m *mockStatusStorage) CountExecutionsByStatus(ctx context.Context, start, end time.Time) (types.ExecutionStatusCounts, error) {
+	return types.ExecutionStatusCounts{}, nil
+}
+
+func (m *mockStatusStorage) QueryRecentFailures(ctx context.Context, start, end time.Time, limit int) ([]*types.Execution, error) {
+	return nil, nil
+}
+
+func (m *mockStatusStorage) QueryDeveloperHome(ctx context.Context, q types.DeveloperHomeQuery) (*types.DeveloperHomeData, error) {
+	return &types.DeveloperHomeData{}, nil
+}
+
+func (m *mockStatusStorage) QueryBlastRadius(ctx context.Context, agentNodeID string, start, end time.Time) ([]types.DeveloperHomeEntryPoint, error) {
+	return nil, nil
+}
+
+func (m *mockStatusStorage) CountForwarderDeadLetters(ctx context.Context) (int64, error) {
+	return 0, nil
+}

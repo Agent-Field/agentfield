@@ -284,11 +284,14 @@ func TestBuildOverviewHealthInsightsIncidentsAndStats(t *testing.T) {
 		testExecutionAt("exec-8", "run-f", "flow-f", string(types.ExecutionStatusSucceeded), now.Add(-5*24*time.Hour), dashboardTimePtr(now.Add(-5*24*time.Hour+5*time.Minute)), dashboardInt64Ptr(400), nil),
 	}
 
+	// Status follows each agent's recorded heartbeat and lifecycle: the three
+	// ready, heartbeating agents are running whether or not the local
+	// process manager started them.
 	overview := handler.buildEnhancedOverview(now, agents, executions)
 	require.Equal(t, 4, overview.TotalAgents)
-	require.Equal(t, 1, overview.ActiveAgents)
+	require.Equal(t, 3, overview.ActiveAgents)
 	require.Equal(t, 1, overview.DegradedAgents)
-	require.Equal(t, 2, overview.OfflineAgents)
+	require.Equal(t, 0, overview.OfflineAgents)
 	require.Equal(t, 4, overview.TotalReasoners)
 	require.Equal(t, 4, overview.TotalSkills)
 	require.Equal(t, 7, overview.ExecutionsLast24h)
@@ -299,14 +302,16 @@ func TestBuildOverviewHealthInsightsIncidentsAndStats(t *testing.T) {
 
 	health := handler.buildAgentHealthSummary(context.Background(), agents)
 	require.Equal(t, 4, health.Total)
-	require.Equal(t, 1, health.Active)
+	require.Equal(t, 3, health.Active)
 	require.Equal(t, 1, health.Degraded)
-	require.Equal(t, 2, health.Offline)
+	require.Equal(t, 0, health.Offline)
 	require.Len(t, health.Agents, 4)
 	require.Equal(t, "agent-degraded", health.Agents[0].ID)
 	require.Equal(t, "degraded", health.Agents[0].Status)
+	require.Equal(t, "agent-running", health.Agents[1].ID)
+	require.Equal(t, "running", health.Agents[1].Status)
+	require.Equal(t, "4h", health.Agents[1].Uptime)
 	require.Equal(t, "running", health.Agents[len(health.Agents)-1].Status)
-	require.Equal(t, "4h", health.Agents[len(health.Agents)-1].Uptime)
 
 	insights := buildWorkflowInsights(executions[:7], []*types.Execution{
 		testExecution("run-1", "run-1", "flow-a", string(types.ExecutionStatusRunning), now.Add(-2*time.Minute), 0, nil),
