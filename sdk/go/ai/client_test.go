@@ -799,3 +799,44 @@ func TestSSEDecoder_CRLFAndNoSpaceDataField(t *testing.T) {
 		})
 	}
 }
+
+func TestSSEDecoder_InStreamError(t *testing.T) {
+	input := "data: {\"id\":\"a\"}\n\n" +
+		"data: {\"error\":{\"message\":\"upstream overloaded\",\"code\":429}}\n\n" +
+		"data: [DONE]\n\n"
+	decoder := NewSSEDecoder(strings.NewReader(input))
+
+	if chunk, err := decoder.Decode(); err != nil || chunk.ID != "a" {
+		t.Fatalf("expected first chunk a, got %+v err=%v", chunk, err)
+	}
+	_, err := decoder.Decode()
+	if err == nil || err == io.EOF {
+		t.Fatalf("expected in-stream error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "upstream overloaded") {
+		t.Fatalf("error should carry provider message, got %q", err.Error())
+	}
+}
+
+func TestStreamComplete_InStreamErrorReachesErrCh(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"error\":{\"message\":\"boom\",\"type\":\"server_error\"}}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := NewClient(&Config{APIKey: "k", BaseURL: server.URL, Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks, errs := client.StreamComplete(context.Background(), "hi")
+	for range chunks {
+	}
+	var got error
+	for e := range errs {
+		got = e
+	}
+	if got == nil || !strings.Contains(got.Error(), "boom") {
+		t.Fatalf("expected stream error containing boom, got %v", got)
+	}
+}
