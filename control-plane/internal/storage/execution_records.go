@@ -108,7 +108,10 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 		exec.ResultURI,
 		exec.SessionID,
 		exec.ActorID,
-		exec.StartedAt,
+		// started_at is stored in UTC: SQLite compares it as stored text,
+		// so a row written in another zone would sort and filter by the
+		// wrong instant.
+		exec.StartedAt.UTC(),
 		exec.CompletedAt,
 		exec.DurationMS,
 		notesJSON,
@@ -311,7 +314,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 		updated.ResultURI,
 		updated.SessionID,
 		updated.ActorID,
-		updated.StartedAt,
+		updated.StartedAt.UTC(),
 		updated.CompletedAt,
 		updated.DurationMS,
 		notesJSON,
@@ -602,14 +605,44 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		orderDirection = "ASC"
 	}
 
+	// Phase one picks the page: the run_ids of the requested slice, in order,
+	// computing only the sort key per run. Phase two aggregates every summary
+	// column for those runs alone. Aggregating all columns for every run and
+	// then keeping one page of them cost the whole table on every list
+	// request, which is most of what a polled Runs page paid for.
+	var pageRunIDs []string
+	var err error
+	if runSummaryFilterIsEmpty(filter) && orderColumn == "latest_activity" && orderDirection == "DESC" {
+		pageRunIDs, err = ls.recentRunIDsByActivity(ctx, offset, limit)
+	} else {
+		pageRunIDs, err = ls.runSummaryPageRunIDs(ctx, whereClause, havingClause, args, orderColumn, orderDirection, limit, offset)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(pageRunIDs) == 0 {
+		return []*RunSummaryAggregation{}, totalRuns, nil
+	}
+
+	pagePlaceholders := strings.TrimSuffix(strings.Repeat("?,", len(pageRunIDs)), ",")
+	pageArgs := make([]interface{}, 0, len(pageRunIDs)+len(args))
+	for _, runID := range pageRunIDs {
+		pageArgs = append(pageArgs, runID)
+	}
+	pageArgs = append(pageArgs, args...)
+	pageWhere := " WHERE run_id IN (" + pagePlaceholders + ")"
+	if len(where) > 0 {
+		pageWhere += " AND " + strings.Join(where, " AND ")
+	}
+
 	query := fmt.Sprintf(`
 		SELECT
 			run_id,
-			MIN(started_at) AS earliest_started,
-			MAX(COALESCE(updated_at, started_at)) AS latest_activity,
-			COUNT(*) AS total_executions,
+			%s AS earliest_started,
+			%s AS latest_activity,
+			%s AS total_executions,
 			SUM(CASE WHEN LOWER(status) = 'succeeded' THEN 1 ELSE 0 END) AS succeeded_count,
-			SUM(CASE WHEN LOWER(status) = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+			%s AS failed_count,
 			SUM(CASE WHEN LOWER(status) = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
 			SUM(CASE WHEN LOWER(status) = 'timeout' THEN 1 ELSE 0 END) AS timeout_count,
 			SUM(CASE WHEN LOWER(status) = 'running' THEN 1 ELSE 0 END) AS running_count,
@@ -617,7 +650,7 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_count,
 			SUM(CASE WHEN LOWER(status) = 'queued' THEN 1 ELSE 0 END) AS queued_count,
 			SUM(CASE WHEN LOWER(status) = 'waiting' THEN 1 ELSE 0 END) AS waiting_count,
-			SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting') THEN 1 ELSE 0 END) AS active_executions,
+			%s AS active_executions,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN execution_id END) AS root_execution_id,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN status END) AS root_status,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN status_reason END) AS root_error_category,
@@ -626,25 +659,25 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN reasoner_id END) AS root_reasoner_id,
 			MAX(session_id) AS session_id,
 			MAX(actor_id) AS actor_id,
-			CASE
-				WHEN SUM(CASE WHEN LOWER(status) IN ('failed','cancelled','timeout') THEN 1 ELSE 0 END) > 0 THEN 2
-				WHEN SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting') THEN 1 ELSE 0 END) > 0 THEN 1
-				ELSE 0
-			END AS status_rank
+			%s AS status_rank
 		FROM executions
 		%s
-		GROUP BY run_id%s
-		ORDER BY %s %s
-		LIMIT %d OFFSET %d`,
-		whereClause, havingClause, orderColumn, orderDirection, limit, offset)
+		GROUP BY run_id`,
+		runSummarySortExpressions["earliest_started"],
+		runSummarySortExpressions["latest_activity"],
+		runSummarySortExpressions["total_executions"],
+		runSummarySortExpressions["failed_count"],
+		runSummarySortExpressions["active_executions"],
+		runSummarySortExpressions["status_rank"],
+		pageWhere)
 
 	logger.Logger.Debug().
 		Str("query", query).
-		Interface("args", args).
+		Interface("args", pageArgs).
 		Int("total_runs", totalRuns).
 		Msg("Executing run summary aggregation query")
 
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, query, pageArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query run summaries: %w", err)
 	}
@@ -784,14 +817,22 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		}
 
 		summaryByRunID[runID] = summary
-		if totalExecutions <= maxNodesForDepthCalc {
-			runIDsForDepth = append(runIDsForDepth, runID)
-		}
-
-		summaries = append(summaries, summary)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("iterate run summaries: %w", err)
+	}
+
+	// Phase two returns groups in no particular order; the page order is
+	// phase one's. A run removed between the two phases is simply absent.
+	for _, runID := range pageRunIDs {
+		summary, ok := summaryByRunID[runID]
+		if !ok {
+			continue
+		}
+		summaries = append(summaries, summary)
+		if summary.TotalExecutions <= maxNodesForDepthCalc {
+			runIDsForDepth = append(runIDsForDepth, runID)
+		}
 	}
 
 	if len(runIDsForDepth) > 0 {
@@ -913,6 +954,160 @@ func mapRunSummarySortColumn(sortBy string) string {
 	default:
 		return "latest_activity"
 	}
+}
+
+// runSummarySortExpressions are the per-run aggregates the runs list can sort
+// by, keyed by the column names mapRunSummarySortColumn returns. The page
+// query and the summary query both read them from here, so the order a page
+// was chosen in and the values it then shows cannot drift apart.
+var runSummarySortExpressions = map[string]string{
+	"latest_activity":   "MAX(COALESCE(updated_at, started_at))",
+	"earliest_started":  "MIN(started_at)",
+	"total_executions":  "COUNT(*)",
+	"failed_count":      "SUM(CASE WHEN LOWER(status) = 'failed' THEN 1 ELSE 0 END)",
+	"active_executions": "SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting') THEN 1 ELSE 0 END)",
+	"status_rank": `CASE
+				WHEN SUM(CASE WHEN LOWER(status) IN ('failed','cancelled','timeout') THEN 1 ELSE 0 END) > 0 THEN 2
+				WHEN SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting') THEN 1 ELSE 0 END) > 0 THEN 1
+				ELSE 0
+			END`,
+}
+
+// runSummaryFilterIsEmpty reports whether filter narrows the runs list in any
+// way QueryRunSummaries applies. Only an unfiltered list can be paged from the
+// activity index, because a row filter changes which rows a run's latest
+// activity is taken over.
+func runSummaryFilterIsEmpty(filter types.ExecutionFilter) bool {
+	return filter.RunID == nil &&
+		filter.AgentNodeID == nil &&
+		filter.Status == nil &&
+		filter.SessionID == nil &&
+		filter.ActorID == nil &&
+		filter.StartTime == nil &&
+		filter.EndTime == nil &&
+		filter.Search == nil &&
+		!filter.ActiveOnly
+}
+
+// runSummaryPageRunIDs returns one page of run_ids in list order, computing
+// only the sort key for each run. run_id breaks ties in the sort direction so
+// a page boundary falls in the same place on every request.
+func (ls *LocalStorage) runSummaryPageRunIDs(
+	ctx context.Context,
+	whereClause, havingClause string,
+	args []interface{},
+	orderColumn, orderDirection string,
+	limit, offset int,
+) ([]string, error) {
+	sortExpr, ok := runSummarySortExpressions[orderColumn]
+	if !ok {
+		sortExpr = runSummarySortExpressions["latest_activity"]
+	}
+	query := fmt.Sprintf(`
+		SELECT run_id, %s AS sort_key
+		FROM executions
+		%s
+		GROUP BY run_id%s
+		ORDER BY sort_key %s, run_id %s
+		LIMIT %d OFFSET %d`,
+		sortExpr, whereClause, havingClause, orderDirection, orderDirection, limit, offset)
+
+	rows, err := ls.requireSQLDB().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query run summary page: %w", err)
+	}
+	defer rows.Close()
+
+	// No capacity hint from limit: allocation size must not depend on caller
+	// input (CodeQL go/uncontrolled-allocation-size), and a page is small
+	// enough that append's growth costs nothing measurable.
+	var runIDs []string
+	for rows.Next() {
+		var (
+			runID   string
+			sortKey interface{}
+		)
+		if err := rows.Scan(&runID, &sortKey); err != nil {
+			return nil, fmt.Errorf("scan run summary page: %w", err)
+		}
+		runIDs = append(runIDs, runID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate run summary page: %w", err)
+	}
+	return runIDs, nil
+}
+
+// runActivityScanMinRows is the smallest window recentRunIDsByActivity reads
+// before it widens; a page of 25 runs whose recent steps are interleaved is
+// usually found in the first few hundred rows.
+const runActivityScanMinRows = 512
+
+// recentRunIDsByActivity returns the run_ids of runs offset..offset+limit
+// ordered by latest activity, newest first, run_id descending on ties — the
+// same order the grouped page query produces for an unfiltered list.
+//
+// It walks idx_executions_run_activity newest first. A run's first row in
+// that walk carries its latest activity, so the order in which run_ids first
+// appear is exactly the list order, and the walk can stop as soon as the page
+// is complete instead of grouping every execution in the table. The window is
+// bounded with LIMIT and widened when it holds too few distinct runs, so no
+// driver ever has to drain an unbounded result after the early stop.
+func (ls *LocalStorage) recentRunIDsByActivity(ctx context.Context, offset, limit int) ([]string, error) {
+	need := offset + limit
+	window := need * 16
+	if window < runActivityScanMinRows {
+		window = runActivityScanMinRows
+	}
+	db := ls.requireSQLDB()
+	for {
+		runIDs, rowsRead, err := scanDistinctRecentRunIDs(ctx, db, need, window)
+		if err != nil {
+			return nil, err
+		}
+		if len(runIDs) >= need || rowsRead < window {
+			if offset >= len(runIDs) {
+				return nil, nil
+			}
+			return runIDs[offset:], nil
+		}
+		window *= 4
+	}
+}
+
+func scanDistinctRecentRunIDs(ctx context.Context, db *sqlDatabase, need, window int) ([]string, int, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT run_id
+		FROM executions
+		ORDER BY COALESCE(updated_at, started_at) DESC, run_id DESC
+		LIMIT ?`, window)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query recent runs: %w", err)
+	}
+	defer rows.Close()
+
+	runIDs := make([]string, 0, need)
+	seen := make(map[string]struct{}, need)
+	rowsRead := 0
+	for rows.Next() {
+		rowsRead++
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			return nil, 0, fmt.Errorf("scan recent runs: %w", err)
+		}
+		if _, ok := seen[runID]; ok {
+			continue
+		}
+		seen[runID] = struct{}{}
+		runIDs = append(runIDs, runID)
+		if len(runIDs) == need {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate recent runs: %w", err)
+	}
+	return runIDs, rowsRead, nil
 }
 
 // getRunAggregation computes aggregated statistics for a single run using efficient SQL queries

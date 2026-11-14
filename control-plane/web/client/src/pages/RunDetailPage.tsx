@@ -106,6 +106,7 @@ import {
   downloadWorkflowShareFile,
   downloadWorkflowVCAuditFile,
   getWorkflowVCChain,
+  getWorkflowVCChainSummary,
 } from "@/services/vcApi";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -564,8 +565,8 @@ export function RunDetailPage() {
 
   const workflowIdForVc = dag?.root_workflow_id || runId || "";
   const { data: vcChain } = useQuery({
-    queryKey: ["workflow-vc-chain", workflowIdForVc],
-    queryFn: () => getWorkflowVCChain(workflowIdForVc),
+    queryKey: ["workflow-vc-chain-summary", workflowIdForVc],
+    queryFn: () => getWorkflowVCChainSummary(workflowIdForVc),
     enabled: Boolean(workflowIdForVc),
     retry: false,
     staleTime: 60_000,
