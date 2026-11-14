@@ -188,19 +188,8 @@ async def test_wait_for_approval_retries_transient_client_errors(
 
 
 @pytest.mark.asyncio
-async def test_wait_for_approval_times_out(
-    client: AgentFieldClient, monkeypatch: pytest.MonkeyPatch
-):
-    import agentfield.client as client_module
-
+async def test_wait_for_approval_times_out(client: AgentFieldClient):
     client.get_approval_status = AsyncMock(return_value=ApprovalStatusResponse(status="pending"))
-
-    async def no_sleep(_: float) -> None:
-        return None
-
-    times = iter([0.0, 0.02, 0.06])
-    monkeypatch.setattr("agentfield.client.asyncio.sleep", no_sleep)
-    monkeypatch.setattr(client_module.time, "time", lambda: next(times))
 
     with pytest.raises(ExecutionTimeoutError, match="timed out"):
         await client.wait_for_approval(
