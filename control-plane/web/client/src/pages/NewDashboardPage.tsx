@@ -728,10 +728,14 @@ export function NewDashboardPage() {
         />
       )}
 
-      <LLMHealthWidget
-        loading={llmHealthQuery.isLoading}
-        health={llmHealthQuery.data}
-      />
+      {/* LLM health monitoring is opt-in; with it off there is nothing to
+          report, so the card is left out rather than saying "Disabled". */}
+      {llmHealthQuery.data?.enabled === true ? (
+        <LLMHealthWidget
+          loading={llmHealthQuery.isLoading}
+          health={llmHealthQuery.data}
+        />
+      ) : null}
 
       <PrimaryRunFocus
         loading={runsQuery.isLoading}

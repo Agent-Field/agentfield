@@ -272,5 +272,7 @@ describe("NewDashboardPage", () => {
     expect(screen.getAllByText("No runs yet").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "View runs" })).toBeInTheDocument();
     expect(screen.queryByText("System issues")).not.toBeInTheDocument();
+    // Monitoring is not enabled in this fixture, so no LLM card is drawn.
+    expect(screen.queryByText("LLM backend health")).not.toBeInTheDocument();
   });
 });

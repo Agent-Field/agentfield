@@ -60,7 +60,7 @@ describe("HealthStrip", () => {
     state.refreshAllLiveQueries.mockReset();
     state.llmHealth.mockReturnValue({
       isLoading: false,
-      data: { healthy: true, endpoints: [{ healthy: true }] },
+      data: { enabled: true, healthy: true, endpoints: [{ healthy: true }] },
     });
     state.queueStatus.mockReturnValue({
       data: {
@@ -126,8 +126,9 @@ describe("HealthStrip", () => {
 
     render(<HealthStrip />);
 
-    expect(screen.getByText("Unknown")).toBeInTheDocument();
-    expect(screen.getAllByText("Checking LLM health…")).toHaveLength(2);
+    // Until the server says monitoring is on, the LLM indicator is absent.
+    expect(screen.queryByText("LLM")).not.toBeInTheDocument();
+    expect(screen.queryByText("Checking LLM health…")).not.toBeInTheDocument();
     expect(screen.getByText("0/1 online")).toBeInTheDocument();
     expect(screen.getByText("Disconnected")).toBeInTheDocument();
     expect(
@@ -136,5 +137,41 @@ describe("HealthStrip", () => {
 
     await user.click(screen.getByRole("button", { name: "Refresh runs, agents, and dashboard data" }));
     expect(state.refreshAllLiveQueries).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows nothing about the LLM when monitoring is not enabled", () => {
+    state.llmHealth.mockReturnValue({
+      isLoading: false,
+      data: { enabled: false, healthy: false, endpoints: [] },
+    });
+
+    render(<HealthStrip />);
+
+    expect(screen.queryByText("LLM")).not.toBeInTheDocument();
+    expect(screen.queryByText("Degraded")).not.toBeInTheDocument();
+    expect(screen.queryByText("Healthy")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: /^System status: 2 of 2 agents online, 3 running, Live$/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows Degraded when monitoring is enabled and an endpoint is down", () => {
+    state.llmHealth.mockReturnValue({
+      isLoading: false,
+      data: {
+        enabled: true,
+        healthy: true,
+        endpoints: [{ healthy: true }, { healthy: false }],
+      },
+    });
+
+    render(<HealthStrip />);
+
+    expect(screen.getByText("Degraded")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("One or more LLM endpoints are unhealthy"),
+    ).toHaveLength(2);
   });
 });
