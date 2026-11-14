@@ -2167,7 +2167,8 @@ class AgentFieldClient:
             execution_id: Execution ID to wait for.
             poll_interval: Initial polling interval in seconds.
             max_interval: Maximum polling interval in seconds.
-            timeout: Total timeout in seconds (None = wait indefinitely).
+            timeout: Total timeout including polling delays and requests, in seconds
+                (None = wait indefinitely).
 
         Returns:
             ApprovalStatusResponse with the final approval status (approved/rejected/expired).
@@ -2176,29 +2177,31 @@ class AgentFieldClient:
             AgentFieldClientError: If polling encounters a non-retryable error.
             ExecutionTimeoutError: If timeout is reached.
         """
-        start_time = time.time()
-        interval = poll_interval
-        backoff_factor = 2.0
+        async def poll() -> ApprovalStatusResponse:
+            interval = poll_interval
+            backoff_factor = 2.0
 
-        while True:
-            if timeout is not None and (time.time() - start_time) >= timeout:
-                raise ExecutionTimeoutError(
-                    f"Approval for execution {execution_id} timed out after {timeout}s"
-                )
+            while True:
+                await asyncio.sleep(interval)
 
-            await asyncio.sleep(interval)
+                try:
+                    result = await self.get_approval_status(execution_id)
+                except AgentFieldClientError:
+                    # Transient failure — back off and retry
+                    interval = min(interval * backoff_factor, max_interval)
+                    continue
 
-            try:
-                result = await self.get_approval_status(execution_id)
-            except AgentFieldClientError:
-                # Transient failure — back off and retry
+                if result.status != "pending":
+                    return result
+
                 interval = min(interval * backoff_factor, max_interval)
-                continue
 
-            if result.status != "pending":
-                return result
-
-            interval = min(interval * backoff_factor, max_interval)
+        try:
+            return await asyncio.wait_for(poll(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise ExecutionTimeoutError(
+                f"Approval for execution {execution_id} timed out after {timeout}s"
+            ) from exc
 
     async def post_execution_logs(
         self,
