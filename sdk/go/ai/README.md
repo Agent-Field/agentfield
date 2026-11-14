@@ -103,6 +103,23 @@ aiConfig := &ai.Config{
 }
 ```
 
+### Partial Configuration Limits
+
+A configuration literal with only connection fields leaves `MaxTokens` and
+`Timeout` at zero, which means the SDK does not apply its finite caps. Set
+`ApplyDefaultLimits: true` to opt into the SDK defaults: 4096 output tokens and
+a 30-second HTTP timeout for completion requests. Explicit non-zero values are
+preserved, and opting in does not mutate the caller's configuration.
+
+```go
+aiConfig := &ai.Config{
+    APIKey:             "sk-...",
+    BaseURL:            "https://api.openai.com/v1",
+    Model:              "gpt-4o",
+    ApplyDefaultLimits: true, // 4096 tokens, 30s timeout
+}
+```
+
 ### OpenRouter Configuration
 
 ```go

@@ -60,6 +60,11 @@ func NewClient(config *Config, opts ...ClientOption) (*Client, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
+	if config.ApplyDefaultLimits {
+		configured := *config
+		configured.applyDefaultLimits()
+		config = &configured
+	}
 
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
