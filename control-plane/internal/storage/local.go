@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -566,10 +567,10 @@ type DBTX interface {
 // - This eliminates the performance bottleneck where analytics queries blocked all writes
 type LocalStorage struct {
 	db                        *sqlDatabase
-	gormDB                    *gorm.DB                                  // GORM handle for ORM operations
-	kvStore                   *bolt.DB                                  // BoltDB for key-value (memory)
-	cache                     *sync.Map                                 // In-memory cache for hot data
-	subscribers               map[string][]chan types.MemoryChangeEvent // Local pub/sub
+	gormDB                    *gorm.DB                       // GORM handle for ORM operations
+	kvStore                   *bolt.DB                       // BoltDB for key-value (memory)
+	cache                     *sync.Map                      // In-memory cache for hot data
+	subscribers               map[string][]*memorySubscriber // Local pub/sub
 	mu                        sync.RWMutex
 	mode                      string
 	config                    LocalStorageConfig
@@ -4183,7 +4184,7 @@ func (ls *LocalStorage) Subscribe(channel string) (<-chan CacheMessage, error) {
 	subChannel := make(chan types.MemoryChangeEvent, 100) // Buffered channel
 
 	// Store the subscriber channel
-	ls.subscribers[channel] = append(ls.subscribers[channel], subChannel)
+	ls.subscribers[channel] = append(ls.subscribers[channel], &memorySubscriber{ch: subChannel})
 
 	// Convert MemoryChangeEvent to CacheMessage for the return channel
 	cacheMsgChannel := make(chan CacheMessage, 100)
@@ -4208,10 +4209,10 @@ func (ls *LocalStorage) Publish(channel string, message interface{}) error {
 
 	// Send message to all subscribers of the channel
 	if subscribers, ok := ls.subscribers[channel]; ok {
-		for _, subChannel := range subscribers {
+		for _, sub := range subscribers {
 			// Non-blocking send
 			select {
-			case subChannel <- message.(types.MemoryChangeEvent): // Assuming message is always MemoryChangeEvent for this channel
+			case sub.ch <- message.(types.MemoryChangeEvent): // Assuming message is always MemoryChangeEvent for this channel
 				// Sent successfully
 			default:
 				// Subscriber channel is full, drop the message or log a warning
@@ -4223,7 +4224,15 @@ func (ls *LocalStorage) Publish(channel string, message interface{}) error {
 	return nil
 }
 
-// publishMemoryChange is an internal helper to publish memory change events.
+// memorySubscriber is one entry in the local pub/sub registry.
+type memorySubscriber struct {
+	ch chan types.MemoryChangeEvent
+	// closeOnOverflow marks a channel created by SubscribeToMemoryChanges: it
+	// is removed and closed when its buffer fills, or when its context ends.
+	closeOnOverflow bool
+}
+
+// subscriberKey names the pub/sub channel for a scope and scope ID; empty means any.
 func subscriberKey(scope, scopeID string) string {
 	if scope == "" {
 		scope = "*"
@@ -4231,40 +4240,78 @@ func subscriberKey(scope, scopeID string) string {
 	if scopeID == "" {
 		scopeID = "*"
 	}
-	return fmt.Sprintf("memory_changes:%s:%s", scope, scopeID)
+	return "memory_changes:" + scope + ":" + scopeID
 }
 
+// publishMemoryChange delivers event to every matching subscriber before it
+// returns, so events published one after another reach each subscriber in
+// that order. A memory subscriber whose buffer is full is removed and its
+// channel closed rather than silently missing the event: the reader sees the
+// closed channel and can tell its stream has a gap.
 func (ls *LocalStorage) publishMemoryChange(event types.MemoryChangeEvent) {
-	targets := map[string]struct{}{}
-	keys := []string{
+	type overflow struct {
+		key string
+		sub *memorySubscriber
+	}
+	var overflowed []overflow
+
+	ls.mu.RLock()
+	if len(ls.subscribers) == 0 {
+		ls.mu.RUnlock()
+		return
+	}
+	keys := [...]string{
 		subscriberKey(event.Scope, event.ScopeID),
 		subscriberKey(event.Scope, "*"),
 		subscriberKey("*", event.ScopeID),
 		subscriberKey("*", "*"),
 	}
-	for _, key := range keys {
-		targets[key] = struct{}{}
-	}
-
-	// Use a goroutine to avoid blocking the main thread
-	go func() {
-		ls.mu.RLock()
-		defer ls.mu.RUnlock()
-
-		for key := range targets {
-			if subscribers, ok := ls.subscribers[key]; ok {
-				for _, subChannel := range subscribers {
-					// Non-blocking send
-					select {
-					case subChannel <- event:
-						// Sent successfully
-					default:
-						fmt.Printf("Warning: Memory change subscriber channel for '%s' is full, dropping event.\n", key)
-					}
+	for i, key := range keys {
+		// Keys repeat when the event's scope or scope ID is empty or "*".
+		if slices.Contains(keys[:i], key) {
+			continue
+		}
+		for _, sub := range ls.subscribers[key] {
+			select {
+			case sub.ch <- event:
+			default:
+				if sub.closeOnOverflow {
+					overflowed = append(overflowed, overflow{key: key, sub: sub})
+				} else {
+					fmt.Printf("Warning: Memory change subscriber channel for '%s' is full, dropping event.\n", key)
 				}
 			}
 		}
-	}()
+	}
+	ls.mu.RUnlock()
+
+	for _, o := range overflowed {
+		if ls.removeMemorySubscriber(o.key, o.sub) {
+			logger.Logger.Warn().Str("channel", o.key).Msg("memory change subscriber fell behind; disconnecting it")
+		}
+	}
+}
+
+// removeMemorySubscriber unregisters a subscriber created by
+// SubscribeToMemoryChanges and closes its channel. It reports whether the
+// subscriber was still registered; only that call closes the channel, so it
+// is closed exactly once.
+func (ls *LocalStorage) removeMemorySubscriber(key string, sub *memorySubscriber) bool {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	subs := ls.subscribers[key]
+	i := slices.Index(subs, sub)
+	if i < 0 {
+		return false
+	}
+	if len(subs) == 1 {
+		delete(ls.subscribers, key)
+	} else {
+		ls.subscribers[key] = append(subs[:i:i], subs[i+1:]...)
+	}
+	close(sub.ch)
+	return true
 }
 
 // RegisterAgent stores an agent node record in SQLite.
@@ -5117,7 +5164,13 @@ func (ls *LocalStorage) DeleteConfig(ctx context.Context, key string) error {
 	return nil
 }
 
+// memorySubscriberBuffer is how many events a memory change subscriber may
+// fall behind before it is disconnected.
+const memorySubscriberBuffer = 100
+
 // SubscribeToMemoryChanges implements the StorageProvider SubscribeToMemoryChanges method using local pub/sub.
+// The returned channel is closed when ctx is done, or early if the subscriber
+// falls more than memorySubscriberBuffer events behind.
 func (ls *LocalStorage) SubscribeToMemoryChanges(ctx context.Context, scope, scopeID string) (<-chan types.MemoryChangeEvent, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
@@ -5125,16 +5178,20 @@ func (ls *LocalStorage) SubscribeToMemoryChanges(ctx context.Context, scope, sco
 	}
 
 	channel := subscriberKey(scope, scopeID)
+	sub := &memorySubscriber{
+		ch:              make(chan types.MemoryChangeEvent, memorySubscriberBuffer),
+		closeOnOverflow: true,
+	}
+
 	ls.mu.Lock()
-	defer ls.mu.Unlock()
+	ls.subscribers[channel] = append(ls.subscribers[channel], sub)
+	ls.mu.Unlock()
 
-	// Create a new channel for this subscriber
-	subChannel := make(chan types.MemoryChangeEvent, 100) // Buffered channel
+	// The subscription lasts as long as ctx. Unregistering on cancel keeps
+	// disconnected clients from accumulating dead channels.
+	context.AfterFunc(ctx, func() { ls.removeMemorySubscriber(channel, sub) })
 
-	// Store the subscriber channel
-	ls.subscribers[channel] = append(ls.subscribers[channel], subChannel)
-
-	return subChannel, nil
+	return sub.ch, nil
 }
 
 // PublishMemoryChange implements the StorageProvider PublishMemoryChange method using local pub/sub.
