@@ -222,3 +222,55 @@ func TestLocalStorageCacheAndPubSub(t *testing.T) {
 	assert.Equal(t, "memory_changes:*:*", subscriberKey("", ""))
 	assert.Equal(t, "memory_changes:session:*", subscriberKey("session", ""))
 }
+
+func TestLocalStorageMemorySubscriptionCancellation(t *testing.T) {
+	for _, selector := range []struct{ scope, scopeID string }{
+		{"session", "scope-1"},
+		{"session", ""},
+		{"", "scope-1"},
+		{"", ""},
+	} {
+		t.Run(subscriberKey(selector.scope, selector.scopeID), func(t *testing.T) {
+			ls, ctx := setupLocalStorage(t)
+			firstCtx, cancelFirst := context.WithCancel(ctx)
+			defer cancelFirst()
+			secondCtx, cancelSecond := context.WithCancel(ctx)
+			defer cancelSecond()
+			first, err := ls.SubscribeToMemoryChanges(firstCtx, selector.scope, selector.scopeID)
+			require.NoError(t, err)
+			second, err := ls.SubscribeToMemoryChanges(secondCtx, selector.scope, selector.scopeID)
+			require.NoError(t, err)
+
+			cancelFirst()
+			select {
+			case _, open := <-first:
+				require.False(t, open, "cancellation should close the event channel")
+			case <-time.After(time.Second):
+				t.Fatal("cancelled memory subscription remained open")
+			}
+
+			// Removing one subscription must preserve another on the same key.
+			event := types.MemoryChangeEvent{ID: "surviving-event", Scope: "session", ScopeID: "scope-1"}
+			require.NoError(t, ls.PublishMemoryChange(ctx, event))
+			select {
+			case got, open := <-second:
+				require.True(t, open)
+				require.Equal(t, event.ID, got.ID)
+			case <-time.After(time.Second):
+				t.Fatal("remaining subscription did not receive the event")
+			}
+
+			cancelSecond()
+			select {
+			case _, open := <-second:
+				require.False(t, open)
+			case <-time.After(time.Second):
+				t.Fatal("last cancelled memory subscription remained open")
+			}
+			ls.mu.RLock()
+			remaining := len(ls.subscribers)
+			ls.mu.RUnlock()
+			require.Zero(t, remaining, "cancelled subscriptions must not retain registry entries")
+		})
+	}
+}
