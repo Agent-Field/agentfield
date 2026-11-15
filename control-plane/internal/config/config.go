@@ -1009,6 +1009,9 @@ func ApplyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_DEFAULT_DENY"); val != "" {
 		cfg.Features.DID.Authorization.DefaultDeny = val == "true" || val == "1"
 	}
+	if val := strings.TrimSpace(os.Getenv("AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE")); val != "" {
+		cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode = strings.ToLower(val)
+	}
 
 	// Node log proxy (UI → agent NDJSON)
 	if val := os.Getenv("AGENTFIELD_NODE_LOG_PROXY_CONNECT_TIMEOUT"); val != "" {
