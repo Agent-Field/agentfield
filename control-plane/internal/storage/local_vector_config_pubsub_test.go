@@ -231,7 +231,8 @@ func TestLocalStorageMemorySubscriptionCancellation(t *testing.T) {
 		{"", ""},
 	} {
 		t.Run(subscriberKey(selector.scope, selector.scopeID), func(t *testing.T) {
-			ls, ctx := setupLocalStorage(t)
+			ls := NewLocalStorage(LocalStorageConfig{})
+			ctx := context.Background()
 			firstCtx, cancelFirst := context.WithCancel(ctx)
 			defer cancelFirst()
 			secondCtx, cancelSecond := context.WithCancel(ctx)
@@ -276,7 +277,8 @@ func TestLocalStorageMemorySubscriptionCancellation(t *testing.T) {
 }
 
 func TestLocalStorageMemoryCancellationDuringPublish(t *testing.T) {
-	ls, ctx := setupLocalStorage(t)
+	ls := NewLocalStorage(LocalStorageConfig{})
+	ctx := context.Background()
 	cancelledCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cancelled, err := ls.SubscribeToMemoryChanges(cancelledCtx, "session", "scope-1")
