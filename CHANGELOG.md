@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.33] - 2026-11-15
+
+
+### Fixed
+
+- Fix(python): decode URL escapes in inline base64 media (#1200)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (e497b75)
+
+- Fix(config): honor AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE (#1201)
+
+docs/ENVIRONMENT_VARIABLES.md documents the variable, but ApplyEnvOverrides
+never read it, so setting it left tag_approval_rules.default_mode untouched
+and tags stayed auto-approved. Read it into
+features.did.authorization.tag_approval_rules.default_mode and document the
+modes the tag approval service implements (auto, manual, forbidden).
+
+Also drop AGENTFIELD_AUTHORIZATION_MASTER_SEED from the docs: nothing reads
+it, the master seed is generated and stored in the DID registry. (bd7a3c3)
+
+- Fix(control-plane): read AGENTFIELD_API_CORS_* without a config file (#1202)
+
+The CORS variables documented in docs/ENVIRONMENT_VARIABLES.md only reached
+the config through viper's AutomaticEnv, which resolves a key only when a
+loaded config file already contains it. With no config file (Railway, bare
+binary) they were dropped and the server kept the localhost default origins.
+
+Read the five variables in ApplyEnvOverrides, next to the other overrides
+that exist for the same reason. (e746d09)
+
+- Fix(go-sdk): preserve streaming read errors after buffered data (#1203)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (dde816a)
+
+- Fix(sdk-ts): apply rate-limit retry and circuit breaker to AIClient.stream (#1206) (ff1db1b)
+
 ## [0.1.146-rc.32] - 2026-11-14
 
 
