@@ -140,7 +140,7 @@ describe('AIClient temperature compatibility', () => {
     streamTextMock.mockReset();
     generateTextMock.mockResolvedValue({ text: 'ok' });
     generateObjectMock.mockResolvedValue({ object: { value: 'ok' } });
-    streamTextMock.mockReturnValue({ textStream: (async function* () { yield 'ok'; })() });
+    streamTextMock.mockReturnValue({ fullStream: (async function* () { yield { type: 'text-delta', text: 'ok' }; })() });
   });
 
   it.each([
@@ -160,7 +160,7 @@ describe('AIClient temperature compatibility', () => {
     await client.generate('hello', { schema, temperature: 0.9 });
     expect(sentTemperature(generateObjectMock)).toBeUndefined();
 
-    await client.stream('hello', { temperature: 0 });
+    for await (const _ of await client.stream('hello', { temperature: 0 })) void _;
     expect(sentTemperature(streamTextMock)).toBeUndefined();
   });
 
@@ -179,7 +179,7 @@ describe('AIClient temperature compatibility', () => {
     await client.generate('hello', { schema, temperature: 0.9 });
     expect(sentTemperature(generateObjectMock)).toBe(0.9);
 
-    await client.stream('hello', { temperature: 0 });
+    for await (const _ of await client.stream('hello', { temperature: 0 })) void _;
     expect(sentTemperature(streamTextMock)).toBe(0);
   });
 
