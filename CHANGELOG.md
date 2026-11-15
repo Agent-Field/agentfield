@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.34] - 2026-11-15
+
+
+### Fixed
+
+- Fix(python): preserve stored memory JSON value types (#1199)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (95c109d)
+
 ## [0.1.146-rc.33] - 2026-11-15
 
 
