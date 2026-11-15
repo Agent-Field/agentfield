@@ -75,6 +75,21 @@ func (f *fakeMemoryEventsServer) nextRequest(t *testing.T) *http.Request {
 	}
 }
 
+// requireNoRequest fails the test if another connection attempt has arrived.
+func (f *fakeMemoryEventsServer) requireNoRequest(t *testing.T, msg string) {
+	t.Helper()
+	select {
+	case <-f.requests:
+		t.Fatal(msg)
+	default:
+	}
+}
+
+func sendFrame(t *testing.T, conn *websocket.Conn, frame string) {
+	t.Helper()
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(frame)))
+}
+
 func recvEvent(t *testing.T, sub MemorySubscription) MemoryChangeEvent {
 	t.Helper()
 	select {
@@ -102,11 +117,19 @@ func waitClosed(t *testing.T, sub MemorySubscription) {
 	}
 }
 
-func shortReconnects(t *testing.T) {
-	t.Helper()
-	prev := memoryEventsReconnectBase
-	memoryEventsReconnectBase = 10 * time.Millisecond
-	t.Cleanup(func() { memoryEventsReconnectBase = prev })
+// fastEventsBackend returns a backend whose subscriptions reconnect quickly.
+func fastEventsBackend(baseURL string) *ControlPlaneMemoryBackend {
+	b := NewControlPlaneMemoryBackend(baseURL, "", "")
+	b.eventTimings.reconnectBase = 10 * time.Millisecond
+	return b
+}
+
+// fastKeepaliveBackend also pings often and gives up on a silent connection quickly.
+func fastKeepaliveBackend(baseURL string) *ControlPlaneMemoryBackend {
+	b := fastEventsBackend(baseURL)
+	b.eventTimings.pingInterval = 20 * time.Millisecond
+	b.eventTimings.pongWait = 100 * time.Millisecond
+	return b
 }
 
 func TestMemoryWatch_SendsFiltersAndIdentity(t *testing.T) {
@@ -151,15 +174,15 @@ func TestMemoryWatch_DecodesEvents(t *testing.T) {
 	t.Cleanup(func() { _ = sub.Close() })
 
 	conn := srv.nextConn(t)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{
+	sendFrame(t, conn, `{
 		"id":"e1","type":"memory_change","timestamp":"2026-01-02T03:04:05Z",
 		"scope":"actor","scope_id":"a1","key":"user_1","action":"set",
 		"data":{"theme":"dark"},"previous_data":{"theme":"light"},
-		"metadata":{"agent_id":"node-1","actor_id":"a1","workflow_id":"wf"}}`)))
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`not json`)))
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{
+		"metadata":{"agent_id":"node-1","actor_id":"a1","workflow_id":"wf"}}`)
+	sendFrame(t, conn, `not json`)
+	sendFrame(t, conn, `{
 		"id":"e2","scope":"session","scope_id":"s1","key":"user_1","action":"delete",
-		"previous_data":{"theme":"dark"}}`)))
+		"previous_data":{"theme":"dark"}}`)
 
 	ev := recvEvent(t, sub)
 	assert.Equal(t, "e1", ev.ID)
@@ -254,7 +277,7 @@ func TestMemoryWatch_CloseUnblocksPendingDelivery(t *testing.T) {
 	require.NoError(t, err)
 	conn := srv.nextConn(t)
 	for i := 0; i < 3; i++ {
-		require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"key":"k","action":"set"}`)))
+		sendFrame(t, conn, `{"key":"k","action":"set"}`)
 	}
 	// Nobody reads: the subscription blocks on a full buffer until Close.
 	time.Sleep(50 * time.Millisecond)
@@ -269,9 +292,8 @@ func TestMemoryWatch_CloseUnblocksPendingDelivery(t *testing.T) {
 }
 
 func TestMemoryWatch_ReconnectsAfterDrop(t *testing.T) {
-	shortReconnects(t)
 	srv := newFakeMemoryEventsServer(t)
-	mem := NewMemory(NewControlPlaneMemoryBackend(srv.URL, "", ""))
+	mem := NewMemory(fastEventsBackend(srv.URL))
 
 	sub, err := mem.Watch(context.Background(), WatchOptions{Patterns: []string{"k*"}, Scope: ScopeSession})
 	require.NoError(t, err)
@@ -286,15 +308,14 @@ func TestMemoryWatch_ReconnectsAfterDrop(t *testing.T) {
 	assert.Equal(t, "session", r.URL.Query().Get("scope"))
 
 	conn := srv.nextConn(t)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"id":"after","key":"k1","action":"set"}`)))
+	sendFrame(t, conn, `{"id":"after","key":"k1","action":"set"}`)
 	assert.Equal(t, "after", recvEvent(t, sub).ID)
 	assert.NoError(t, sub.Err())
 }
 
 func TestMemoryWatch_GivesUpAfterMaxReconnects(t *testing.T) {
-	shortReconnects(t)
 	srv := newFakeMemoryEventsServer(t)
-	mem := NewMemory(NewControlPlaneMemoryBackend(srv.URL, "", ""))
+	mem := NewMemory(fastEventsBackend(srv.URL))
 
 	sub, err := mem.Watch(context.Background(), WatchOptions{MaxReconnectAttempts: 2})
 	require.NoError(t, err)
@@ -309,17 +330,12 @@ func TestMemoryWatch_GivesUpAfterMaxReconnects(t *testing.T) {
 	// One initial connection plus exactly two retries.
 	srv.nextRequest(t)
 	srv.nextRequest(t)
-	select {
-	case <-srv.requests:
-		t.Fatal("reconnected more than MaxReconnectAttempts times")
-	default:
-	}
+	srv.requireNoRequest(t, "reconnected more than MaxReconnectAttempts times")
 }
 
 func TestMemoryWatch_StopsOnPermanentRejection(t *testing.T) {
-	shortReconnects(t)
 	srv := newFakeMemoryEventsServer(t)
-	mem := NewMemory(NewControlPlaneMemoryBackend(srv.URL, "", ""))
+	mem := NewMemory(fastEventsBackend(srv.URL))
 
 	sub, err := mem.Watch(context.Background(), WatchOptions{MaxReconnectAttempts: 10})
 	require.NoError(t, err)
@@ -332,17 +348,12 @@ func TestMemoryWatch_StopsOnPermanentRejection(t *testing.T) {
 	require.Error(t, sub.Err())
 	assert.Contains(t, sub.Err().Error(), "status=401")
 	srv.nextRequest(t)
-	select {
-	case <-srv.requests:
-		t.Fatal("retried after a permanent rejection")
-	default:
-	}
+	srv.requireNoRequest(t, "retried after a permanent rejection")
 }
 
 func TestMemoryWatch_NegativeMaxReconnectsDisablesReconnect(t *testing.T) {
-	shortReconnects(t)
 	srv := newFakeMemoryEventsServer(t)
-	mem := NewMemory(NewControlPlaneMemoryBackend(srv.URL, "", ""))
+	mem := NewMemory(fastEventsBackend(srv.URL))
 
 	sub, err := mem.Watch(context.Background(), WatchOptions{MaxReconnectAttempts: -1})
 	require.NoError(t, err)
@@ -370,8 +381,8 @@ func TestMemoryOnChange_DeliversToHandler(t *testing.T) {
 
 	assert.Equal(t, "user_*.preferences", srv.nextRequest(t).URL.Query().Get("patterns"))
 	conn := srv.nextConn(t)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"key":"user_1.preferences","action":"set"}`)))
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"key":"user_2.preferences","action":"delete"}`)))
+	sendFrame(t, conn, `{"key":"user_1.preferences","action":"set"}`)
+	sendFrame(t, conn, `{"key":"user_2.preferences","action":"delete"}`)
 	for i := 0; i < 2; i++ {
 		select {
 		case <-got:
@@ -413,7 +424,7 @@ func TestMemoryHistory_SendsFiltersAndDecodes(t *testing.T) {
 		gotHeader = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{"id": "h1", "scope": "actor", "scope_id": "a1", "key": "user_1", "action": "set", "data": 5},
+			{"id": "h1", "timestamp": "2026-05-06T07:00:00Z", "scope": "actor", "scope_id": "a1", "key": "user_1", "action": "set", "data": 5},
 		})
 	}))
 	defer srv.Close()
@@ -434,7 +445,7 @@ func TestMemoryHistory_SendsFiltersAndDecodes(t *testing.T) {
 	assert.Equal(t, "user_*", q.Get("patterns"))
 	assert.Equal(t, "actor", q.Get("scope"))
 	assert.Equal(t, "a1", q.Get("scope_id"))
-	assert.Equal(t, "10", q.Get("limit"))
+	assert.Equal(t, "11", q.Get("limit"), "one extra to cover an event at exactly Since")
 	parsed, err := time.Parse(time.RFC3339, q.Get("since"))
 	require.NoError(t, err)
 	assert.True(t, parsed.Equal(since))
@@ -458,13 +469,177 @@ func TestMemoryHistory_ErrorStatus(t *testing.T) {
 }
 
 func TestMemoryEventsReconnectDelay(t *testing.T) {
-	prev := memoryEventsReconnectBase
-	memoryEventsReconnectBase = time.Second
-	defer func() { memoryEventsReconnectBase = prev }()
+	timings := memoryEventTimings{}.withDefaults()
 
-	assert.Equal(t, time.Second, memoryEventsReconnectDelay(1))
-	assert.Equal(t, 2*time.Second, memoryEventsReconnectDelay(2))
-	assert.Equal(t, 16*time.Second, memoryEventsReconnectDelay(5))
-	assert.Equal(t, 30*time.Second, memoryEventsReconnectDelay(6))
-	assert.Equal(t, 30*time.Second, memoryEventsReconnectDelay(50))
+	assert.Equal(t, time.Second, timings.reconnectDelay(1))
+	assert.Equal(t, 2*time.Second, timings.reconnectDelay(2))
+	assert.Equal(t, 16*time.Second, timings.reconnectDelay(5))
+	assert.Equal(t, 30*time.Second, timings.reconnectDelay(6))
+	assert.Equal(t, 30*time.Second, timings.reconnectDelay(50))
+}
+
+func TestMemoryWatch_ImmediateDropsExhaustAttempts(t *testing.T) {
+	srv := newFakeMemoryEventsServer(t)
+	mem := NewMemory(fastEventsBackend(srv.URL))
+
+	sub, err := mem.Watch(context.Background(), WatchOptions{MaxReconnectAttempts: 2})
+	require.NoError(t, err)
+
+	// Every connection is accepted and closed at once, so none proves healthy.
+	go func() {
+		for conn := range srv.conns {
+			_ = conn.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "failed to subscribe"))
+			_ = conn.Close()
+		}
+	}()
+
+	waitClosed(t, sub)
+	assert.ErrorContains(t, sub.Err(), "after 2 reconnect attempts")
+}
+
+func TestMemoryWatch_HealthyConnectionResetsAttempts(t *testing.T) {
+	srv := newFakeMemoryEventsServer(t)
+	mem := NewMemory(fastEventsBackend(srv.URL))
+
+	sub, err := mem.Watch(context.Background(), WatchOptions{MaxReconnectAttempts: 1})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Close() })
+
+	// Each connection delivers an event and then drops. With one attempt
+	// allowed, this only keeps going if delivery resets the count.
+	for i := 0; i < 3; i++ {
+		conn := srv.nextConn(t)
+		sendFrame(t, conn, `{"key":"k","action":"set"}`)
+		recvEvent(t, sub)
+		_ = conn.Close()
+	}
+	srv.nextConn(t)
+	assert.NoError(t, sub.Err())
+}
+
+func TestMemoryWatch_SilentConnectionIsReplaced(t *testing.T) {
+	srv := newFakeMemoryEventsServer(t)
+	mem := NewMemory(fastKeepaliveBackend(srv.URL))
+
+	reconnected := make(chan struct{}, 1)
+	sub, err := mem.Watch(context.Background(), WatchOptions{
+		OnReconnect: func() { reconnected <- struct{}{} },
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Close() })
+
+	// The server never reads, so it never answers pings: a half-open link.
+	srv.nextRequest(t)
+	srv.nextConn(t)
+	srv.nextRequest(t)
+	select {
+	case <-reconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnReconnect not called")
+	}
+	assert.NoError(t, sub.Err())
+}
+
+func TestMemoryWatch_PongsKeepConnectionAlive(t *testing.T) {
+	srv := newFakeMemoryEventsServer(t)
+	mem := NewMemory(fastKeepaliveBackend(srv.URL))
+
+	sub, err := mem.Watch(context.Background(), WatchOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Close() })
+
+	srv.nextRequest(t)
+	conn := srv.nextConn(t)
+	// Reading lets gorilla answer the client's pings with pongs.
+	go func() {
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				return
+			}
+		}
+	}()
+
+	time.Sleep(400 * time.Millisecond)
+	srv.requireNoRequest(t, "reconnected although the server answered pings")
+}
+
+func TestMemoryOnChange_NoHandlerCallsAfterClose(t *testing.T) {
+	srv := newFakeMemoryEventsServer(t)
+	mem := NewMemory(NewControlPlaneMemoryBackend(srv.URL, "", ""))
+
+	var calls atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	sub, err := mem.OnChange(context.Background(), "*", func(MemoryChangeEvent) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+	})
+	require.NoError(t, err)
+
+	conn := srv.nextConn(t)
+	for i := 0; i < 5; i++ {
+		sendFrame(t, conn, `{"key":"k","action":"set"}`)
+	}
+	<-entered
+	// Let the remaining events land in the buffer behind the blocked handler.
+	time.Sleep(50 * time.Millisecond)
+
+	closed := make(chan struct{})
+	go func() { _ = sub.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while the handler was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return")
+	}
+	assert.Equal(t, int32(1), calls.Load(), "handler called after Close")
+}
+
+func TestMemoryHistory_SinceIsExclusive(t *testing.T) {
+	since := time.Date(2026, 5, 6, 7, 8, 9, 0, time.UTC)
+	var gotLimit string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		// An older control plane includes the event at exactly Since.
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "seen", "timestamp": since, "key": "k"},
+			{"id": "new1", "timestamp": since.Add(time.Millisecond), "key": "k"},
+			{"id": "new2", "timestamp": since.Add(2 * time.Millisecond), "key": "k"},
+		})
+	}))
+	defer srv.Close()
+
+	mem := NewMemory(NewControlPlaneMemoryBackend(srv.URL, "", ""))
+	events, err := mem.History(context.Background(), MemoryHistoryOptions{Since: since, Limit: 2})
+	require.NoError(t, err)
+	assert.Equal(t, "3", gotLimit)
+	require.Len(t, events, 2)
+	assert.Equal(t, "new1", events[0].ID)
+	assert.Equal(t, "new2", events[1].ID)
+
+	events, err = mem.History(context.Background(), MemoryHistoryOptions{Since: since, Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "new2", events[0].ID, "Limit keeps the most recent events")
+}
+
+func TestMemoryWatch_UsesHTTPClientTransport(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	b := NewControlPlaneMemoryBackend(srv.URL, "", "")
+	// srv.Client trusts the test certificate, so the handshake reaches HTTP.
+	b.httpClient = srv.Client()
+	_, err := b.WatchMemory(context.Background(), WatchOptions{})
+	assert.ErrorContains(t, err, "status=403")
 }

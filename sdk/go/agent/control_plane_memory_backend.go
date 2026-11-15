@@ -21,6 +21,8 @@ type ControlPlaneMemoryBackend struct {
 	token       string
 	agentNodeID string
 	httpClient  *http.Client
+	// eventTimings tunes memory event subscriptions; zero means defaults.
+	eventTimings memoryEventTimings
 }
 
 // NewControlPlaneMemoryBackend creates a distributed memory backend that uses the control plane.

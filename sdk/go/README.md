@@ -157,18 +157,21 @@ if err := sub.Err(); err != nil {
     log.Printf("subscription ended: %v", err)
 }
 
-// Callback form: one handler goroutine, events delivered in order.
+// Callback form: one handler goroutine, events in the order Events() would deliver them.
+// After sub2.Close() returns, the handler is not running and is not called again.
 sub2, err := a.Memory().OnChange(ctx, "user_*.preferences", func(ev agent.MemoryChangeEvent) {
     fmt.Println("preferences changed:", ev.Key)
 })
 ```
 
 - **Events:** `Action` is `set` or `delete`. `Data` and `PreviousData` are raw JSON; use `Value()` or `DecodeData(&dst)`. `Metadata` names the agent, actor and workflow behind the change. The `actor` scope is reported as `agent.ScopeUser`.
-- **Patterns:** filtered by the control plane with Go's `path/filepath.Match` rules: `*` matches any characters except `/`, `?` one character, `[...]` a class. `.` is literal, so `config.*` does not match `configX`. Invalid patterns and commas are rejected by `Watch`.
+- **Ordering:** events arrive in the order the control plane published them. Changes made at the same time by different writers have no defined order.
+- **Patterns:** filtered by the control plane with Go's `path.Match` rules: `*` matches any characters except `/`, `?` one character, `[...]` a class. `.` is literal, so `config.*` does not match `configX`. Invalid patterns and commas are rejected by `Watch`.
 - **Lifetime:** the subscription runs until `Close()` or until `ctx` is cancelled; then `Events()` closes and `Err()` is nil.
-- **Reconnects:** if the connection drops, the SDK reconnects with backoff (1s doubling to 30s), up to `MaxReconnectAttempts` (default 5; negative disables). A 4xx answer such as 401 or 403 stops it at once. When it gives up, `Events()` closes and `Err()` says why.
-- **No replay:** changes made while disconnected are not resent. Backfill with `Memory().History(ctx, agent.MemoryHistoryOptions{Since: lastEvent.Timestamp, ...})`.
-- **Backpressure:** `Events()` is buffered (`BufferSize`, default 64). When it is full, the stream waits for you rather than dropping events, so keep handlers fast or hand work to another goroutine.
+- **Keepalive:** both sides ping. A connection that stays silent for 60s is treated as dropped and reconnected.
+- **Reconnects:** if the connection drops, the SDK reconnects with backoff (1s doubling to 30s), up to `MaxReconnectAttempts` (default 5; negative disables). The count resets only after a connection proves healthy (it delivers a message or stays up 30s), so a server that keeps accepting and dropping the connection still exhausts it. A 4xx answer such as 401 or 403 stops it at once. When it gives up, `Events()` closes and `Err()` says why.
+- **No replay:** changes made while disconnected are not resent. Set `OnReconnect` to learn about gaps, then backfill with `Memory().History(ctx, agent.MemoryHistoryOptions{Since: lastEvent.Timestamp, ...})`. `Since` is exclusive, so the last event you saw is not returned again.
+- **Slow consumers:** `Events()` is buffered (`BufferSize`, default 64), and the control plane buffers about 100 more events per subscriber. A consumer that falls further behind is disconnected rather than silently missing events: the subscription reconnects and `OnReconnect` runs. Keep handlers fast or hand work to another goroutine.
 
 ## Logging
 
