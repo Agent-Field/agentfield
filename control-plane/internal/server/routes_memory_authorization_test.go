@@ -392,8 +392,21 @@ func TestMemoryEventVisibility(t *testing.T) {
 								got = append(got, ev.Key)
 							}
 						} else {
+							// A subscriber the store closes while the request is still
+							// live is told so with an "event: error" frame (the stream
+							// has a gap). That frame carries text, not a change event,
+							// so only message frames are decoded here.
+							frameEvent := ""
 							for _, line := range strings.Split(w.Body.String(), "\n") {
-								if strings.HasPrefix(line, "data:") {
+								if strings.HasPrefix(line, "event:") {
+									frameEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+									continue
+								}
+								if line == "" {
+									frameEvent = ""
+									continue
+								}
+								if strings.HasPrefix(line, "data:") && frameEvent != "error" {
 									var ev types.MemoryChangeEvent
 									require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &ev))
 									got = append(got, ev.Key)

@@ -92,6 +92,17 @@ func (s *memoryEventStorageStub) publish(event types.MemoryChangeEvent) {
 	}
 }
 
+// dropAll closes every subscriber channel while its context is still live,
+// as storage does for a subscriber that falls behind.
+func (s *memoryEventStorageStub) dropAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, sub := range s.subs {
+		delete(s.subs, id)
+		close(sub.ch)
+	}
+}
+
 func (s *memoryEventStorageStub) ActiveSubscriptions() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,6 +140,27 @@ func newMemoryEventsRouter(store storage.StorageProvider) *gin.Engine {
 	router.GET("/ws", handler.WebSocketHandler)
 	router.GET("/sse", handler.SSEHandler)
 	return router
+}
+
+func newMemoryEventsTestServer(t *testing.T) (*memoryEventStorageStub, *httptest.Server) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	store := newMemoryEventStorageStub()
+	server := httptest.NewServer(newMemoryEventsRouter(store))
+	t.Cleanup(server.Close)
+	return store, server
+}
+
+// dialMemoryEventsWS connects to the /ws endpoint and waits until the
+// handler's subscription is active, so events published next are delivered.
+func dialMemoryEventsWS(t *testing.T, store *memoryEventStorageStub, server *httptest.Server, query string) *websocket.Conn {
+	t.Helper()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws"+query, nil)
+	require.NoError(t, err)
+	waitForCondition(t, time.Second, func() bool {
+		return store.ActiveSubscriptions() == 1
+	}, "websocket subscription should become active")
+	return conn
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, fn func() bool, msg string) {
@@ -181,19 +213,10 @@ func TestMemoryEventsHandler_WebSocketUpgradeFailureReturnsBadRequest(t *testing
 }
 
 func TestMemoryEventsHandler_WebSocketUpgradeAndPatternFilter(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+	store, server := newMemoryEventsTestServer(t)
 
-	store := newMemoryEventStorageStub()
-	server := httptest.NewServer(newMemoryEventsRouter(store))
-	defer server.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws?patterns=user.*", nil)
-	require.NoError(t, err)
+	conn := dialMemoryEventsWS(t, store, server, "?patterns=user.*")
 	defer conn.Close()
-
-	waitForCondition(t, time.Second, func() bool {
-		return store.ActiveSubscriptions() == 1
-	}, "websocket subscription should become active")
 
 	store.publish(newMemoryEvent("session", "s1", "system.name"))
 	store.publish(newMemoryEvent("session", "s1", "user.name"))
@@ -208,11 +231,7 @@ func TestMemoryEventsHandler_WebSocketUpgradeAndPatternFilter(t *testing.T) {
 }
 
 func TestMemoryEventsHandler_SSEHappyPathHonorsScopeFilter(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	store := newMemoryEventStorageStub()
-	server := httptest.NewServer(newMemoryEventsRouter(store))
-	defer server.Close()
+	store, server := newMemoryEventsTestServer(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -270,82 +289,80 @@ func TestMemoryEventsHandler_SSEHappyPathHonorsScopeFilter(t *testing.T) {
 	}, "sse subscription should be released after cancel")
 }
 
-func TestMemoryEventsHandler_SSEInvalidPatternDropsEventsAndDisconnectCleansUp(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+func TestMemoryEventsHandler_InvalidPatternIsRejected(t *testing.T) {
+	store, server := newMemoryEventsTestServer(t)
 
-	store := newMemoryEventStorageStub()
-	server := httptest.NewServer(newMemoryEventsRouter(store))
-	defer server.Close()
-
-	baseline := runtime.NumGoroutine()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/sse?patterns=[invalid", nil)
+	resp, err := http.Get(server.URL + "/sse?patterns=[invalid")
 	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	require.Contains(t, string(body), "[invalid")
 
-	// The SSE handler does not flush headers until it writes the first event.
-	// Run the request in a goroutine, wait for the subscription to be active,
-	// then publish a sentinel event to unblock the headers. Because the pattern
-	// is invalid, no event will reach the client body, but the headers will be
-	// written by gin via the SSEvent path on a non-matching publish? Actually,
-	// non-matching events are skipped before any write. Instead, briefly
-	// publish nothing and rely on cancel() to tear the subscription down. We
-	// cannot read the body without first receiving headers, so we just verify
-	// the subscription is created and cleanly released on cancel.
-	type doResult struct {
-		resp *http.Response
-		err  error
-	}
-	doCh := make(chan doResult, 1)
+	_, wsResp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws?patterns=ok,[invalid", nil)
+	require.Error(t, err)
+	require.NotNil(t, wsResp)
+	require.Equal(t, http.StatusBadRequest, wsResp.StatusCode)
+
+	require.Equal(t, 0, store.ActiveSubscriptions())
+}
+
+func TestMemoryEventsHandler_WebSocketDisconnectReleasesSubscriptionWithoutEvents(t *testing.T) {
+	store, server := newMemoryEventsTestServer(t)
+
+	conn := dialMemoryEventsWS(t, store, server, "")
+
+	// No event is published: the handler must notice the disconnect itself.
+	require.NoError(t, conn.Close())
+	waitForCondition(t, 2*time.Second, func() bool {
+		return store.ActiveSubscriptions() == 0
+	}, "closing websocket should release the subscription")
+}
+
+func TestMemoryEventsHandler_WebSocketDroppedSubscriberGetsTryAgainLater(t *testing.T) {
+	store, server := newMemoryEventsTestServer(t)
+
+	conn := dialMemoryEventsWS(t, store, server, "")
+	defer conn.Close()
+
+	// Storage closes the channel of a subscriber that fell behind.
+	store.dropAll()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, _, err := conn.ReadMessage()
+	require.True(t, websocket.IsCloseError(err, websocket.CloseTryAgainLater), "got %v", err)
+}
+
+func TestMemoryEventsHandler_WebSocketAnswersPings(t *testing.T) {
+	store, server := newMemoryEventsTestServer(t)
+
+	conn := dialMemoryEventsWS(t, store, server, "")
+	defer conn.Close()
+
+	pong := make(chan string, 1)
+	conn.SetPongHandler(func(data string) error { pong <- data; return nil })
 	go func() {
-		resp, err := http.DefaultClient.Do(req)
-		doCh <- doResult{resp: resp, err: err}
-	}()
-
-	waitForCondition(t, 2*time.Second, func() bool {
-		return store.ActiveSubscriptions() == 1
-	}, "invalid-pattern subscription should still connect")
-
-	// Publishing a non-matching event must not produce any client-visible data.
-	store.publish(newMemoryEvent("session", "s1", "user.allowed"))
-
-	// Cancel the request context to disconnect the client. This will cause
-	// http.Client.Do to return with a context.Canceled error, which is the
-	// expected behavior since headers were never flushed for this filter.
-	cancel()
-
-	select {
-	case res := <-doCh:
-		if res.resp != nil {
-			res.resp.Body.Close()
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				return
+			}
 		}
-		// err is expected to be context.Canceled or nil; we don't assert.
+	}()
+	require.NoError(t, conn.WriteControl(websocket.PingMessage, []byte("hi"), time.Now().Add(time.Second)))
+	select {
+	case data := <-pong:
+		require.Equal(t, "hi", data)
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for SSE request to return after cancel")
+		t.Fatal("no pong")
 	}
-
-	waitForCondition(t, 2*time.Second, func() bool {
-		return store.ActiveSubscriptions() == 0 && runtime.NumGoroutine() <= baseline+8
-	}, "disconnect should release subscription without leaking goroutines")
 }
 
 func TestMemoryEventsHandler_WebSocketBackpressureDisconnectsCleanly(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	store := newMemoryEventStorageStub()
-	server := httptest.NewServer(newMemoryEventsRouter(store))
-	defer server.Close()
+	store, server := newMemoryEventsTestServer(t)
 
 	baseline := runtime.NumGoroutine()
 
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws", nil)
-	require.NoError(t, err)
-
-	waitForCondition(t, time.Second, func() bool {
-		return store.ActiveSubscriptions() == 1
-	}, "websocket subscription should become active")
+	conn := dialMemoryEventsWS(t, store, server, "")
 
 	for i := 0; i < 100; i++ {
 		store.publish(newMemoryEvent("session", "s1", fmt.Sprintf("user.%d", i)))

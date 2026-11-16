@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -172,22 +174,12 @@ func (ls *LocalStorage) GetEventHistory(ctx context.Context, filter types.EventF
 			if filter.ScopeID != nil && event.ScopeID != *filter.ScopeID {
 				continue
 			}
-			if filter.Since != nil && event.Timestamp.Before(*filter.Since) {
+			if filter.Since != nil && !event.Timestamp.After(*filter.Since) {
 				continue
 			}
 
-			// Apply pattern matching
-			if len(filter.Patterns) > 0 {
-				match := false
-				for _, pattern := range filter.Patterns {
-					if matched, _ := filepath.Match(pattern, event.Key); matched {
-						match = true
-						break
-					}
-				}
-				if !match {
-					continue
-				}
+			if !types.MatchKeyPatterns(filter.Patterns, event.Key) {
+				continue
 			}
 
 			events = append(events, &event)
@@ -199,6 +191,14 @@ func (ls *LocalStorage) GetEventHistory(ctx context.Context, filter types.EventF
 	if err != nil {
 		return nil, fmt.Errorf("failed to get event history: %w", err)
 	}
+
+	// Keys are decimal sequence numbers, which the cursor walks in
+	// lexicographic order ("10" before "2"); restore publication order.
+	slices.SortStableFunc(events, func(a, b *types.MemoryChangeEvent) int {
+		ai, _ := strconv.ParseUint(a.ID, 10, 64)
+		bi, _ := strconv.ParseUint(b.ID, 10, 64)
+		return cmp.Compare(ai, bi)
+	})
 
 	// Apply limit after filtering
 	if filter.Limit > 0 && len(events) > filter.Limit {
@@ -278,7 +278,7 @@ func (ls *LocalStorage) getEventHistoryPostgres(ctx context.Context, filter type
 		args = append(args, *filter.ScopeID)
 	}
 	if filter.Since != nil {
-		conditions = append(conditions, "timestamp >= ?")
+		conditions = append(conditions, "timestamp > ?")
 		args = append(args, *filter.Since)
 	}
 
@@ -341,17 +341,8 @@ func (ls *LocalStorage) getEventHistoryPostgres(ctx context.Context, filter type
 			}
 		}
 
-		if len(filter.Patterns) > 0 {
-			match := false
-			for _, pattern := range filter.Patterns {
-				if matched, _ := filepath.Match(pattern, event.Key); matched {
-					match = true
-					break
-				}
-			}
-			if !match {
-				continue
-			}
+		if !types.MatchKeyPatterns(filter.Patterns, event.Key) {
+			continue
 		}
 
 		events = append(events, event)
