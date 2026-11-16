@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.38] - 2026-11-16
+
+
+### Added
+
+- Feat(sdk/go): real-time memory change subscriptions (#1208)
+
+* feat(sdk/go): real-time memory change subscriptions
+
+Add Memory().Watch, Memory().OnChange and Memory().History to the Go SDK,
+backed by the control plane's /api/v1/memory/events/ws and
+/api/v1/memory/events/history endpoints.
+
+- Server-side filtering by patterns (filepath.Match), scope and scope ID
+- Initial connect is synchronous so auth and pattern errors surface early
+- Reconnect with exponential backoff (1s to 30s), bounded attempts;
+  4xx handshake refusals stop immediately
+- Buffered events channel that applies backpressure instead of dropping
+- MemoryChangeEvent mirrors the wire format (set/delete actions, raw JSON
+  data); the "actor" scope is reported as ScopeUser
+- Backends without event support return ErrMemoryEventsUnsupported
+
+Closes #95
+
+* refactor(sdk/go): tighten memory subscription lifecycle and docs
+
+- OnChange stops through a derived context; Close no longer needs a
+  separate stop channel, and the context is released when the
+  subscription ends on its own
+- Reuse sleepCtx for reconnect waits and isTransientPollStatus for
+  permanent handshake refusals
+- Map the "actor" scope to ScopeUser in MemoryChangeEvent.UnmarshalJSON
+  instead of at each decode site
+- Extend the read deadline after each delivery so a slow consumer does
+  not make a healthy connection look silent
+- Copy DialTLSContext into the WebSocket dialer, and document that a
+  wrapping RoundTripper's settings do not apply to the handshake
+- Document that OnReconnect must not call Close, and that OnChange cannot
+  report reconnect gaps
+- Factor repeated test plumbing into helpers (fc96211)
+
 ## [0.1.146-rc.37] - 2026-11-16
 
 
