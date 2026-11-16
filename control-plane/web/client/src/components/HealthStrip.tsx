@@ -40,10 +40,18 @@ export function HealthStrip({ className }: HealthStripProps) {
     refreshAllLiveQueries,
   } = useSSESync();
   const llmLoading = llmHealth.isLoading;
-  const llmOk = llmHealth.data
-    ? llmHealth.data.healthy &&
-      !llmHealth.data.endpoints?.some((ep) => !ep.healthy)
+  // LLM health monitoring is opt-in (`agentfield.llm_health` in the server
+  // config). Until the server reports it as enabled nothing is being measured,
+  // so the LLM indicator is not shown at all, rather than reading "Degraded"
+  // on every install that never configured it.
+  const llmMonitored = llmHealth.data?.enabled === true;
+  const llmOk = llmMonitored
+    ? llmHealth.data!.healthy &&
+      !llmHealth.data!.endpoints?.some((ep) => !ep.healthy)
     : undefined;
+  const llmAriaPart = llmMonitored
+    ? `LLM ${llmOk === true ? "healthy" : llmOk === false ? "degraded" : "unknown"}, `
+    : "";
 
   const nodes: AgentNodeSummary[] = agents.data?.nodes ?? [];
   const totalAgents = agents.data?.count ?? nodes.length;
@@ -118,7 +126,7 @@ export function HealthStrip({ className }: HealthStripProps) {
                 variant="outline"
                 size="sm"
                 className={compactTriggerClass}
-                aria-label={`System status: LLM ${llmOk === true ? "healthy" : llmOk === false ? "degraded" : "unknown"}, ${onlineCount} of ${totalAgents} agents online, ${totalRunning} running, ${sseLabel}`}
+                aria-label={`System status: ${llmAriaPart}${onlineCount} of ${totalAgents} agents online, ${totalRunning} running, ${sseLabel}`}
               >
                 <Activity className="size-3.5 shrink-0" aria-hidden />
                 <span className="tabular-nums text-muted-foreground">
@@ -142,36 +150,38 @@ export function HealthStrip({ className }: HealthStripProps) {
                 System status
               </p>
               <ul className="space-y-2.5 text-sm">
-                <li className="flex items-start gap-2">
-                  {llmOk === true ? (
-                    <CircleCheck
-                      className="mt-0.5 size-4 shrink-0 text-green-500"
-                      aria-hidden
-                    />
-                  ) : llmOk === false ? (
-                    <CircleAlert
-                      className="mt-0.5 size-4 shrink-0 text-destructive"
-                      aria-hidden
-                    />
-                  ) : (
-                    <CircleAlert
-                      className="mt-0.5 size-4 shrink-0 text-amber-500"
-                      aria-hidden
-                    />
-                  )}
-                  <div>
-                    <div className="font-medium">LLM</div>
-                    <div className="text-xs text-muted-foreground">
-                      {llmOk === true
-                        ? "All LLM endpoints responding"
-                        : llmOk === false
-                          ? "One or more LLM endpoints are unhealthy"
-                          : llmLoading
-                            ? "Checking LLM health…"
-                            : "LLM health status unavailable"}
+                {llmMonitored ? (
+                  <li className="flex items-start gap-2">
+                    {llmOk === true ? (
+                      <CircleCheck
+                        className="mt-0.5 size-4 shrink-0 text-green-500"
+                        aria-hidden
+                      />
+                    ) : llmOk === false ? (
+                      <CircleAlert
+                        className="mt-0.5 size-4 shrink-0 text-destructive"
+                        aria-hidden
+                      />
+                    ) : (
+                      <CircleAlert
+                        className="mt-0.5 size-4 shrink-0 text-amber-500"
+                        aria-hidden
+                      />
+                    )}
+                    <div>
+                      <div className="font-medium">LLM</div>
+                      <div className="text-xs text-muted-foreground">
+                        {llmOk === true
+                          ? "All LLM endpoints responding"
+                          : llmOk === false
+                            ? "One or more LLM endpoints are unhealthy"
+                            : llmLoading
+                              ? "Checking LLM health…"
+                              : "LLM health status unavailable"}
+                      </div>
                     </div>
-                  </div>
-                </li>
+                  </li>
+                ) : null}
                 <li className="flex items-start gap-2">
                   <Server
                     className={cn(
@@ -251,46 +261,48 @@ export function HealthStrip({ className }: HealthStripProps) {
         </div>
 
         <div className="hidden items-center gap-2 text-xs sm:gap-3 xl:flex">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-1 sm:gap-1.5">
-                {llmOk === true ? (
-                  <CircleCheck
-                    className="size-3.5 shrink-0 text-green-500"
-                    aria-hidden
-                  />
-                ) : llmOk === false ? (
-                  <CircleAlert
-                    className="size-3.5 shrink-0 text-destructive"
-                    aria-hidden
-                  />
-                ) : (
-                  <CircleAlert
-                    className="size-3.5 shrink-0 text-amber-500"
-                    aria-hidden
-                  />
-                )}
-                <span className="hidden text-muted-foreground lg:inline">
-                  LLM
-                </span>
-                <Badge
-                  variant={llmOk === true ? "secondary" : llmOk === false ? "destructive" : "outline"}
-                  className="h-5 px-1.5 text-micro"
-                >
-                  {llmOk === true ? "Healthy" : llmOk === false ? "Degraded" : "Unknown"}
-                </Badge>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              {llmOk === true
-                ? "All LLM endpoints responding"
-                : llmOk === false
-                  ? "One or more LLM endpoints are unhealthy"
-                  : llmLoading
-                    ? "Checking LLM health…"
-                    : "LLM health status unavailable"}
-            </TooltipContent>
-          </Tooltip>
+          {llmMonitored ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1 sm:gap-1.5">
+                  {llmOk === true ? (
+                    <CircleCheck
+                      className="size-3.5 shrink-0 text-green-500"
+                      aria-hidden
+                    />
+                  ) : llmOk === false ? (
+                    <CircleAlert
+                      className="size-3.5 shrink-0 text-destructive"
+                      aria-hidden
+                    />
+                  ) : (
+                    <CircleAlert
+                      className="size-3.5 shrink-0 text-amber-500"
+                      aria-hidden
+                    />
+                  )}
+                  <span className="hidden text-muted-foreground lg:inline">
+                    LLM
+                  </span>
+                  <Badge
+                    variant={llmOk === true ? "secondary" : llmOk === false ? "destructive" : "outline"}
+                    className="h-5 px-1.5 text-micro"
+                  >
+                    {llmOk === true ? "Healthy" : llmOk === false ? "Degraded" : "Unknown"}
+                  </Badge>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                {llmOk === true
+                  ? "All LLM endpoints responding"
+                  : llmOk === false
+                    ? "One or more LLM endpoints are unhealthy"
+                    : llmLoading
+                      ? "Checking LLM health…"
+                      : "LLM health status unavailable"}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
 
           <Tooltip>
             <TooltipTrigger asChild>
