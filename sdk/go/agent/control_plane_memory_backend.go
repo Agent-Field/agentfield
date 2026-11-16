@@ -21,6 +21,8 @@ type ControlPlaneMemoryBackend struct {
 	token       string
 	agentNodeID string
 	httpClient  *http.Client
+	// eventTimings tunes memory event subscriptions; zero means defaults.
+	eventTimings memoryEventTimings
 }
 
 // NewControlPlaneMemoryBackend creates a distributed memory backend that uses the control plane.
@@ -362,26 +364,32 @@ func (b *ControlPlaneMemoryBackend) DeleteVector(ctx context.Context, scope Memo
 func (b *ControlPlaneMemoryBackend) applyHeaders(req *http.Request, scope MemoryScope, scopeID string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	b.applyIdentityHeaders(req.Header, scope, scopeID)
+}
+
+// applyIdentityHeaders sets credentials, caller identity and the scope ID header.
+// It is shared with the memory events WebSocket handshake.
+func (b *ControlPlaneMemoryBackend) applyIdentityHeaders(h http.Header, scope MemoryScope, scopeID string) {
 	if b.token != "" {
-		req.Header.Set("Authorization", "Bearer "+b.token)
+		h.Set("Authorization", "Bearer "+b.token)
 	}
 	if b.agentNodeID != "" {
-		req.Header.Set("X-Agent-Node-ID", b.agentNodeID)
+		h.Set("X-Agent-Node-ID", b.agentNodeID)
 	}
 
 	// Provide the scope ID via headers so the control plane can resolve scope_id consistently.
 	switch b.apiScope(scope) {
 	case "workflow":
 		if scopeID != "" {
-			req.Header.Set("X-Workflow-ID", scopeID)
+			h.Set("X-Workflow-ID", scopeID)
 		}
 	case "session":
 		if scopeID != "" {
-			req.Header.Set("X-Session-ID", scopeID)
+			h.Set("X-Session-ID", scopeID)
 		}
 	case "actor":
 		if scopeID != "" {
-			req.Header.Set("X-Actor-ID", scopeID)
+			h.Set("X-Actor-ID", scopeID)
 		}
 	case "global":
 		// no header required
