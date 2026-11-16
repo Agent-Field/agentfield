@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.36] - 2026-11-16
+
+
+### Fixed
+
+- Fix(control-plane): memory event subscription reliability and ordering (#1207)
+
+* fix(control-plane): memory event subscription reliability and ordering
+
+Subscriptions
+- Unsubscribe when the subscriber's context ends, so disconnected
+  clients no longer leave dead channels behind
+- Publish synchronously, so events reach each subscriber in the order
+  they were published
+- A subscriber whose 100-event buffer is full is disconnected and its
+  channel closed, instead of silently missing individual events
+
+WebSocket and SSE handlers
+- The server pings every 25s and drops a connection that is silent for
+  60s; the subscription lives exactly as long as the connection
+- A subscriber dropped for falling behind gets close code 1013 (WS) or
+  an "error" event (SSE), so clients can tell their stream has a gap
+- Malformed glob patterns are rejected with 400 instead of silently
+  matching nothing
+
+History
+- Patterns use path.Match (shared as types.MatchKeyPatterns), so
+  matching does not depend on the server's operating system
+- since is exclusive: only events strictly after it are returned
+- Local mode returns events in publication order; decimal BoltDB keys
+  previously sorted "10" before "2", so Limit kept the wrong events
+
+Refs #95
+
+* test(control-plane): decode only message frames in the memory event visibility test
+
+The SSE stub closes its channel to end the stream. With the subscription fix,
+a close while the request is still live is reported to the client as an
+"event: error" frame (the subscriber fell behind), which carries text rather
+than a change event. The test decoded every data: line as a change event and
+failed on that frame. Decode only message frames; the error frame is the
+intended behaviour of this change.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (6b09e65)
+
 ## [0.1.146-rc.35] - 2026-11-16
 
 
