@@ -56,7 +56,8 @@ func normalizePatterns(raw string) []string {
 
 // WebSocketHandler handles WebSocket connections for memory events.
 func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
-	ctx := c.Request.Context()
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
 	eventFilter, allowed := authorizeMemoryEvents(c)
 	if !allowed {
 		return
@@ -82,8 +83,10 @@ func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 		return
 	}
 
-	// Goroutine to read messages from the client (e.g., for ping/pong)
+	// Goroutine to read messages from the client (e.g., for ping/pong).
+	// A hijacked connection does not cancel the HTTP request on disconnect.
 	go func() {
+		defer cancel()
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
 				if closeErr := conn.Close(); closeErr != nil {
@@ -95,7 +98,17 @@ func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 	}()
 
 	// Forward events to the client
-	for event := range eventChan {
+	for {
+		var event types.MemoryChangeEvent
+		select {
+		case <-ctx.Done():
+			return
+		case next, ok := <-eventChan:
+			if !ok {
+				return
+			}
+			event = next
+		}
 		if eventFilter != nil && !eventFilter(ctx, &event) {
 			continue
 		}

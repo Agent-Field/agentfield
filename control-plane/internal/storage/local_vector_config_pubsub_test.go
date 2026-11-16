@@ -222,3 +222,164 @@ func TestLocalStorageCacheAndPubSub(t *testing.T) {
 	assert.Equal(t, "memory_changes:*:*", subscriberKey("", ""))
 	assert.Equal(t, "memory_changes:session:*", subscriberKey("session", ""))
 }
+
+func TestLocalStorageMemorySubscriptionCancellation(t *testing.T) {
+	for _, selector := range []struct{ scope, scopeID string }{
+		{"session", "scope-1"},
+		{"session", ""},
+		{"", "scope-1"},
+		{"", ""},
+	} {
+		t.Run(subscriberKey(selector.scope, selector.scopeID), func(t *testing.T) {
+			ls := NewLocalStorage(LocalStorageConfig{})
+			ctx := context.Background()
+			firstCtx, cancelFirst := context.WithCancel(ctx)
+			defer cancelFirst()
+			secondCtx, cancelSecond := context.WithCancel(ctx)
+			defer cancelSecond()
+			first, err := ls.SubscribeToMemoryChanges(firstCtx, selector.scope, selector.scopeID)
+			require.NoError(t, err)
+			second, err := ls.SubscribeToMemoryChanges(secondCtx, selector.scope, selector.scopeID)
+			require.NoError(t, err)
+
+			cancelFirst()
+			select {
+			case _, open := <-first:
+				require.False(t, open, "cancellation should close the event channel")
+			case <-time.After(time.Second):
+				t.Fatal("cancelled memory subscription remained open")
+			}
+
+			// Removing one subscription must preserve another on the same key.
+			event := types.MemoryChangeEvent{ID: "surviving-event", Scope: "session", ScopeID: "scope-1"}
+			require.NoError(t, ls.PublishMemoryChange(ctx, event))
+			select {
+			case got, open := <-second:
+				require.True(t, open)
+				require.Equal(t, event.ID, got.ID)
+			case <-time.After(time.Second):
+				t.Fatal("remaining subscription did not receive the event")
+			}
+
+			cancelSecond()
+			select {
+			case _, open := <-second:
+				require.False(t, open)
+			case <-time.After(time.Second):
+				t.Fatal("last cancelled memory subscription remained open")
+			}
+			ls.mu.RLock()
+			remaining := len(ls.subscribers)
+			ls.mu.RUnlock()
+			require.Zero(t, remaining, "cancelled subscriptions must not retain registry entries")
+		})
+	}
+}
+
+func TestLocalStorageMemoryCancellationDuringPublish(t *testing.T) {
+	ls := NewLocalStorage(LocalStorageConfig{})
+	ctx := context.Background()
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cancelled, err := ls.SubscribeToMemoryChanges(cancelledCtx, "session", "scope-1")
+	require.NoError(t, err)
+	activeCtx, cancelActive := context.WithCancel(ctx)
+	defer cancelActive()
+	active, err := ls.SubscribeToMemoryChanges(activeCtx, "session", "scope-1")
+	require.NoError(t, err)
+	key := subscriberKey("session", "scope-1")
+	cached, err := ls.Subscribe(key)
+	require.NoError(t, err)
+	// CacheProvider has no unsubscribe API. Release this test's own remaining
+	// channels and wait for its conversion goroutine during cleanup.
+	defer func() {
+		cancelActive()
+		ls.mu.Lock()
+		for _, channel := range ls.subscribers[key] {
+			close(channel)
+		}
+		delete(ls.subscribers, key)
+		ls.mu.Unlock()
+		deadline := time.After(time.Second)
+		for {
+			select {
+			case _, open := <-cached:
+				if !open {
+					return
+				}
+			case <-deadline:
+				t.Error("cache subscription did not finish cleanup")
+				return
+			}
+		}
+	}()
+
+	start := make(chan struct{})
+	ready := make(chan struct{})
+	publishing := make(chan error, 1)
+	go func() {
+		<-start
+		close(ready)
+		for i := 0; i < 12; i++ {
+			event := types.MemoryChangeEvent{ID: "concurrent", Scope: "session", ScopeID: "scope-1"}
+			if err := ls.PublishMemoryChange(ctx, event); err != nil {
+				publishing <- err
+				return
+			}
+			if err := ls.Publish(key, event); err != nil {
+				publishing <- err
+				return
+			}
+		}
+		publishing <- nil
+	}()
+	// Queue publication and cancellation behind the same lock so their
+	// lifetimes overlap. All buffers fit the finite burst without dropping.
+	ls.mu.Lock()
+	close(start)
+	<-ready
+	cancel()
+	ls.mu.Unlock()
+	require.NoError(t, <-publishing)
+	deadline := time.After(time.Second)
+cancelledEvents:
+	for {
+		select {
+		case _, open := <-cancelled:
+			if !open {
+				break cancelledEvents
+			}
+		case <-deadline:
+			t.Fatal("cancelled subscription was not closed during publication")
+		}
+	}
+	sentinel := types.MemoryChangeEvent{ID: "sentinel", Scope: "session", ScopeID: "scope-1"}
+	require.NoError(t, ls.PublishMemoryChange(ctx, sentinel))
+	deadline = time.After(time.Second)
+memoryEvents:
+	for {
+		select {
+		case event, open := <-active:
+			require.True(t, open, "other memory subscription was closed")
+			if event.ID == sentinel.ID {
+				break memoryEvents
+			}
+		case <-deadline:
+			t.Fatal("other memory subscription lost the sentinel")
+		}
+	}
+	deadline = time.After(time.Second)
+	for {
+		select {
+		case message, open := <-cached:
+			require.True(t, open, "cache subscription was closed")
+			var event types.MemoryChangeEvent
+			require.NoError(t, json.Unmarshal(message.Payload, &event))
+			if event.ID == sentinel.ID {
+				return
+			}
+		case <-deadline:
+			t.Fatal("cache subscription lost the sentinel")
+		}
+	}
+}

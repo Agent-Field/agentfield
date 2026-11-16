@@ -365,3 +365,58 @@ func TestMemoryEventsHandler_WebSocketBackpressureDisconnectsCleanly(t *testing.
 		return store.ActiveSubscriptions() == 0 && runtime.NumGoroutine() <= baseline+10
 	}, "closing websocket should release subscription after burst publish")
 }
+
+func TestMemoryEventsHandler_WebSocketIdleDisconnectCleansUp(t *testing.T) {
+	for _, mode := range []string{"tcp-close", "close-frame", "request-cancel", "after-event"} {
+		t.Run(mode, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			store := newMemoryEventStorageStub()
+			ctx, cancel := context.WithCancel(context.Background())
+			router := newMemoryEventsRouter(store)
+			done := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer close(done)
+				router.ServeHTTP(w, r.WithContext(ctx))
+			}))
+			defer server.Close()
+			defer cancel()
+
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws?patterns=user.*", nil)
+			require.NoError(t, err)
+			defer conn.Close()
+			waitForCondition(t, time.Second, func() bool {
+				return store.ActiveSubscriptions() == 1
+			}, "websocket subscription should become active")
+
+			switch mode {
+			case "close-frame":
+				require.NoError(t, conn.WriteControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)))
+				require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+				_, _, err := conn.ReadMessage()
+				require.True(t, websocket.IsCloseError(err, websocket.CloseNormalClosure), "unexpected close response: %v", err)
+			case "request-cancel":
+				cancel()
+			case "after-event":
+				store.publish(newMemoryEvent("session", "s1", "user.name"))
+				require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+				var event types.MemoryChangeEvent
+				require.NoError(t, conn.ReadJSON(&event))
+				require.Equal(t, "user.name", event.Key)
+				require.NoError(t, conn.Close())
+			default:
+				require.NoError(t, conn.Close())
+			}
+
+			// No matching event is published to wake the handler after disconnect.
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("idle websocket handler did not return after disconnect")
+			}
+			waitForCondition(t, time.Second, func() bool {
+				return store.ActiveSubscriptions() == 0
+			}, "idle disconnect should release the subscription")
+		})
+	}
+}

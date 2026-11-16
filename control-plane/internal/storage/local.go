@@ -5134,6 +5134,30 @@ func (ls *LocalStorage) SubscribeToMemoryChanges(ctx context.Context, scope, sco
 	// Store the subscriber channel
 	ls.subscribers[channel] = append(ls.subscribers[channel], subChannel)
 
+	context.AfterFunc(ctx, func() {
+		ls.mu.Lock()
+		defer ls.mu.Unlock()
+
+		subscribers := ls.subscribers[channel]
+		for i, subscriber := range subscribers {
+			if subscriber != subChannel {
+				continue
+			}
+			// Publication holds the same mutex for reading, so it cannot
+			// send to the channel while cancellation removes and closes it.
+			copy(subscribers[i:], subscribers[i+1:])
+			subscribers[len(subscribers)-1] = nil
+			subscribers = subscribers[:len(subscribers)-1]
+			if len(subscribers) == 0 {
+				delete(ls.subscribers, channel)
+			} else {
+				ls.subscribers[channel] = subscribers
+			}
+			close(subChannel)
+			return
+		}
+	})
+
 	return subChannel, nil
 }
 
