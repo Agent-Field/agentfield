@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.37] - 2026-11-16
+
+
+### Fixed
+
+- Fix(web): hide LLM health UI when monitoring is not enabled (#1173)
+
+* fix(web): hide LLM health UI when monitoring is not enabled
+
+LLM health monitoring is opt-in (agentfield.llm_health). With it off, the
+server answers {enabled:false} and the header pill read the missing
+healthy field as false, so every default install showed "LLM Degraded".
+The pill, its popover row and the dashboard card now render only when the
+server reports monitoring as enabled.
+
+* test(web): monitored fixture for the dashboard LLM card
+
+The dashboard now draws the LLM card only when monitoring is enabled, so
+the default fixture says enabled: true, and a new case pins that the card
+is left out when it is not. (1593ad6)
+
 ## [0.1.146-rc.36] - 2026-11-16
 
 
