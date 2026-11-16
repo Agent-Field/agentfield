@@ -137,4 +137,21 @@ describe("HealthStrip", () => {
     await user.click(screen.getByRole("button", { name: "Refresh runs, agents, and dashboard data" }));
     expect(state.refreshAllLiveQueries).toHaveBeenCalledTimes(1);
   });
+
+  it("leaves the LLM item out when LLM health monitoring is not configured", () => {
+    state.llmHealth.mockReturnValue({
+      isLoading: false,
+      data: { enabled: false, healthy: false, endpoints: [] },
+    });
+
+    render(<HealthStrip />);
+
+    expect(screen.queryByText("Degraded")).not.toBeInTheDocument();
+    expect(screen.queryByText("LLM")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: /^System status: 2 of 2 agents online, 3 running, Live/i,
+      }),
+    ).toBeInTheDocument();
+  });
 });

@@ -40,7 +40,11 @@ export function HealthStrip({ className }: HealthStripProps) {
     refreshAllLiveQueries,
   } = useSSESync();
   const llmLoading = llmHealth.isLoading;
-  const llmOk = llmHealth.data
+  // A control plane without LLM health monitoring reports enabled: false
+  // with healthy: false; that is "not configured", not "degraded", so the
+  // LLM item is left out instead of raising a false alarm.
+  const llmConfigured = llmHealth.data?.enabled !== false;
+  const llmOk = llmHealth.data && llmConfigured
     ? llmHealth.data.healthy &&
       !llmHealth.data.endpoints?.some((ep) => !ep.healthy)
     : undefined;
@@ -118,7 +122,7 @@ export function HealthStrip({ className }: HealthStripProps) {
                 variant="outline"
                 size="sm"
                 className={compactTriggerClass}
-                aria-label={`System status: LLM ${llmOk === true ? "healthy" : llmOk === false ? "degraded" : "unknown"}, ${onlineCount} of ${totalAgents} agents online, ${totalRunning} running, ${sseLabel}`}
+                aria-label={`System status: ${llmConfigured ? `LLM ${llmOk === true ? "healthy" : llmOk === false ? "degraded" : "unknown"}, ` : ""}${onlineCount} of ${totalAgents} agents online, ${totalRunning} running, ${sseLabel}`}
               >
                 <Activity className="size-3.5 shrink-0" aria-hidden />
                 <span className="tabular-nums text-muted-foreground">
@@ -142,6 +146,7 @@ export function HealthStrip({ className }: HealthStripProps) {
                 System status
               </p>
               <ul className="space-y-2.5 text-sm">
+                {llmConfigured && (
                 <li className="flex items-start gap-2">
                   {llmOk === true ? (
                     <CircleCheck
@@ -172,6 +177,7 @@ export function HealthStrip({ className }: HealthStripProps) {
                     </div>
                   </div>
                 </li>
+                )}
                 <li className="flex items-start gap-2">
                   <Server
                     className={cn(
@@ -251,6 +257,7 @@ export function HealthStrip({ className }: HealthStripProps) {
         </div>
 
         <div className="hidden items-center gap-2 text-xs sm:gap-3 xl:flex">
+          {llmConfigured && (
           <Tooltip>
             <TooltipTrigger asChild>
               <div className="flex items-center gap-1 sm:gap-1.5">
@@ -291,6 +298,7 @@ export function HealthStrip({ className }: HealthStripProps) {
                     : "LLM health status unavailable"}
             </TooltipContent>
           </Tooltip>
+          )}
 
           <Tooltip>
             <TooltipTrigger asChild>

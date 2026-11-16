@@ -289,6 +289,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 			dashboardHandler := ui.NewDashboardHandler(s.storage, s.agentService)
 			dashboard.GET("/summary", dashboardHandler.GetDashboardSummaryHandler)
 			dashboard.GET("/enhanced", dashboardHandler.GetEnhancedDashboardSummaryHandler)
+			dashboard.GET("/home", dashboardHandler.GetDeveloperHomeHandler)
 		}
 
 		// DID system-wide endpoints

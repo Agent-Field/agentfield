@@ -7,6 +7,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -56,8 +57,49 @@ function shouldInvalidateForEvent(data: unknown): boolean {
   return type !== "connected" && type !== "heartbeat";
 }
 
+/**
+ * The Home page aggregates every execution in its window, so it is refreshed
+ * at most once per interval however many execution events arrive: the first
+ * event refreshes at once, later ones in the same interval fold into a single
+ * trailing refresh. The server caches the same response for five seconds.
+ */
+export const HOME_REFRESH_INTERVAL_MS = 5000;
+
+function useCoalescedInvalidation(
+  queryKey: readonly unknown[],
+  intervalMs: number,
+): () => void {
+  const queryClient = useQueryClient();
+  const lastRun = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  return useCallback(() => {
+    const run = () => {
+      timer.current = null;
+      lastRun.current = Date.now();
+      void queryClient.invalidateQueries({ queryKey: [...queryKey] });
+    };
+    if (timer.current) return;
+    const wait = lastRun.current + intervalMs - Date.now();
+    if (wait <= 0) run();
+    else timer.current = setTimeout(run, wait);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryClient, intervalMs]);
+}
+
 function useSSEQuerySyncCore(): SSESyncContextValue {
   const queryClient = useQueryClient();
+  const refreshHome = useCoalescedInvalidation(
+    ["dashboard-home"],
+    HOME_REFRESH_INTERVAL_MS,
+  );
 
   const {
     latestEvent: execEvent,
@@ -88,6 +130,7 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
 
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
     void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+    refreshHome();
 
     const runId = (data.run_id ?? data.workflow_id) as string | undefined;
     const execId = data.execution_id as string | undefined;
@@ -98,7 +141,7 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
     if (execId) {
       void queryClient.invalidateQueries({ queryKey: ["step-detail", execId] });
     }
-  }, [execEvent, queryClient]);
+  }, [execEvent, queryClient, refreshHome]);
 
   const {
     latestEvent: nodeEvent,
@@ -159,6 +202,7 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
     void queryClient.invalidateQueries({ queryKey: ["agents"] });
     void queryClient.invalidateQueries({ queryKey: ["reasoners"] });
     void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+    void queryClient.invalidateQueries({ queryKey: ["dashboard-home"] });
     void queryClient.invalidateQueries({ queryKey: ["run-dag"] });
     void queryClient.invalidateQueries({ queryKey: ["step-detail"] });
     void queryClient.invalidateQueries({ queryKey: ["llm-health"] });

@@ -224,3 +224,22 @@ describe('getEnhancedDashboardSummary', () => {
     await expect(getDashboardSummaryWithRetry(0, 0)).rejects.toThrow();
   });
 });
+
+describe('getDeveloperHome', () => {
+  it('asks for the chosen window and returns the payload', async () => {
+    mockFetch(200, { generated_at: '2026-01-01T00:00:00Z', totals: { counts: { total: 3 } } });
+    const { getDeveloperHome } = await import('../../services/dashboardService');
+    const data = await getDeveloperHome('24h');
+    expect(data.totals.counts.total).toBe(3);
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toContain('/dashboard/home?window=24h');
+  });
+
+  it('defaults to the last hour', async () => {
+    mockFetch(200, {});
+    const { getDeveloperHome } = await import('../../services/dashboardService');
+    await getDeveloperHome();
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toContain('/dashboard/home?window=1h');
+  });
+});

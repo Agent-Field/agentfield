@@ -16,21 +16,12 @@ func (h *DashboardHandler) buildEnhancedOverviewForRange(agents []*types.AgentNo
 		overview.TotalReasoners += len(agent.Reasoners)
 		overview.TotalSkills += len(agent.Skills)
 
-		isDegraded := agent.LifecycleStatus == types.AgentStatusDegraded || agent.HealthStatus == types.HealthStatusInactive
-		if isDegraded {
-			overview.DegradedAgents++
-			continue
-		}
-
-		status, err := h.agentService.GetAgentStatus(agent.ID)
-		if err != nil {
-			overview.OfflineAgents++
-			continue
-		}
-
-		if status != nil && status.IsRunning {
+		switch recordedAgentStatus(agent) {
+		case agentStatusRunning:
 			overview.ActiveAgents++
-		} else {
+		case agentStatusDegraded:
+			overview.DegradedAgents++
+		default:
 			overview.OfflineAgents++
 		}
 	}
@@ -346,21 +337,12 @@ func (h *DashboardHandler) buildEnhancedOverview(now time.Time, agents []*types.
 		overview.TotalReasoners += len(agent.Reasoners)
 		overview.TotalSkills += len(agent.Skills)
 
-		isDegraded := agent.LifecycleStatus == types.AgentStatusDegraded || agent.HealthStatus == types.HealthStatusInactive
-		if isDegraded {
-			overview.DegradedAgents++
-			continue
-		}
-
-		status, err := h.agentService.GetAgentStatus(agent.ID)
-		if err != nil {
-			overview.OfflineAgents++
-			continue
-		}
-
-		if status != nil && status.IsRunning {
+		switch recordedAgentStatus(agent) {
+		case agentStatusRunning:
 			overview.ActiveAgents++
-		} else {
+		case agentStatusDegraded:
+			overview.DegradedAgents++
+		default:
 			overview.OfflineAgents++
 		}
 	}
@@ -492,34 +474,21 @@ func (h *DashboardHandler) buildAgentHealthSummary(ctx context.Context, agents [
 			Skills:        len(agent.Skills),
 		}
 
-		isDegraded := agent.LifecycleStatus == types.AgentStatusDegraded || agent.HealthStatus == types.HealthStatusInactive
-		if isDegraded {
-			summary.Degraded++
-			item.Status = "degraded"
-			items = append(items, item)
-			continue
-		}
-
-		status, err := h.agentService.GetAgentStatus(agent.ID)
-		if err != nil {
-			summary.Offline++
-			item.Status = "offline"
-			items = append(items, item)
-			continue
-		}
-
-		if status != nil {
-			item.Uptime = status.Uptime
-			if status.IsRunning {
-				summary.Active++
-				item.Status = "running"
-			} else {
-				summary.Offline++
-				item.Status = "offline"
+		// The status comes from what the control plane records for the
+		// agent (heartbeats and lifecycle). The local process manager only
+		// knows agents it started itself, so it is consulted for uptime
+		// alone and never decides whether a remote agent is up.
+		item.Status = recordedAgentStatus(agent)
+		switch item.Status {
+		case agentStatusRunning:
+			summary.Active++
+			if status, err := h.agentService.GetAgentStatus(agent.ID); err == nil && status != nil {
+				item.Uptime = status.Uptime
 			}
-		} else {
+		case agentStatusDegraded:
+			summary.Degraded++
+		default:
 			summary.Offline++
-			item.Status = "offline"
 		}
 
 		items = append(items, item)
@@ -531,10 +500,12 @@ func (h *DashboardHandler) buildAgentHealthSummary(ctx context.Context, agents [
 	}
 
 	priority := map[string]int{
-		"degraded": 0,
-		"offline":  1,
-		"running":  2,
-		"unknown":  3,
+		agentStatusDegraded:        0,
+		agentStatusOffline:         1,
+		agentStatusPendingApproval: 2,
+		agentStatusStarting:        3,
+		agentStatusRunning:         4,
+		agentStatusUnknown:         5,
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -732,9 +703,9 @@ func (h *DashboardHandler) getAgentsSummary(ctx context.Context) (AgentsSummary,
 	total := len(agents)
 	running := 0
 
-	// Count running agents using the agent service
+	// Count running agents from their recorded heartbeat and lifecycle.
 	for _, agent := range agents {
-		if status, err := h.agentService.GetAgentStatus(agent.ID); err == nil && status.IsRunning {
+		if recordedAgentStatus(agent) == agentStatusRunning {
 			running++
 		}
 	}
@@ -745,59 +716,36 @@ func (h *DashboardHandler) getAgentsSummary(ctx context.Context) (AgentsSummary,
 	}, nil
 }
 
-// getExecutionsSummaryAndSuccessRate collects execution statistics and calculates success rate
+// getExecutionsSummaryAndSuccessRate collects execution statistics and
+// calculates the success rate. Every figure is a COUNT over the executions
+// table, so a busy install is not reported as exactly 10,000 a day.
 func (h *DashboardHandler) getExecutionsSummaryAndSuccessRate(ctx context.Context, now time.Time) (ExecutionsSummary, float64, error) {
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	yesterday := today.AddDate(0, 0, -1)
 	tomorrow := today.AddDate(0, 0, 1)
 
-	// Get today's executions
-	todayFilters := types.ExecutionFilter{
-		StartTime:       &today,
-		EndTime:         &tomorrow,
-		Limit:           10000,
-		SortBy:          "started_at",
-		SortDescending:  false,
-		ExcludePayloads: true,
-	}
-	todayExecutions, err := h.store.QueryExecutionRecords(ctx, todayFilters)
+	todayCounts, err := h.storage.CountExecutionsByStatus(ctx, today, tomorrow)
 	if err != nil {
 		return ExecutionsSummary{}, 0, err
 	}
-
-	// Get yesterday's executions
-	yesterdayFilters := types.ExecutionFilter{
-		StartTime:       &yesterday,
-		EndTime:         &today,
-		Limit:           10000,
-		SortBy:          "started_at",
-		SortDescending:  false,
-		ExcludePayloads: true,
-	}
-	yesterdayExecutions, err := h.store.QueryExecutionRecords(ctx, yesterdayFilters)
+	yesterdayCounts, err := h.storage.CountExecutionsByStatus(ctx, yesterday, today)
 	if err != nil {
 		return ExecutionsSummary{}, 0, err
 	}
-
-	// Success rate covers the rolling last-24h window, which spans the tail of
-	// yesterday's calendar window plus all of today's.
-	cutoff := now.Add(-24 * time.Hour)
-	last24h := make([]*types.Execution, 0, len(todayExecutions)+len(yesterdayExecutions))
-	for _, exec := range todayExecutions {
-		if !exec.StartedAt.Before(cutoff) {
-			last24h = append(last24h, exec)
-		}
+	// Success rate covers the rolling last-24h window. In-flight executions
+	// don't count against it, and with nothing finished it reports 100.
+	last24h, err := h.storage.CountExecutionsByStatus(ctx, now.Add(-24*time.Hour), now.Add(time.Nanosecond))
+	if err != nil {
+		return ExecutionsSummary{}, 0, err
 	}
-	for _, exec := range yesterdayExecutions {
-		if !exec.StartedAt.Before(cutoff) {
-			last24h = append(last24h, exec)
-		}
+	successRate := 100.0
+	if last24h.Terminal > 0 {
+		successRate = float64(last24h.Succeeded) / float64(last24h.Terminal) * 100.0
 	}
-	successRate := h.calculateSuccessRate(last24h)
 
 	return ExecutionsSummary{
-		Today:     len(todayExecutions),
-		Yesterday: len(yesterdayExecutions),
+		Today:     int(todayCounts.Total),
+		Yesterday: int(yesterdayCounts.Total),
 	}, successRate, nil
 }
 
@@ -855,4 +803,39 @@ func (h *DashboardHandler) getPackagesSummary(ctx context.Context) (PackagesSumm
 		Available: available,
 		Installed: installed,
 	}, nil
+}
+
+// Agent status words reported by the dashboard endpoints.
+const (
+	agentStatusRunning         = "running"
+	agentStatusDegraded        = "degraded"
+	agentStatusOffline         = "offline"
+	agentStatusStarting        = "starting"
+	agentStatusPendingApproval = "pending_approval"
+	agentStatusUnknown         = "unknown"
+)
+
+// recordedAgentStatus derives an agent's status from what the control plane
+// records for it: the lifecycle the agent reports and the health the status
+// manager keeps from its heartbeats. An agent that heartbeats and reports
+// ready is running, wherever its process lives.
+func recordedAgentStatus(agent *types.AgentNode) string {
+	switch {
+	case agent == nil:
+		return agentStatusUnknown
+	case agent.LifecycleStatus == types.AgentStatusPendingApproval:
+		return agentStatusPendingApproval
+	case agent.LifecycleStatus == types.AgentStatusOffline:
+		return agentStatusOffline
+	case agent.LifecycleStatus == types.AgentStatusDegraded || agent.HealthStatus == types.HealthStatusDegraded:
+		return agentStatusDegraded
+	case agent.HealthStatus == types.HealthStatusInactive:
+		return agentStatusOffline
+	case agent.LifecycleStatus == types.AgentStatusStarting:
+		return agentStatusStarting
+	case agent.HealthStatus == types.HealthStatusActive || agent.LifecycleStatus == types.AgentStatusReady:
+		return agentStatusRunning
+	default:
+		return agentStatusUnknown
+	}
 }
