@@ -57,6 +57,8 @@ UNDECODABLE_DATA_URLS = [
     EMPTY_PAYLOAD_DATA_URL,
     NOT_BASE64_DATA_URL,
     CORRUPT_DATA_URL,
+    "data:image/png;base64,Zm9v%21",
+    "data:image/png;base64,%20%0A",
 ]
 
 # Whitespace inside a payload is layout, not corruption: RFC 2045 encoders wrap
@@ -262,6 +264,39 @@ class TestDataUrlHelper:
         with pytest.raises(ValueError, match="expected base64 payload") as excinfo:
             decode_data_url("data:text/plain,sup3r-s3cret")
         assert "sup3r-s3cret" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("payload", ["%2B%2F8%3D", "+%2f8=", "%2b/8%3d", "+/8="])
+def test_image_decodes_percent_encoded_base64(payload, no_network):
+    assert (
+        ImageOutput(url=f"data:image/png;base64,{payload}").get_bytes() == b"\xfb\xff"
+    )
+
+
+@pytest.mark.parametrize("make", [cls for _, cls in URL_OUTPUTS])
+def test_percent_encoded_media_reads_and_saves_locally(make, tmp_path, no_network):
+    output = make(url="data:application/octet-stream;base64,%2B%2F8%3D")
+    assert output.get_bytes() == b"\xfb\xff"
+    path = tmp_path / "media.bin"
+    output.save(path)
+    assert path.read_bytes() == b"\xfb\xff"
+
+
+def test_audio_accepts_percent_encoded_base64(no_network):
+    audio = audio_from_url("data:audio/mpeg;base64,+%2F8%3D")
+    assert base64.b64decode(audio.input_audio["data"]) == b"\xfb\xff"
+    assert audio.input_audio["format"] == "mp3"
+
+
+def test_percent_encoded_whitespace_is_layout(no_network):
+    url = "data:image/png;base64,%20%2B%0D%0A%2F8%3D%09"
+    assert ImageOutput(url=url).get_bytes() == b"\xfb\xff"
+
+
+@pytest.mark.parametrize("payload", ["%252B%2F8%3D", "Zm9v%21", "Zm9v%FF", "Zm9v%ZZ"])
+def test_percent_decoding_keeps_base64_validation_strict(payload, no_network):
+    with pytest.raises(binascii.Error):
+        ImageOutput(url=f"data:image/png;base64,{payload}").get_bytes()
 
 
 @pytest.mark.parametrize(

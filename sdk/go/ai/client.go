@@ -369,6 +369,7 @@ type SSEDecoder struct {
 	reader      io.Reader
 	accumulated []byte
 	buf         []byte
+	readErr     error
 }
 
 // NewSSEDecoder creates a new SSE decoder.
@@ -423,6 +424,11 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 			continue // Non-data message, try next
 		}
 
+		// Return a saved read error only after consuming all complete events.
+		if d.readErr != nil {
+			return StreamChunk{}, d.readErr
+		}
+
 		// Need more data. Per the io.Reader contract, a Read may return n > 0
 		// alongside a non-nil error (commonly the final body bytes together
 		// with io.EOF) — those bytes must be consumed before the error is
@@ -431,6 +437,7 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 		n, err := d.reader.Read(d.buf)
 		if n > 0 {
 			d.accumulated = append(d.accumulated, d.buf[:n]...)
+			d.readErr = err
 			continue
 		}
 		if err != nil {

@@ -87,6 +87,15 @@ export interface AIRequestOptions {
 
 export type AIStream = AsyncIterable<string>;
 
+async function* textFromFullStream(
+  parts: AsyncIterable<{ type: string; text?: string; error?: unknown }>
+): AsyncGenerator<string> {
+  for await (const part of parts) {
+    if (part.type === 'error') throw part.error;
+    if (part.type === 'text-delta' && part.text) yield part.text;
+  }
+}
+
 export interface AIEmbeddingOptions {
   model?: string;
   provider?: AIConfig['provider'];
@@ -165,28 +174,59 @@ export class AIClient {
   async stream(prompt: string, options: AIRequestOptions = {}): Promise<AIStream> {
     const { provider, modelName, routingProvider } = this.resolveModelChoice(options);
     const tracker = ExecutionContext.getCurrent()?.costTracker;
-    const streamResult = streamText({
-      model: this.buildModel(options),
-      prompt: this.buildPrompt(prompt, options.content),
-      system: options.system,
-      temperature: temperatureForModel(modelName, options.temperature ?? this.config.temperature),
-      maxOutputTokens: options.maxTokens ?? this.config.maxTokens
-    });
-    if (!tracker) return streamResult.textStream;
+    const buildModel = () => this.buildModel(options);
+    const requestPrompt = this.buildPrompt(prompt, options.content);
+    const startStream = () =>
+      streamText({
+        model: buildModel(),
+        prompt: requestPrompt,
+        system: options.system,
+        temperature: temperatureForModel(modelName, options.temperature ?? this.config.temperature),
+        maxOutputTokens: options.maxTokens ?? this.config.maxTokens
+      });
+    // Rate-limit errors surface while the stream is read. Retry only until the
+    // first chunk has arrived, so a retry can never duplicate emitted output.
+    const open = () =>
+      this.withRateLimitRetry(async () => {
+        // Created inside the retry wrapper so an open circuit breaker blocks
+        // the request instead of firing it before the check.
+        const result = startStream();
+        // streamText turns provider errors (e.g. 429) into `error` parts that
+        // textStream silently drops, so read fullStream and rethrow them.
+        const iterator = textFromFullStream(result.fullStream)[Symbol.asyncIterator]();
+        try {
+          return { result, iterator, first: await iterator.next() };
+        } catch (error) {
+          await iterator.return?.(undefined);
+          throw error;
+        }
+      });
     return (async function* () {
       let completed = false;
+      let iterator: AsyncIterator<string> | undefined;
       try {
-        for await (const text of streamResult.textStream) yield text;
-        try {
-          const usage = await streamResult.totalUsage;
-          if (usage) recordAiSdkUsage({ source: { totalUsage: usage }, model: modelName, provider, routingProvider, tracker });
-          else tracker.record({ model: modelName, provider, routingProvider, usageStatus: 'missing' });
-        } catch {
-          tracker.record({ model: modelName, provider, routingProvider, usageStatus: 'missing' });
+        const opened = await open();
+        iterator = opened.iterator;
+        let step = opened.first;
+        while (!step.done) {
+          yield step.value;
+          step = await iterator.next();
+        }
+        if (tracker) {
+          try {
+            const usage = await opened.result.totalUsage;
+            if (usage) recordAiSdkUsage({ source: { totalUsage: usage }, model: modelName, provider, routingProvider, tracker });
+            else tracker.record({ model: modelName, provider, routingProvider, usageStatus: 'missing' });
+          } catch {
+            tracker.record({ model: modelName, provider, routingProvider, usageStatus: 'missing' });
+          }
         }
         completed = true;
       } finally {
-        if (!completed) tracker.record({ model: modelName, provider, routingProvider, usageStatus: 'missing' });
+        if (!completed) {
+          await iterator?.return?.();
+          tracker?.record({ model: modelName, provider, routingProvider, usageStatus: 'missing' });
+        }
       }
     })();
   }

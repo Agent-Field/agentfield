@@ -3,8 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,15 @@ func NewMemoryEventsHandler(storage storage.StorageProvider) *MemoryEventsHandle
 	}
 }
 
+const (
+	// memoryEventsPongWait is how long the WebSocket may go without any frame
+	// from the client, pongs included, before it is treated as dead.
+	memoryEventsPongWait = 60 * time.Second
+	// memoryEventsPingInterval must be shorter than memoryEventsPongWait.
+	memoryEventsPingInterval = 25 * time.Second
+	memoryEventsWriteWait    = 10 * time.Second
+)
+
 func normalizePatterns(raw string) []string {
 	if raw == "" {
 		return nil
@@ -54,11 +64,32 @@ func normalizePatterns(raw string) []string {
 	return patterns
 }
 
+// parsePatterns reads the patterns query parameter and rejects malformed
+// globs, which would otherwise silently match nothing.
+func parsePatterns(c *gin.Context) ([]string, bool) {
+	patterns := normalizePatterns(c.Query("patterns"))
+	for _, p := range patterns {
+		if _, err := path.Match(p, ""); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid pattern %q: %v", p, err)})
+			return nil, false
+		}
+	}
+	return patterns, true
+}
+
 // WebSocketHandler handles WebSocket connections for memory events.
+//
+// Events are forwarded in the order they were published. The server pings the
+// client and drops the connection when nothing arrives within
+// memoryEventsPongWait. If the client falls too far behind, the connection is
+// closed with CloseTryAgainLater so the client knows events were missed.
 func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
-	ctx := c.Request.Context()
 	eventFilter, allowed := authorizeMemoryEvents(c)
 	if !allowed {
+		return
+	}
+	patterns, ok := parsePatterns(c)
+	if !ok {
 		return
 	}
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -68,58 +99,84 @@ func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
+	// The subscription lives exactly as long as the connection.
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+
+	writeClose := func(code int, text string) {
+		msg := websocket.FormatCloseMessage(code, text)
+		if err := conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(memoryEventsWriteWait)); err != nil {
+			logger.Logger.Debug().Err(err).Msg("failed to send websocket close message")
+		}
+	}
+
 	// Parse query parameters for filtering
 	scope := c.Query("scope")
 	scopeID := c.Query("scope_id")
-	patterns := normalizePatterns(c.Query("patterns"))
 
-	// Subscribe to memory changes
 	eventChan, err := h.storage.SubscribeToMemoryChanges(ctx, scope, scopeID)
 	if err != nil {
-		if writeErr := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "failed to subscribe to events")); writeErr != nil {
-			logger.Logger.Warn().Err(writeErr).Msg("failed to send websocket close message")
-		}
+		writeClose(websocket.CloseInternalServerErr, "failed to subscribe to events")
 		return
 	}
 
-	// Goroutine to read messages from the client (e.g., for ping/pong)
+	// Read from the client so control frames are processed. Any frame,
+	// including a pong or ping, proves the client is alive.
+	extend := func() { _ = conn.SetReadDeadline(time.Now().Add(memoryEventsPongWait)) }
+	extend()
+	conn.SetPongHandler(func(string) error { extend(); return nil })
+	conn.SetPingHandler(func(data string) error {
+		extend()
+		err := conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(memoryEventsWriteWait))
+		if err == websocket.ErrCloseSent {
+			return nil
+		}
+		return err
+	})
 	go func() {
+		defer cancel()
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
-				if closeErr := conn.Close(); closeErr != nil {
-					logger.Logger.Debug().Err(closeErr).Msg("websocket close returned error")
-				}
-				break
+				return
 			}
+			extend()
 		}
 	}()
 
-	// Forward events to the client
-	for event := range eventChan {
-		if eventFilter != nil && !eventFilter(ctx, &event) {
-			continue
-		}
-		// Apply pattern matching
-		if len(patterns) > 0 {
-			match := false
-			for _, pattern := range patterns {
-				if matched, _ := filepath.Match(pattern, event.Key); matched {
-					match = true
-					break
-				}
+	ping := time.NewTicker(memoryEventsPingInterval)
+	defer ping.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ping.C:
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(memoryEventsWriteWait)); err != nil {
+				return
 			}
-			if !match {
+		case event, ok := <-eventChan:
+			if !ok {
+				if ctx.Err() == nil {
+					writeClose(websocket.CloseTryAgainLater, "subscriber fell behind; events were dropped")
+				}
+				return
+			}
+			if eventFilter != nil && !eventFilter(ctx, &event) {
 				continue
 			}
-		}
-
-		if err := conn.WriteJSON(event); err != nil {
-			break // Client disconnected
+			if !types.MatchKeyPatterns(patterns, event.Key) {
+				continue
+			}
+			_ = conn.SetWriteDeadline(time.Now().Add(memoryEventsWriteWait))
+			if err := conn.WriteJSON(event); err != nil {
+				return // Client disconnected
+			}
 		}
 	}
 }
 
-// SSEHandler handles Server-Sent Events connections for memory events.
+// SSEHandler handles Server-Sent Events connections for memory events. If the
+// client falls too far behind, it is sent an "error" event and the stream ends.
 func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	eventFilter, allowed := authorizeMemoryEvents(c)
@@ -127,10 +184,14 @@ func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 		return
 	}
 
+	patterns, ok := parsePatterns(c)
+	if !ok {
+		return
+	}
+
 	// Parse query parameters for filtering
 	scope := c.Query("scope")
 	scopeID := c.Query("scope_id")
-	patterns := normalizePatterns(c.Query("patterns"))
 
 	// Subscribe to memory changes before flushing headers so we can still
 	// return a proper HTTP error status on failure.
@@ -160,25 +221,20 @@ func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 			return
 		case event, ok := <-eventChan:
 			if !ok {
-				// Channel closed
+				if ctx.Err() == nil {
+					// Storage dropped this subscriber for falling behind;
+					// tell the client its stream has a gap.
+					c.SSEvent("error", "subscriber fell behind; events were dropped")
+					c.Writer.Flush()
+				}
 				return
 			}
 
 			if eventFilter != nil && !eventFilter(ctx, &event) {
 				continue
 			}
-			// Apply pattern matching
-			if len(patterns) > 0 {
-				match := false
-				for _, pattern := range patterns {
-					if matched, _ := filepath.Match(pattern, event.Key); matched {
-						match = true
-						break
-					}
-				}
-				if !match {
-					continue
-				}
+			if !types.MatchKeyPatterns(patterns, event.Key) {
+				continue
 			}
 
 			// Marshal event to JSON
@@ -211,9 +267,11 @@ func GetEventHistoryHandler(storage storage.StorageProvider) gin.HandlerFunc {
 		if scopeID := c.Query("scope_id"); scopeID != "" && scopeID != "*" {
 			filter.ScopeID = &scopeID
 		}
-		if patterns := c.Query("patterns"); patterns != "" {
-			filter.Patterns = strings.Split(patterns, ",")
+		patterns, ok := parsePatterns(c)
+		if !ok {
+			return
 		}
+		filter.Patterns = patterns
 		if since := c.Query("since"); since != "" {
 			if sinceTime, err := time.Parse(time.RFC3339, since); err == nil {
 				filter.Since = &sinceTime

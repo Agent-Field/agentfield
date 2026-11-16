@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/json"
+	"path"
 	"time"
 )
 
@@ -630,13 +631,29 @@ type AgentGroupSummary struct {
 	Versions  []string `json:"versions"`
 }
 
-// EventFilter holds filters for querying memory events.
+// EventFilter holds filters for querying memory events. Since keeps only
+// events strictly after that time.
 type EventFilter struct {
 	Scope    *string    `json:"scope,omitempty"`
 	ScopeID  *string    `json:"scope_id,omitempty"`
 	Patterns []string   `json:"patterns,omitempty"`
 	Since    *time.Time `json:"since,omitempty"`
 	Limit    int        `json:"limit,omitempty"`
+}
+
+// MatchKeyPatterns reports whether key matches any pattern; no patterns matches
+// every key. Patterns use path.Match so matching does not depend on the
+// server's operating system.
+func MatchKeyPatterns(patterns []string, key string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pattern := range patterns {
+		if matched, _ := path.Match(pattern, key); matched {
+			return true
+		}
+	}
+	return false
 }
 
 // MemoryChangeEvent represents a detailed event when memory changes.

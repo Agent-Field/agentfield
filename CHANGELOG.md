@@ -6,6 +6,153 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.37] - 2026-11-16
+
+
+### Fixed
+
+- Fix(web): hide LLM health UI when monitoring is not enabled (#1173)
+
+* fix(web): hide LLM health UI when monitoring is not enabled
+
+LLM health monitoring is opt-in (agentfield.llm_health). With it off, the
+server answers {enabled:false} and the header pill read the missing
+healthy field as false, so every default install showed "LLM Degraded".
+The pill, its popover row and the dashboard card now render only when the
+server reports monitoring as enabled.
+
+* test(web): monitored fixture for the dashboard LLM card
+
+The dashboard now draws the LLM card only when monitoring is enabled, so
+the default fixture says enabled: true, and a new case pins that the card
+is left out when it is not. (1593ad6)
+
+## [0.1.146-rc.36] - 2026-11-16
+
+
+### Fixed
+
+- Fix(control-plane): memory event subscription reliability and ordering (#1207)
+
+* fix(control-plane): memory event subscription reliability and ordering
+
+Subscriptions
+- Unsubscribe when the subscriber's context ends, so disconnected
+  clients no longer leave dead channels behind
+- Publish synchronously, so events reach each subscriber in the order
+  they were published
+- A subscriber whose 100-event buffer is full is disconnected and its
+  channel closed, instead of silently missing individual events
+
+WebSocket and SSE handlers
+- The server pings every 25s and drops a connection that is silent for
+  60s; the subscription lives exactly as long as the connection
+- A subscriber dropped for falling behind gets close code 1013 (WS) or
+  an "error" event (SSE), so clients can tell their stream has a gap
+- Malformed glob patterns are rejected with 400 instead of silently
+  matching nothing
+
+History
+- Patterns use path.Match (shared as types.MatchKeyPatterns), so
+  matching does not depend on the server's operating system
+- since is exclusive: only events strictly after it are returned
+- Local mode returns events in publication order; decimal BoltDB keys
+  previously sorted "10" before "2", so Limit kept the wrong events
+
+Refs #95
+
+* test(control-plane): decode only message frames in the memory event visibility test
+
+The SSE stub closes its channel to end the stream. With the subscription fix,
+a close while the request is still live is reported to the client as an
+"event: error" frame (the subscriber fell behind), which carries text rather
+than a change event. The test decoded every data: line as a change event and
+failed on that frame. Decode only message frames; the error frame is the
+intended behaviour of this change.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (6b09e65)
+
+## [0.1.146-rc.35] - 2026-11-16
+
+
+### Documentation
+
+- Docs: add Awesome AI Agents badge to README (#1190) (f6f3003)
+
+
+
+### Fixed
+
+- Fix(did): preserve component identities during concurrent registration (#1209)
+
+* fix(did): analyze registration from one identity snapshot
+
+Use the response snapshot for component differential analysis so a concurrent registration cannot make a no-change response omit newly issued DIDs. Cover reasoner and skill issuance with deterministic SQLite interleavings and serial controls.
+
+Fixes #1205
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* fix(did): retain identities across overlapping registrations
+
+Return a complete identity package from full registration and include concurrently issued requested components in partial responses without counting them as new allocations. Cover overlapping reasoners and skills, SDK key continuity and response-refresh failure.
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+---------
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (10fabe3)
+
+## [0.1.146-rc.34] - 2026-11-15
+
+
+### Fixed
+
+- Fix(python): preserve stored memory JSON value types (#1199)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (95c109d)
+
+## [0.1.146-rc.33] - 2026-11-15
+
+
+### Fixed
+
+- Fix(python): decode URL escapes in inline base64 media (#1200)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (e497b75)
+
+- Fix(config): honor AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE (#1201)
+
+docs/ENVIRONMENT_VARIABLES.md documents the variable, but ApplyEnvOverrides
+never read it, so setting it left tag_approval_rules.default_mode untouched
+and tags stayed auto-approved. Read it into
+features.did.authorization.tag_approval_rules.default_mode and document the
+modes the tag approval service implements (auto, manual, forbidden).
+
+Also drop AGENTFIELD_AUTHORIZATION_MASTER_SEED from the docs: nothing reads
+it, the master seed is generated and stored in the DID registry. (bd7a3c3)
+
+- Fix(control-plane): read AGENTFIELD_API_CORS_* without a config file (#1202)
+
+The CORS variables documented in docs/ENVIRONMENT_VARIABLES.md only reached
+the config through viper's AutomaticEnv, which resolves a key only when a
+loaded config file already contains it. With no config file (Railway, bare
+binary) they were dropped and the server kept the localhost default origins.
+
+Read the five variables in ApplyEnvOverrides, next to the other overrides
+that exist for the same reason. (e746d09)
+
+- Fix(go-sdk): preserve streaming read errors after buffered data (#1203)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (dde816a)
+
+- Fix(sdk-ts): apply rate-limit retry and circuit breaker to AIClient.stream (#1206) (ff1db1b)
+
 ## [0.1.146-rc.32] - 2026-11-14
 
 
