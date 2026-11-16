@@ -213,13 +213,10 @@ func (s *DIDService) registerAgentOnce(ctx context.Context, req *types.DIDRegist
 		newReasonerIDs := extractReasonerIDs(req.Reasoners)
 		newSkillIDs := extractSkillIDs(req.Skills)
 
-		diffResult, err := s.performDifferentialAnalysis(ctx, req.AgentNodeID, newReasonerIDs, newSkillIDs)
-		if err != nil {
-			return &types.DIDRegistrationResponse{
-				Success: false,
-				Error:   fmt.Sprintf("differential analysis failed: %v", err),
-			}, nil
-		}
+		// Analyze the same snapshot used to build the no-change response.
+		// A second read could see components issued by another replica while
+		// existingAgent still lacks them.
+		diffResult := s.performDifferentialAnalysis(existingAgent, newReasonerIDs, newSkillIDs)
 
 		if !diffResult.RequiresUpdate {
 			// No changes needed, return existing identity package
@@ -1209,15 +1206,14 @@ func (s *DIDService) getExistingAgentDID(ctx context.Context, agentNodeID string
 
 // PerformDifferentialAnalysis compares existing vs new reasoners/skills to determine what needs to be updated.
 func (s *DIDService) PerformDifferentialAnalysis(agentNodeID string, newReasonerIDs, newSkillIDs []string) (*types.DifferentialAnalysisResult, error) {
-	return s.performDifferentialAnalysis(context.Background(), agentNodeID, newReasonerIDs, newSkillIDs)
-}
-
-func (s *DIDService) performDifferentialAnalysis(ctx context.Context, agentNodeID string, newReasonerIDs, newSkillIDs []string) (*types.DifferentialAnalysisResult, error) {
-	existingAgent, err := s.getExistingAgentDID(ctx, agentNodeID)
+	existingAgent, err := s.getExistingAgentDID(context.Background(), agentNodeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get existing agent: %w", err)
 	}
+	return s.performDifferentialAnalysis(existingAgent, newReasonerIDs, newSkillIDs), nil
+}
 
+func (s *DIDService) performDifferentialAnalysis(existingAgent *types.AgentDIDInfo, newReasonerIDs, newSkillIDs []string) *types.DifferentialAnalysisResult {
 	// Extract existing IDs
 	existingReasonerIDs := make([]string, 0, len(existingAgent.Reasoners))
 	for id := range existingAgent.Reasoners {
@@ -1245,9 +1241,9 @@ func (s *DIDService) performDifferentialAnalysis(ctx context.Context, agentNodeI
 		len(result.RemovedSkillIDs) > 0
 
 	logger.Logger.Debug().Msgf("🔍 Differential analysis for agent %s: new_reasoners=%d, removed_reasoners=%d, new_skills=%d, removed_skills=%d, requires_update=%v",
-		agentNodeID, len(result.NewReasonerIDs), len(result.RemovedReasonerIDs), len(result.NewSkillIDs), len(result.RemovedSkillIDs), result.RequiresUpdate)
+		existingAgent.AgentNodeID, len(result.NewReasonerIDs), len(result.RemovedReasonerIDs), len(result.NewSkillIDs), len(result.RemovedSkillIDs), result.RequiresUpdate)
 
-	return result, nil
+	return result
 }
 
 // setDifference returns elements in slice a that are not in slice b.
