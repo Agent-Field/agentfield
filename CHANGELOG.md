@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.35] - 2026-11-16
+
+
+### Documentation
+
+- Docs: add Awesome AI Agents badge to README (#1190) (f6f3003)
+
+
+
+### Fixed
+
+- Fix(did): preserve component identities during concurrent registration (#1209)
+
+* fix(did): analyze registration from one identity snapshot
+
+Use the response snapshot for component differential analysis so a concurrent registration cannot make a no-change response omit newly issued DIDs. Cover reasoner and skill issuance with deterministic SQLite interleavings and serial controls.
+
+Fixes #1205
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* fix(did): retain identities across overlapping registrations
+
+Return a complete identity package from full registration and include concurrently issued requested components in partial responses without counting them as new allocations. Cover overlapping reasoners and skills, SDK key continuity and response-refresh failure.
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+---------
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (10fabe3)
+
 ## [0.1.146-rc.34] - 2026-11-15
 
 
