@@ -474,7 +474,7 @@ func TestToolCallTrace_MaxTurnsZeroDoesNotReplayOptions(t *testing.T) {
 		incMaxTokens,
 	)
 	require.NoError(t, err)
-	// The option ran once: base MaxTokens + 1. Running twice would be +2.
-	defaultMax := 0 // client default MaxTokens is 0 unless configured
-	assert.Equal(t, defaultMax+1, sawMaxTokens, "option must apply exactly once for the single request")
+	// The option ran once: the client's configured MaxTokens + 1. Running
+	// twice would be +2.
+	assert.Equal(t, client.config.MaxTokens+1, sawMaxTokens, "option must apply exactly once for the single request")
 }

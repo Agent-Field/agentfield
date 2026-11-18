@@ -76,6 +76,14 @@ type Config struct {
 	CircuitBreakerTimeout   time.Duration
 }
 
+// Defaults merged into partial Configs so omitted caps never degrade to an
+// unlimited completion size or an unbounded HTTP request lifetime. They are
+// shared with DefaultConfig and applied to non-nil configs in NewClient.
+const (
+	defaultMaxTokens = 4096
+	defaultTimeout   = 30 * time.Second
+)
+
 // DefaultConfig returns a Config with sensible defaults.
 // It reads from environment variables:
 // - OPENAI_API_KEY or OPENROUTER_API_KEY
@@ -151,8 +159,8 @@ func DefaultConfig() *Config {
 		BaseURL:     baseURL,
 		Model:       model,
 		Temperature: 0.7,
-		MaxTokens:   4096,
-		Timeout:     30 * time.Second,
+		MaxTokens:   defaultMaxTokens,
+		Timeout:     defaultTimeout,
 	}
 	switch {
 	case cfg.IsOpenRouter():

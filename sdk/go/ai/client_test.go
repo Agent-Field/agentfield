@@ -64,7 +64,13 @@ func TestNewClient(t *testing.T) {
 				if tt.config == nil {
 					assert.NotNil(t, client.config)
 				} else {
-					assert.Equal(t, tt.config, client.config)
+					// A partial config keeps its explicit fields and gains the
+					// SDK default caps for the omitted ones (issue #1184).
+					assert.Equal(t, tt.config.APIKey, client.config.APIKey)
+					assert.Equal(t, tt.config.BaseURL, client.config.BaseURL)
+					assert.Equal(t, tt.config.Model, client.config.Model)
+					assert.Equal(t, defaultMaxTokens, client.config.MaxTokens)
+					assert.Equal(t, defaultTimeout, client.config.Timeout)
 				}
 			}
 		})
@@ -117,6 +123,61 @@ func TestNewClient_WithTransportPreservesTimeout(t *testing.T) {
 	response, err := client.Complete(context.Background(), "hello")
 	require.NoError(t, err)
 	assert.Equal(t, "ok", response.Text())
+}
+
+// A partial config (issue #1184) must yield bounded completion size and HTTP
+// lifetime on the wire: the SDK defaults are merged in, not sent as zero.
+func TestNewClient_PartialConfigGetsDefaultCaps(t *testing.T) {
+	var sent Request
+	transport := &roundTripFunc{fn: func(req *http.Request) (*http.Response, error) {
+		require.NoError(t, json.NewDecoder(req.Body).Decode(&sent))
+		return testCompletionResponse(), nil
+	}}
+	config := &Config{
+		APIKey:  "test-key",
+		BaseURL: "https://api.example.com/v1",
+		Model:   "gpt-4o",
+	}
+
+	client, err := NewClient(config, WithTransport(transport))
+	require.NoError(t, err)
+	require.NotSame(t, config, client.config, "caller's config must not be aliased")
+
+	_, err = client.Complete(context.Background(), "hello")
+	require.NoError(t, err)
+
+	require.NotNil(t, sent.MaxTokens)
+	assert.Equal(t, defaultMaxTokens, *sent.MaxTokens)
+	assert.Equal(t, defaultTimeout, client.httpClient.Timeout)
+}
+
+// Explicitly selected caps must pass through untouched.
+func TestNewClient_ExplicitCapsAreHonored(t *testing.T) {
+	var sent Request
+	transport := &roundTripFunc{fn: func(req *http.Request) (*http.Response, error) {
+		require.NoError(t, json.NewDecoder(req.Body).Decode(&sent))
+		return testCompletionResponse(), nil
+	}}
+	config := &Config{
+		APIKey:    "test-key",
+		BaseURL:   "https://api.example.com/v1",
+		Model:     "gpt-4o",
+		MaxTokens: 1234,
+		Timeout:   45 * time.Second,
+	}
+
+	client, err := NewClient(config, WithTransport(transport))
+	require.NoError(t, err)
+
+	_, err = client.Complete(context.Background(), "hello")
+	require.NoError(t, err)
+
+	require.NotNil(t, sent.MaxTokens)
+	assert.Equal(t, 1234, *sent.MaxTokens)
+	assert.Equal(t, 45*time.Second, client.httpClient.Timeout)
+	// The defaults merge must not rewrite the caller's struct.
+	assert.Equal(t, 1234, config.MaxTokens)
+	assert.Equal(t, 45*time.Second, config.Timeout)
 }
 
 type roundTripFunc struct {

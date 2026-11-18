@@ -56,9 +56,23 @@ func WithTransport(transport http.RoundTripper) ClientOption {
 }
 
 // NewClient creates a new AI client with the given configuration.
+// A nil configuration uses DefaultConfig. A non-nil configuration that omits
+// MaxTokens or Timeout has those caps filled with the SDK defaults (4096
+// tokens, 30 seconds) on a private copy, so a partial config never sends an
+// unbounded completion size or an unlimited HTTP request lifetime and the
+// caller's struct is left untouched.
 func NewClient(config *Config, opts ...ClientOption) (*Client, error) {
 	if config == nil {
 		config = DefaultConfig()
+	} else {
+		filled := *config
+		if config.MaxTokens <= 0 {
+			filled.MaxTokens = defaultMaxTokens
+		}
+		if config.Timeout <= 0 {
+			filled.Timeout = defaultTimeout
+		}
+		config = &filled
 	}
 
 	if err := config.Validate(); err != nil {
