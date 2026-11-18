@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.146-rc.39] - 2026-11-18
+
+
+### Fixed
+
+- Fix(sdk-go): accept SSE data fields without a space in audio generation (#1210)
+
+OpenRouterMediaProvider.GenerateAudio only recognised lines starting with "data: ", so a valid SSE "data:{...}" event was skipped and the call returned success with empty audio and text. The SSE field value may follow the colon directly; match "data:" and let the existing TrimSpace drop the optional space, as client.go already does.
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com> (36d50b4)
+
 ## [0.1.146-rc.38] - 2026-11-16
 
 
