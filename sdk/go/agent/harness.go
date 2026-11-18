@@ -46,7 +46,10 @@ type HarnessConfig struct {
 	// Env is additional environment variables for the subprocess.
 	Env map[string]string
 
-	// BinPath overrides the provider binary path.
+	// BinPath overrides the provider binary path. It never selects a provider:
+	// an implicit default with a custom binary runs CodeAF with that binary.
+	// To stay on the legacy aforge adapter after an upgrade, set Provider to
+	// "aforge" or keep AFORGE_BIN set.
 	BinPath string
 
 	// Timeout in seconds for the subprocess. Default 600.

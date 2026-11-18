@@ -29,17 +29,26 @@ func TestCodeAFF1LegacyPinPrecedence(t *testing.T) {
 				} else {
 					bin = "/legacy"
 				}
+				// F1: the legacy pin (AFORGE_BIN) and an explicit aforge
+				// selection keep the legacy adapter; a generic binary override
+				// on an implicit default runs CodeAF, which honors the binary.
+				buildWant := any(&CodeAFProvider{})
+				if explicit == "aforge" || (explicit == "" && pin == "env") {
+					buildWant = &AforgeProvider{}
+				}
 				p, err := BuildProvider(explicit, bin)
 				require.NoError(t, err)
-				if explicit == "codeaf" {
-					assert.IsType(t, &CodeAFProvider{}, p)
-				} else {
-					assert.IsType(t, &AforgeProvider{}, p)
-				}
+				assert.IsType(t, buildWant, p)
+				// The runner default is always implicit: only the AFORGE_BIN
+				// pin selects legacy; a binary override runs CodeAF.
 				r := NewRunner(Options{BinPath: bin})
 				p, err = r.buildProvider(r.DefaultOptions)
 				require.NoError(t, err)
-				assert.IsType(t, &AforgeProvider{}, p)
+				runnerWant := any(&CodeAFProvider{})
+				if pin == "env" {
+					runnerWant = &AforgeProvider{}
+				}
+				assert.IsType(t, runnerWant, p)
 			})
 		}
 	}

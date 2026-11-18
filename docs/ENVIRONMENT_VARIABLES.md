@@ -47,9 +47,12 @@ for the key ladder and once-per-process warnings.
   values. The legacy `af aforge ensure` command retains its original behavior.
 - `CODEAF_BIN`: Explicit CodeAF executable override, after the SDK's per-call or
   configured binary option, before managed lookup/download and PATH fallback.
-- `AFORGE_BIN`: Pins the legacy adapter for `aforge` or an implicit default
-  provider. Explicit `codeaf` overrides it. Without a pin, `aforge` runs CodeAF;
-  doctor checks CodeAF read-only, then legacy aforge, and reports its version.
+- `AFORGE_BIN`: The legacy compatibility pin. Pins the legacy adapter for
+  `aforge` or an implicit default provider. Explicit `codeaf` overrides it.
+  It is the only thing that pins an implicit default: a generic binary
+  override is honored by the resolved provider (CodeAF by default, with live
+  watching/steering). Without a pin, `aforge` runs CodeAF; doctor checks
+  CodeAF read-only, then legacy aforge, and reports its version.
 - `AGENTFIELD_CODEAF_COMMAND`: `exec` (default) or `do`; invalid values warn and
   fall back to `exec`. `do` is unattended with `--yes-spend` and explicit worker,
   plan and check models; its own per-task spending limit still applies.

@@ -240,7 +240,9 @@ printf '%s\n' '{"ok":true,"stop":"done","answer":"ok","spend_usd":0,"tokens":{"i
 	assert.Equal(t, 0.0, entries[0]["cost_usd"])
 }
 
-// F1a/d: agent-level defaults and per-call BinPath pins keep the legacy adapter and usage.
+// F1a/d: the AFORGE_BIN pin and an explicit aforge selection keep the legacy
+// adapter and record usage on it; an implicit default with a generic binary
+// override no longer pins (issue #1181).
 func TestHarnessF1ImplicitLegacyPinRecordsUsage(t *testing.T) {
 	for _, source := range []string{"env", "config", "call"} {
 		t.Run(source, func(t *testing.T) {
@@ -257,10 +259,10 @@ printf '%s\n' '{"text":"legacy","stop":"done","turns":2,"usage":{"prompt_tokens"
 				t.Setenv("AFORGE_BIN", path)
 			}
 			if source == "config" {
-				a.cfg.HarnessConfig = &HarnessConfig{BinPath: path}
+				a.cfg.HarnessConfig = &HarnessConfig{Provider: harness.ProviderAforge, BinPath: path}
 			}
 			if source == "call" {
-				opts.BinPath = path
+				opts = harness.Options{Provider: harness.ProviderAforge, BinPath: path}
 			}
 			tracker := NewCostTracker()
 			ctx := contextWithCostTracker(context.Background(), tracker)

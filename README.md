@@ -50,7 +50,9 @@ work out of the box; skip it with `--no-codeaf` (`--no-aforge` remains an alias)
 managed home. `AGENTFIELD_INSTALL_DIR` selects the `af` directory; CodeAF
 always uses the managed home's `bin`. Repair it with `af codeaf ensure`.
 The provider name `aforge` remains an alias; set `AFORGE_BIN` and select
-`provider="aforge"` to pin the legacy adapter. CodeAF state stays isolated in
+`provider="aforge"` to pin the legacy adapter. A binary override never
+selects a provider: it is honored by the resolved one, so an implicit default
+with a custom binary runs CodeAF. CodeAF state stays isolated in
 `$AGENTFIELD_HOME/codeaf`. See [harness providers](docs/harness-providers.md)
 for binary overrides, mirror/skip switches, and telemetry controls.
 

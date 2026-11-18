@@ -23,9 +23,15 @@ func ResolveProviderName(name string) string {
 
 var legacyPinOnce sync.Once
 
-func resolveExecutionProvider(name, binPath string) string {
+// resolveExecutionProvider applies harness provider precedence for actual
+// execution: the legacy pin (AFORGE_BIN, the compatibility signal for aforge-era
+// deployments) wins only for an implicit default, then an explicit name, then
+// AGENTFIELD_HARNESS_PROVIDER, then DefaultProvider ("codeaf"). A generic
+// binary override (BinPath) is not a legacy signal: it is honored by whatever
+// provider is selected, so an implicit default with a custom binary runs CodeAF.
+func resolveExecutionProvider(name string) string {
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(os.Getenv(ProviderEnvVar)) == "" &&
-		(binPath != "" || strings.TrimSpace(os.Getenv("AFORGE_BIN")) != "") {
+		strings.TrimSpace(os.Getenv("AFORGE_BIN")) != "" {
 		legacyPinOnce.Do(func() {
 			log.Print(`INFO Legacy aforge pin in effect; unset it or select provider "codeaf" to use CodeAF`)
 		})
@@ -37,8 +43,13 @@ func resolveExecutionProvider(name, binPath string) string {
 // BuildProvider creates a Provider instance for the given provider name.
 // Supported providers: "codeaf", "aforge", "claude-code", "codex", "gemini",
 // "opencode", "pi", "omp", "cursor".
+//
+// binPath overrides the provider binary and never forces a provider. An
+// explicit "codeaf" (or an implicit default) with a custom binary runs
+// CodeAF with live watching/steering. The legacy aforge adapter remains
+// explicitly selectable: "aforge" plus a binary override or AFORGE_BIN.
 func BuildProvider(name string, binPath string) (Provider, error) {
-	name = resolveExecutionProvider(name, binPath)
+	name = resolveExecutionProvider(name)
 	switch name {
 	case ProviderCodeAF:
 		return NewCodeAFProvider(binPath), nil

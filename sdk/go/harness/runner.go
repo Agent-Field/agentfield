@@ -56,7 +56,7 @@ type schemaAware interface {
 // is non-nil, the validated output is unmarshalled into it.
 func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, dest any, overrides Options) (*Result, error) {
 	opts := r.mergeOptions(overrides)
-	opts.Provider = resolveExecutionProvider(opts.Provider, opts.BinPath)
+	opts.Provider = resolveExecutionProvider(opts.Provider)
 
 	provider, err := r.buildProvider(opts)
 	if err != nil {

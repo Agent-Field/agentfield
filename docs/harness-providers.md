@@ -175,11 +175,17 @@ The Python extras install wrappers, rather than these managed binaries.
 CodeAF, Gemini, Pi and OMP are CLI-only; other providers may require a
 separately available executable or wrapper, as listed above.
 
-With no explicit provider (including no `AGENTFIELD_HARNESS_PROVIDER`), an
-existing `AFORGE_BIN` or SDK legacy binary option keeps the legacy aforge adapter.
-Select `provider="codeaf"` explicitly to use CodeAF despite that pin. Doctor checks
-for unpinned `aforge` look for CodeAF without downloading, report its version,
-and fall back to checking legacy aforge; a pinned alias checks only that pin.
+With no explicit provider (including no `AGENTFIELD_HARNESS_PROVIDER`), only
+an existing `AFORGE_BIN` keeps the legacy aforge adapter. A generic binary
+override is NOT a pin: it is honored by whichever provider is selected, so an
+implicit default with a custom binary runs CodeAF with that binary (live
+watching/steering included). During an upgrade from a pre-CodeAF SDK, keep
+`AFORGE_BIN` (or select `provider="aforge"` with the SDK's legacy binary
+option — Go `BinPath`, TypeScript `aforgeBin`, Python `aforge_bin`) to stay on
+the legacy adapter; select `provider="codeaf"` explicitly to use CodeAF with a
+custom binary despite a pin. Doctor checks for unpinned `aforge` look for CodeAF
+without downloading, report its version, and fall back to checking legacy
+aforge; a pinned alias checks only that pin.
 
 ### CodeAF adapter contract
 
