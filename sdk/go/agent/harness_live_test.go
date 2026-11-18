@@ -399,6 +399,91 @@ func TestRelayRidesTheLinkAndFallsBackToHTTP(t *testing.T) {
 	assert.Equal(t, map[int64]string{1: RelayStarted, 2: RelayLine, 3: RelayLine, 4: RelayEnded}, held)
 }
 
+// watchedUsageCodeAF rounds out recordingCodeAF: it accepts --events (a watched
+// run's stream) and appends usage entries to it, proving the SDK records what a
+// watched codeaf streams. usage vars let a test script the totals and the
+// final envelope per scenario.
+func watchedUsageCodeAF(stream, envelope string) string {
+	return `#!/bin/sh
+` + stream + `
+printf '%s\n' '` + envelope + `'
+`
+}
+
+const usageStreamLines = `events=""
+while [ $# -gt 0 ]; do
+  case "$1" in --events) events="$2"; shift;; esac
+  shift
+done
+cat >/dev/null`
+
+// A watched codeaf run (X-AgentField-Run-Watched) emits its usage on the
+// --events stream, and the final envelope carries none (current codeaf). The
+// SDK must record exactly one persisted harness usage entry matching the
+// streamed totals — the rows that were missing in issue #1183.
+func TestWatchedCodeAFRecordsStreamedHarnessUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		stream       string
+		envelope     string
+		wantInput    int
+		wantOutput   int
+		wantCacheIn  int
+		wantCost     any
+	}{
+		// Streamed only: the watched envelope omits usage, as today.
+		{
+			name:    "stream-only",
+			stream:  `printf '%s\n' '{"kind":"usage","usage":{"input_tokens":9,"output_tokens":7,"cache_read_input_tokens":1}}' >> "$events"`,
+			envelope: `{"ok":true,"stop":"done","answer":"ok"}`,
+			wantInput: 9, wantOutput: 7, wantCacheIn: 1, wantCost: nil,
+		},
+		// Envelope + stream: the producer-fixed envelope is authoritative, so
+		// the same run must record it once and never add the stream on top.
+		{
+			name:    "envelope-and-stream",
+			stream:  `printf '%s\n' '{"kind":"usage","usage":{"input_tokens":9,"output_tokens":7,"cache_read_input_tokens":1}}' >> "$events"`,
+			envelope: `{"ok":true,"stop":"done","answer":"ok","tokens":{"in":100,"out":50},"spend_usd":0.5}`,
+			wantInput: 100, wantOutput: 50, wantCacheIn: 0, wantCost: 0.5,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AGENTFIELD_HOME", t.TempDir())
+			t.Setenv("OPENROUTER_API_KEY", "test-key")
+			t.Setenv("AGENTFIELD_LOG_STDOUT", "off")
+			script := filepath.Join(t.TempDir(), "codeaf")
+			require.NoError(t, os.WriteFile(script, []byte(watchedUsageCodeAF(usageStreamLines+"\n"+tc.stream, tc.envelope)), 0o755))
+
+			cp := &cpRecorder{}
+			server := httptest.NewServer(cp.handler(t))
+			defer server.Close()
+			a, err := New(Config{NodeID: "node-1", Version: "1.0.0", AgentFieldURL: server.URL, Logger: log.New(io.Discard, "", 0),
+				HarnessConfig: &HarnessConfig{Provider: "codeaf", BinPath: script}})
+			require.NoError(t, err)
+			tracker := NewCostTracker()
+			ctx := contextWithExecution(context.Background(), ExecutionContext{ExecutionID: "exec-usage", RunWatched: true})
+			ctx = contextWithCostTracker(ctx, tracker)
+
+			result, err := a.Harness(ctx, "task", nil, nil, harness.Options{})
+			require.NoError(t, err)
+			require.False(t, result.IsError, result.ErrorMessage)
+
+			entries := tracker.Serialize()["entries"].([]map[string]any)
+			require.Len(t, entries, 1, "one run must record exactly one harness usage row")
+			assert.Equal(t, "codeaf", entries[0]["harness"])
+			assert.Equal(t, tc.wantInput, entries[0]["input_tokens"])
+			assert.Equal(t, tc.wantOutput, entries[0]["output_tokens"])
+			assert.Equal(t, tc.wantInput+tc.wantOutput, entries[0]["total_tokens"])
+			assert.Equal(t, tc.wantCacheIn, entries[0]["cache_read_tokens"])
+			if tc.wantCost == nil {
+				assert.Nil(t, entries[0]["cost_usd"])
+			} else {
+				assert.Equal(t, tc.wantCost, entries[0]["cost_usd"])
+			}
+		})
+	}
+}
+
 // recordingCodeAF records its argv and stdin into REC_DIR so a test can prove
 // whether codeaf ran on the origin/main exec path or the watched chat path.
 const recordingCodeAF = `#!/bin/sh

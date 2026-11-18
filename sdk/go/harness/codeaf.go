@@ -383,8 +383,23 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	// a run is a convenience and must never cost the run itself.
 	var live *liveRun
 	runCmd, runCwd := cmd, ""
+	// A watched run reports its usage on the --events stream and (on current
+	// codeaf) not in the final envelope. Collect every streamed line verbatim
+	// for the result's usage fallback while still passing it on to the caller's
+	// Event unchanged. When the final envelope does carry usage it stays the
+	// authoritative summary and the stream is ignored, so one run records at
+	// most one usage entry.
+	var streamed codeAFStreamedUsage
 	if command == "exec" && options.Live != nil {
-		run, flags, err := startLive(options.Live)
+		liveOpts := *options.Live
+		origEvent := liveOpts.Event
+		liveOpts.Event = func(line json.RawMessage) {
+			if origEvent != nil {
+				origEvent(line)
+			}
+			streamed.observe(line)
+		}
+		run, flags, err := startLive(&liveOpts)
 		if err != nil {
 			log.Printf("WARNING CodeAF live transcript unavailable: %v", err)
 		} else {
@@ -403,6 +418,9 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	live.finish()
 	if live != nil && err == nil && cli != nil && cli.ReturnCode != 0 && strings.Contains(cli.Stderr, "-events") && strings.Contains(cli.Stderr, "not defined") {
 		cli, err = runCLI(runCtx, cmd, env, "", int(math.Ceil(time.Until(deadline).Seconds())), 0, input)
+		// The fallback plain exec path reports its own usage in its envelope;
+		// whatever the failed watched run streamed must not be added on top.
+		streamed = codeAFStreamedUsage{}
 	}
 	elapsed := int(time.Since(started).Milliseconds())
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
@@ -420,7 +438,7 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 		}
 		return nil, err
 	}
-	return codeAFResult(cli, model, elapsed), nil
+	return codeAFResult(cli, model, elapsed, &streamed), nil
 }
 
 // codeAFChatCommand is the watched run's command line: one headless session
@@ -437,7 +455,70 @@ func codeAFChatCommand(bin, model string, prompt []byte, options Options, deadli
 	return append(cmd, live...)
 }
 
-func codeAFResult(cli *CLIResult, model string, elapsed int) *RawResult {
+// codeAFStreamedUsage aggregates token/cost totals from a watched run's
+// --events stream, working against the shapes usageFromMap/extractTokenUsage
+// already tolerate. "Last usage object wins" is the anti-double-count rule
+// (codeaf, like Codex, emits cumulative totals), and the last cost the stream
+// reports is remembered too. It is used only as a fallback when the final
+// envelope reports no usage at all, never added on top of one that does.
+type codeAFStreamedUsage struct {
+	tokens tokenUsage
+	cost   *float64
+}
+
+// observe parses one streamed event line for usage without dropping or
+// reshaping it: the caller still hands the original line to its own Event.
+func (u *codeAFStreamedUsage) observe(line []byte) {
+	var ev map[string]any
+	if json.Unmarshal(line, &ev) != nil {
+		return
+	}
+	usage := usageMapFromEvent(ev)
+	if usage != nil {
+		u.tokens = usageFromMap(usage)
+	}
+	if c, ok := codeAFStreamedCost(ev, usage); ok {
+		u.cost = &c
+	}
+}
+
+// usageMapFromEvent returns the event's "usage" object, whether top-level or
+// nested under "item"/"turn", mirroring extractTokenUsage's navigation.
+func usageMapFromEvent(ev map[string]any) map[string]any {
+	if usage, ok := ev["usage"].(map[string]any); ok {
+		return usage
+	}
+	if nested, ok := ev["item"].(map[string]any); ok {
+		if usage, ok := nested["usage"].(map[string]any); ok {
+			return usage
+		}
+	}
+	if nested, ok := ev["turn"].(map[string]any); ok {
+		if usage, ok := nested["usage"].(map[string]any); ok {
+			return usage
+		}
+	}
+	return nil
+}
+
+// codeAFStreamedCost returns the last numeric cost the stream reports, read
+// from the usage object (spend_usd/cost_usd/cost) or the event's own spend
+// field, whichever comes first.
+func codeAFStreamedCost(ev, usage map[string]any) (float64, bool) {
+	for _, src := range []map[string]any{usage, ev} {
+		if src == nil {
+			continue
+		}
+		for _, key := range []string{"spend_usd", "cost_usd", "cost"} {
+			if v, ok := aforgeNumber(src[key]); ok {
+				return v, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func codeAFResult(cli *CLIResult, model string, elapsed int, streamed *codeAFStreamedUsage) *RawResult {
 	envelope := parseCodeAFEnvelope(cli.Stdout)
 	text := func(key string) string {
 		value, _ := envelope[key].(string)
@@ -448,13 +529,29 @@ func codeAFResult(cli *CLIResult, model string, elapsed int) *RawResult {
 	if steps, ok := aforgeNumber(envelope["steps"]); ok {
 		metrics.NumTurns = int(steps)
 	}
+	envelopeHasUsage := false
 	if tokens, ok := envelope["tokens"].(map[string]any); ok {
 		in, _ := aforgeNumber(tokens["in"])
 		out, _ := aforgeNumber(tokens["out"])
 		metrics.InputTokens, metrics.OutputTokens = int(in), int(out)
+		if in > 0 || out > 0 {
+			envelopeHasUsage = true
+		}
 	}
 	if spend, ok := aforgeNumber(envelope["spend_usd"]); ok {
 		metrics.CostUSD = &spend
+		envelopeHasUsage = true
+	}
+	// Current codeaf's watched envelope omits usage entirely, so a watched run
+	// would otherwise record nothing. Fall back to the aggregated --events
+	// stream then; never add streamed usage on top of an envelope that reports
+	// any — one run, one usage row.
+	if !envelopeHasUsage && streamed != nil {
+		metrics.InputTokens = streamed.tokens.inputTokens
+		metrics.OutputTokens = streamed.tokens.outputTokens
+		metrics.CacheReadTokens = streamed.tokens.cacheReadTokens
+		metrics.CacheCreationTokens = streamed.tokens.cacheCreationTokens
+		metrics.CostUSD = streamed.cost
 	}
 	raw := &RawResult{Provider: ProviderCodeAF, Metrics: metrics, ReturnCode: cli.ReturnCode, FailureType: FailureNone}
 	if envelope != nil {

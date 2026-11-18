@@ -15,10 +15,11 @@ import (
 //
 // A codeaf run is otherwise silent until its final envelope. With Live set, the
 // provider passes codeaf two files (`--events` and `--steer`), tails the first
-// and hands every line to Event VERBATIM — the provider never parses or reshapes
+// and hands every line to Event VERBATIM — the provider never reshapes
 // codeaf's entries, so whatever codeaf streams is what a watcher receives — and
 // writes every note read from Steer to the second, where codeaf reads it at its
-// next turn boundary.
+// next turn boundary. (The provider may additionally read the stream in
+// parallel to tally usage, without changing what is handed to Event.)
 //
 // Begin is called once the run is about to start and End once it is over, so a
 // caller can say "this execution is steerable now" only while it really is. A

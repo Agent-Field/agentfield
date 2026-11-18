@@ -230,7 +230,7 @@ func TestCodeAFOutcomes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stdout := fmt.Sprintf(`{"ok":%t,"stop":%q,"answer":%q,"blocked_on":"need approval"}`, tc.ok, tc.stop, tc.answer)
-			raw := codeAFResult(&CLIResult{Stdout: stdout, ReturnCode: tc.code}, "requested", 42)
+			raw := codeAFResult(&CLIResult{Stdout: stdout, ReturnCode: tc.code}, "requested", 42, nil)
 			assert.Equal(t, tc.failure, raw.FailureType)
 			assert.Equal(t, tc.failure != FailureNone, raw.IsError)
 			assert.Equal(t, ProviderCodeAF, raw.Provider)
@@ -253,13 +253,41 @@ func TestCodeAFOutcomes(t *testing.T) {
 		{" \n", 0, FailureNoOutput}, {"", 1, FailureCrash},
 		{"plain text", 0, FailureCrash}, {`{"text":"legacy"}`, 0, FailureCrash}, {"", -9, FailureCrash},
 	} {
-		raw := codeAFResult(&CLIResult{Stdout: tc.stdout, ReturnCode: tc.code}, "model", 1)
+		raw := codeAFResult(&CLIResult{Stdout: tc.stdout, ReturnCode: tc.code}, "model", 1, nil)
 		assert.Equal(t, tc.failure, raw.FailureType)
 	}
 }
 
+// The watched result falls back to aggregated streamed usage only when the
+// envelope reports none, so a producer-fixed envelope never double-counts.
+func TestCodeAFResultStreamedUsageFallback(t *testing.T) {
+	envelope := `{"ok":true,"stop":"done","answer":"ok"}`
+	streamed := codeAFStreamedUsage{}
+	for _, line := range []string{
+		`{"kind":"assistant","usage":{"input_tokens":2,"output_tokens":1}}`,
+		`{"kind":"status","text":"x"}`,
+		`{"usage":{"input_tokens":9,"output_tokens":7,"cache_read_input_tokens":1,"cost":0.25}}`,
+	} {
+		streamed.observe([]byte(line))
+	}
+	raw := codeAFResult(&CLIResult{Stdout: envelope}, "model", 3, &streamed)
+	assert.Equal(t, 9, raw.Metrics.InputTokens)
+	assert.Equal(t, 7, raw.Metrics.OutputTokens)
+	assert.Equal(t, 1, raw.Metrics.CacheReadTokens)
+	require.NotNil(t, raw.Metrics.CostUSD)
+	assert.Equal(t, 0.25, *raw.Metrics.CostUSD)
+
+	// Envelope usage wins: the stream must not be added on top.
+	raw = codeAFResult(&CLIResult{Stdout: `{"ok":true,"stop":"done","answer":"ok","tokens":{"in":100,"out":50},"spend_usd":0.5}`}, "model", 3, &streamed)
+	assert.Equal(t, 100, raw.Metrics.InputTokens)
+	assert.Equal(t, 50, raw.Metrics.OutputTokens)
+	assert.Zero(t, raw.Metrics.CacheReadTokens)
+	require.NotNil(t, raw.Metrics.CostUSD)
+	assert.Equal(t, 0.5, *raw.Metrics.CostUSD)
+}
+
 func TestCodeAFMetricsAndErrorDetails(t *testing.T) {
-	raw := codeAFResult(&CLIResult{Stdout: `{"ok":true,"stop":"done","answer":" result ","steps":4,"calls":99,"tokens":{"in":100,"out":50},"spend_usd":0.0,"model":"returned","seconds":999,"usage":{"cost":99},"turns":99}`}, "requested", 12)
+	raw := codeAFResult(&CLIResult{Stdout: `{"ok":true,"stop":"done","answer":" result ","steps":4,"calls":99,"tokens":{"in":100,"out":50},"spend_usd":0.0,"model":"returned","seconds":999,"usage":{"cost":99},"turns":99}`}, "requested", 12, nil)
 	assert.Equal(t, "result", raw.Result)
 	assert.Equal(t, 4, raw.Metrics.NumTurns)
 	assert.Equal(t, 100, raw.Metrics.InputTokens)
@@ -272,7 +300,7 @@ func TestCodeAFMetricsAndErrorDetails(t *testing.T) {
 	assert.Zero(t, raw.Metrics.CacheReadTokens)
 	require.Len(t, raw.Messages, 1)
 
-	raw = codeAFResult(&CLIResult{Stdout: `{"ok":false,"stop":"error","error":"specific","answer":"answer"}`, Stderr: "stderr", ReturnCode: 1}, "requested", 0)
+	raw = codeAFResult(&CLIResult{Stdout: `{"ok":false,"stop":"error","error":"specific","answer":"answer"}`, Stderr: "stderr", ReturnCode: 1}, "requested", 0, nil)
 	assert.Contains(t, raw.ErrorMessage, "specific")
 	assert.NotContains(t, raw.ErrorMessage, "stderr")
 	assert.Nil(t, raw.Metrics.CostUSD)
