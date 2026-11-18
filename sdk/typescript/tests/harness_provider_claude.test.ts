@@ -162,6 +162,37 @@ describe('ClaudeCodeProvider', () => {
     expect(captured.options).not.toHaveProperty('cwd');
   });
 
+  it.each([
+    ['a session id', { resumeSessionId: 'sess-prev' }, 'sess-prev'],
+    ['no session id', {}, undefined],
+    ['an empty session id', { resumeSessionId: '' }, undefined],
+  ])('forwards resumeSessionId as resume when given %s', async (_label, options, expected) => {
+    const captured: { options?: Record<string, unknown> } = {};
+
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: ({ options }: { prompt: string; options: Record<string, unknown> }) => {
+          captured.options = options;
+          return (async function* stream() {
+            yield { type: 'result', result: 'final', session_id: 'sess-prev' };
+          })();
+        },
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const provider = new ClaudeCodeProvider();
+    await provider.execute('hello', options);
+
+    if (expected === undefined) {
+      expect(captured.options).not.toHaveProperty('resume');
+    } else {
+      expect(captured.options?.resume).toBe(expected);
+    }
+  });
+
   it('strips a #variant model suffix before handing the model to the SDK', async () => {
     const captured: { options?: Record<string, unknown> } = {};
 

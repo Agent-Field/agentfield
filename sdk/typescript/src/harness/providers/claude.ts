@@ -58,6 +58,9 @@ export class ClaudeCodeProvider implements HarnessProvider {
       agentOptions.permissionMode = modeMap[raw] ?? raw;
     }
     if (options.env !== undefined) agentOptions.env = options.env;
+    if (typeof options.resumeSessionId === 'string' && options.resumeSessionId) {
+      agentOptions.resume = options.resumeSessionId;
+    }
 
     const messages: Array<Record<string, unknown>> = [];
     let resultText: string | undefined;
