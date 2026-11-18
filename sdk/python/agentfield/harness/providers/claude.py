@@ -102,6 +102,10 @@ class ClaudeCodeProvider:
         if options.get("system_prompt") is not None:
             agent_options["system_prompt"] = options["system_prompt"]
         if options.get("max_budget_usd") is not None:
+            # Claude Code's --max-budget-usd is a stop condition checked only
+            # after a call returns, not a hard ceiling: the crossing call is
+            # paid in full, so the worst case is the cap plus one full model
+            # call (more with parallel subagents).
             agent_options["max_budget_usd"] = options["max_budget_usd"]
         if options.get("permission_mode") is not None:
             raw_mode = str(options["permission_mode"])

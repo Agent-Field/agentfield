@@ -394,7 +394,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Swap the worker, keep the loop | `provider="claude-code"` \| `"codex"` \| `"gemini"` \| `"opencode"` \| `"pi"` \| `"omp"` |
 | Fleet-wide default override | `AGENTFIELD_HARNESS_PROVIDER=codex` |
 | Schema-constrained output | `schema=ResultModel` (Pydantic/Zod) |
-| Cost capping | `max_budget_usd=3.0` |
+| Cost capping | `max_budget_usd=3.0` — claude-code checks it only after a call returns, so the crossing call is paid in full (stop condition, not a hard ceiling) |
 | Turn limiting | `max_turns=100` |
 | Tool access control | `tools=["Read", "Write", "Bash"]` |
 | Environment injection | `env={"KEY": "value"}` |
