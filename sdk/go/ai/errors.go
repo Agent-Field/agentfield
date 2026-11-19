@@ -3,6 +3,10 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 )
 
 const maxAPIErrorBody = 4 << 10
@@ -18,6 +22,9 @@ type APIError struct {
 	Type       string
 	Code       string
 	Body       []byte
+	// RetryAfter is the delay requested by the provider via the Retry-After
+	// response header, or zero when absent or unparseable.
+	RetryAfter time.Duration
 }
 
 // Error returns a human-readable description including the HTTP status.
@@ -54,4 +61,33 @@ func newAPIError(statusCode int, body []byte) *APIError {
 	}
 	apiErr.Body = append([]byte(nil), body...)
 	return apiErr
+}
+
+// newAPIErrorFromResponse builds an APIError and records the Retry-After
+// header of resp so rate-limit handling can honor the provider's hint.
+func newAPIErrorFromResponse(resp *http.Response, body []byte) *APIError {
+	apiErr := newAPIError(resp.StatusCode, body)
+	apiErr.RetryAfter = parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	return apiErr
+}
+
+// parseRetryAfter parses a Retry-After header value, which is either a number
+// of seconds or an HTTP date. It returns 0 for empty, invalid, or past values.
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if secs, err := strconv.ParseFloat(value, 64); err == nil {
+		if secs > 0 {
+			return time.Duration(secs * float64(time.Second))
+		}
+		return 0
+	}
+	if when, err := http.ParseTime(value); err == nil {
+		if d := when.Sub(now); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
