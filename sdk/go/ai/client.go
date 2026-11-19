@@ -202,7 +202,7 @@ func (c *Client) sendRequest(ctx context.Context, req *Request, body []byte) (*R
 
 	// Check for errors
 	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newAPIError(httpResp.StatusCode, respBody)
+		return nil, newAPIErrorFromResponse(httpResp, respBody)
 	}
 
 	// Parse response
@@ -273,7 +273,7 @@ func (c *Client) openStream(ctx context.Context, req *Request, body []byte) (*ht
 		respBody, _ := io.ReadAll(httpResp.Body)
 		httpResp.Body.Close()
 		cancel()
-		return nil, nil, newAPIError(httpResp.StatusCode, respBody)
+		return nil, nil, newAPIErrorFromResponse(httpResp, respBody)
 	}
 	return httpResp, cancel, nil
 }
