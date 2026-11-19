@@ -2016,6 +2016,11 @@ class AgentAI:
         - OpenRouter: Models like "openrouter/google/gemini-3.1-flash-image-preview"
         - Fal.ai: Models like "fal-ai/flux/dev", "fal-ai/flux/schnell", "fal-ai/recraft-v3"
 
+        MiniMax H3 models use ``minimax/MiniMax-H3-Image`` or
+        ``minimax/MiniMax-H3-Image-Highspeed``. Pass ``size="auto"`` to use
+        ``aspect_ratio`` or ``area``. Per-image errors in partial batches are
+        available in ``raw_response["data"]``.
+
         Args:
             prompt: Text description of the image to generate
             model: Model to use (defaults to AIConfig.vision_model, typically "dall-e-3")
