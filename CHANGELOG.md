@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.1] - 2026-11-19
+
+
+### Fixed
+
+- Fix(sdk-go): honor the Retry-After header on 429 responses
+
+APIError dropped the response headers, so the rate limiter never saw the provider's Retry-After hint. Record the header (seconds or HTTP date) in APIError.RetryAfter and prefer it when computing the backoff.
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com> (f404fbf)
+
 ## [0.1.146] - 2026-11-18
 
 ## [0.1.146-rc.39] - 2026-11-18
