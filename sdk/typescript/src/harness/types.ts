@@ -66,6 +66,11 @@ export interface HarnessOptions {
   opencodeBin?: string;
   piBin?: string;
   ompBin?: string;
+  /**
+   * Resume a session with the selected provider. AgentField submits Claude Code
+   * resumes once and reports `costUsd` only when a cost for this call is available.
+   * Claude Code may reuse the session's saved system prompt until compaction.
+   */
   resumeSessionId?: string;
   timeout?: number;
   schema?: unknown;
@@ -97,6 +102,8 @@ export interface RawResult {
   messages: Array<Record<string, unknown>>;
   metrics: Metrics;
   isError: boolean;
+  /** Set to false when retrying a failed call could repeat its side effects. */
+  retryable?: boolean;
   errorMessage?: string;
   failureType?: FailureType;
   returnCode?: number;

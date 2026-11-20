@@ -159,7 +159,7 @@ export class HarnessRunner {
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
         const result = await provider.execute(prompt, options as Record<string, unknown>);
-        if (!result.isError) {
+        if (!result.isError || result.retryable === false) {
           return result;
         }
 
