@@ -162,6 +162,96 @@ describe('ClaudeCodeProvider', () => {
     expect(captured.options).not.toHaveProperty('cwd');
   });
 
+  it.each([
+    ['a session id', { resumeSessionId: 'sess-prev' }, 'sess-prev'],
+    ['no session id', {}, undefined],
+    ['an empty session id', { resumeSessionId: '' }, undefined],
+  ])('forwards resumeSessionId as resume when given %s', async (_label, options, expected) => {
+    const captured: { options?: Record<string, unknown> } = {};
+
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: ({ options }: { prompt: string; options: Record<string, unknown> }) => {
+          captured.options = options;
+          return (async function* stream() {
+            yield { type: 'result', result: 'final', session_id: 'sess-prev' };
+          })();
+        },
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const provider = new ClaudeCodeProvider();
+    await provider.execute('hello', options);
+
+    if (expected === undefined) {
+      expect(captured.options).not.toHaveProperty('resume');
+    } else {
+      expect(captured.options?.resume).toBe(expected);
+    }
+  });
+
+  it.each([
+    { resumeSessionId: 'sess-prev', costUsd: undefined, expectedCost: undefined },
+    { resumeSessionId: 'sess-prev', costUsd: 0.25, expectedCost: 0.25 },
+    { resumeSessionId: '', costUsd: undefined, expectedCost: 0.75 },
+  ])('reports only call-level cost for resumeSessionId $resumeSessionId and cost_usd $costUsd', async ({
+    resumeSessionId, costUsd, expectedCost,
+  }) => {
+    const sdkResult = {
+      type: 'result',
+      result: 'final',
+      session_id: 'sess-prev',
+      total_cost_usd: 0.75,
+      cost_usd: costUsd,
+      usage: { input_tokens: 100, output_tokens: 50 },
+    };
+    vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
+      async *query() { yield sdkResult; },
+    }), { virtual: true });
+
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const runner = new HarnessRunner({ provider: 'claude-code' });
+    const result = await runner.run('hello', { resumeSessionId });
+
+    expect(result).toMatchObject({
+      isError: false,
+      costUsd: expectedCost,
+      inputTokens: 100,
+      outputTokens: 50,
+      messages: [sdkResult],
+    });
+  });
+
+  it.each([
+    { entryPoint: 'run', maxRetries: undefined },
+    { entryPoint: 'run', maxRetries: 2 },
+    { entryPoint: 'executeWithRetry', maxRetries: 2 },
+  ])('does not replay a resumed turn through $entryPoint with maxRetries $maxRetries', async ({
+    entryPoint, maxRetries,
+  }) => {
+    const toolResult = { type: 'user', message: { content: [{ type: 'tool_result', content: 'done' }] } };
+    const query = vi.fn(async function* () {
+      yield toolResult;
+      throw new Error('connection reset');
+    });
+    vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({ query }), { virtual: true });
+
+    const { buildProvider } = await import('../src/harness/providers/factory.js');
+    const { HarnessRunner } = await import('../src/harness/runner.js');
+    const runner = new HarnessRunner({ provider: 'claude-code' });
+    const options = { resumeSessionId: 'sess-prev', initialDelay: 0, maxRetries };
+    const result = entryPoint === 'run'
+      ? await runner.run('hello', options)
+      : await runner.executeWithRetry(await buildProvider({ provider: 'claude-code' }), 'hello', options);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledWith({ prompt: 'hello', options: { resume: 'sess-prev' } });
+    expect(result).toMatchObject({ isError: true, errorMessage: 'connection reset', messages: [toolResult] });
+  });
+
   it('strips a #variant model suffix before handing the model to the SDK', async () => {
     const captured: { options?: Record<string, unknown> } = {};
 

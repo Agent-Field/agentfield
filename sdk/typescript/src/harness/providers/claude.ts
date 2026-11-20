@@ -58,6 +58,8 @@ export class ClaudeCodeProvider implements HarnessProvider {
       agentOptions.permissionMode = modeMap[raw] ?? raw;
     }
     if (options.env !== undefined) agentOptions.env = options.env;
+    const resumeSessionId = getString(options, 'resumeSessionId');
+    if (resumeSessionId) agentOptions.resume = resumeSessionId;
 
     const messages: Array<Record<string, unknown>> = [];
     let resultText: string | undefined;
@@ -91,7 +93,8 @@ export class ClaudeCodeProvider implements HarnessProvider {
           const totalCostUsd = getNumber(msgObj, 'total_cost_usd');
           if (costUsd !== undefined) {
             totalCost = costUsd;
-          } else if (totalCostUsd !== undefined) {
+          } else if (!resumeSessionId && totalCostUsd !== undefined) {
+            // On resume, Claude can include earlier spend in this total.
             totalCost = totalCostUsd;
           }
 
@@ -157,6 +160,8 @@ export class ClaudeCodeProvider implements HarnessProvider {
         messages,
         metrics: createMetrics({ durationApiMs: Date.now() - startApi, sessionId }),
         isError: true,
+        // The resumed session may already contain this turn, even if the stream failed.
+        ...(resumeSessionId ? { retryable: false } : {}),
         errorMessage: error instanceof Error ? error.message : String(error),
       });
     }
