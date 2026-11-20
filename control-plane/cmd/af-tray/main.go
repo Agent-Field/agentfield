@@ -9,8 +9,8 @@
 // Subcommands:
 //
 //	af-tray run         Run the menu-bar tray (default).
-//	af-tray install     Install the desktop tray + control-plane autostart (macOS).
-//	af-tray uninstall   Remove the desktop tray and autostart.
+//	af-tray install     Install the tray at login (macOS).
+//	af-tray uninstall   Remove the tray login item.
 //	af-tray version     Print version.
 //
 // The platform-specific behaviour lives in tray_darwin.go / launchd_darwin.go
@@ -47,14 +47,23 @@ func run(args []string) int {
 			fmt.Fprintln(os.Stderr, "af-tray:", err)
 			return 1
 		}
-	case "install":
-		if err := installDesktopWith(parseInstallOptions(args[1:])); err != nil {
+	case "install", "install-tray":
+		if err := installDesktop(); err != nil {
 			fmt.Fprintln(os.Stderr, "af-tray install:", err)
 			return 1
 		}
 	case "uninstall":
 		if err := uninstallDesktop(); err != nil {
 			fmt.Fprintln(os.Stderr, "af-tray uninstall:", err)
+			return 1
+		}
+	case "desktop-tray":
+		if len(args) != 3 || (args[1] != "show" && args[1] != "hide") ||
+			(args[2] != "auto" && args[2] != "login" && args[2] != "session") {
+			return 2
+		}
+		if err := syncDesktopTray(args[1] == "show", args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "af-tray desktop-tray:", err)
 			return 1
 		}
 	case "version", "--version", "-v":
@@ -68,34 +77,14 @@ func run(args []string) int {
 	return 0
 }
 
-// parseInstallOptions reads the install-mode flags. Unknown arguments are
-// ignored rather than rejected: install.sh may pass flags a newer installer
-// script knows about but an older tray binary does not, and a hands-off
-// `curl … | bash` must not fail on that.
-func parseInstallOptions(args []string) installOptions {
-	var opts installOptions
-	for _, a := range args {
-		switch a {
-		case "--defer-restart":
-			opts.deferRestart = true
-		case "--take-over":
-			opts.takeOver = true
-		}
-	}
-	return opts
-}
-
 func printUsage() {
 	fmt.Print(`af-tray — AgentField menu-bar companion
 
 Usage:
   af-tray run         Run the menu-bar tray (default)
-  af-tray install     Install the desktop tray + control-plane autostart (macOS)
+  af-tray install     Install the tray at login (macOS)
   af-tray uninstall   Remove the desktop tray and control-plane autostart
   af-tray version     Print version information
 
-Install flags:
-  --defer-restart   Update files but never restart a running control plane
-  --take-over       Replace a launchd agent registered by a different install
 `)
 }

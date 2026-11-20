@@ -80,6 +80,7 @@ function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
     provisionedBundled: [],
     installSkills: true,
     trayCompanion: true,
+    trayAtLogin: null,
     dismissedUpdateVersion: null,
     starPrompt: 'pending',
     starPromptSnoozedUntil: null,

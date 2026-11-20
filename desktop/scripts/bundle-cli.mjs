@@ -16,13 +16,9 @@
 // bundle would answer `Version: dev`, and the app's CLI resolution can
 // neither gate it against MIN_AF_VERSION nor ever offer an update over it.
 //
-// On macOS this ALSO builds ./cmd/af-tray into vendor/af-tray, stamped with
-// the SAME version so the desktop app can provision + install the menu-bar
-// companion itself (src/main/tray-companion.ts) — a desktop-app-only install
-// gets the tray without ever running the curl installer, and both installers
-// converge on ~/.agentfield/bin/af-tray. af-tray carries the systray/CGO
-// dependency, so it is built with CGO enabled and only on/for darwin (the app
-// has its own in-app tray on Windows/Linux).
+// On macOS this also builds the native tray helper. electron-builder places
+// it in Contents/MacOS beside the app executable so it can use the app's
+// signed ServiceManagement LaunchAgent. Windows/Linux have an in-app tray.
 
 import { spawnSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
@@ -60,8 +56,7 @@ if (result.error) {
 }
 if (result.status !== 0) process.exit(result.status ?? 1)
 
-// macOS only: build the af-tray menu-bar companion alongside af, stamped
-// identically so tray-companion.ts can version-compare bundled vs. managed.
+// macOS only: build and version-stamp the af-tray menu-bar companion.
 // af-tray needs the systray/CGO dependency (clang ships on macOS runners and
 // dev machines); never built for win32/linux — the app has an in-app tray there.
 if (process.platform === 'darwin') {

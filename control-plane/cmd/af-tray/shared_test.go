@@ -347,7 +347,7 @@ func TestServerPlistContract(t *testing.T) {
 func TestTrayPlistContract(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
-	p := trayPlist()
+	p := trayPlistFor(trayBundleBinaryPath())
 
 	mustContain(t, p, "<string>"+trayLabel+"</string>")
 	mustContain(t, p, "<string>run</string>")

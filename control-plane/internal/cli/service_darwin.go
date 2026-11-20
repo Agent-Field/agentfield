@@ -5,7 +5,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/launchdsvc"
 )
@@ -29,8 +28,11 @@ func serviceStop() error {
 // serviceRestart reloads the agent onto whatever binary the plist now names.
 func serviceRestart() error {
 	plist := launchdsvc.ServerPlistPath(serviceHome())
+	if _, err := os.Stat(plist); os.IsNotExist(err) {
+		plist = launchdsvc.ServerSessionPlistPath(serviceHome())
+	}
 	if _, err := os.Stat(plist); err != nil {
-		return fmt.Errorf("no control-plane agent installed at %s", plist)
+		return fmt.Errorf("no control-plane agent installed at %s: %w", plist, err)
 	}
 	// Full reload rather than `kickstart -k`: an upgraded binary carries a new
 	// ad-hoc code signature, which launchd refuses to re-exec.
@@ -46,7 +48,10 @@ func serviceUninstall() error {
 	_ = launchdsvc.Bootout(launchdsvc.ServerLabel)
 	_ = os.Remove(launchdsvc.TrayPlistPath(home))
 	_ = os.Remove(launchdsvc.ServerPlistPath(home))
-	_ = os.RemoveAll(filepath.Join(home, "Applications", "AgentField.app"))
+	_ = os.Remove(launchdsvc.ServerSessionPlistPath(home))
+	if err := launchdsvc.RemoveLegacyTrayBundle(home); err != nil {
+		return err
+	}
 	fmt.Println("Control plane autostart and menu-bar app removed.")
 	fmt.Println("The `af` binary itself is untouched.")
 	return nil

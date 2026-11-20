@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"image"
 	"image/color"
 	"image/png"
@@ -1294,8 +1295,17 @@ func serverPlist() string {
 // trayPlist is the menu-bar tray launchd agent. KeepAlive={Crashed: true} means
 // a genuine crash relaunches it, but a clean exit (the "Quit" menu item, or the
 // no-GUI-session early exit) does not — so it never crash-loops.
-func trayPlist() string {
-	log := trayLogPath()
+func trayPlistFor(program string) string {
+	return formatTrayPlist(html.EscapeString(program), html.EscapeString(trayLogPath()))
+}
+
+// Older versions wrote unescaped paths. Recognize their template during
+// migration while ensuring any newly written property lists are valid XML.
+func legacyTrayPlistFor(program string) string {
+	return formatTrayPlist(program, trayLogPath())
+}
+
+func formatTrayPlist(program, log string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -1314,5 +1324,5 @@ func trayPlist() string {
   <key>ProcessType</key><string>Interactive</string>
 </dict>
 </plist>
-`, trayLabel, trayBundleBinaryPath(), log, log)
+`, trayLabel, program, log, log)
 }

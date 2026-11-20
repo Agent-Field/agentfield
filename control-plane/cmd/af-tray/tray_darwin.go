@@ -24,6 +24,12 @@ func runTray() error {
 		fmt.Fprintln(os.Stderr, "af-tray: no GUI session detected, tray unavailable — exiting")
 		return nil
 	}
+	lock, err := lockTrayProcess()
+	if err != nil || lock == nil {
+		return err
+	}
+	defer lock.Close()
+	setupTrayApp()
 	systray.Run(onReady, func() {})
 	return nil
 }
