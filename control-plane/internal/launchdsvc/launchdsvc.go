@@ -33,6 +33,10 @@ func ServerPlistPath(home string) string {
 	return filepath.Join(LaunchAgentsDir(home), ServerLabel+".plist")
 }
 
+func ServerSessionPlistPath(home string) string {
+	return filepath.Join(home, ".agentfield", "server-session.plist")
+}
+
 func TrayPlistPath(home string) string {
 	return filepath.Join(LaunchAgentsDir(home), TrayLabel+".plist")
 }
