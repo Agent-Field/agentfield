@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StepDetail } from "@/components/StepDetail";
+import { setGlobalApiKey } from "@/services/api";
 
 const state = vi.hoisted(() => ({
   useStepDetail: vi.fn(),
@@ -215,6 +216,9 @@ describe("StepDetail", () => {
         getItem: vi.fn(() => "api-key"),
       },
     });
+    // The approval request takes the key the app signed in with, not a raw
+    // localStorage read.
+    setGlobalApiKey("api-key");
 
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,

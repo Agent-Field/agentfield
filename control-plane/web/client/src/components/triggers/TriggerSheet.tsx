@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { authHeaders } from "@/services/api";
 import { useNavigate } from 'react-router';
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -66,7 +67,7 @@ type InboundEvent = EventRowInboundEvent;
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers || {}) },
   });
   if (!res.ok) {
     const text = await res.text();

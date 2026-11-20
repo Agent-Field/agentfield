@@ -111,3 +111,43 @@ func TestC1F1HistoricalWorkflowChainRoutes(t *testing.T) {
 		})
 	}
 }
+
+// The summary view a run page asks for carries the chain's status and
+// verifiability but none of the per-step credentials; the default view is
+// unchanged.
+func TestUIWorkflowVCChainSummaryViewOmitsPerStepCredentials(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	ls, registry, didService, vcService, didWebService, ctx := setupDIDHandlerServices(t)
+	seedDIDHandlerData(t, ls, registry, vcService, didWebService, ctx)
+
+	handler := NewDIDHandler(ls, didService, vcService, didWebService)
+	router := gin.New()
+	router.GET("/api/ui/v1/workflows/:workflowId/vc-chain", handler.GetWorkflowVCChainHandler)
+
+	full := performJSONRequest(router, http.MethodGet, "/api/ui/v1/workflows/wf-1/vc-chain", nil)
+	require.Equal(t, http.StatusOK, full.Code)
+	var fullChain types.WorkflowVCChainResponse
+	require.NoError(t, json.Unmarshal(full.Body.Bytes(), &fullChain))
+	require.NotEmpty(t, fullChain.ComponentVCs, "fixture should have per-step credentials")
+
+	rec := performJSONRequest(router, http.MethodGet, "/api/ui/v1/workflows/wf-1/vc-chain?view=summary", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, full.Header().Get(handlers.VCChainVerifiableHeader), rec.Header().Get(handlers.VCChainVerifiableHeader))
+
+	body := decodeJSONResponse[map[string]any](t, rec)
+	require.Equal(t, []any{}, body["component_vcs"])
+	require.NotContains(t, body, "did_resolution_bundle")
+
+	var summary types.WorkflowVCChainResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &summary))
+	require.Equal(t, fullChain.WorkflowID, summary.WorkflowID)
+	require.Equal(t, fullChain.Status, summary.Status)
+	require.Equal(t, fullChain.TotalSteps, summary.TotalSteps)
+	require.Equal(t, fullChain.Verifiable, summary.Verifiable)
+	require.Equal(t, fullChain.UnresolvedDIDs, summary.UnresolvedDIDs)
+	require.Equal(t, fullChain.WorkflowVC.IssuerDID, summary.WorkflowVC.IssuerDID)
+	require.Equal(t, fullChain.WorkflowVC.Status, summary.WorkflowVC.Status)
+	require.Empty(t, summary.WorkflowVC.VCDocument)
+	require.Less(t, rec.Body.Len(), full.Body.Len())
+}
