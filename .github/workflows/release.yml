@@ -300,6 +300,89 @@ jobs:
           echo "=== Flattened dist/ directory ==="
           ls -lah dist/agentfield-* 2>/dev/null || echo "No binaries found"
 
+      - name: Sign and notarize standalone macOS tray binaries
+        if: matrix.label == 'darwin'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$CSC_LINK" || -z "$CSC_KEY_PASSWORD" || -z "$APPLE_ID" || \
+                -z "$APPLE_APP_SPECIFIC_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
+            echo "::error::Standalone macOS tray releases require the Developer ID and Apple notarization secrets"
+            exit 1
+          fi
+
+          binaries=(dist/agentfield-tray-darwin-amd64 dist/agentfield-tray-darwin-arm64)
+          for binary in "${binaries[@]}"; do
+            if [[ ! -f "$binary" ]]; then
+              echo "::error::Missing standalone tray binary: $binary"
+              exit 1
+            fi
+          done
+
+          signing_dir="$(mktemp -d "$RUNNER_TEMP/af-tray-signing.XXXXXX")"
+          keychain="$signing_dir/signing.keychain-db"
+          trap 'security delete-keychain "$keychain" >/dev/null 2>&1 || true; rm -rf -- "$signing_dir"' EXIT
+          keychain_password="$(openssl rand -hex 32)"
+
+          printf '%s' "$CSC_LINK" | base64 --decode > "$signing_dir/cert.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$signing_dir/cert.p12" -k "$keychain" \
+            -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+
+          # Include the temporary keychain when codesign resolves the certificate chain.
+          # Deleting the keychain removes its entry from the search list.
+          existing_keychains="$(security list-keychains -d user | sed -E 's/^[[:space:]]*"//; s/"$//')"
+          keychains=("$keychain")
+          while IFS= read -r entry; do
+            if [[ -n "$entry" ]]; then keychains+=("$entry"); fi
+          done <<< "$existing_keychains"
+          security list-keychains -d user -s "${keychains[@]}"
+
+          requirement="=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\""
+          for binary in "${binaries[@]}"; do
+            codesign --force --sign 'Developer ID Application:' --keychain "$keychain" \
+              --identifier ai.agentfield.tray --options runtime --timestamp "$binary"
+            codesign --verify --strict --test-requirement "$requirement" --verbose=2 "$binary"
+          done
+
+          # The ZIP is for Apple only. Raw Mach-O binaries get online tickets
+          # and keep their existing release asset names and download format.
+          archive="$signing_dir/af-tray.zip"
+          zip -jq "$archive" "${binaries[@]}"
+          notary_auth=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID")
+          response="$signing_dir/notary-response.json"
+          if ! xcrun notarytool submit "$archive" "${notary_auth[@]}" --wait --timeout 30m --output-format json > "$response" ||
+             [[ "$(plutil -extract status raw -o - "$response" 2>/dev/null)" != Accepted ]]; then
+            cat "$response"
+            submission_id="$(plutil -extract id raw -o - "$response" 2>/dev/null || true)"
+            if [[ -n "$submission_id" ]]; then
+              xcrun notarytool log "$submission_id" "${notary_auth[@]}" || true
+            fi
+            echo "::error::Apple did not accept the standalone macOS tray binaries for notarization"
+            exit 1
+          fi
+          cat "$response"
+
+          # Allow a short delay for Apple's online tickets to become available.
+          for binary in "${binaries[@]}"; do
+            for delay in 5 15 30; do
+              if codesign --verify --strict --check-notarization --test-requirement '=notarized' --verbose=2 "$binary"; then
+                continue 2
+              fi
+              sleep "$delay"
+            done
+            codesign --verify --strict --check-notarization --test-requirement '=notarized' --verbose=2 "$binary"
+          done
+
       - name: Rename artifact metadata
         shell: bash
         run: |
