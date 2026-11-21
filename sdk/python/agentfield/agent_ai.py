@@ -987,8 +987,59 @@ class AgentAI:
 
                 if final_config.enable_rate_limit_retry:
                     rate_limiter = self._get_rate_limiter()
-                    return await rate_limiter.execute_with_retry(_call_with_fallbacks)
-                return await _call_with_fallbacks()
+                    turn_resp = await rate_limiter.execute_with_retry(
+                        _call_with_fallbacks
+                    )
+                else:
+                    turn_resp = await _call_with_fallbacks()
+                _record_tool_turn_usage(turn_resp, params)
+                return turn_resp
+
+            def _record_tool_turn_usage(turn_resp, params):
+                """Record token usage for one LLM turn of the tool loop."""
+                from agentfield.cost_tracker import (
+                    derive_provider,
+                    get_current_cost_tracker,
+                )
+                from .multimodal_response import detect_multimodal_response
+                from .usage_routing import routing_provider
+
+                tracker = get_current_cost_tracker() or getattr(
+                    self.agent, "cost_tracker", None
+                )
+                if tracker is None:
+                    return
+                requested_model = params.get("model", final_config.model)
+                provider = derive_provider(requested_model)
+                route = routing_provider(provider, params.get("api_base"))
+                usage = detect_multimodal_response(turn_resp)
+                if not usage.usage:
+                    tracker.record(
+                        model=requested_model,
+                        provider=provider,
+                        routing_provider=route,
+                        usage_status="missing",
+                    )
+                    return
+                from agentfield.execution_context import get_current_context
+
+                ctx = get_current_context()
+                tracker.record(
+                    model=getattr(turn_resp, "model", "") or requested_model,
+                    provider=provider,
+                    routing_provider=route,
+                    prompt_tokens=usage.usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.usage.get("completion_tokens", 0),
+                    total_tokens=usage.usage.get("total_tokens", 0),
+                    cost_usd=usage.cost_usd,
+                    reasoner_name=ctx.reasoner_name if ctx else None,
+                    source="llm",
+                    cache_read_tokens=usage.usage.get("cache_read_tokens", 0),
+                    cache_creation_tokens=usage.usage.get(
+                        "cache_creation_tokens", 0
+                    ),
+                    cost_source=usage.cost_source,
+                )
 
             resp, trace = await execute_tool_call_loop(
                 agent=self.agent,

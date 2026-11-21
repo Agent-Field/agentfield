@@ -529,3 +529,66 @@ async def test_ai_system_and_user_prompts(monkeypatch, agent_with_ai):
     assert len(messages) >= 2
     assert any(msg.get("role") == "system" for msg in messages)
     assert any(msg.get("role") == "user" for msg in messages)
+
+
+@pytest.mark.asyncio
+async def test_ai_tool_loop_records_usage_per_turn(monkeypatch, agent_with_ai):
+    """Every LLM turn of the tool-calling loop is recorded in the cost tracker."""
+    from agentfield.cost_tracker import CostTracker
+
+    agent_with_ai.cost_tracker = CostTracker()
+    litellm_module = setup_litellm_stub(monkeypatch)
+
+    def chat(content, tool_calls, usage):
+        return SimpleNamespace(
+            model="gpt-4",
+            usage=usage,
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=content,
+                        audio=None,
+                        tool_calls=tool_calls,
+                        model_dump=lambda: {
+                            "role": "assistant",
+                            "content": content,
+                        },
+                    )
+                )
+            ],
+        )
+
+    tool_call = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name="lookup", arguments="{}"),
+    )
+    litellm_module.acompletion.side_effect = [
+        chat(
+            None,
+            [tool_call],
+            {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        ),
+        chat(
+            "done",
+            None,
+            {"prompt_tokens": 20, "completion_tokens": 7, "total_tokens": 27},
+        ),
+    ]
+    agent_with_ai.call = AsyncMock(return_value={"ok": True})
+
+    ai = AgentAI(agent_with_ai)
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    await ai.ai("question", tools=tools)
+
+    summary = agent_with_ai.cost_tracker.serialize()
+    assert len(summary["entries"]) == 2
+    assert summary["total_tokens"] == 42
