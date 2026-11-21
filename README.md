@@ -237,6 +237,19 @@ Most agent tools help you **write** agent logic. AgentField is what **runs** it 
 
 [Full comparison & decision guide →](https://agentfield.ai/docs/learn/vs-frameworks?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-vs-frameworks)
 
+## How AgentField compares
+
+AgentField is the open-source (Apache 2.0) control plane that runs agents as backend services; most of the projects people compare it with author agents, and their code can run inside an AgentField reasoner.
+
+| | What it is for | Where AgentField differs |
+|---|---|---|
+| [LangGraph](https://agentfield.ai/compare/agentfield-vs-langgraph) | A graph framework and runtime for stateful agents, with checkpoints and interrupts | Agents become HTTP services other software can call, with discovery, policy and a signed audit trail |
+| [CrewAI](https://agentfield.ai/compare/agentfield-vs-crewai) | A framework for teams of role-based agents, with a managed option (AMP) | A layer below the framework: it runs agents written in CrewAI or any other framework as governed services |
+| [Temporal](https://agentfield.ai/compare/agentfield-vs-temporal) | Durable execution for workflows that must finish exactly as written, with a full event history | Durability without workflow code or determinism rules, plus agent-native reasoners, memory scopes, identity and audit |
+| [OpenAI Agents SDK](https://agentfield.ai/compare/agentfield-vs-openai-agents-sdk) | A lightweight agent loop with handoffs, guardrails and tracing, best on OpenAI models | Runs agents on any model, switching per call, in Python, TypeScript or Go, on infrastructure you control |
+
+Choose LangGraph for an explicit, inspectable graph inside one process, CrewAI to ship a role-based team fast, Temporal when a business process must be correct across failures, and the OpenAI Agents SDK to build on OpenAI models with minimal code; choose AgentField when other services must call your agents, runs are long, and security asks who did what.
+
 ## How it scales
 
 The control plane is a stateless Go service. You put more of them behind a load balancer and the fleet grows horizontally. Work is admitted into a bounded in-process queue with backpressure (`429`/`503` plus `Retry-After`). On graceful shutdown, in-flight executions are terminated with `status_reason` `control_plane_shutdown` rather than silently dropped.
