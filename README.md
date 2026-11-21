@@ -215,7 +215,7 @@ docker run -p 8080:8080 agentfield/control-plane:latest
 
 ## How AgentField fits in your stack
 
-Most agent tools help you **write** agent logic. AgentField is what **runs** it in production: the layer that makes agents callable by other software, durable across failures, and observable when one request fans out to a thousand branches. Keep the framework you already use for authoring; a reasoner is a plain function, so existing LangGraph or CrewAI code can run inside one.
+Most agent tools help you **write** agent logic. AgentField is what **runs** it in production: the layer that makes agents callable by other software, durable across failures, and observable when one request fans out to a thousand branches. You write the agents in AgentField itself, in place of a framework: a reasoner is a plain Python, TypeScript or Go function, and AgentField gives it everything around it.
 
 |  | **Frameworks**<br><sub>LangChain · CrewAI · PydanticAI · OpenAI Agents SDK</sub> | **Workflow engines**<br><sub>Temporal · Airflow</sub> | **Visual builders**<br><sub>n8n · Zapier</sub> | **AgentField** |
 |---|:-:|:-:|:-:|:-:|
@@ -239,12 +239,12 @@ Most agent tools help you **write** agent logic. AgentField is what **runs** it 
 
 ## How AgentField compares
 
-AgentField is the open-source (Apache 2.0) control plane that runs agents as backend services; most of the projects people compare it with author agents, and their code can run inside an AgentField reasoner.
+AgentField is an open-source (Apache 2.0) framework and control plane: you write agents in it and they run as backend services, so it replaces an agent framework rather than sitting under one.
 
 | | What it is for | Where AgentField differs |
 |---|---|---|
 | [LangGraph](https://agentfield.ai/compare/agentfield-vs-langgraph) | A graph framework and runtime for stateful agents, with checkpoints and interrupts | Agents become HTTP services other software can call, with discovery, policy and a signed audit trail |
-| [CrewAI](https://agentfield.ai/compare/agentfield-vs-crewai) | A framework for teams of role-based agents, with a managed option (AMP) | A layer below the framework: it runs agents written in CrewAI or any other framework as governed services |
+| [CrewAI](https://agentfield.ai/compare/agentfield-vs-crewai) | A framework for teams of role-based agents, with a managed option (AMP) | Write the agents in AgentField instead: each one is an HTTP service other software can call, with durable runs, identity, policy and audit built in |
 | [Temporal](https://agentfield.ai/compare/agentfield-vs-temporal) | Durable execution for workflows that must finish exactly as written, with a full event history | Durability without workflow code or determinism rules, plus agent-native reasoners, memory scopes, identity and audit |
 | [OpenAI Agents SDK](https://agentfield.ai/compare/agentfield-vs-openai-agents-sdk) | A lightweight agent loop with handoffs, guardrails and tracing, best on OpenAI models | Runs agents on any model, switching per call, in Python, TypeScript or Go, on infrastructure you control |
 
