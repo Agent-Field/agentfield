@@ -103,6 +103,23 @@ aiConfig := &ai.Config{
 }
 ```
 
+Omitting `MaxTokens` or `Timeout` leaves the call uncapped: the request carries
+no token budget worth honouring and the HTTP client gets no deadline at all, so
+a slow provider can hold the call open for as long as it likes. Set
+`ApplyDefaultCaps: true` to have `ai.NewClient` fill an omitted `MaxTokens` with
+4096 and an omitted `Timeout` with 30 seconds; a value you set is kept. It is
+opt-in because applying a cap to a configuration that runs uncapped today would
+cut off completions that currently succeed.
+
+```go
+aiConfig := &ai.Config{
+    APIKey:           "sk-...",
+    BaseURL:          "https://api.openai.com/v1",
+    Model:            "gpt-4o",
+    ApplyDefaultCaps: true, // MaxTokens 4096, Timeout 30s
+}
+```
+
 ### OpenRouter Configuration
 
 ```go

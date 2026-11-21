@@ -119,6 +119,69 @@ func TestNewClient_WithTransportPreservesTimeout(t *testing.T) {
 	assert.Equal(t, "ok", response.Text())
 }
 
+func TestNewClient_ApplyDefaultCapsFillsAPartialConfig(t *testing.T) {
+	var sent map[string]any
+	transport := &roundTripFunc{fn: func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &sent))
+		return testCompletionResponse(), nil
+	}}
+	config := &Config{
+		APIKey:           "test-key",
+		BaseURL:          "https://api.example.com/v1",
+		Model:            "gpt-4o",
+		ApplyDefaultCaps: true,
+	}
+
+	client, err := NewClient(config, WithTransport(transport))
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, client.httpClient.Timeout)
+	require.Equal(t, 4096, client.config.MaxTokens)
+
+	// The caps only matter if they reach the wire, so read the request body
+	// the client actually built.
+	_, err = client.Complete(context.Background(), "hello")
+	require.NoError(t, err)
+	require.Equal(t, float64(4096), sent["max_tokens"])
+
+	// NewClient fills a copy: a config the caller reuses must not come back
+	// capped.
+	require.Zero(t, config.MaxTokens)
+	require.Zero(t, config.Timeout)
+}
+
+func TestNewClient_ApplyDefaultCapsKeepsExplicitLimits(t *testing.T) {
+	config := &Config{
+		APIKey:           "test-key",
+		BaseURL:          "https://api.example.com/v1",
+		Model:            "gpt-4o",
+		MaxTokens:        1234,
+		Timeout:          5 * time.Second,
+		ApplyDefaultCaps: true,
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err)
+	require.Equal(t, 1234, client.config.MaxTokens)
+	require.Equal(t, 5*time.Second, client.httpClient.Timeout)
+}
+
+func TestNewClient_LeavesCapsAloneWithoutOptIn(t *testing.T) {
+	config := &Config{
+		APIKey:  "test-key",
+		BaseURL: "https://api.example.com/v1",
+		Model:   "gpt-4o",
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err)
+	// Zero stays "no deadline" until the caller opts in; changing that by
+	// default would cut off calls that run uncapped today.
+	require.Zero(t, client.httpClient.Timeout)
+	require.Zero(t, client.config.MaxTokens)
+}
+
 type roundTripFunc struct {
 	fn func(*http.Request) (*http.Response, error)
 }

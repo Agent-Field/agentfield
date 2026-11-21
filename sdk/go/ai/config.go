@@ -27,6 +27,14 @@ const defaultRuncrateBaseURL = "https://api.runcrate.ai/v1"
 // names, e.g. "deepseek-v4-flash".
 const defaultCloudGPUBaseURL = "https://cloudgpu.app/v1"
 
+// defaultMaxTokens and defaultRequestTimeout are the caps DefaultConfig
+// applies. A Config that opts into ApplyDefaultCaps gets the same numbers, so
+// the two paths cannot drift.
+const (
+	defaultMaxTokens      = 4096
+	defaultRequestTimeout = 30 * time.Second
+)
+
 // Config holds AI/LLM configuration for making API calls.
 type Config struct {
 	// API Key for the selected provider: OpenAI, Infron,
@@ -53,6 +61,16 @@ type Config struct {
 
 	// HTTP timeout for requests
 	Timeout time.Duration
+
+	// ApplyDefaultCaps fills an omitted MaxTokens and Timeout from the SDK
+	// defaults (4096 tokens, 30s) when NewClient builds the client. A partial
+	// Config otherwise sends max_tokens as zero and gives the HTTP client no
+	// deadline at all, which means a slow provider can hold a call open
+	// indefinitely. Opt-in rather than default, because silently capping a
+	// configuration that runs uncapped today would cut off completions that
+	// currently succeed. A positive value the caller set is always kept, and a
+	// client passed through WithHTTPClient keeps its own Timeout.
+	ApplyDefaultCaps bool
 
 	// Optional: Site URL for OpenRouter rankings
 	SiteURL string
@@ -151,8 +169,8 @@ func DefaultConfig() *Config {
 		BaseURL:     baseURL,
 		Model:       model,
 		Temperature: 0.7,
-		MaxTokens:   4096,
-		Timeout:     30 * time.Second,
+		MaxTokens:   defaultMaxTokens,
+		Timeout:     defaultRequestTimeout,
 	}
 	switch {
 	case cfg.IsOpenRouter():
@@ -197,6 +215,23 @@ func (c *Config) Validate() error {
 		return errors.New("model is required")
 	}
 	return nil
+}
+
+// withDefaultCaps returns a copy of c in which an unspecified MaxTokens and
+// Timeout are replaced by the SDK defaults. The copy leaves the caller's Config
+// untouched, so building two clients from one Config cannot make the first
+// client's caps appear in the second. Negative values count as unspecified:
+// neither a negative token budget nor a negative timeout means anything to the
+// providers or to net/http, both of which read a zero duration as "no limit".
+func (c *Config) withDefaultCaps() *Config {
+	filled := *c
+	if filled.MaxTokens <= 0 {
+		filled.MaxTokens = defaultMaxTokens
+	}
+	if filled.Timeout <= 0 {
+		filled.Timeout = defaultRequestTimeout
+	}
+	return &filled
 }
 
 // IsOpenRouter returns true if the base URL is for OpenRouter.

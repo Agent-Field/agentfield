@@ -59,6 +59,10 @@ func WithTransport(transport http.RoundTripper) ClientOption {
 func NewClient(config *Config, opts ...ClientOption) (*Client, error) {
 	if config == nil {
 		config = DefaultConfig()
+	} else if config.ApplyDefaultCaps {
+		// Fill the caps before the HTTP client is built, so its Timeout is
+		// the one the caller asked for rather than the zero value.
+		config = config.withDefaultCaps()
 	}
 
 	if err := config.Validate(); err != nil {
