@@ -2789,6 +2789,19 @@ class OpenRouterProvider(MediaProvider):
                         except json_mod.JSONDecodeError:
                             continue
 
+                        # OpenRouter reports mid-stream failures as an
+                        # in-band ``{"error": {...}}`` event on an HTTP 200.
+                        if isinstance(event, dict) and event.get("error"):
+                            err = event["error"]
+                            msg = (
+                                err.get("message")
+                                if isinstance(err, dict)
+                                else None
+                            ) or str(err)
+                            raise RuntimeError(
+                                f"OpenRouter {label} stream failed: {msg}"
+                            )
+
                         choices = event.get("choices", [])
                         if not choices:
                             continue
