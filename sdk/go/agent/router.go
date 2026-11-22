@@ -172,7 +172,11 @@ func (r *Router) flatten(prefix string, inheritedTags []string) []routerHandlerE
 func (a *Agent) IncludeRouter(router *Router, opts RouterOptions) {
 	for _, e := range router.flatten(opts.Prefix, opts.Tags) {
 		if e.skill {
-			a.RegisterSkill(e.name, e.handler, e.opts...)
+			// IncludeRouter has no error return, so a rejected skill panics like
+			// the reasoner branch below instead of silently going missing.
+			if err := a.RegisterSkill(e.name, e.handler, e.opts...); err != nil {
+				panic(err.Error())
+			}
 			continue
 		}
 		a.RegisterReasoner(e.name, e.handler, e.opts...)

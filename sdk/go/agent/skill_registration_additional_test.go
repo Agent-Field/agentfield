@@ -23,7 +23,7 @@ func TestRegisterSkill_HTTPDiscoveryAndLocalExecution(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Error(t, a.RegisterSkill("bad", nil))
+	require.EqualError(t, a.RegisterSkill("bad", nil), `agentfield: skill "bad": nil handler`)
 	require.NoError(t, a.RegisterSkill("add", func(ctx context.Context, input map[string]any) (any, error) {
 		return map[string]any{"ok": input["ok"]}, nil
 	}, WithReasonerTags("deterministic"), WithRequireRealtimeValidation()))
