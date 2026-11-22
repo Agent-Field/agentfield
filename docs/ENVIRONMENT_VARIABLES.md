@@ -380,6 +380,12 @@ Python, Go, and TypeScript OpenCode harness runs use the generated per-run agent
 
 MiniMax video models are routed with the `minimax/` model prefix. The model suffix is sent unchanged to the video generation API.
 
+### WaveSpeedAI media generation
+
+- `WAVESPEED_API_KEY`: API key used by the Python SDK's WaveSpeedAI media provider. `AIConfig(wavespeed_api_key=...)` takes precedence when set.
+
+WaveSpeedAI image, audio, and video models are routed with the `wavespeed/` model prefix (for example `wavespeed/bytedance/seedream-v5.5`). The model suffix is sent unchanged as the model id, and extra keyword arguments are sent as model inputs.
+
 ### OpenRouter attribution
 
 OpenRouter attribution is request metadata, not authentication. AgentField SDKs send these as `HTTP-Referer`, `X-OpenRouter-Title`, and `X-Title` for OpenRouter requests.

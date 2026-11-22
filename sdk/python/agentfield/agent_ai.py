@@ -390,6 +390,7 @@ class AgentAI:
         self._fal_provider_instance = None
         self._minimax_provider_instance = None
         self._openrouter_provider_instance = None
+        self._wavespeed_provider_instance = None
         self._media_router_instance = None
 
     @property
@@ -438,6 +439,18 @@ class AgentAI:
         return self._minimax_provider_instance
 
     @property
+    def _wavespeed_provider(self):
+        """Lazy-initialized WaveSpeedAI media provider."""
+        if self._wavespeed_provider_instance is None:
+            from agentfield.media_providers import WaveSpeedProvider
+
+            api_key = getattr(self.agent.ai_config, "wavespeed_api_key", None)
+            self._wavespeed_provider_instance = WaveSpeedProvider(
+                api_key=api_key if isinstance(api_key, str) else None,
+            )
+        return self._wavespeed_provider_instance
+
+    @property
     def _media_router(self):
         """
         Lazy-initialized MediaRouter for prefix-based provider dispatch.
@@ -454,6 +467,7 @@ class AgentAI:
             router.register("fal/", self._fal_provider)
             router.register("minimax/", self._minimax_provider)
             router.register("openrouter/", self._openrouter_provider)
+            router.register("wavespeed/", self._wavespeed_provider)
             router.register("", LiteLLMProvider())  # catch-all fallback
             self._media_router_instance = router
         return self._media_router_instance
@@ -1636,7 +1650,7 @@ class AgentAI:
                 self.agent.ai_config.audio_model
             )  # Use configured audio model (defaults to tts-1)
 
-        if model.startswith("minimax/"):
+        if model.startswith(("minimax/", "wavespeed/")):
             provider = self._media_router.resolve(model, "audio")
             text_input = " ".join(str(arg) for arg in args if isinstance(arg, str))
             if not text_input:
