@@ -13,9 +13,9 @@ Thank you for your interest in contributing to AgentField! This guide outlines h
 ## Development Environment
 
 1. Fork the repository and clone your fork.
-2. Install dependencies:
+2. Install development dependencies from the repository root:
    ```bash
-   ./scripts/install.sh
+   make install
    ```
 3. Create a feature branch:
    ```bash

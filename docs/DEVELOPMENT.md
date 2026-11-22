@@ -4,7 +4,7 @@ This document provides instructions for working on the AgentField monorepo local
 
 ## Prerequisites
 
-- **Go** ≥ 1.23
+- **Go** ≥ 1.25.0
 - **Node.js** ≥ 20 (for the control plane web UI)
 - **Python** ≥ 3.10
 - **Docker** (optional, for running the full stack)
@@ -14,14 +14,16 @@ This document provides instructions for working on the AgentField monorepo local
 ```bash
 git clone https://github.com/Agent-Field/agentfield.git
 cd agentfield
-./scripts/install.sh
+make install
 ```
 
-The install script performs:
+`make install` runs `./scripts/install-dev-deps.sh`. The script:
 
-- `go install` of required tooling (e.g., `golangci-lint`, `goose`).
-- `pip install -e .` for the Python SDK and development dependencies.
-- `npm install` inside `control-plane/web`.
+- Downloads the control-plane and Go SDK modules and installs development tools such as `golangci-lint` and `goose`.
+- Installs the Python SDK in editable mode and installs Python development dependencies.
+- Runs `npm install` inside `control-plane/web/client`.
+
+Use `./scripts/install.sh` to install the released AgentField CLI.
 
 ## Directory Conventions
 
@@ -41,7 +43,7 @@ The install script performs:
 | Format Go code        | `make fmt`                                                   |
 | Tidy Go modules       | `make tidy`                                                  |
 | Run the control plane | `cd control-plane && go run cmd/server/main.go`              |
-| Run UI in development | `cd control-plane/web && npm run dev`                        |
+| Run UI in development | `cd control-plane/web/client && npm run dev`                 |
 | Start local stack     | `docker compose -f deployments/docker/docker-compose.yml up` |
 
 ## Environment Variables
@@ -61,10 +63,10 @@ goose -dir ./migrations postgres "$AGENTFIELD_DATABASE_URL" up
 
 ## Frontend Development
 
-The UI lives in `control-plane/web`. It is built with React + TypeScript.
+The UI lives in `control-plane/web/client`. It is built with React + TypeScript.
 
 ```bash
-cd control-plane/web
+cd control-plane/web/client
 npm install
 npm run dev
 ```
@@ -103,8 +105,8 @@ Web UI lint is opt-in for this broad regression pass. Set `AGENTFIELD_RUN_UI_LIN
 
 - Ensure Docker resources are sufficient (4 CPU, 8 GB RAM recommended).
 - Run `make tidy` if Go modules drift.
-- Delete `.venv` and rerun `./scripts/install.sh` if Python deps conflict.
-- Clear `control-plane/web/node_modules` if UI builds fail after dependency upgrades.
+- Recreate and activate your Python virtual environment, then rerun `make install` if dependencies conflict.
+- Clear `control-plane/web/client/node_modules` if UI builds fail after dependency upgrades.
 
 ## Conventions
 
