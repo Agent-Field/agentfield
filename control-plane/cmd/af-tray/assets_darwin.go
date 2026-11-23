@@ -12,8 +12,3 @@ var iconActive []byte
 
 //go:embed assets/icon_inactive.png
 var iconInactive []byte
-
-// appIconICNS is written into the generated .app bundle's Resources on macOS.
-//
-//go:embed assets/appicon.icns
-var appIconICNS []byte

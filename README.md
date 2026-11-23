@@ -54,10 +54,14 @@ The provider name `aforge` remains an alias; set `AFORGE_BIN` and select
 `$AGENTFIELD_HOME/codeaf`. See [harness providers](docs/harness-providers.md)
 for binary overrides, mirror/skip switches, and telemetry controls.
 
-On macOS the installer also registers the control plane to start at login (under
-launchd) and adds a menu-bar icon. Stop it with `af service stop` or the menu-bar
-icon — a plain `kill` looks like a crash and it restarts. `af service status`
-shows health and in-flight work; install with `--no-tray` to skip this entirely.
+On macOS the installer does not register anything to run at login. Add the
+optional menu-bar icon with `--with-tray`; it registers one login job for the
+icon, and the icon's **Control plane → Start at login** switch decides whether
+the control plane starts at login as well. A machine that already has the icon
+keeps it and is updated in place (`--no-tray` skips that). When launchd
+supervises the control plane, stop it with `af service stop` or the menu-bar icon
+— a plain `kill` looks like a crash and it restarts. `af service status` shows
+health and in-flight work.
 
 Then in your coding agent, paste any spec with /agentfield :
 

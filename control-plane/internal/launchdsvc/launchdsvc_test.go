@@ -322,3 +322,25 @@ func TestActiveExecutionsURLMatchesServerRoute(t *testing.T) {
 		t.Errorf("ActiveExecutionsURL = %q", got)
 	}
 }
+
+// Contract: the files that must never survive a logout (the session plists) live
+// under ~/.agentfield, never in LaunchAgents, and the staged tray copy sits in the
+// managed bin directory the installer and old Desktop builds used.
+func TestSessionAndStagedPathsStayOutOfLaunchAgents(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "home", "demo")
+	agents := LaunchAgentsDir(home)
+	for name, path := range map[string]string{
+		"server session plist": ServerSessionPlistPath(home),
+		"tray session plist":   TraySessionPlistPath(home),
+	} {
+		if strings.HasPrefix(path, agents) {
+			t.Errorf("%s %q is inside LaunchAgents %q and would persist across logins", name, path, agents)
+		}
+		if !strings.HasPrefix(path, filepath.Join(home, ".agentfield")+string(filepath.Separator)) {
+			t.Errorf("%s %q is not under ~/.agentfield", name, path)
+		}
+	}
+	if got, want := StagedTrayPath(home), filepath.Join(home, ".agentfield", "bin", "af-tray"); got != want {
+		t.Errorf("StagedTrayPath = %q, want %q", got, want)
+	}
+}

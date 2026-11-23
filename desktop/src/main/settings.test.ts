@@ -38,6 +38,7 @@ describe('normalizeSettings', () => {
       provisionedBundled: ['swe-planner'],
       installSkills: false,
       trayCompanion: false,
+      trayAtLogin: false,
       dismissedUpdateVersion: '0.1.110',
       starPrompt: 'done' as const,
       starPromptSnoozedUntil: '2026-08-01T00:00:00.000Z',
@@ -65,6 +66,7 @@ describe('normalizeSettings', () => {
 
   it('defaults trayCompanion on and coerces non-booleans', () => {
     expect(normalizeSettings({}).trayCompanion).toBe(true)
+    expect(normalizeSettings({}).trayAtLogin).toBeNull()
     expect(normalizeSettings({ trayCompanion: false }).trayCompanion).toBe(false)
     expect(normalizeSettings({ trayCompanion: 'yes' }).trayCompanion).toBe(true)
   })
@@ -320,6 +322,7 @@ describe('load/save round trip', () => {
       provisionedBundled: ['swe-planner', 'pr-af'],
       installSkills: true,
       trayCompanion: true,
+      trayAtLogin: true,
       dismissedUpdateVersion: null,
       starPrompt: 'pending' as const,
       starPromptSnoozedUntil: null,

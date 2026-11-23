@@ -24,6 +24,12 @@ func runTray() error {
 		fmt.Fprintln(os.Stderr, "af-tray: no GUI session detected, tray unavailable — exiting")
 		return nil
 	}
+	lock, err := lockTrayProcess()
+	if err != nil || lock == nil {
+		return err
+	}
+	defer lock.Close()
+	setupTrayApp()
 	systray.Run(onReady, func() {})
 	return nil
 }
@@ -184,6 +190,11 @@ func onReady() {
 	mLogin := mServer.AddSubMenuItemCheckbox("Start at login", "Launch the control plane automatically when you log in", serverAutostartEnabled())
 	mLogs := systray.AddMenuItem("View logs", "Open the control-plane log file")
 	mLogs.SetTemplateIcon(iconLogs, iconLogs)
+	// Off until the user turns it on: the rows read the Claude Code login from
+	// the Keychain, so the tray must never do that without being asked.
+	mClaudeUsage := systray.AddMenuItemCheckbox("Show Claude usage limits",
+		"Read the saved Claude Code login from your Keychain to show its 5-hour and 7-day usage. Off by default.",
+		claudeUsageEnabled())
 
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit the AgentField tray")
@@ -525,6 +536,9 @@ func onReady() {
 	// Claude subscription quota lives on its own goroutine and cadence so a slow
 	// or hanging call to api.anthropic.com can never block the menu refresh. It
 	// writes the latest reading under a mutex; renderUsage reads it each refresh.
+	// It does nothing, and never touches the Keychain, until the user has turned
+	// "Show Claude usage limits" on; claudeNudge makes a flip take effect now.
+	claudeNudge := make(chan struct{}, 1)
 	go func() {
 		poll := func() {
 			q := fetchClaudeQuotaNow()
@@ -535,7 +549,11 @@ func onReady() {
 		poll()
 		ticker := time.NewTicker(claudeQuotaInterval)
 		defer ticker.Stop()
-		for range ticker.C {
+		for {
+			select {
+			case <-ticker.C:
+			case <-claudeNudge:
+			}
 			poll()
 		}
 	}()
@@ -606,6 +624,21 @@ func onReady() {
 				refresh()
 			case <-mLogs.ClickedCh:
 				openLogs()
+			case <-mClaudeUsage.ClickedCh:
+				if mClaudeUsage.Checked() {
+					if err := setClaudeUsageEnabled(false); err == nil {
+						mClaudeUsage.Uncheck()
+					}
+				} else {
+					if err := setClaudeUsageEnabled(true); err == nil {
+						mClaudeUsage.Check()
+					}
+				}
+				select {
+				case claudeNudge <- struct{}{}:
+				default:
+				}
+				refresh()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -633,30 +666,27 @@ func handleEnterAPIKey() {
 	}
 }
 
-// promptForAPIKey shows a native password-style dialog. It returns ok=false when
-// the user cancels (osascript exits non-zero) or on any error.
+// promptForAPIKey shows a native alert with a masked field (dialog_darwin.go).
+// It returns ok=false when the user cancels. It deliberately does not shell out
+// to osascript: an AppleScript password dialog is the signature of credential
+// phishing, and endpoint-security tools flag it.
 func promptForAPIKey(invalid bool) (string, bool) {
 	msg := "Enter the API key for this AgentField control plane:"
 	if invalid {
 		msg = "This API key was rejected (invalid or expired). Enter a new one:"
 	}
-	script := fmt.Sprintf(
-		`display dialog %q with title "AgentField" default answer "" `+
-			`buttons {"Cancel","Save"} default button "Save" with hidden answer`,
-		msg,
-	)
-	out, err := exec.Command("osascript", "-e", script, "-e", "text returned of result").Output()
-	if err != nil {
+	key, ok := promptSecret("AgentField", msg)
+	if !ok {
 		return "", false
 	}
-	return strings.TrimSpace(string(out)), true
+	return strings.TrimSpace(key), true
 }
 
-// notify shows a small informational dialog (used for errors the user should see
-// right after acting; menu-bar apps have no other affordance for this).
+// notify shows a small informational alert (used for errors the user should see
+// right after acting; menu-bar apps have no other affordance for this). It runs
+// on its own goroutine so the menu loop that called it is not held open.
 func notify(title, body string) {
-	script := fmt.Sprintf(`display dialog %q with title %q buttons {"OK"} default button "OK" with icon caution`, body, title)
-	_ = exec.Command("osascript", "-e", script).Start()
+	go showAlert(title, body)
 }
 
 func openDashboard() { openPage("") }

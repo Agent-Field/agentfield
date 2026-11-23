@@ -141,6 +141,14 @@ jobs:
           go build ./cmd/af-tray/
           go vet ./cmd/af-tray/
 
+      # The tray's install, upgrade and login-item paths are darwin-only code
+      # that the Linux jobs cannot execute. These tests drive them against a stub
+      # launchctl, and check that Service Management can see the bundled login
+      # agent from inside an app bundle.
+      - name: Test the macOS tray lifecycle
+        working-directory: control-plane
+        run: go test -count=1 ./cmd/af-tray/ ./internal/launchdsvc/
+
   # Summary job that depends on all critical checks
   required-checks:
     name: All Required Checks Passed

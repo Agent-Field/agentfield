@@ -15,8 +15,7 @@ import (
 )
 
 // NewServiceCommand creates the `af service` command group, which manages the
-// control plane running under launchd (installed by install.sh / the menu-bar
-// app). It is registered on every platform so `af service` self-documents;
+// control plane running under launchd. It is registered on every platform so `af service` self-documents;
 // off macOS each subcommand reports that launchd is macOS-only.
 func NewServiceCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -24,9 +23,9 @@ func NewServiceCommand() *cobra.Command {
 		Short: "Manage the background control plane (macOS launchd)",
 		Long: `Manage the AgentField control plane that runs in the background.
 
-install.sh registers the control plane as a launchd agent so it starts at login
-and restarts if it crashes. Because it is supervised, killing the process does
-not stop it — use these commands (or the menu-bar icon).
+Enable Control plane → Start at login from the macOS menu-bar icon to
+register the server for future logins. With launchd supervision, killing the process does
+not stop it permanently. Use these commands or the menu-bar icon instead.
 
 Examples:
   af service status     Show whether it is registered, healthy, and busy
@@ -44,6 +43,11 @@ Examples:
 // agentLoadedFn is the launchd registration probe, indirected so tests can
 // assemble a status without shelling out to launchctl at all.
 var agentLoadedFn = launchdsvc.AgentLoaded
+
+// launchdSupportedFn is launchd's availability probe, indirected for the same
+// reason: the status code that follows a session-registered server is only
+// reachable where launchd exists, and tests must cover it on every platform.
+var launchdSupportedFn = launchdsvc.Supported
 
 func servicePort() int {
 	if v := os.Getenv("AGENTFIELD_PORT"); v != "" {
@@ -99,12 +103,16 @@ type serviceStatus struct {
 func collectServiceStatus() serviceStatus {
 	port := servicePort()
 	st := serviceStatus{
-		Supported: launchdsvc.Supported(),
+		Supported: launchdSupportedFn(),
 		Port:      port,
 		PlistPath: launchdsvc.ServerPlistPath(serviceHome()),
 	}
 	if owner, ok := launchdsvc.ReadPlistOwner(st.PlistPath); ok {
 		st.Program = owner.Program
+	} else if path := launchdsvc.ServerSessionPlistPath(serviceHome()); launchdSupportedFn() {
+		if owner, ok := launchdsvc.ReadPlistOwner(path); ok {
+			st.PlistPath, st.Program = path, owner.Program
+		}
 	}
 	if st.Supported {
 		st.Loaded = agentLoadedFn(launchdsvc.ServerLabel)

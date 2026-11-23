@@ -174,21 +174,26 @@ turns gold while the control plane is running and gray otherwise, and the
 menu offers Open AgentField / Open web UI / Quit. Closing the window hides it
 to the tray (Docker-Desktop style) — Quit lives in the tray menu.
 
-On macOS the desktop app adds **no** in-app tray: the menu-bar companion there
-is `af-tray` (`control-plane/cmd/af-tray`), and **the app now provisions and
-installs it itself** (`src/main/tray-companion.ts`). On launch it stages the
-bundled `af-tray` into `~/.agentfield/bin/af-tray` — the same managed location
-the curl installer uses, so both installers converge there — and runs `af-tray
-install`, which builds `~/Applications/AgentField.app` and the launchd agents.
-A desktop-app-only install therefore gets the menu-bar icon without ever running
-the curl installer. It only re-stages when the bundled copy is a newer stamped
-version (via `af-tray version`, matching how `cli.ts` gates the CLI), and only
-re-runs `af-tray install` when the binary changed or the tray's launchd agent
-is not loaded — never unconditionally, since install reloads launchd and would
-blink the tray on every launch. The **Show the menu bar icon** toggle in
-Settings (macOS only) drives this: turning it off runs `af-tray uninstall`. The
-bundled `af-tray` is built by `npm run bundle-cli` on macOS only (it carries the
-systray/CGO dependency); Windows/Linux keep the in-app tray instead.
+On macOS the menu-bar companion (`af-tray`) runs from the Desktop app
+bundle. **Show the menu bar icon** controls its visibility independently of
+the local server. **Start the menu bar icon at login** is opt-in for new
+installs, and upgrades adopt the previous tray registration. macOS 13 and
+later use Service Management for the login item and may request approval in
+System Settings. The tray’s **Control plane → Start at login** setting controls
+the server separately.
+
+The helper is shipped signed inside the app (`Contents/MacOS/af-tray`) and the
+login item is a bundled launch agent
+(`Contents/Library/LaunchAgents/ai.agentfield.tray.login.plist`) that macOS
+registers on the app's behalf. Nothing is copied into a second app bundle or
+written into `~/Library/LaunchAgents` for it, which is what keeps endpoint-security
+tools from reading the install as malware persistence. The helper's
+**Show Claude usage limits** item is off until the user turns it on, because it
+reads the saved Claude Code login from the Keychain.
+
+CLI-only macOS users can install the tray at login with `install.sh --with-tray`.
+The CLI installer updates existing CLI tray registrations by default. Tray
+updates and hiding the icon leave the server process and its login job alone.
 
 The app registers the `agentfield://` URL scheme (single-instance: a second
 launch focuses the running app). `agentfield://dashboard|agents|activity|install`
@@ -317,16 +322,12 @@ Packaging is unsigned for now (no notarization/signing identities configured).
 
 - Control plane URL is hard-coded to `http://localhost:8080` (not configurable yet).
 - No stop control for the control plane itself yet (the app only starts it).
-- The macOS `af-tray` companion installs its own `~/Applications/AgentField.app`
-  wrapper — a second bundle named "AgentField" distinct from this desktop app in
-  `/Applications`. Harmless (the tray bundle is `LSUIElement`, menu-bar only) but
-  a naming collision; disambiguating it is a separate, out-of-scope decision.
 - The registry is read directly from `~/.agentfield/installed.yaml`; once
   `af list -o json` lands, the app should shell out to the CLI instead (see
   the `TODO(af-cli)` seam in `src/main/agentfield.ts`).
-- Packaging has no signing identity. Builds without one get a valid **ad-hoc**
-  signature (`scripts/macos-adhoc-sign.mjs`, afterPack) — electron-builder
-  would otherwise leave a resource-less linker signature that codesign/spctl
-  reject as invalid. Ad-hoc is enough to run locally-built apps normally;
-  *downloaded* builds still carry quarantine and need right-click-Open or
-  `xattr -dr com.apple.quarantine` until real signing/notarization lands.
+- Local and CI pull-request builds have no signing identity. They get a valid
+  **ad-hoc** signature (`scripts/macos-adhoc-sign.mjs`, afterPack) —
+  electron-builder would otherwise leave a resource-less linker signature that
+  codesign/spctl reject as invalid. Release DMGs are Developer ID signed with the
+  hardened runtime and notarized (see `.github/workflows/release.yml`), so a
+  downloaded release opens without any quarantine workaround.

@@ -92,12 +92,20 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
               onChange={(on) => update({ installSkills: on })}
             />
             {window.agentfield.platform === 'darwin' && (
-              <ToggleRow
-                title="Show the menu bar icon"
-                sub="Install the AgentField menu-bar companion (af-tray) for at-a-glance status and quick controls."
-                checked={settings.trayCompanion}
-                onChange={(on) => update({ trayCompanion: on })}
-              />
+              <>
+                <ToggleRow
+                  title="Show the menu bar icon"
+                  sub="See AgentField status and server controls in the menu bar."
+                  checked={settings.trayCompanion}
+                  onChange={(on) => update({ trayCompanion: on })}
+                />
+                <ToggleRow
+                  title="Start the menu bar icon at login"
+                  sub="Show the icon when you sign in. macOS may ask you to approve it in Login Items."
+                  checked={settings.trayCompanion && settings.trayAtLogin === true}
+                  onChange={(on) => update({ trayAtLogin: on, ...(on ? { trayCompanion: true } : {}) })}
+                />
+              </>
             )}
           </ul>
         </div>

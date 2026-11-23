@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"image"
 	"image/color"
 	"image/png"
@@ -902,6 +903,30 @@ func saveAPIKey(key string) error {
 
 // ---- Tray settings (persisted preferences) ---------------------------------
 
+// claudeUsagePath is the opt-in switch for the Claude plan-usage rows. The rows
+// read the Claude Code login out of the user's Keychain, which is credential
+// access that belongs to another application, so it is OFF until the user turns
+// it on from the menu. The switch is a file so every tray start (launchd, login
+// item, a manual run) sees the same answer without another settings format.
+func claudeUsagePath() string { return filepath.Join(agentfieldDir(), "tray-claude-usage") }
+
+// claudeUsageEnabled reports whether the user has opted in to the Claude rows.
+func claudeUsageEnabled() bool {
+	_, err := os.Stat(claudeUsagePath())
+	return err == nil
+}
+
+// setClaudeUsageEnabled records or clears the opt-in.
+func setClaudeUsageEnabled(on bool) error {
+	if on {
+		return writeFileAtomic(claudeUsagePath(), []byte("on\n"), 0o600)
+	}
+	if err := os.Remove(claudeUsagePath()); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // ---- Presentation helpers (pure, so they're unit-tested on any OS) ----------
 //
 // Design: the menu is a calm dashboard — a two-line header, then one fact per
@@ -1294,8 +1319,17 @@ func serverPlist() string {
 // trayPlist is the menu-bar tray launchd agent. KeepAlive={Crashed: true} means
 // a genuine crash relaunches it, but a clean exit (the "Quit" menu item, or the
 // no-GUI-session early exit) does not — so it never crash-loops.
-func trayPlist() string {
-	log := trayLogPath()
+func trayPlistFor(program string) string {
+	return formatTrayPlist(html.EscapeString(program), html.EscapeString(trayLogPath()))
+}
+
+// Older versions wrote unescaped paths. Recognize their template during
+// migration while ensuring any newly written property lists are valid XML.
+func legacyTrayPlistFor(program string) string {
+	return formatTrayPlist(program, trayLogPath())
+}
+
+func formatTrayPlist(program, log string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -1314,5 +1348,5 @@ func trayPlist() string {
   <key>ProcessType</key><string>Interactive</string>
 </dict>
 </plist>
-`, trayLabel, trayBundleBinaryPath(), log, log)
+`, trayLabel, program, log, log)
 }

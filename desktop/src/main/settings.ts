@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   provisionedBundled: [],
   installSkills: true,
   trayCompanion: true,
+  trayAtLogin: null,
   dismissedUpdateVersion: null,
   starPrompt: 'pending',
   starPromptSnoozedUntil: null,
@@ -106,6 +107,7 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
       typeof obj.installSkills === 'boolean' ? obj.installSkills : DEFAULT_SETTINGS.installSkills,
     trayCompanion:
       typeof obj.trayCompanion === 'boolean' ? obj.trayCompanion : DEFAULT_SETTINGS.trayCompanion,
+    trayAtLogin: typeof obj.trayAtLogin === 'boolean' ? obj.trayAtLogin : null,
     dismissedUpdateVersion:
       typeof obj.dismissedUpdateVersion === 'string' && obj.dismissedUpdateVersion !== ''
         ? obj.dismissedUpdateVersion

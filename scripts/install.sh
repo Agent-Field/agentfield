@@ -33,13 +33,8 @@ STAGING="${STAGING:-0}"
 #   SKILL_MODE=<mode>     → env var override
 SKILL_MODE="${SKILL_MODE:-all}"
 
-# Desktop tray mode (auto | none)
-#
-# On macOS (production channel), the installer also drops the AgentField
-# menu-bar tray and registers it — plus the control plane — to auto-start via
-# launchd. It is a small, separate binary from the control-plane binary and is
-# never installed on Linux/headless/container hosts. Opt out with --no-tray or
-# TRAY_MODE=none.
+# On macOS, auto updates an existing CLI tray registration. New users
+# explicitly opt into the tray login item with --with-tray.
 TRAY_MODE="${TRAY_MODE:-auto}"
 
 # CodeAF coding-harness mode (auto | none). Provisioning is delegated to af.
@@ -47,11 +42,6 @@ TRAY_MODE="${TRAY_MODE:-auto}"
 # Both skip variables are exported before any af, skill or tray subprocess.
 CODEAF_MODE="${CODEAF_MODE:-auto}"
 AFORGE_MODE="${AFORGE_MODE:-auto}"
-
-# Extra flags forwarded to `af-tray install` (see --defer-restart / --take-over).
-# Bash 3.2 (macOS) treats an empty array under `set -u` as unset, so every
-# expansion below uses the +alternate form.
-TRAY_INSTALL_FLAGS=()
 
 # Color codes
 RED='\033[0;31m'
@@ -97,6 +87,10 @@ parse_args() {
         SKILL_MODE="interactive"
         shift
         ;;
+      --with-tray)
+        TRAY_MODE="login"
+        shift
+        ;;
       --no-tray)
         TRAY_MODE="none"
         shift
@@ -105,15 +99,9 @@ parse_args() {
         CODEAF_MODE="none"
         shift
         ;;
-      --defer-restart)
-        # Never restart a control plane that is already running; the newly
-        # installed binary takes effect at the next restart.
-        TRAY_INSTALL_FLAGS+=("--defer-restart")
-        shift
-        ;;
-      --take-over)
-        # Permit replacing a launchd agent registered by a different install.
-        TRAY_INSTALL_FLAGS+=("--take-over")
+      --defer-restart|--take-over)
+        # Accepted for compatibility with older automation. Tray installation
+        # no longer takes over or restarts the server.
         shift
         ;;
       --help|-h)
@@ -137,14 +125,10 @@ parse_args() {
         echo "  --interactive-skill    Run the interactive skill picker (only useful"
         echo "                         when you run install.sh from a real terminal,"
         echo "                         not from 'curl … | bash')"
-        echo "  --no-tray              Skip the macOS desktop tray / auto-start setup"
-        echo "                         (control-plane binary only)"
+        echo "  --with-tray            Install the macOS menu-bar icon and start it at login"
+        echo "  --no-tray              Skip installation or updates of the macOS tray"
         echo "  --no-codeaf            Skip installing the CodeAF coding-harness binary"
         echo "  --no-aforge            Alias for --no-codeaf"
-        echo "  --defer-restart        Update files but never restart a control"
-        echo "                         plane that is already running"
-        echo "  --take-over            Replace a launchd agent registered by a"
-        echo "                         different AgentField install"
         echo "  --help                 Show this help message"
         echo ""
         echo "Environment variables:"
@@ -155,7 +139,7 @@ parse_args() {
         echo "  AGENTFIELD_HOME         Managed home (staging uses ~/.agentfield-staging)"
         echo "  AGENTFIELD_INSTALL_DIR  Custom install directory"
         echo "  SKILL_MODE              all (default) | all-targets | interactive | none"
-        echo "  TRAY_MODE               auto (default, macOS only) | none"
+        echo "  TRAY_MODE               auto (update existing) | login | none"
         echo "  CODEAF_MODE             auto (default) | none"
         echo "  AFORGE_MODE             Legacy alias; none also opts out of CodeAF"
         exit 0
@@ -472,14 +456,11 @@ install_binary() {
     print_warning "Could not create $SYMLINK_NAME symlink; ensure filesystem supports symlinks"
   fi
 
-  # On macOS, remove quarantine attribute
-  if [[ "$(detect_os)" == "darwin" ]]; then
-    print_verbose "Removing macOS quarantine attribute..."
-    xattr -d com.apple.quarantine "$install_dir/agentfield" 2>/dev/null || true
-    if [[ "$symlink_created" -eq 1 ]]; then
-      xattr -d com.apple.quarantine "$install_dir/$SYMLINK_NAME" 2>/dev/null || true
-    fi
-  fi
+  # This installer deliberately never strips com.apple.quarantine. curl does not
+  # set that attribute on what it downloads, so there is nothing to remove, and
+  # a script that clears the attribute is indistinguishable from malware that
+  # evades Gatekeeper. The release binaries are Developer ID signed and
+  # notarized, so macOS accepts them as they are.
 
   print_success "Binary installed to $install_dir/agentfield"
   if [[ "$symlink_created" -eq 1 ]]; then
@@ -675,14 +656,8 @@ install_codeaf() {
   fi
 }
 
-# Install the AgentField desktop tray (menu-bar app) and register it — plus the
-# control plane — to auto-start via launchd. macOS + production channel only.
-#
-# The tray is a small, SEPARATE binary from the control-plane binary: it carries
-# the GUI dependency so the server never has to, and it is simply never fetched
-# on Linux/headless/container hosts. Every step here is best-effort — a failure
-# to set up the tray must never fail the overall install, because the control
-# plane itself is already installed and working by this point.
+# Install or upgrade the optional macOS tray. This is best-effort because
+# the control-plane binary has already been installed.
 install_tray() {
   local os="$1"
   local arch="$2"
@@ -695,10 +670,13 @@ install_tray() {
     print_info "Skipping desktop tray (TRAY_MODE=none)"
     return 0
   fi
+  if [[ "$TRAY_MODE" != "login" && ! -f "$HOME/Library/LaunchAgents/ai.agentfield.tray.plist" ]]; then
+    return 0
+  fi
   # Staging uses a separate install dir and would collide with the production
   # launchd agents (same labels), so leave the tray to the production channel.
   if [[ "$STAGING" == "1" ]]; then
-    print_info "Skipping desktop tray on staging channel (run 'af-tray install' manually to test)"
+    print_info "Skipping desktop tray on staging channel"
     return 0
   fi
 
@@ -738,17 +716,11 @@ install_tray() {
   # upgrade.
   cp "$tray_path" "$INSTALL_DIR/af-tray.tmp.$$"
   chmod +x "$INSTALL_DIR/af-tray.tmp.$$"
-  xattr -d com.apple.quarantine "$INSTALL_DIR/af-tray.tmp.$$" 2>/dev/null || true
   mv -f "$INSTALL_DIR/af-tray.tmp.$$" "$INSTALL_DIR/af-tray"
 
-  # Delegate .app-bundle + launchd setup to the tray binary itself, so all of
-  # that logic lives in one place (Go) and stays testable — mirroring how the
-  # skill install is delegated to `af skill install`. Idempotent: safe to re-run
-  # on every update, and it force-restarts a stale running tray onto the new
-  # binary so a `curl … | bash` update is fully hands-off.
-  if "$INSTALL_DIR/af-tray" install ${TRAY_INSTALL_FLAGS[@]+"${TRAY_INSTALL_FLAGS[@]}"}; then
-    print_success "Desktop tray installed — look for the AgentField icon in your menu bar"
-  else
+  # This subcommand only manages the icon. Pinned releases without it fail
+  # safely without running their legacy install command.
+  if ! "$INSTALL_DIR/af-tray" install-tray; then
     print_warning "Desktop tray setup reported an issue; the control plane is unaffected"
   fi
 }
@@ -813,23 +785,10 @@ print_success_message() {
     printf "     ${CYAN}agentfield init my-agent${NC}\n"
   fi
 
-  # The control plane runs under launchd on macOS, which surprises people: a
-  # plain `kill` looks like a crash to launchd and it restarts the process.
-  if [[ "$(uname -s)" == "Darwin" && "$TRAY_MODE" != "none" ]]; then
-    printf "\n"
-    printf "${BOLD}Background control plane:${NC}\n"
-    printf "  The server runs under launchd and starts at login. Stop it with\n"
-    printf "  ${CYAN}%s service stop${NC} or the menu-bar icon — a plain ${CYAN}kill${NC} auto-restarts it.\n" "$SYMLINK_NAME"
-    printf "  ${CYAN}%s service status${NC} shows health and in-flight work; re-run the\n" "$SYMLINK_NAME"
-    printf "  installer with ${CYAN}--no-tray${NC} to skip this setup entirely.\n"
+  if [[ "$(uname -s)" == "Darwin" && "$TRAY_MODE" == "auto" && "$STAGING" != "1" && \
+        ! -f "$HOME/Library/LaunchAgents/ai.agentfield.tray.plist" ]]; then
+    printf "\nUse ${CYAN}--with-tray${NC} to install the optional macOS menu-bar icon at login.\n"
   fi
-
-  printf "\n"
-  printf "${BOLD}Resources:${NC}\n"
-  printf "  Documentation: ${BLUE}https://agentfield.ai/docs${NC}\n"
-  printf "  GitHub:        ${BLUE}https://github.com/$REPO${NC}\n"
-  printf "  Releases:      ${BLUE}https://github.com/$REPO/releases${NC}\n"
-  printf "\n"
 }
 
 is_truthy() {
@@ -928,8 +887,7 @@ main() {
   # Provision the default coding harness once the control plane is installed.
   install_codeaf "$INSTALL_DIR"
 
-  # Install the desktop tray + auto-start (macOS, production channel). Best-effort:
-  # never fails the overall install, and never runs on Linux/headless/container hosts.
+  # Update the existing tray or install it when explicitly requested (macOS only).
   install_tray "$os" "$arch" "$VERSION"
 
   # Print success message

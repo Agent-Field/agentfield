@@ -17,27 +17,19 @@ func TestRunDispatchExitCodes(t *testing.T) {
 	}
 }
 
-// TestParseInstallOptions covers the install-mode flags install.sh threads
-// through. Unknown flags must be ignored, not rejected: a newer install.sh may
-// pass a flag an older tray binary predates, and `curl … | bash` must not fail.
-func TestParseInstallOptions(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		args         []string
-		deferRestart bool
-		takeOver     bool
-	}{
-		{name: "no flags", args: nil},
-		{name: "defer", args: []string{"--defer-restart"}, deferRestart: true},
-		{name: "take over", args: []string{"--take-over"}, takeOver: true},
-		{name: "both", args: []string{"--take-over", "--defer-restart"}, deferRestart: true, takeOver: true},
-		{name: "unknown ignored", args: []string{"--from-the-future", "--defer-restart"}, deferRestart: true},
+// Contract: desktop-tray takes exactly "show|hide" and "auto|login|session".
+// Anything else exits 2 before the tray is touched, on every platform, so a typo
+// in Desktop's call can never register or remove a login item.
+func TestDesktopTrayRejectsMalformedArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{"desktop-tray"},
+		{"desktop-tray", "show"},
+		{"desktop-tray", "toggle", "auto"},
+		{"desktop-tray", "show", "forever"},
+		{"desktop-tray", "show", "auto", "extra"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseInstallOptions(tc.args)
-			if got.deferRestart != tc.deferRestart || got.takeOver != tc.takeOver {
-				t.Fatalf("parseInstallOptions(%v) = %#v", tc.args, got)
-			}
-		})
+		if code := run(args); code != 2 {
+			t.Errorf("run(%q) = %d, want 2", args, code)
+		}
 	}
 }

@@ -37,8 +37,7 @@
         "to": "bin",
         "filter": [
           "af",
-          "af.exe",
-          "af-tray"
+          "af.exe"
         ]
       },
       {
@@ -56,6 +55,18 @@
       "target": [
         "dmg",
         "zip"
+      ],
+      "extraFiles": [
+        {
+          "from": "vendor",
+          "to": "MacOS",
+          "filter": ["af-tray"]
+        },
+        {
+          "from": "resources/macos",
+          "to": "Library/LaunchAgents",
+          "filter": ["ai.agentfield.tray.login.plist"]
+        }
       ],
       "darkModeSupport": true,
       "hardenedRuntime": true,

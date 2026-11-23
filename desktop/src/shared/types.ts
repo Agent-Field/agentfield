@@ -285,14 +285,10 @@ export interface DesktopSettings {
    * Code, Codex, …) via `af skill install` — so they know how to use this.
    */
   installSkills: boolean
-  /**
-   * macOS only: keep the af-tray menu-bar companion provisioned and installed
-   * (~/.agentfield/bin/af-tray → ~/Applications/AgentField.app + launchd), so a
-   * desktop-app-only install still gets the menu-bar icon. Meaningless on
-   * Windows/Linux, where the app carries its own in-app tray; the setting is
-   * present but the toggle is hidden there.
-   */
+  /** macOS only: show the packaged menu-bar companion. */
   trayCompanion: boolean
+  /** macOS only: start the tray at login. Null asks the helper to adopt legacy state. */
+  trayAtLogin: boolean | null
   /**
    * App-update version the user dismissed from the banner (null = none).
    * Hides the banner for that version only — a newer release brings it

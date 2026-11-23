@@ -3,9 +3,12 @@
 package launchdsvc
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -68,4 +71,53 @@ func Reload(plistPath, label string) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	_ = Kickstart(label, false)
+}
+
+// RemoveLegacyTrayBundle removes only the generated macOS tray wrapper.
+func RemoveLegacyTrayBundle(home string) error {
+	root := filepath.Join(home, "Applications", "AgentField.app")
+	info, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.IsDir() {
+		return err
+	}
+	plist := filepath.Join(root, "Contents", "Info.plist")
+	for key, want := range map[string]string{"CFBundleIdentifier": TrayLabel, "CFBundleExecutable": "af-tray"} {
+		out, err := exec.Command("/usr/bin/plutil", "-extract", key, "raw", "-o", "-", plist).Output()
+		if err != nil || strings.TrimSpace(string(out)) != want {
+			return nil
+		}
+	}
+	// Older releases could overwrite the Info.plist of a full Desktop app
+	// at this path. Verify the wrapper layout before recursively removing it.
+	owned := true
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		switch relative {
+		case ".", "Contents", "Contents/MacOS", "Contents/Resources":
+			owned = entry.IsDir()
+		case "Contents/Info.plist", "Contents/MacOS/af-tray", "Contents/Resources/appicon.icns":
+			owned = entry.Type().IsRegular()
+		default:
+			owned = false
+		}
+		if !owned {
+			return filepath.SkipAll
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if !owned {
+		return nil
+	}
+	return os.RemoveAll(root)
 }

@@ -325,26 +325,25 @@ function bundledCliPath(): string {
     : join(app.getAppPath(), 'vendor', name)
 }
 
-// The af-tray menu-bar companion shipped inside the app package (macOS only;
-// see build.extraResources). Same layout as bundledCliPath — resources/bin when
-// packaged, desktop/vendor in dev (npm run bundle-cli drops it there).
 function bundledTrayPath(): string {
   return app.isPackaged
-    ? join(process.resourcesPath, 'bin', 'af-tray')
+    ? join(process.resourcesPath, '..', 'MacOS', 'af-tray')
     : join(app.getAppPath(), 'vendor', 'af-tray')
 }
 
-// macOS only: provision + install (or, when toggled off, uninstall) the af-tray
-// menu-bar companion. Fire-and-forget like syncSkills — errors are logged, never
-// thrown — and safe to call repeatedly (planTray only runs `af-tray install`
-// when the binary changed or the launchd agent isn't loaded).
-function syncTray(enabled: boolean): void {
-  if (!isMac) return
-  void syncTrayCompanion(enabled, bundledTrayPath())
-    .then((r) => {
-      if (!r.ok) console.error('tray companion:', r.message)
-    })
-    .catch((err) => console.error('tray companion failed:', err))
+let traySync = Promise.resolve()
+
+function syncTray(): Promise<void> {
+  if (!isMac || !app.isPackaged) return Promise.resolve()
+  traySync = traySync.then(async () => {
+    const { trayCompanion, trayAtLogin } = settings
+    const result = await syncTrayCompanion(bundledTrayPath(), trayCompanion, trayAtLogin)
+    if (trayAtLogin === null && settings.trayAtLogin === null && settings.trayCompanion === trayCompanion) {
+      settings = { ...settings, trayAtLogin: result.atLogin }
+      await saveSettings(settingsFile(), settings)
+    }
+  }).catch((error) => console.error('tray companion:', error))
+  return traySync
 }
 
 // Where per-run skill-sync lines land: ~/Library/Logs/AgentField/skill-sync.log
@@ -542,10 +541,8 @@ function main(): void {
     skillSync = new SkillSync(defaultSkillSyncDeps(skillSyncLogFile()))
     if (shouldSyncOnLaunch(settings)) syncSkills('launch')
 
-    // macOS only: provision + install the af-tray menu-bar companion so a
-    // desktop-app-only install gets the menu-bar icon. Runs after initializeCli
-    // (it needs the managed bin dir to exist) and non-blocking, like syncSkills.
-    syncTray(settings.trayCompanion)
+    // Resolve the inherited login preference before the settings UI reads it.
+    await syncTray()
 
     // The pinned CodeAF harness binary lands beside af in ~/.agentfield/bin, so a
     // desktop-only install can run harness-backed agents. Fire-and-forget: a failed
@@ -1164,7 +1161,9 @@ function main(): void {
         nativeTheme.themeSource = settings.appearance
       }
       // macOS: reflect a flipped tray toggle (install ↔ uninstall) right away.
-      if (settings.trayCompanion !== prev.trayCompanion) syncTray(settings.trayCompanion)
+      if (settings.trayCompanion !== prev.trayCompanion || settings.trayAtLogin !== prev.trayAtLogin) {
+        await syncTray()
+      }
       // Skills toggled on: install them now instead of at the next launch.
       // (Off is not a trigger — `af skill install` has no uninstall side, and
       // the dashboard reports the setting itself as off.)

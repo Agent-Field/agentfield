@@ -10,7 +10,11 @@ import { getCliCommand } from './cli'
 import { childEnv } from './env'
 import { DEFAULT_CONTROL_PLANE_PORT, baseUrlForPort } from './ports'
 import { CpApiError, createCpClient, type CpClient } from './cpClient'
-import type { RunResult } from './tray-companion'
+
+interface RunResult {
+  code: number
+  stdout: string
+}
 
 export type AgentAction = 'start' | 'stop' | 'restart'
 
@@ -122,8 +126,7 @@ export type ControlPlaneLaunch = 'launchd' | 'spawn'
  * rather than direct-spawning a second `af server`, which would race launchd's
  * KeepAlive-supervised process for port 8080, lose the bind, and (with
  * KeepAlive={SuccessfulExit:false}) trigger a relaunch loop. Everywhere else —
- * Windows/Linux, or a net-new macOS machine before `af-tray install` has loaded
- * the agent — direct-spawn, which is still the only way to get a server up.
+ * Windows/Linux, or a net-new macOS machine without a registered server agent — direct-spawn, which is still the only way to get a server up.
  *
  * launchd only ever serves the default port (that is what af-tray's plist
  * starts), so a non-default target port always direct-spawns — kickstarting

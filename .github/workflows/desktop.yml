@@ -64,10 +64,44 @@ jobs:
           else
             printf 'stub' > vendor/af
           fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # af-tray lands in Contents/MacOS, where it is signed as code, so the
+            # stub has to be a real Mach-O binary rather than a text file.
+            printf 'int main(void) { return 0; }\n' > "$RUNNER_TEMP/af-tray-stub.c"
+            cc -o vendor/af-tray "$RUNNER_TEMP/af-tray-stub.c"
+          fi
 
       - name: Package (unsigned, unpacked)
         working-directory: desktop
         run: npm run dist:dir
+
+      # The tray helper must ship inside the app, with the one bundled login
+      # agent that Service Management registers. Without them the app falls back
+      # to copying the helper into a second bundle, which is the install pattern
+      # endpoint-security tools flag as malware persistence.
+      - name: Check the packaged tray layout (macOS)
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=(release/mac*/*.app)
+          if [ ${#apps[@]} -ne 1 ]; then
+            echo "expected one packed .app under desktop/release, found: ${apps[*]:-nothing}" >&2
+            exit 1
+          fi
+          app="${apps[0]}"
+          test -x "$app/Contents/MacOS/af-tray"
+          agents=("$app"/Contents/Library/LaunchAgents/*.plist)
+          if [ ${#agents[@]} -ne 1 ] || [ "$(basename "${agents[0]}")" != "ai.agentfield.tray.login.plist" ]; then
+            echo "expected exactly ai.agentfield.tray.login.plist, found: ${agents[*]:-nothing}" >&2
+            exit 1
+          fi
+          plutil -lint "${agents[0]}"
+          # BundleProgram is resolved against the app bundle, so it must name the helper.
+          test "$(plutil -extract BundleProgram raw -o - "${agents[0]}")" = "Contents/MacOS/af-tray"
+          # The ad-hoc signature must seal the helper and the plist like any other code.
+          codesign --verify --deep --strict --verbose=2 "$app"
 
   # Manual-dispatch-only: prove the macOS signing/notarization secrets work
   # without cutting a release. Imports the Developer ID cert into a keychain
