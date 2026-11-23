@@ -25,6 +25,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,9 @@ import (
 )
 
 const linkVersion = 1
+
+// RunOwnerProofHeader sends a proof of the named run owner's consent.
+const RunOwnerProofHeader = "X-AgentField-Run-Owner-Proof"
 
 type linkFrame struct {
 	V    int             `json:"v"`
@@ -84,16 +88,70 @@ var errNoLink = errors.New("no node link is up")
 
 // linkOK is the body of the control plane's ok to an up frame.
 type linkOK struct {
-	Code    int    `json:"code"`
-	Error   string `json:"error,omitempty"`
-	Through int64  `json:"through,omitempty"`
-	Dropped int64  `json:"dropped,omitempty"`
+	Code      int      `json:"code"`
+	Error     string   `json:"error,omitempty"`
+	Through   int64    `json:"through,omitempty"`
+	Dropped   int64    `json:"dropped,omitempty"`
+	Token     string   `json:"token,omitempty"`
+	ExpiresAt string   `json:"expires_at,omitempty"`
+	ExpiresIn int      `json:"expires_in,omitempty"`
+	Scopes    []string `json:"scopes,omitempty"`
+}
+
+// RunOwnerProofRequest specifies the requested scopes, lifetime and optional
+// run restriction for a proof of this node's consent.
+type RunOwnerProofRequest struct {
+	Scopes []string
+	TTL    time.Duration
+	Run    string
+}
+
+// RunOwnerProof is a link-issued bearer token and its granted scopes and expiry.
+type RunOwnerProof struct {
+	Token     string
+	ExpiresAt time.Time
+	Scopes    []string
+}
+
+// RunOwnerProof asks the control plane to issue a proof for this node over
+// its live link.
+func (a *Agent) RunOwnerProof(ctx context.Context, req RunOwnerProofRequest) (*RunOwnerProof, error) {
+	seconds := int64(req.TTL / time.Second)
+	if req.TTL > 0 && req.TTL%time.Second != 0 {
+		seconds++
+	} else if req.TTL < 0 && seconds == 0 {
+		seconds = -1
+	}
+	body := struct {
+		Scopes     []string `json:"scopes"`
+		TTLSeconds int64    `json:"ttl_seconds,omitempty"`
+		Run        string   `json:"run,omitempty"`
+	}{Scopes: append([]string(nil), req.Scopes...), TTLSeconds: seconds, Run: req.Run}
+	ok, err := a.linkAskContext(ctx, "delegate", "", body, 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("request run owner proof: %w", err)
+	}
+	if ok.Code != http.StatusOK {
+		return nil, fmt.Errorf("the control plane refused a run owner proof (%d): %s", ok.Code, ok.Error)
+	}
+	expiry, err := time.Parse(time.RFC3339, ok.ExpiresAt)
+	if err != nil || ok.Token == "" {
+		return nil, errors.New("the control plane's run owner proof answer is missing a token or valid expiry")
+	}
+	return &RunOwnerProof{Token: ok.Token, ExpiresAt: expiry, Scopes: ok.Scopes}, nil
 }
 
 // linkAsk sends one up frame and waits for its ok. THE FRAME'S seq IS THIS
 // NODE'S OWN COUNTER AND NOTHING ELSE: the control plane answers it by that
 // number, so a data seq never goes there (it travels in the body).
 func (a *Agent) linkAsk(t, exec string, body any, timeout time.Duration) (linkOK, error) {
+	return a.linkAskContext(context.Background(), t, exec, body, timeout)
+}
+
+func (a *Agent) linkAskContext(ctx context.Context, t, exec string, body any, timeout time.Duration) (linkOK, error) {
+	if err := ctx.Err(); err != nil {
+		return linkOK{}, err
+	}
 	reply := make(chan linkFrame, 1)
 	a.link.mu.Lock()
 	if a.link.conn == nil {
@@ -115,11 +173,35 @@ func (a *Agent) linkAsk(t, exec string, body any, timeout time.Duration) (linkOK
 		delete(a.link.waits, seq)
 		a.link.mu.Unlock()
 	}()
-	if !a.linkWrite(linkFrame{T: t, Exec: exec, Seq: seq}, body) {
-		return linkOK{}, errNoLink
+	frame := linkFrame{T: t, Exec: exec, Seq: seq}
+	if ctx.Done() == nil {
+		if !a.linkWrite(frame, body) {
+			return linkOK{}, errNoLink
+		}
+	} else {
+		// Waiting for the shared writer can outlast this caller. The writer
+		// checks ctx again before sending if it was queued behind another frame.
+		sent := make(chan bool, 1)
+		go func() { sent <- a.linkWriteContext(ctx, frame, body) }()
+		select {
+		case <-ctx.Done():
+			return linkOK{}, ctx.Err()
+		case written := <-sent:
+			if err := ctx.Err(); err != nil {
+				return linkOK{}, err
+			}
+			if !written {
+				return linkOK{}, errNoLink
+			}
+		}
 	}
 	select {
+	case <-ctx.Done():
+		return linkOK{}, ctx.Err()
 	case f := <-reply:
+		if err := ctx.Err(); err != nil {
+			return linkOK{}, err
+		}
 		var ok linkOK
 		if err := json.Unmarshal(f.Body, &ok); err != nil {
 			return linkOK{}, fmt.Errorf("the control plane's answer to %s is not an ok: %w", t, err)
@@ -225,13 +307,10 @@ func (a *Agent) linkLoop(target string) {
 
 // linkWrite sends one frame on whichever link is up now; false when none is.
 func (a *Agent) linkWrite(f linkFrame, body any) bool {
-	f.V = linkVersion
-	f.TS = time.Now().UTC().Format(time.RFC3339Nano)
-	if body != nil {
-		raw, _ := json.Marshal(body)
-		f.Body = raw
-	}
-	raw, _ := json.Marshal(f)
+	return a.linkWriteContext(context.Background(), f, body)
+}
+
+func (a *Agent) linkWriteContext(ctx context.Context, f linkFrame, body any) bool {
 	a.link.mu.Lock()
 	conn := a.link.conn
 	a.link.mu.Unlock()
@@ -240,7 +319,25 @@ func (a *Agent) linkWrite(f linkFrame, body any) bool {
 	}
 	a.link.wmu.Lock()
 	defer a.link.wmu.Unlock()
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return writeLinkFrame(ctx, conn, f, body)
+}
+
+func writeLinkFrame(ctx context.Context, conn *websocket.Conn, f linkFrame, body any) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	f.V = linkVersion
+	f.TS = time.Now().UTC().Format(time.RFC3339Nano)
+	if body != nil {
+		raw, _ := json.Marshal(body)
+		f.Body = raw
+	}
+	raw, _ := json.Marshal(f)
+	deadline := time.Now().Add(10 * time.Second)
+	if earlier, ok := ctx.Deadline(); ok && earlier.Before(deadline) {
+		deadline = earlier
+	}
+	_ = conn.SetWriteDeadline(deadline)
 	return conn.WriteMessage(websocket.TextMessage, raw) == nil
 }
 
@@ -263,6 +360,13 @@ func (a *Agent) linkOnce(target string) (bool, int) {
 		return false, 0
 	}
 	defer conn.Close()
+	// Publish the connection only after hello so a concurrent ask cannot
+	// send an up-frame before the control plane has adopted the link.
+	if !writeLinkFrame(context.Background(), conn, linkFrame{T: "hello", Seq: 1}, map[string]any{
+		"instance_id": a.cfg.NodeID, "sdk": "go", "version": a.cfg.Version, "accepts": []string{"http", "steer", "cancel"},
+	}) {
+		return false, 0
+	}
 	a.link.mu.Lock()
 	a.link.conn = conn
 	if a.link.served == nil {
@@ -285,9 +389,6 @@ func (a *Agent) linkOnce(target string) (bool, int) {
 		case <-stop:
 		}
 	}()
-	if !a.linkWrite(linkFrame{T: "hello", Seq: 1}, map[string]any{"instance_id": a.cfg.NodeID, "sdk": "go", "version": a.cfg.Version, "accepts": []string{"http", "steer", "cancel"}}) {
-		return false, 0
-	}
 	a.logger.Printf("node link up (%s)", target)
 	for {
 		_, raw, err := conn.ReadMessage()
