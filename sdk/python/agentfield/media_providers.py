@@ -951,7 +951,10 @@ class MiniMaxProvider(MediaProvider):
                             f"MiniMax H3 image generation returned invalid JSON (HTTP {status})"
                         ) from exc
             except (
+                # asyncio.TimeoutError is a distinct class from the builtin on
+                # Python 3.10; socket-level timeouts surface as the builtin.
                 asyncio.TimeoutError,
+                TimeoutError,
                 aiohttp.ClientConnectionError,
                 aiohttp.ClientPayloadError,
             ) as exc:
