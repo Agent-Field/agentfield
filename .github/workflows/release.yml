@@ -300,7 +300,16 @@ jobs:
           echo "=== Flattened dist/ directory ==="
           ls -lah dist/agentfield-* 2>/dev/null || echo "No binaries found"
 
-      - name: Sign and notarize standalone macOS tray binaries
+      # The standalone macOS binaries are signed with the same Developer ID as the
+      # Desktop app, with the hardened runtime and a secure timestamp, and are
+      # notarized. Both are launched by the user's login session (the tray, and the
+      # control plane under launchd), and an ad-hoc or unsigned executable that runs
+      # at login is what endpoint-security tools quarantine. This runs before the
+      # publish job computes checksums, so the published sums match what ships.
+      #
+      # Production releases refuse to ship unsigned binaries. Staging degrades to a
+      # warning like the Desktop installer step below.
+      - name: Sign and notarize standalone macOS binaries
         if: matrix.label == 'darwin'
         shell: bash
         env:
@@ -309,24 +318,39 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RELEASE_ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           set -euo pipefail
 
           if [[ -z "$CSC_LINK" || -z "$CSC_KEY_PASSWORD" || -z "$APPLE_ID" || \
                 -z "$APPLE_APP_SPECIFIC_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
-            echo "::error::Standalone macOS tray releases require the Developer ID and Apple notarization secrets"
-            exit 1
-          fi
-
-          binaries=(dist/agentfield-tray-darwin-amd64 dist/agentfield-tray-darwin-arm64)
-          for binary in "${binaries[@]}"; do
-            if [[ ! -f "$binary" ]]; then
-              echo "::error::Missing standalone tray binary: $binary"
+            if [[ "$RELEASE_ENVIRONMENT" == "production" ]]; then
+              echo "::error::Production macOS binaries require the Developer ID and Apple notarization secrets"
               exit 1
             fi
+            echo "::warning::signing/notarization secrets incomplete; the standalone macOS binaries stay unsigned"
+            exit 0
+          fi
+
+          # name:identifier pairs. The identifier is what macOS shows for the item
+          # in Login Items and in security prompts.
+          targets=(
+            "dist/agentfield-tray-darwin-amd64:ai.agentfield.tray"
+            "dist/agentfield-tray-darwin-arm64:ai.agentfield.tray"
+            "dist/agentfield-darwin-amd64:ai.agentfield.cli"
+            "dist/agentfield-darwin-arm64:ai.agentfield.cli"
+          )
+          binaries=()
+          for target in "${targets[@]}"; do
+            binary="${target%%:*}"
+            if [[ ! -f "$binary" ]]; then
+              echo "::error::Missing standalone macOS binary: $binary"
+              exit 1
+            fi
+            binaries+=("$binary")
           done
 
-          signing_dir="$(mktemp -d "$RUNNER_TEMP/af-tray-signing.XXXXXX")"
+          signing_dir="$(mktemp -d "$RUNNER_TEMP/af-signing.XXXXXX")"
           keychain="$signing_dir/signing.keychain-db"
           trap 'security delete-keychain "$keychain" >/dev/null 2>&1 || true; rm -rf -- "$signing_dir"' EXIT
           keychain_password="$(openssl rand -hex 32)"
@@ -348,15 +372,19 @@ jobs:
           security list-keychains -d user -s "${keychains[@]}"
 
           requirement="=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\""
-          for binary in "${binaries[@]}"; do
+          for target in "${targets[@]}"; do
+            binary="${target%%:*}"
+            identifier="${target##*:}"
             codesign --force --sign 'Developer ID Application:' --keychain "$keychain" \
-              --identifier ai.agentfield.tray --options runtime --timestamp "$binary"
+              --identifier "$identifier" --options runtime --timestamp "$binary"
             codesign --verify --strict --test-requirement "$requirement" --verbose=2 "$binary"
+            # Notarization below rejects a binary without the hardened runtime or
+            # a secure timestamp, so those flags are enforced by Apple, not here.
           done
 
           # The ZIP is for Apple only. Raw Mach-O binaries get online tickets
           # and keep their existing release asset names and download format.
-          archive="$signing_dir/af-tray.zip"
+          archive="$signing_dir/af-binaries.zip"
           zip -jq "$archive" "${binaries[@]}"
           notary_auth=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID")
           response="$signing_dir/notary-response.json"
@@ -367,14 +395,15 @@ jobs:
             if [[ -n "$submission_id" ]]; then
               xcrun notarytool log "$submission_id" "${notary_auth[@]}" || true
             fi
-            echo "::error::Apple did not accept the standalone macOS tray binaries for notarization"
+            echo "::error::Apple did not accept the standalone macOS binaries for notarization"
             exit 1
           fi
           cat "$response"
 
-          # Allow a short delay for Apple's online tickets to become available.
+          # Apple's online tickets can take a little while to become available
+          # after the notary service accepts the submission.
           for binary in "${binaries[@]}"; do
-            for delay in 5 15 30; do
+            for delay in 5 15 30 60 60; do
               if codesign --verify --strict --check-notarization --test-requirement '=notarized' --verbose=2 "$binary"; then
                 continue 2
               fi
@@ -919,6 +948,28 @@ jobs:
           for app in "${apps[@]}"; do
             xcrun stapler validate "$app"
             spctl --assess --type execute -vv "$app"
+
+            # The menu-bar helper ships inside the notarized app, signed by us,
+            # and the app registers exactly one login item for it. A helper that
+            # went missing or unsigned, or a second launch agent, would put the
+            # install back on the endpoint-security watch list; fail the release
+            # here instead of discovering it on a user's machine.
+            helper="$app/Contents/MacOS/af-tray"
+            if [ ! -x "$helper" ]; then
+              echo "::error::$helper is missing from the packed app" >&2
+              exit 1
+            fi
+            codesign --verify --strict --verbose=2 "$helper"
+            helper_details="$(codesign -dv --verbose=2 "$helper" 2>&1)"
+            if ! grep -q "^TeamIdentifier=$APPLE_TEAM_ID\$" <<< "$helper_details"; then
+              echo "::error::$helper is not signed with the release Team ID" >&2
+              exit 1
+            fi
+            agents=("$app"/Contents/Library/LaunchAgents/*.plist)
+            if [ "${#agents[@]}" -ne 1 ] || [ "$(basename "${agents[0]}")" != "ai.agentfield.tray.login.plist" ]; then
+              echo "::error::expected exactly Contents/Library/LaunchAgents/ai.agentfield.tray.login.plist, found: ${agents[*]:-nothing}" >&2
+              exit 1
+            fi
           done
 
       - name: Attach installers to the release
