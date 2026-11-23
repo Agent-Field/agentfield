@@ -456,14 +456,11 @@ install_binary() {
     print_warning "Could not create $SYMLINK_NAME symlink; ensure filesystem supports symlinks"
   fi
 
-  # On macOS, remove quarantine attribute
-  if [[ "$(detect_os)" == "darwin" ]]; then
-    print_verbose "Removing macOS quarantine attribute..."
-    xattr -d com.apple.quarantine "$install_dir/agentfield" 2>/dev/null || true
-    if [[ "$symlink_created" -eq 1 ]]; then
-      xattr -d com.apple.quarantine "$install_dir/$SYMLINK_NAME" 2>/dev/null || true
-    fi
-  fi
+  # This installer deliberately never strips com.apple.quarantine. curl does not
+  # set that attribute on what it downloads, so there is nothing to remove, and
+  # a script that clears the attribute is indistinguishable from malware that
+  # evades Gatekeeper. The release binaries are Developer ID signed and
+  # notarized, so macOS accepts them as they are.
 
   print_success "Binary installed to $install_dir/agentfield"
   if [[ "$symlink_created" -eq 1 ]]; then
