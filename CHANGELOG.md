@@ -6,6 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.5] - 2026-11-23
+
+
+### Fixed
+
+- Fix(sdk-python): record prompt-cache tokens for streaming calls (#1222)
+
+* fix(sdk-python): record prompt-cache tokens for streaming calls
+
+* fix(sdk-python): keep the token receipt when a cache count is malformed
+
+A non-finite cached_tokens value made _extract_usage raise inside _finish,
+and the surrounding handler then dropped the whole receipt, which main
+recorded. Fall back to no cache counts instead.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (3b2a50b)
+
+- Fix(sdk-python): record token usage for every tool-calling turn in ai(tools=...) (#1221)
+
+* fix(sdk-python): record token usage for every tool-calling turn in ai(tools=...)
+
+The tool-calling path of AgentAI.ai() returned before the cost-tracker
+recording used by the plain completion path, so ai(tools=...) never
+contributed tokens or cost to the tracker. Record usage per LLM turn
+inside the tool-loop completion callback.
+
+* test(sdk-python): cover cache tokens and missing usage in tool-loop turns
+
+Both rate-limit-retry and direct paths of the per-turn recorder are
+exercised, so every line added by the usage-recording fix is covered.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(sdk-python): never fail a tool-loop turn on a usage-tracker error
+
+Recording is an observation side effect, like the stream path. Without the
+guard, a tracker error (for example a lock timeout) would turn a successful
+completion into an exception, which the tool loop never did before it
+recorded usage.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (dc802dc)
+
 ## [0.1.147-rc.4] - 2026-11-23
 
 
