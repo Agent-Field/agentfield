@@ -33,6 +33,7 @@ from agentfield.multimodal_response import (
 
 MINIMAX_GLOBAL_BASE_URL = "https://api.minimax.io/v1"
 MINIMAX_CN_BASE_URL = "https://api.minimaxi.com/v1"
+MINIMAX_H3_IMAGE_MODELS = {"MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"}
 MINIMAX_H3_MODEL = "MiniMax-H3"
 MINIMAX_H3_VIDEO_METADATA: Dict[str, Any] = {
     "release_date": "2026-07-31",
@@ -769,9 +770,9 @@ class MiniMaxProvider(MediaProvider):
         prompt_optimizer: Optional[bool] = None,
         **kwargs,
     ) -> MultimodalResponse:
-        """Generate images via the MiniMax image_generation endpoint.
+        """Generate images via the MiniMax image API.
 
-        URL responses remain available for 24 hours. ``b64_json`` is accepted
+        For legacy models, URL responses last 24 hours and ``b64_json`` is accepted
         as the unified SDK alias for MiniMax's ``base64`` response format.
         """
         import os
@@ -802,6 +803,48 @@ class MiniMaxProvider(MediaProvider):
             "prompt": prompt,
             "response_format": normalized_format,
         }
+        if send_model in MINIMAX_H3_IMAGE_MODELS:
+            if subject_reference is not None or seed is not None:
+                raise ValueError(
+                    "MiniMax H3 text-to-image does not support subject_reference or seed"
+                )
+            if width is not None or height is not None:
+                raise ValueError(
+                    "Use size='WIDTHxHEIGHT' for MiniMax H3 image dimensions"
+                )
+            if prompt_optimizer is not None:
+                if "disable_prompt_enhanced" in kwargs:
+                    raise ValueError(
+                        "Specify either prompt_optimizer or disable_prompt_enhanced"
+                    )
+                kwargs["disable_prompt_enhanced"] = not prompt_optimizer
+            if kwargs.pop("stream", False):
+                raise ValueError("generate_image does not support streaming")
+            supported = {
+                "area",
+                "disable_prompt_enhanced",
+                "output_compression",
+                "output_format",
+            }
+            unsupported = kwargs.keys() - supported
+            if unsupported:
+                raise ValueError(
+                    f"Unsupported MiniMax H3 image options: {', '.join(sorted(unsupported))}"
+                )
+            if size != "auto" and (
+                aspect_ratio is not None or kwargs.get("area") is not None
+            ):
+                raise ValueError("Set size='auto' when using aspect_ratio or area")
+            body.update(kwargs)
+            body["size"] = size
+            if aspect_ratio is not None:
+                body["aspect_ratio"] = aspect_ratio
+            if n is not None:
+                body["n"] = n
+            if normalized_format == "base64":
+                body["response_format"] = "b64_json"
+            return await self._generate_h3_images(api_key, body)
+
         optional_fields = {
             "subject_reference": subject_reference,
             "aspect_ratio": aspect_ratio,
@@ -879,6 +922,97 @@ class MiniMaxProvider(MediaProvider):
             files=[],
             raw_response=data,
         )
+
+    async def _generate_h3_images(
+        self, api_key: str, body: dict[str, Any]
+    ) -> MultimodalResponse:
+        import asyncio
+
+        import aiohttp
+
+        # The endpoint is not idempotent: the server charges for images it
+        # generated even when the client never reads the response, and a retry
+        # generates (and charges) again.
+        may_have_billed = (
+            " The request may still have completed and incurred a charge; "
+            "do not retry automatically."
+        )
+        base_url = self._base_url
+        if base_url == MINIMAX_CN_BASE_URL:
+            base_url = "https://api.minimax.cn/v1"
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=600)
+        ) as session:
+            try:
+                async with session.post(
+                    f"{base_url}/images/generations",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=body,
+                    allow_redirects=False,
+                ) as response:
+                    status = response.status
+                    try:
+                        data = await response.json()
+                    except (aiohttp.ContentTypeError, ValueError) as exc:
+                        raise RuntimeError(
+                            f"MiniMax H3 image generation returned invalid JSON (HTTP {status})."
+                            + may_have_billed
+                        ) from exc
+            except (
+                # asyncio.TimeoutError is a distinct class from the builtin on
+                # Python 3.10; socket-level timeouts surface as the builtin.
+                asyncio.TimeoutError,
+                TimeoutError,
+                aiohttp.ClientConnectionError,
+                aiohttp.ClientPayloadError,
+                aiohttp.ClientResponseError,
+            ) as exc:
+                raise RuntimeError(
+                    "MiniMax H3 image generation was interrupted. The request may still complete and incur a charge."
+                ) from exc
+
+        error = data.get("error") if isinstance(data, dict) else None
+        if status != 200 or error:
+            detail = error.get("message") if isinstance(error, dict) else None
+            if not detail and isinstance(data, dict):
+                # All-failed responses document per-image errors in ``data``
+                # and do not promise a top-level ``error``.
+                for item in data.get("data") or []:
+                    item_error = item.get("error") if isinstance(item, dict) else None
+                    if isinstance(item_error, dict) and item_error.get("message"):
+                        detail = str(item_error["message"])
+                        break
+            raise RuntimeError(
+                f"MiniMax H3 image generation failed (HTTP {status}): {detail or 'unknown error'}"
+            )
+
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list) or not items:
+            raise RuntimeError(
+                "MiniMax H3 image generation returned an invalid image list."
+                + may_have_billed
+            )
+        field = body["response_format"]
+        images = [
+            ImageOutput(
+                **{field: item[field]},
+                revised_prompt=(
+                    item["revised_prompt"]
+                    if isinstance(item.get("revised_prompt"), str)
+                    else None
+                ),
+            )
+            for item in items
+            if isinstance(item, dict)
+            and not item.get("error")
+            and isinstance(item.get(field), str)
+            and item[field]
+        ]
+        if not images:
+            raise RuntimeError(
+                "MiniMax H3 image generation returned no images." + may_have_billed
+            )
+        return MultimodalResponse(text=body["prompt"], images=images, raw_response=data)
 
     async def generate_audio(
         self,
