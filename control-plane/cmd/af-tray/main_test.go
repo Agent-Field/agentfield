@@ -16,7 +16,3 @@ func TestRunDispatchExitCodes(t *testing.T) {
 		t.Errorf("run([unknown]) = %d, want 2", code)
 	}
 }
-
-// TestParseInstallOptions covers the install-mode flags install.sh threads
-// through. Unknown flags must be ignored, not rejected: a newer install.sh may
-// pass a flag an older tray binary predates, and `curl … | bash` must not fail.
