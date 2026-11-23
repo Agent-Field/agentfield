@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.10] - 2026-11-23
+
+
+### Fixed
+
+- Fix(desktop): extract deploy-engine zips with tar.exe so the Windows installer builds again (#1240)
+
+* fix(desktop): extract the deploy-engine zips with tar.exe on Windows
+
+fetch-deploy-engine.mjs extracted the OpenTofu and Railway provider zips by
+running powershell.exe (Windows PowerShell 5.1) with Expand-Archive. The
+release job's step shell is pwsh 7, which exports a PSModulePath holding its
+own Microsoft.PowerShell.Archive. Runner image win25-vs2026 20261116.315
+updated PowerShell 7.6.9 to 7.6.10, and with it that module from 1.2.6 to
+1.2.7, whose Expand-Archive calls the .NET Core only overload
+ZipFileExtensions.ExtractToDirectory(ZipArchive, string, bool). The child 5.1
+process loads that copy and fails with MethodCountCouldNotFindBest. The error
+is non-terminating, so powershell.exe still exited 0, the directory stayed
+empty, and the script died with "Provider archive did not contain the Railway
+provider binary". Every release run since 2026-11-19 lost its Windows .exe.
+
+Extract with the bsdtar that ships in System32 instead, by absolute path
+because Git for Windows puts a GNU tar (no zip support) first on PATH. It does
+not depend on PowerShell module resolution, exits non-zero on a truncated
+archive or a bad CRC (Expand-Archive let a bad CRC through), and macOS/Linux
+still run `unzip -o <zip> -d <dir>` as before.
+
+The extractor moves to scripts/extract-zip.mjs so it can be tested: the new
+test builds real zips and runs the platform extractor on whichever OS the
+Desktop CI uses. The fetch script now also names the missing file (and what it
+did find) when either archive lacks its binary.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci(desktop): run the deploy-engine fetch on PRs and assert the provider binary
+
+The release job's fetch step broke on a runner image update and nothing on a
+PR exercised it, so releases shipped without a Windows installer for days.
+Desktop CI now runs `npm run fetch:deploy-engine` on macOS and Windows before
+packaging (as the release does), then checks that the packaged app contains
+the tofu and Railway provider binaries; electron-builder silently skips a
+missing extraResources source.
+
+The release job's "Assert deploy engine is bundled" step only checked that the
+providers directory exists. It now also requires a provider binary in it, so an
+installer cannot ship without one.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (06a6d4a)
+
 ## [0.1.147-rc.9] - 2026-11-23
 
 
