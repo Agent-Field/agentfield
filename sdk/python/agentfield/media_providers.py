@@ -18,7 +18,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import quote, urlparse
 
 from agentfield import openrouter_retry
@@ -3231,12 +3231,55 @@ class WaveSpeedProvider(MediaProvider):
             raise RuntimeError(f"WaveSpeedAI {operation} returned an invalid response")
         return data
 
+    @staticmethod
+    def _retry_after_seconds(value: Optional[str]) -> Optional[float]:
+        """Parse a ``Retry-After`` header (seconds or HTTP date)."""
+        if not value:
+            return None
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            pass
+        try:
+            from datetime import datetime, timezone
+            from email.utils import parsedate_to_datetime
+
+            retry_at = parsedate_to_datetime(value)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+    async def _poll_once(
+        self, session: Any, result_url: str, headers: Dict[str, str], prediction_id: str
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
+        """Fetch the prediction result once.
+
+        Returns ``(data, None)`` on success, or ``(None, retry_after)`` when
+        the poll should be retried (5xx, 429, 408).
+        """
+        async with session.get(result_url, headers=headers) as response:
+            if response.status >= 500 or response.status in (408, 429):
+                return None, self._retry_after_seconds(
+                    response.headers.get("Retry-After")
+                )
+            if response.status >= 400:
+                detail = await response.text()
+                raise RuntimeError(
+                    f"WaveSpeedAI result for {prediction_id} failed "
+                    f"({response.status}): {detail[:500]}"
+                )
+            return self._unwrap(await response.json(), "result"), None
+
     async def _run(self, model: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Submit a prediction and poll until it completes.
 
         The submit request is never retried because each accepted submission
-        starts a new prediction. Transient errors while polling are retried
-        until ``timeout``.
+        starts a new, billed prediction. While polling, network errors, 5xx,
+        429 and 408 responses are retried (honouring ``Retry-After``) until
+        ``timeout``; each sleep and each poll request is bounded by the time
+        remaining.
         """
         import asyncio
         import time
@@ -3272,6 +3315,7 @@ class WaveSpeedProvider(MediaProvider):
                 f"{quote(str(prediction_id), safe='')}/result"
             )
             deadline = time.monotonic() + self._timeout
+            delay = self._poll_interval
             while True:
                 status = data.get("status")
                 if status == "completed":
@@ -3281,25 +3325,56 @@ class WaveSpeedProvider(MediaProvider):
                     raise RuntimeError(
                         f"WaveSpeedAI prediction {prediction_id} failed: {error}"
                     )
-                if time.monotonic() >= deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     raise TimeoutError(
                         f"WaveSpeedAI prediction {prediction_id} did not finish "
                         f"within {self._timeout} seconds"
                     )
-                await asyncio.sleep(self._poll_interval)
+                await asyncio.sleep(min(delay, remaining))
+                delay = self._poll_interval
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    continue
                 try:
-                    async with session.get(result_url, headers=headers) as response:
-                        if response.status >= 500:
-                            continue
-                        if response.status >= 400:
-                            detail = await response.text()
-                            raise RuntimeError(
-                                f"WaveSpeedAI result for {prediction_id} failed "
-                                f"({response.status}): {detail[:500]}"
-                            )
-                        data = self._unwrap(await response.json(), "result")
+                    polled, retry_after = await asyncio.wait_for(
+                        self._poll_once(
+                            session, result_url, headers, str(prediction_id)
+                        ),
+                        timeout=remaining,
+                    )
                 except (aiohttp.ClientError, asyncio.TimeoutError):
                     continue
+                if polled is None:
+                    if retry_after is not None:
+                        delay = retry_after
+                    continue
+                data = polled
+
+    async def _download(self, url: str) -> bytes:
+        """Download an output file within the provider timeout."""
+        import aiohttp
+
+        _assert_safe_download_url(url)
+        timeout = aiohttp.ClientTimeout(total=self._timeout, connect=30.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"Failed to download WaveSpeedAI output from {url}: "
+                        f"HTTP {response.status}"
+                    )
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > MAX_AUDIO_B64_BYTES:
+                    raise RuntimeError(
+                        f"WaveSpeedAI output too large ({int(content_length)} bytes)"
+                    )
+                content = await response.read()
+        if len(content) > MAX_AUDIO_B64_BYTES:
+            raise RuntimeError(
+                f"WaveSpeedAI output exceeded {MAX_AUDIO_B64_BYTES} byte limit"
+            )
+        return content
 
     @staticmethod
     def _output_urls(data: Dict[str, Any]) -> List[str]:
@@ -3327,11 +3402,22 @@ class WaveSpeedProvider(MediaProvider):
                 model's own size fields (e.g. ``aspect_ratio``,
                 ``resolution``) as keyword arguments instead
             quality: Accepted for interface compatibility and not sent
-            **kwargs: Model input fields, sent unchanged
+            **kwargs: Model input fields, sent unchanged. The interface-only
+                ``response_format`` and ``style`` arguments are not sent;
+                outputs are always returned as URLs, so
+                ``response_format="b64_json"`` is rejected
 
         Returns:
             MultimodalResponse with generated images
         """
+        response_format = kwargs.pop("response_format", None)
+        kwargs.pop("style", None)
+        if response_format not in (None, "url"):
+            raise ValueError(
+                "WaveSpeedAI returns image outputs as URLs only; "
+                f"response_format={response_format!r} is not supported. "
+                "Use ImageOutput.save() or get_bytes() to download the image."
+            )
         payload: Dict[str, Any] = {"prompt": prompt, **kwargs}
         data = await self._run(model or WAVESPEED_DEFAULT_IMAGE_MODEL, payload)
         images = [ImageOutput(url=url) for url in self._output_urls(data)]
@@ -3368,7 +3454,8 @@ class WaveSpeedProvider(MediaProvider):
             **kwargs: Model input fields (e.g. ``language``), sent unchanged
 
         Returns:
-            MultimodalResponse with generated audio
+            MultimodalResponse with generated audio. The output file is
+            downloaded, so ``audio.data`` is set alongside ``audio.url``.
         """
         send_model = model or WAVESPEED_DEFAULT_AUDIO_MODEL
         payload: Dict[str, Any] = {"text": text}
@@ -3386,9 +3473,12 @@ class WaveSpeedProvider(MediaProvider):
         data = await self._run(send_model, payload)
         url = self._output_urls(data)[0]
         suffix = Path(urlparse(url).path).suffix.lstrip(".").lower()
+        import base64
+
+        audio_data = base64.b64encode(await self._download(url)).decode("ascii")
         return MultimodalResponse(
             text=text,
-            audio=AudioOutput(url=url, data=None, format=suffix or format),
+            audio=AudioOutput(url=url, data=audio_data, format=suffix or format),
             images=[],
             files=[],
             raw_response=data,

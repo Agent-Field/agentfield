@@ -1,3 +1,5 @@
+import asyncio
+import base64
 import itertools
 from types import SimpleNamespace
 
@@ -13,11 +15,15 @@ from agentfield.media_providers import (
 
 
 class FakeResponse:
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, headers=None):
         self.payload = payload
         self.status = status
+        self.headers = headers or {}
 
     async def json(self):
+        return self.payload
+
+    async def read(self):
         return self.payload
 
     async def text(self):
@@ -75,10 +81,13 @@ def completed(outputs, prediction_id="pred-1"):
 
 @pytest.fixture
 def no_sleep(monkeypatch):
-    async def _sleep(_seconds):
-        return None
+    sleeps = []
+
+    async def _sleep(seconds):
+        sleeps.append(seconds)
 
     monkeypatch.setattr("asyncio.sleep", _sleep)
+    return sleeps
 
 
 def install(monkeypatch, session):
@@ -265,8 +274,11 @@ async def test_invalid_submit_payload_raises(monkeypatch, no_sleep):
 
 
 @pytest.mark.asyncio
-async def test_generate_audio_uses_default_tts_inputs(monkeypatch, no_sleep):
-    session = ScriptedSession(created(), [completed(["https://x.test/speech.mp3"])])
+async def test_generate_audio_uses_default_tts_inputs(monkeypatch, no_sleep, tmp_path):
+    session = ScriptedSession(
+        created(),
+        [completed(["https://x.test/speech.mp3"]), FakeResponse(b"ID3-audio")],
+    )
     install(monkeypatch, session)
 
     result = await WaveSpeedProvider(api_key="k").generate_audio(
@@ -282,11 +294,21 @@ async def test_generate_audio_uses_default_tts_inputs(monkeypatch, no_sleep):
     }
     assert result.audio.url == "https://x.test/speech.mp3"
     assert result.audio.format == "mp3"
+    # The output file is downloaded without the API key.
+    download_url, download_kwargs = session.gets[-1]
+    assert download_url == "https://x.test/speech.mp3"
+    assert "headers" not in download_kwargs
+    assert result.audio.get_bytes() == b"ID3-audio"
+    target = tmp_path / "speech.mp3"
+    result.audio.save(target)
+    assert target.read_bytes() == b"ID3-audio"
 
 
 @pytest.mark.asyncio
 async def test_generate_audio_passes_voice_and_model_fields(monkeypatch, no_sleep):
-    session = ScriptedSession(created(), [completed(["https://x.test/speech"])])
+    session = ScriptedSession(
+        created(), [completed(["https://x.test/speech"]), FakeResponse(b"RIFF")]
+    )
     install(monkeypatch, session)
 
     result = await WaveSpeedProvider(api_key="k").generate_audio(
@@ -366,6 +388,8 @@ async def test_agent_ai_routes_wavespeed_prefix_for_image(monkeypatch, no_sleep)
 
     url, kwargs = session.posts[0]
     assert url.endswith("/api/v3/bytedance/seedream-v5.5")
+    # size/quality/response_format/style are interface-only and not sent.
+    assert kwargs["json"] == {"prompt": "A cat"}
     assert kwargs["headers"]["Authorization"] == "Bearer config-value"
     assert result.images[0].url == "https://x.test/a.png"
 
@@ -376,7 +400,9 @@ async def test_agent_ai_routes_wavespeed_prefix_for_audio_and_video(
 ):
     ai = _agent_ai()
 
-    session = ScriptedSession(created(), [completed(["https://x.test/s.wav"])])
+    session = ScriptedSession(
+        created(), [completed(["https://x.test/s.wav"]), FakeResponse(b"RIFF")]
+    )
     install(monkeypatch, session)
     audio = await ai.ai_generate_audio(
         "Hello", model="wavespeed/wavespeed-ai/qwen3-tts/text-to-speech"
@@ -387,6 +413,7 @@ async def test_agent_ai_routes_wavespeed_prefix_for_audio_and_video(
         "voice": "Vivian",
     }
     assert audio.audio.format == "wav"
+    assert audio.audio.data == base64.b64encode(b"RIFF").decode("ascii")
 
     session = ScriptedSession(created(), [completed(["https://x.test/v.mp4"])])
     install(monkeypatch, session)
@@ -423,3 +450,113 @@ async def test_envelope_without_data_object_raises(monkeypatch, no_sleep):
 
     with pytest.raises(RuntimeError, match="invalid response"):
         await WaveSpeedProvider(api_key="k").generate_image("A cat")
+
+
+@pytest.mark.asyncio
+async def test_image_style_is_not_sent_and_b64_json_is_rejected(monkeypatch, no_sleep):
+    session = ScriptedSession(created(), [completed(["https://x.test/a.png"])])
+    install(monkeypatch, session)
+
+    await WaveSpeedProvider(api_key="k").generate_image(
+        "A cat", style="vivid", response_format="url", seed=7
+    )
+    assert session.posts[0][1]["json"] == {"prompt": "A cat", "seed": 7}
+
+    session = ScriptedSession(created())
+    install(monkeypatch, session)
+    with pytest.raises(ValueError, match="URLs only"):
+        await WaveSpeedProvider(api_key="k").generate_image(
+            "A cat", response_format="b64_json"
+        )
+    assert session.posts == []
+
+
+@pytest.mark.asyncio
+async def test_throttled_polls_are_retried_with_retry_after(monkeypatch, no_sleep):
+    session = ScriptedSession(
+        created(),
+        [
+            FakeResponse(
+                {"message": "too many"}, status=429, headers={"Retry-After": "3"}
+            ),
+            FakeResponse({"message": "timeout"}, status=408),
+            completed(["https://x.test/a.png"]),
+        ],
+    )
+    install(monkeypatch, session)
+
+    result = await WaveSpeedProvider(api_key="k", poll_interval=1.0).generate_image(
+        "A cat"
+    )
+
+    assert len(session.posts) == 1
+    assert len(session.gets) == 3
+    assert no_sleep == [1.0, 3.0, 1.0]
+    assert result.images[0].url == "https://x.test/a.png"
+
+
+@pytest.mark.asyncio
+async def test_throttled_submit_is_not_retried(monkeypatch, no_sleep):
+    session = ScriptedSession(
+        FakeResponse({"message": "too many"}, status=429, headers={"Retry-After": "1"})
+    )
+    install(monkeypatch, session)
+
+    with pytest.raises(RuntimeError, match=r"submit failed \(429\)"):
+        await WaveSpeedProvider(api_key="k").generate_image("A cat")
+    assert len(session.posts) == 1
+    assert session.gets == []
+
+
+@pytest.mark.asyncio
+async def test_sleep_and_retry_after_are_bounded_by_deadline(monkeypatch, no_sleep):
+    now = [0.0]
+    monkeypatch.setattr("time.monotonic", lambda: now[0])
+
+    async def _sleep(seconds):
+        no_sleep.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr("asyncio.sleep", _sleep)
+    session = ScriptedSession(
+        created(),
+        [FakeResponse({"message": "busy"}, status=429, headers={"Retry-After": "60"})],
+    )
+    install(monkeypatch, session)
+
+    with pytest.raises(TimeoutError, match="pred-1"):
+        await WaveSpeedProvider(
+            api_key="k", timeout=5.0, poll_interval=2.0
+        ).generate_image("A cat")
+    # 2 s poll interval, then the 60 s Retry-After capped at the 3 s left.
+    assert no_sleep == [2.0, 3.0]
+    assert len(session.gets) == 1
+
+
+@pytest.mark.asyncio
+async def test_hanging_poll_request_is_bounded_by_timeout(monkeypatch):
+    class HangingResponse(FakeResponse):
+        async def __aenter__(self):
+            await asyncio.Event().wait()
+
+    session = ScriptedSession(created(), [HangingResponse(None)])
+    install(monkeypatch, session)
+    provider = WaveSpeedProvider(api_key="k", timeout=0.3, poll_interval=0.01)
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(TimeoutError, match="pred-1"):
+        await provider.generate_image("A cat")
+    assert loop.time() - started < 2.0
+
+
+@pytest.mark.asyncio
+async def test_audio_download_failure_raises(monkeypatch, no_sleep):
+    session = ScriptedSession(
+        created(),
+        [completed(["https://x.test/s.mp3"]), FakeResponse(b"", status=403)],
+    )
+    install(monkeypatch, session)
+
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        await WaveSpeedProvider(api_key="k").generate_audio("Hello")
