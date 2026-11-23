@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.3] - 2026-11-23
+
+
+### Fixed
+
+- Fix(sdk-go): panic on nil skill in IncludeRouter and name the handler (#1233) (cb7f77e)
+
+- Fix(control-plane): honor AGENTFIELD_STORAGE_LOCAL_* env overrides (#1218)
+
+ApplyEnvOverrides did not read AGENTFIELD_STORAGE_LOCAL_DATABASE_PATH or
+AGENTFIELD_STORAGE_LOCAL_KV_STORE_PATH. Viper's AutomaticEnv only resolves
+keys it already knows from a config file, so without one the documented
+variables were ignored and the default data paths were used.
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (ddfa7fa)
+
+- Fix(sdk-python): raise on in-band error events in OpenRouter audio/music stream (#1223)
+
+OpenRouter reports mid-stream failures as a data: {"error": ...} event on an HTTP 200. The SSE parser skipped events without choices, so callers got an empty or truncated audio result instead of the provider error. Raise RuntimeError with the provider message, like the Go SDK fix. (4ac6eb8)
+
 ## [0.1.147-rc.2] - 2026-11-23
 
 
