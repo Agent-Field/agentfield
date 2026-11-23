@@ -666,30 +666,27 @@ func handleEnterAPIKey() {
 	}
 }
 
-// promptForAPIKey shows a native password-style dialog. It returns ok=false when
-// the user cancels (osascript exits non-zero) or on any error.
+// promptForAPIKey shows a native alert with a masked field (dialog_darwin.go).
+// It returns ok=false when the user cancels. It deliberately does not shell out
+// to osascript: an AppleScript password dialog is the signature of credential
+// phishing, and endpoint-security tools flag it.
 func promptForAPIKey(invalid bool) (string, bool) {
 	msg := "Enter the API key for this AgentField control plane:"
 	if invalid {
 		msg = "This API key was rejected (invalid or expired). Enter a new one:"
 	}
-	script := fmt.Sprintf(
-		`display dialog %q with title "AgentField" default answer "" `+
-			`buttons {"Cancel","Save"} default button "Save" with hidden answer`,
-		msg,
-	)
-	out, err := exec.Command("osascript", "-e", script, "-e", "text returned of result").Output()
-	if err != nil {
+	key, ok := promptSecret("AgentField", msg)
+	if !ok {
 		return "", false
 	}
-	return strings.TrimSpace(string(out)), true
+	return strings.TrimSpace(key), true
 }
 
-// notify shows a small informational dialog (used for errors the user should see
-// right after acting; menu-bar apps have no other affordance for this).
+// notify shows a small informational alert (used for errors the user should see
+// right after acting; menu-bar apps have no other affordance for this). It runs
+// on its own goroutine so the menu loop that called it is not held open.
 func notify(title, body string) {
-	script := fmt.Sprintf(`display dialog %q with title %q buttons {"OK"} default button "OK" with icon caution`, body, title)
-	_ = exec.Command("osascript", "-e", script).Start()
+	go showAlert(title, body)
 }
 
 func openDashboard() { openPage("") }
