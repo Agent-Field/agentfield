@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.6] - 2026-11-23
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 2 updates (#1155)
+
+* chore(deps): bump the npm_and_yarn group across 2 directories with 2 updates
+
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [esbuild](https://github.com/evanw/esbuild).
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [follow-redirects](https://github.com/follow-redirects/follow-redirects).
+
+
+Removes `esbuild`
+
+Updates `follow-redirects` from 1.16.1 to 1.16.2
+- [Release notes](https://github.com/follow-redirects/follow-redirects/releases)
+- [Commits](https://github.com/follow-redirects/follow-redirects/compare/v1.16.1...v1.16.2)
+
+---
+updated-dependencies:
+- dependency-name: esbuild
+  dependency-version:
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: follow-redirects
+  dependency-version: 1.16.2
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+* fix(desktop): move @vitejs/plugin-react to 6.x alongside vite 8
+
+The grouped bump took desktop to vite 8 and electron-vite 6, but
+@vitejs/plugin-react 4.x only peers vite up to 7, so npm ci failed with
+ERESOLVE on the Windows packaging job. plugin-react 6 is the vite 8
+release line and is what the web client already uses. Also drop the
+unrelated sdk/typescript lockfile version churn so the PR keeps to the
+dependency change.
+
+npm ci, tsc --noEmit, vitest (673 passed) and electron-vite build pass
+locally on Node 22; the preload bundle is still CJS.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (8d8775e)
+
 ## [0.1.147-rc.5] - 2026-11-23
 
 
