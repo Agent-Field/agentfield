@@ -185,3 +185,24 @@ async def test_stream_receipt_records_cache_tokens(usage, read, creation):
     entry = tracker.serialize()["entries"][0]
     assert entry["cache_read_tokens"] == read
     assert entry["cache_creation_tokens"] == creation
+
+
+@pytest.mark.asyncio
+async def test_stream_receipt_keeps_tokens_when_cache_count_is_malformed():
+    async def source():
+        yield SimpleNamespace(
+            usage={
+                "prompt_tokens": 80,
+                "completion_tokens": 20,
+                "total_tokens": 100,
+                "prompt_tokens_details": {"cached_tokens": float("inf")},
+            }
+        )
+
+    tracker = CostTracker()
+    stream = UsageTrackingStream(source(), tracker, "anthropic/claude", "anthropic")
+    async for _ in stream:
+        pass
+    entry = tracker.serialize()["entries"][0]
+    assert entry["total_tokens"] == 100
+    assert entry["cache_read_tokens"] == 0

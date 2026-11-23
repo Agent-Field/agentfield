@@ -86,7 +86,12 @@ class UsageTrackingStream:
                     for field in fields
                 )
             if known:
-                cache = _extract_usage(usage)
+                try:
+                    cache = _extract_usage(usage)
+                except Exception:
+                    # A malformed optional cache count must not discard the
+                    # validated prompt/completion/total receipt.
+                    cache = {}
                 self._tracker.record(
                     model=self._model,
                     provider=self._provider,
