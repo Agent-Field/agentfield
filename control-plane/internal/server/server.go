@@ -200,6 +200,22 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		}
 	}
 
+	var ownerPolicy *nodelink.OwnerPolicy
+	_, hasPipe := storageProvider.(nodelink.PipeStore)
+	if hasPipe || cfg.AgentField.RunOwner.ProofKey != "" {
+		secret, _, err := nodelink.LoadProofSecret(cfg.AgentField.RunOwner.ProofKey, dirs.DataDir)
+		if err != nil {
+			_ = storageProvider.Close(context.Background())
+			return nil, err
+		}
+		if hasPipe {
+			ownerPolicy = &nodelink.OwnerPolicy{
+				Signer:       nodelink.NewProofSigner(secret),
+				RequireProof: cfg.AgentField.RunOwner.RequireProof,
+			}
+		}
+	}
+
 	// Configure execution event payload redaction from logging config.
 	handlers.SetRedactPayloads(cfg.Logging.ShouldRedactPayloads())
 	configureAgentRestartSettings(cfg.AgentField.NodeHealth)
@@ -592,6 +608,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		pipe = &nodelink.Pipe{
 			Store:         store,
 			Hub:           linkHub,
+			Owners:        ownerPolicy,
 			InternalToken: cfg.Features.DID.Authorization.InternalToken,
 			Retention: func() time.Duration {
 				return config.EffectiveExecutionLogs(cfg.AgentField.ExecutionLogs).RetentionPeriod
@@ -600,6 +617,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		linkHub.Pipe = pipe
 		pipe.Start()
 	}
+	handlers.SetRunOwnerPolicy(ownerPolicy)
 
 	// Native RAG knowledge store: pick the embedding provider from config,
 	// falling back to the deterministic FakeEmbedder when no OpenAI key is set.

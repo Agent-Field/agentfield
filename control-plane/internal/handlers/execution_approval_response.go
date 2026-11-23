@@ -28,7 +28,7 @@ type ResolveApprovalRequest struct {
 // approval directly. Both paths share applyApprovalDecision, so state
 // transitions, idempotency, events, and callbacks are identical.
 //
-// A caller that names itself with X-AgentField-Run-Owner (WorkAF's node) is
+// A caller that names itself with X-AgentField-Run-Owner is
 // held to the runs it owns, exactly as steer and the relay are: only the run's
 // owner may answer its question. A caller that names no node is the API-key
 // holder speaking for itself, which the control plane already trusts. scope
@@ -73,7 +73,12 @@ func (c *webhookApprovalController) handleResolveApproval(ctx *gin.Context) {
 
 	reqCtx := ctx.Request.Context()
 	if c.scope != nil {
-		if err := c.scope.Scope(reqCtx, strings.TrimSpace(ctx.GetHeader(RunOwnerHeader)), executionID); err != nil {
+		owner := strings.TrimSpace(ctx.GetHeader(RunOwnerHeader))
+		if err := checkExecutionOwner(ctx, c.scope, owner, nodelink.ScopeAct); err != nil {
+			pipeRefusal(ctx, err)
+			return
+		}
+		if err := c.scope.Scope(reqCtx, owner, executionID); err != nil {
 			ctx.JSON(nodelink.CodeOf(err), gin.H{"error": err.Error()})
 			return
 		}

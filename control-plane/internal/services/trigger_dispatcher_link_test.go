@@ -121,6 +121,8 @@ func TestTriggerDispatchGoesDownALiveLink(t *testing.T) {
 	require.Equal(t, exec.RunID, b.Headers["X-Run-ID"], "the node is told the run its root is filed under")
 }
 
+// Contract A10: Strict HTTP ownership policy still leaves the trigger as
+// the authority to record the target node as owner.
 // A LINK-ONLY GO SDK NODE (no base_url, hello accepts "http") IS DISPATCHED
 // WITH THE HTTP REQUEST ITSELF CARRIED DOWN ITS LINK — never a dispatch
 // frame it would refuse — and the node the trigger routed the run to owns it.
@@ -131,6 +133,11 @@ func TestTriggerDispatchCarriesHTTPToALinkOnlySDKNode(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	hub := &nodelink.Hub{Sweep: 10 * time.Millisecond}
+	pipeStore, ok := provider.(nodelink.PipeStore)
+	require.True(t, ok)
+	hub.Pipe = &nodelink.Pipe{Store: pipeStore, Hub: hub, Owners: &nodelink.OwnerPolicy{
+		Signer: nodelink.NewProofSigner([]byte("example signing key")), RequireProof: true,
+	}}
 	r := gin.New()
 	r.GET("/api/v1/nodes/:node_id/link", hub.Handler())
 	cp := httptest.NewServer(r)

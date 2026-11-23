@@ -22,6 +22,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -39,6 +40,7 @@ func readExecutionHeaders(ctx *gin.Context) executionHeaders {
 	replayBeforeExecutionID := strings.TrimSpace(ctx.GetHeader("X-AgentField-Replay-Before-Execution-ID"))
 	replayMode := strings.TrimSpace(ctx.GetHeader("X-AgentField-Replay-Mode"))
 	runOwner := strings.TrimSpace(ctx.GetHeader(RunOwnerHeader))
+	runOwnerProof := strings.TrimSpace(ctx.GetHeader(RunOwnerProofHeader))
 
 	var parentPtr *string
 	if parent != "" {
@@ -63,6 +65,7 @@ func readExecutionHeaders(ctx *gin.Context) executionHeaders {
 		replaySourceRunID:       replaySourceRunID,
 		replayBeforeExecutionID: replayBeforeExecutionID,
 		runOwner:                runOwner,
+		runOwnerProof:           runOwnerProof,
 		replayMode:              replayMode,
 	}
 }
@@ -578,6 +581,12 @@ func writeExecutionError(ctx *gin.Context, err error) {
 			httpStatus = ce.statusCode
 		}
 		ctx.JSON(httpStatus, response)
+		return
+	}
+
+	var pipeErr *nodelink.PipeError
+	if errors.As(err, &pipeErr) {
+		pipeRefusal(ctx, pipeErr)
 		return
 	}
 

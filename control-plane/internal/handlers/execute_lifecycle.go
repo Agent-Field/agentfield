@@ -482,5 +482,6 @@ type executionHeaders struct {
 	replayMode              string
 	// runOwner is X-AgentField-Run-Owner: the node that started this run and
 	// is sent its tree and harness entries (nodelink/pipe.go).
-	runOwner string
+	runOwner      string
+	runOwnerProof string
 }

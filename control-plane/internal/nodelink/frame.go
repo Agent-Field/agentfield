@@ -51,16 +51,18 @@ const (
 	// The pipe (pipe.go). TEntries goes both ways: up from the node that ran
 	// an execution (body = EntriesUp), and down to the run's subscriber (body
 	// = EntriesDown). TRun is down only. TSubscribe, TEntriesAck and TSteer are
-	// up from the subscriber; each is answered by an ok frame on its seq.
+	// up from the subscriber. TDelegate asks for a proof of the link's own
+	// consent. Each up-frame is answered by an ok frame on its seq.
 	TEntries    = "entries"     // exec; up EntriesUp, down EntriesDown
 	TEntriesAck = "entries_ack" // exec; body = EntriesAck
 	TSubscribe  = "subscribe"   // body = Subscribe
 	TRun        = "run"         // down; body = RunState
 	TSteer      = "steer"       // exec; body = SteerUp
+	TDelegate   = "delegate"    // body = DelegateUp
 )
 
 var known = map[string]bool{TWelcome: true, TDeliver: true, TOK: true, THello: true, TAck: true, TStatus: true, TProgress: true, TLog: true, THeartbeat: true,
-	TEntries: true, TEntriesAck: true, TSubscribe: true, TRun: true, TSteer: true}
+	TEntries: true, TEntriesAck: true, TSubscribe: true, TRun: true, TSteer: true, TDelegate: true}
 
 // Frame is the one envelope every message travels in.
 type Frame struct {
@@ -81,8 +83,8 @@ const (
 	// (agenturl's link carrier): the node serves it on its own handler and
 	// acks with the response. A node takes it only if its hello accepts it.
 	KindHTTP = "http"
-	// KindSteer is a person's note for a running codeaf harness execution, for
-	// a node that takes it as its own delivery rather than over KindHTTP.
+	// KindSteer carries a person's note to a running execution on a node
+	// that accepts a dedicated delivery for notes.
 	KindSteer = "steer"
 )
 
@@ -134,7 +136,7 @@ type Hello struct {
 	Version    string   `json:"version,omitempty"`
 	Inflight   []string `json:"inflight,omitempty"`
 	// Accepts is the delivery kinds this node serves. Empty is the original
-	// set (dispatch, cancel), which is what the codeaf factory's node speaks.
+	// set (dispatch, cancel).
 	Accepts []string `json:"accepts,omitempty"`
 }
 
@@ -162,6 +164,18 @@ type OKBody struct {
 	Through int64 `json:"through,omitempty"`
 	// Dropped answers an entries_ack: how many held entries were deleted.
 	Dropped int64 `json:"dropped,omitempty"`
+	// Delegate returns a proof of consent and its granted scopes and expiry.
+	Token     string   `json:"token,omitempty"`
+	ExpiresAt string   `json:"expires_at,omitempty"`
+	ExpiresIn int      `json:"expires_in,omitempty"`
+	Scopes    []string `json:"scopes,omitempty"`
+}
+
+// DelegateUp requests a proof naming the link's own node.
+type DelegateUp struct {
+	Scopes     []string `json:"scopes"`
+	TTLSeconds int      `json:"ttl_seconds,omitempty"`
+	Run        string   `json:"run,omitempty"`
 }
 
 // Entry is one harness entry in flight. Data is the node's bytes, verbatim.
