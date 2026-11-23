@@ -352,6 +352,31 @@ class TestOpenRouterGenerateAudio:
         assert result.has_audio
         assert result.audio.data == valid_b64
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("with_partial_chunk", [False, True])
+    async def test_in_stream_error_event_raises(
+        self, monkeypatch, with_partial_chunk
+    ):
+        """An in-band ``{"error": ...}`` SSE event must raise, not be dropped."""
+        events = []
+        if with_partial_chunk:
+            events.append(
+                _audio_event(b64_chunk=base64.b64encode(b"AAA").decode())
+            )
+        events.append({"error": {"code": 429, "message": "upstream rate limited"}})
+        fake_resp = _FakeStreamResponse(_make_sse_lines(events))
+        fake_session = _FakeSession(fake_resp)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            with pytest.raises(RuntimeError, match="stream failed.*rate limited"):
+                await provider.generate_audio(
+                    text="test", model="openai/gpt-audio-mini", format="pcm16"
+                )
+
 
 class TestOpenRouterChatAudioFormatGuard:
     """Chat-audio models can only deliver pcm16, so anything else fails fast.
