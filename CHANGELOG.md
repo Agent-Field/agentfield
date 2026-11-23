@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.9] - 2026-11-23
+
+
+### Added
+
+- Feat(python-sdk): support MiniMax H3 image generation (#1211)
+
+* feat(python-sdk): support MiniMax H3 image generation
+
+* fix(python-sdk): treat builtin TimeoutError as an interrupted MiniMax H3 image request
+
+On Python 3.10 asyncio.TimeoutError is a distinct class from the builtin
+TimeoutError, so a socket-level timeout while reading the response body
+escaped the interrupted-request handler instead of becoming the documented
+"may still complete" RuntimeError. Catch both.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(python-sdk): harden MiniMax H3 image error handling
+
+The H3 image endpoint is not idempotent: the server charges for generated
+images even when the client never reads the response. Surface that in the
+errors where the outcome is unknown (unreadable body, unusable 200 body)
+and treat a malformed response head like the other interrupted-request
+cases. Also keep a malformed revised_prompt from discarding the whole
+batch, and fall back to the per-image error message when an all-failed
+response has no top-level error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (cbd99d9)
+
 ## [0.1.147-rc.8] - 2026-11-23
 
 
