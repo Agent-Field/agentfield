@@ -111,10 +111,9 @@ type Options struct {
 	// validation fails. Default 2.
 	SchemaMaxRetries int
 
-	// Live, when set, watches and steers a run while it works. ONLY THE CODEAF
-	// PROVIDER HONORS IT (codeaf_live.go): every other provider ignores it, so
-	// a run on any other harness is never steerable. Agent.Harness sets it
-	// for the current execution; a caller outside an Agent leaves it nil.
+	// Live streams events and optionally accepts notes while a run works.
+	// The runner passes it only to a LiveProvider. Agent.Harness sets it
+	// for a watched execution.
 	Live *Live
 
 	// SchemaMode selects how schema-constrained output is produced:

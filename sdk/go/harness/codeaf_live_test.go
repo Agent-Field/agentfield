@@ -31,7 +31,7 @@ func appendLine(t *testing.T, path, line string) {
 	require.NoError(t, f.Close())
 }
 
-// A live codeaf run streams every event line while it is still running,
+// Contract B2: A live CodeAF run streams each event while it is still running,
 // VERBATIM, and a note sent on Steer reaches the run's steer file mid-run.
 func TestCodeAFLiveStreamsWhileRunningAndDeliversASteer(t *testing.T) {
 	isolateCodeAF(t)
@@ -43,7 +43,7 @@ func TestCodeAFLiveStreamsWhileRunningAndDeliversASteer(t *testing.T) {
 	var begun, ended int
 	live := &Live{
 		Steer: steer,
-		Begin: func() { begun++ },
+		Begin: func(LiveInfo) { begun++ },
 		End:   func() { ended++ },
 		Event: func(raw json.RawMessage) {
 			mu.Lock()
@@ -114,7 +114,7 @@ func TestCodeAFWithoutLivePassesNoLiveFlags(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// An older codeaf that refuses --events is run again without them.
+// Contract B2: An older CodeAF that refuses --events is run again without it.
 func TestCodeAFLiveFallsBackOnAnOlderBinary(t *testing.T) {
 	isolateCodeAF(t)
 	p := stubCodeAF()
@@ -132,11 +132,11 @@ func TestCodeAFLiveFallsBackOnAnOlderBinary(t *testing.T) {
 	assert.Equal(t, "done", raw.Result)
 }
 
-// Live is a codeaf-only thing: another provider never begins it, so the
+// Contract B3: A provider without live support never begins it, so the
 // execution it runs in is never steerable.
-func TestOnlyCodeAFBeginsALiveRun(t *testing.T) {
+func TestNonLiveProviderDoesNotBeginALiveRun(t *testing.T) {
 	begun := false
-	live := &Live{Begin: func() { begun = true }}
+	live := &Live{Begin: func(LiveInfo) { begun = true }}
 	p := NewOpenCodeProvider("/nonexistent/opencode", "")
 	_, _ = p.Execute(context.Background(), "x", Options{Live: live, Timeout: 1})
 	assert.False(t, begun)

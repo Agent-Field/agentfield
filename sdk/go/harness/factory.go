@@ -23,6 +23,43 @@ func ResolveProviderName(name string) string {
 
 var legacyPinOnce sync.Once
 
+var providerRegistry = struct {
+	sync.RWMutex
+	factories map[string]func(string) Provider
+}{factories: make(map[string]func(string) Provider)}
+
+// RegisterProvider makes a custom harness factory available to BuildProvider.
+func RegisterProvider(name string, factory func(binPath string) Provider) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("harness provider name is required")
+	}
+	if factory == nil {
+		return fmt.Errorf("harness provider %q needs a factory", name)
+	}
+	switch name {
+	case ProviderCodeAF, ProviderAforge, ProviderClaudeCode, ProviderCodex, ProviderGemini,
+		ProviderOpenCode, ProviderPi, ProviderOMP, ProviderCursor:
+		return fmt.Errorf("harness provider %q is built in", name)
+	}
+
+	providerRegistry.Lock()
+	defer providerRegistry.Unlock()
+	if _, exists := providerRegistry.factories[name]; exists {
+		return fmt.Errorf("harness provider %q is already registered", name)
+	}
+	providerRegistry.factories[name] = factory
+	return nil
+}
+
+// UnregisterProvider removes a custom factory. Providers already built can
+// continue serving their current invocations.
+func UnregisterProvider(name string) {
+	providerRegistry.Lock()
+	defer providerRegistry.Unlock()
+	delete(providerRegistry.factories, strings.TrimSpace(name))
+}
+
 func resolveExecutionProvider(name, binPath string) string {
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(os.Getenv(ProviderEnvVar)) == "" &&
 		(binPath != "" || strings.TrimSpace(os.Getenv("AFORGE_BIN")) != "") {
@@ -64,6 +101,12 @@ func BuildProvider(name string, binPath string) (Provider, error) {
 	case ProviderCursor:
 		return NewCursorProvider(binPath), nil
 	default:
+		providerRegistry.RLock()
+		factory := providerRegistry.factories[name]
+		providerRegistry.RUnlock()
+		if factory != nil {
+			return factory(binPath), nil
+		}
 		return nil, fmt.Errorf(
 			"unknown harness provider: %q (supported: %s, %s, %s, %s, %s, %s, %s, %s, %s)",
 			name, ProviderCodeAF, ProviderAforge, ProviderClaudeCode, ProviderCodex, ProviderGemini, ProviderOpenCode, ProviderPi, ProviderOMP, ProviderCursor,

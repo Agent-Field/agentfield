@@ -265,6 +265,11 @@ func codeAFErrorMessage(code int, stop, detail, blockedOn, stderr string) string
 	return fmt.Sprintf("codeaf exit code %d (stop=%s): %s", code, stop, truncate(detail, 1000))
 }
 
+// LiveInfo describes the CodeAF session streamed by this provider.
+func (p *CodeAFProvider) LiveInfo() LiveInfo {
+	return LiveInfo{Harness: ProviderCodeAF, Steerable: true}
+}
+
 func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
 	started := time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(aforgeTimeout(options))*time.Second)
@@ -376,15 +381,14 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	if runCLI == nil {
 		runCLI = runCodeAFCLI
 	}
-	// A WATCHED RUN IS THE SAME ENGINE A WORKAF STEP RUNS (codeaf_live.go):
-	// `codeaf chat --once`, a full session whose conversation record is
+	// A watched run uses `codeaf chat --once`, a full session whose record is
 	// streamed line by line through --events and steered through --steer. A
 	// codeaf too old for those flags is run the old way, unwatched: watching
 	// a run is a convenience and must never cost the run itself.
 	var live *liveRun
 	runCmd, runCwd := cmd, ""
 	if command == "exec" && options.Live != nil {
-		run, flags, err := startLive(options.Live)
+		run, flags, err := startLive(options.Live, p.LiveInfo())
 		if err != nil {
 			log.Printf("WARNING CodeAF live transcript unavailable: %v", err)
 		} else {

@@ -11,25 +11,6 @@ import (
 	"time"
 )
 
-// Live watches and steers one codeaf run while it works.
-//
-// A codeaf run is otherwise silent until its final envelope. With Live set, the
-// provider passes codeaf two files (`--events` and `--steer`), tails the first
-// and hands every line to Event VERBATIM — the provider never parses or reshapes
-// codeaf's entries, so whatever codeaf streams is what a watcher receives — and
-// writes every note read from Steer to the second, where codeaf reads it at its
-// next turn boundary.
-//
-// Begin is called once the run is about to start and End once it is over, so a
-// caller can say "this execution is steerable now" only while it really is. A
-// run that never reaches the binary (no key, no binary) calls neither.
-type Live struct {
-	Event func(line json.RawMessage)
-	Steer <-chan string
-	Begin func()
-	End   func()
-}
-
 // livePoll is how often the events file is read. A quarter second keeps a
 // transcript visibly live without spinning.
 const livePoll = 250 * time.Millisecond
@@ -51,7 +32,7 @@ type liveRun struct {
 
 // startLive makes the run's two files and starts tailing and steering. The
 // caller passes the returned flags to codeaf and calls finish when it exits.
-func startLive(live *Live) (*liveRun, []string, error) {
+func startLive(live *Live, info LiveInfo) (*liveRun, []string, error) {
 	if live == nil {
 		return nil, nil, nil
 	}
@@ -71,7 +52,7 @@ func startLive(live *Live) (*liveRun, []string, error) {
 		_ = f.Close()
 	}
 	if live.Begin != nil {
-		live.Begin()
+		live.Begin(info)
 	}
 	r.wg.Add(1)
 	go r.tail()
@@ -84,7 +65,7 @@ func startLive(live *Live) (*liveRun, []string, error) {
 	// clone of a repository from run to run — so the second ticket's step
 	// opened on the first ticket's whole turn. The session file is named in
 	// the run's own directory and not created, so codeaf starts it fresh; the
-	// watcher (WorkAF) keeps the record, and the run's directory goes with it.
+	// watcher keeps the record, and the run's directory goes with it.
 	return r, []string{"--events", r.eventsPath, "--steer", r.steerPath, "--session", r.sessionPath}, nil
 }
 
