@@ -157,3 +157,52 @@ async def test_stream_keeps_adapter_provider_separate_from_openrouter_route():
     entry = tracker.serialize()["entries"][0]
     assert entry["provider"] == "openai"
     assert entry["routing_provider"] == "openrouter"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "usage, read, creation",
+    [
+        ({"cache_read_input_tokens": 30, "cache_creation_input_tokens": 5}, 30, 5),
+        ({"prompt_tokens_details": {"cached_tokens": 40}}, 40, 0),
+    ],
+)
+async def test_stream_receipt_records_cache_tokens(usage, read, creation):
+    async def source():
+        yield SimpleNamespace(
+            usage={
+                "prompt_tokens": 80,
+                "completion_tokens": 20,
+                "total_tokens": 100,
+                **usage,
+            }
+        )
+
+    tracker = CostTracker()
+    stream = UsageTrackingStream(source(), tracker, "anthropic/claude", "anthropic")
+    async for _ in stream:
+        pass
+    entry = tracker.serialize()["entries"][0]
+    assert entry["cache_read_tokens"] == read
+    assert entry["cache_creation_tokens"] == creation
+
+
+@pytest.mark.asyncio
+async def test_stream_receipt_keeps_tokens_when_cache_count_is_malformed():
+    async def source():
+        yield SimpleNamespace(
+            usage={
+                "prompt_tokens": 80,
+                "completion_tokens": 20,
+                "total_tokens": 100,
+                "prompt_tokens_details": {"cached_tokens": float("inf")},
+            }
+        )
+
+    tracker = CostTracker()
+    stream = UsageTrackingStream(source(), tracker, "anthropic/claude", "anthropic")
+    async for _ in stream:
+        pass
+    entry = tracker.serialize()["entries"][0]
+    assert entry["total_tokens"] == 100
+    assert entry["cache_read_tokens"] == 0

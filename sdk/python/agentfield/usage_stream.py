@@ -3,6 +3,8 @@
 import math
 from typing import Any
 
+from agentfield.multimodal_response import _extract_usage
+
 
 class UsageTrackingStream:
     def __init__(
@@ -84,6 +86,12 @@ class UsageTrackingStream:
                     for field in fields
                 )
             if known:
+                try:
+                    cache = _extract_usage(usage)
+                except Exception:
+                    # A malformed optional cache count must not discard the
+                    # validated prompt/completion/total receipt.
+                    cache = {}
                 self._tracker.record(
                     model=self._model,
                     provider=self._provider,
@@ -91,6 +99,8 @@ class UsageTrackingStream:
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     completion_tokens=int(usage.get("completion_tokens", 0)),
                     total_tokens=int(usage.get("total_tokens", 0)),
+                    cache_read_tokens=cache.get("cache_read_tokens", 0),
+                    cache_creation_tokens=cache.get("cache_creation_tokens", 0),
                 )
             else:
                 self._tracker.record(
