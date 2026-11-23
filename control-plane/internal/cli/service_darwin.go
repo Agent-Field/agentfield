@@ -49,9 +49,12 @@ func serviceUninstall() error {
 	_ = os.Remove(launchdsvc.TrayPlistPath(home))
 	_ = os.Remove(launchdsvc.ServerPlistPath(home))
 	_ = os.Remove(launchdsvc.ServerSessionPlistPath(home))
+	_ = os.Remove(launchdsvc.TraySessionPlistPath(home))
 	if err := launchdsvc.RemoveLegacyTrayBundle(home); err != nil {
 		return err
 	}
+	// The copy the installer staged runs only the tray this just removed.
+	_ = os.Remove(launchdsvc.StagedTrayPath(home))
 	fmt.Println("Control plane autostart and menu-bar app removed.")
 	fmt.Println("The `af` binary itself is untouched.")
 	return nil

@@ -39,6 +39,39 @@ func withTrayLock(apply func() error) error {
 	return apply()
 }
 
+// stagedTrayPath is the copy of the helper that older Desktop builds and the
+// installer left in ~/.agentfield/bin. A tray that runs from the signed Desktop
+// app has no use for it, and an unreferenced executable in a hidden folder is
+// exactly what endpoint-security tools quarantine.
+func stagedTrayPath() string { return filepath.Join(binDir(), "af-tray") }
+
+// removeStagedTray deletes the staged copy once no tray job names it. It never
+// follows a link, never deletes the program that is running, and leaves the copy
+// alone while a job still points at it (the CLI-installed tray runs from it).
+func removeStagedTray(program string) error {
+	staged := stagedTrayPath()
+	if staged == program {
+		return nil
+	}
+	info, err := os.Lstat(staged)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return err
+	}
+	for _, job := range []string{trayPlistPath(), traySessionPath()} {
+		data, err := os.ReadFile(job)
+		if err != nil {
+			continue
+		}
+		if html.UnescapeString(launchdsvc.ParsePlistOwner(data).Program) == staged {
+			return nil
+		}
+	}
+	return removeIfPresent(staged)
+}
+
 func desktopOwnsTray() bool {
 	data, err := os.ReadFile(desktopMarkerPath())
 	if err != nil {
@@ -135,6 +168,8 @@ func syncPackagedTray(program string, visible bool, login string) error {
 		if err := launchdsvc.RemoveLegacyTrayBundle(home()); err != nil {
 			return err
 		}
+		// Best effort: a leftover copy is clutter, not a reason to fail the sync.
+		_ = removeStagedTray(program)
 		if err := writeFileAtomic(desktopMarkerPath(), marker, 0o600); err != nil {
 			return err
 		}
@@ -188,6 +223,7 @@ func syncPackagedTray(program string, visible bool, login string) error {
 	if err := launchdsvc.RemoveLegacyTrayBundle(home()); err != nil {
 		return err
 	}
+	_ = removeStagedTray(program)
 	if err := writeFileAtomic(desktopMarkerPath(), marker, 0o600); err != nil {
 		return err
 	}

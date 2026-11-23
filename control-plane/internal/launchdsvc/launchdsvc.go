@@ -41,6 +41,18 @@ func TrayPlistPath(home string) string {
 	return filepath.Join(LaunchAgentsDir(home), TrayLabel+".plist")
 }
 
+// TraySessionPlistPath is the tray job that lasts for one login session. It is
+// kept out of LaunchAgents on purpose, so it never survives a logout.
+func TraySessionPlistPath(home string) string {
+	return filepath.Join(home, ".agentfield", "tray-session.plist")
+}
+
+// StagedTrayPath is the copy of the tray helper that older Desktop builds and
+// the installer left in the managed bin directory.
+func StagedTrayPath(home string) string {
+	return filepath.Join(home, ".agentfield", "bin", "af-tray")
+}
+
 // ---- Ownership -------------------------------------------------------------
 
 // PlistOwner is the identifying part of an installed server agent: which binary

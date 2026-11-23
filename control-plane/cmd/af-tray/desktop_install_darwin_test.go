@@ -52,6 +52,8 @@ esac
 	mustWriteTrayFixture(t, os.Getenv("AF_TEST_ACTIVE_TRAY"), trayPlistPath())
 	mustWriteTrayFixture(t, trayPlistPath(), legacyTrayPlistFor(trayBundleBinaryPath()))
 	mustWriteTrayFixture(t, serverPlistPath(), serverPlist())
+	// Older Desktop builds and install.sh also staged a copy of the helper here.
+	mustWriteTrayFixture(t, stagedTrayPath(), "stale staged tray executable")
 	wantServer, err := os.ReadFile(serverPlistPath())
 	if err != nil {
 		t.Fatal(err)
@@ -70,6 +72,11 @@ esac
 	job, err := readTrayAgent(trayPlistPath())
 	if err != nil || !strings.Contains(string(job), program) {
 		t.Fatalf("legacy opt-in was not preserved by upgrade: %s (%v)", job, err)
+	}
+	// The tray now runs from the packaged app, so the staged copy is just an
+	// unreferenced executable in a hidden folder and must be gone.
+	if _, err := os.Stat(stagedTrayPath()); !os.IsNotExist(err) {
+		t.Fatalf("stale staged tray copy survived the upgrade: %v", err)
 	}
 	if err := withTrayLock(func() error { return syncPackagedTray(program, false, "login") }); err != nil {
 		t.Fatal("hide:", err)
@@ -157,5 +164,30 @@ func TestPackagedTrayDiscoversNativeLoginAgent(t *testing.T) {
 	cmd.Env = append(os.Environ(), "AF_TEST_PACKAGED_TRAY=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("check packaged helper: %s (%v)", out, err)
+	}
+}
+
+// A tray job that still runs from the staged copy (a CLI-installed tray) keeps
+// it: removing the executable under a job would break that tray at next launch.
+func TestStagedTrayCopyIsKeptWhileAJobRunsFromIt(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	mustWriteTrayFixture(t, stagedTrayPath(), "tray executable")
+	mustWriteTrayFixture(t, trayPlistPath(), trayPlistFor(stagedTrayPath()))
+	if err := removeStagedTray(filepath.Join(root, "elsewhere", "af-tray")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stagedTrayPath()); err != nil {
+		t.Fatalf("staged copy removed while its job still names it: %v", err)
+	}
+	// The running program is never deleted, even with no job naming it.
+	if err := os.Remove(trayPlistPath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeStagedTray(stagedTrayPath()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stagedTrayPath()); err != nil {
+		t.Fatalf("removed the program that is running: %v", err)
 	}
 }
