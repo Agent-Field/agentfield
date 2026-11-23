@@ -80,7 +80,7 @@ jobs:
         if: matrix.surface == 'control-plane' || matrix.surface == 'sdk-go'
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.x"
+          go-version: "1.26.x"
 
       - name: Set up Python
         if: matrix.surface == 'sdk-python'
