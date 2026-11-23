@@ -1,5 +1,8 @@
+import asyncio
 import base64
+from types import SimpleNamespace
 
+import aiohttp
 import pytest
 
 from agentfield.media_providers import (
@@ -333,7 +336,11 @@ async def test_h3_reports_api_errors(monkeypatch, status, payload, message):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "message"),
-    [(ValueError(), "invalid JSON"), (TimeoutError(), "may still complete")],
+    [
+        (ValueError(), "invalid JSON"),
+        (TimeoutError(), "may still complete"),
+        (asyncio.TimeoutError(), "may still complete"),
+    ],
 )
 async def test_h3_does_not_retry_interrupted_or_invalid_responses(
     monkeypatch, error, message
@@ -349,3 +356,91 @@ async def test_h3_does_not_retry_interrupted_or_invalid_responses(
             "Sunset", model="MiniMax-H3-Image"
         )
     assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        asyncio.TimeoutError(),
+        TimeoutError(),
+        aiohttp.ServerDisconnectedError(),
+        aiohttp.ClientPayloadError("truncated body"),
+        aiohttp.ClientResponseError(SimpleNamespace(real_url="x"), (), status=400),
+    ],
+)
+async def test_h3_failures_before_the_response_is_read_are_not_retried(
+    monkeypatch, error
+):
+    class FailingPost:
+        async def __aenter__(self):
+            raise error
+
+        async def __aexit__(self, *args):
+            return False
+
+    class FailingSession(CaptureSession):
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return FailingPost()
+
+    session = FailingSession(None)
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
+    with pytest.raises(RuntimeError, match="may still complete"):
+        await MiniMaxProvider(api_key="unit-value").generate_image(
+            "Sunset", model="MiniMax-H3-Image"
+        )
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"data": []},
+        {"data": [{"error": {"code": "1027"}}]},
+        [],
+    ],
+)
+async def test_h3_unusable_success_bodies_warn_about_charges(monkeypatch, payload):
+    session = CaptureSession(FakeResponse(payload))
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
+    with pytest.raises(RuntimeError, match="do not retry automatically"):
+        await MiniMaxProvider(api_key="unit-value").generate_image(
+            "Sunset", model="MiniMax-H3-Image"
+        )
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_h3_all_failed_response_reports_the_per_image_reason(monkeypatch):
+    payload = {
+        "data": [{"error": {"code": "1027", "message": "image withheld"}}],
+        "usage": {"generated_images": 0},
+    }
+    session = CaptureSession(FakeResponse(payload, status=422))
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
+    with pytest.raises(RuntimeError, match=r"HTTP 422\): image withheld"):
+        await MiniMaxProvider(api_key="unit-value").generate_image(
+            "Sunset", model="MiniMax-H3-Image"
+        )
+
+
+@pytest.mark.asyncio
+async def test_h3_malformed_revised_prompt_does_not_discard_the_batch(monkeypatch):
+    payload = {
+        "data": [
+            {"url": "https://example.test/one.png", "revised_prompt": {}},
+            {"url": "https://example.test/two.png", "revised_prompt": "A calm sea"},
+        ]
+    }
+    session = CaptureSession(FakeResponse(payload))
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **kwargs: session)
+    result = await MiniMaxProvider(api_key="unit-value").generate_image(
+        "Sunset", model="MiniMax-H3-Image"
+    )
+    assert [image.url for image in result.images] == [
+        "https://example.test/one.png",
+        "https://example.test/two.png",
+    ]
+    assert [image.revised_prompt for image in result.images] == [None, "A calm sea"]

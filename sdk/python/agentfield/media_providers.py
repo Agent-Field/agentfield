@@ -930,6 +930,13 @@ class MiniMaxProvider(MediaProvider):
 
         import aiohttp
 
+        # The endpoint is not idempotent: the server charges for images it
+        # generated even when the client never reads the response, and a retry
+        # generates (and charges) again.
+        may_have_billed = (
+            " The request may still have completed and incurred a charge; "
+            "do not retry automatically."
+        )
         base_url = self._base_url
         if base_url == MINIMAX_CN_BASE_URL:
             base_url = "https://api.minimax.cn/v1"
@@ -948,7 +955,8 @@ class MiniMaxProvider(MediaProvider):
                         data = await response.json()
                     except (aiohttp.ContentTypeError, ValueError) as exc:
                         raise RuntimeError(
-                            f"MiniMax H3 image generation returned invalid JSON (HTTP {status})"
+                            f"MiniMax H3 image generation returned invalid JSON (HTTP {status})."
+                            + may_have_billed
                         ) from exc
             except (
                 # asyncio.TimeoutError is a distinct class from the builtin on
@@ -957,6 +965,7 @@ class MiniMaxProvider(MediaProvider):
                 TimeoutError,
                 aiohttp.ClientConnectionError,
                 aiohttp.ClientPayloadError,
+                aiohttp.ClientResponseError,
             ) as exc:
                 raise RuntimeError(
                     "MiniMax H3 image generation was interrupted. The request may still complete and incur a charge."
@@ -965,6 +974,14 @@ class MiniMaxProvider(MediaProvider):
         error = data.get("error") if isinstance(data, dict) else None
         if status != 200 or error:
             detail = error.get("message") if isinstance(error, dict) else None
+            if not detail and isinstance(data, dict):
+                # All-failed responses document per-image errors in ``data``
+                # and do not promise a top-level ``error``.
+                for item in data.get("data") or []:
+                    item_error = item.get("error") if isinstance(item, dict) else None
+                    if isinstance(item_error, dict) and item_error.get("message"):
+                        detail = str(item_error["message"])
+                        break
             raise RuntimeError(
                 f"MiniMax H3 image generation failed (HTTP {status}): {detail or 'unknown error'}"
             )
@@ -972,12 +989,18 @@ class MiniMaxProvider(MediaProvider):
         items = data.get("data") if isinstance(data, dict) else None
         if not isinstance(items, list) or not items:
             raise RuntimeError(
-                "MiniMax H3 image generation returned an invalid image list"
+                "MiniMax H3 image generation returned an invalid image list."
+                + may_have_billed
             )
         field = body["response_format"]
         images = [
             ImageOutput(
-                **{field: item[field]}, revised_prompt=item.get("revised_prompt")
+                **{field: item[field]},
+                revised_prompt=(
+                    item["revised_prompt"]
+                    if isinstance(item.get("revised_prompt"), str)
+                    else None
+                ),
             )
             for item in items
             if isinstance(item, dict)
@@ -986,7 +1009,9 @@ class MiniMaxProvider(MediaProvider):
             and item[field]
         ]
         if not images:
-            raise RuntimeError("MiniMax H3 image generation returned no images")
+            raise RuntimeError(
+                "MiniMax H3 image generation returned no images." + may_have_billed
+            )
         return MultimodalResponse(text=body["prompt"], images=images, raw_response=data)
 
     async def generate_audio(
