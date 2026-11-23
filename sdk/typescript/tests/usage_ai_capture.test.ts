@@ -348,8 +348,8 @@ describe('harness usage capture', () => {
 
 it('captures caller-consumed stream usage without eager consumption', async () => {
   let consumed = 0;
-  async function* textStream() { consumed++; yield 'hello'; }
-  streamTextMock.mockReturnValue({ textStream: textStream(), totalUsage: Promise.resolve(sdkUsage(7, 2)) });
+  async function* textStream() { consumed++; yield { type: 'text-delta', text: 'hello' }; }
+  streamTextMock.mockReturnValue({ fullStream: textStream(), totalUsage: Promise.resolve(sdkUsage(7, 2)) });
   const ctx = makeContext('stream-usage');
   const client = new AIClient({ provider: 'openrouter', apiKey: 'k', model: 'deepseek/deepseek-v4' });
   const stream = await ExecutionContext.run(ctx, () => client.stream('hello'));
@@ -362,8 +362,8 @@ it('captures caller-consumed stream usage without eager consumption', async () =
 
 it('marks abandoned streams missing without draining them', async () => {
   let consumed = 0;
-  async function* textStream() { consumed++; yield 'hello'; consumed++; yield 'ignored'; }
-  streamTextMock.mockReturnValue({ textStream: textStream() });
+  async function* textStream() { consumed++; yield { type: 'text-delta', text: 'hello' }; consumed++; yield { type: 'text-delta', text: 'ignored' }; }
+  streamTextMock.mockReturnValue({ fullStream: textStream() });
   const ctx = makeContext('abandoned-usage');
   const client = new AIClient({ provider: 'openrouter', apiKey: 'k', model: 'qwen/qwen3' });
   const stream = await ExecutionContext.run(ctx, () => client.stream('hello'));
@@ -378,8 +378,8 @@ it('attributes all OpenAI-adapter call paths to the resolved OpenRouter endpoint
   const ctx = makeContext('adapter-endpoint');
   generateTextMock.mockResolvedValue({ text: 'done', steps: [], usage: sdkUsage(3, 2) });
   generateObjectMock.mockResolvedValue({ object: {}, usage: sdkUsage(3, 2) });
-  async function* textStream() { yield 'hello'; }
-  streamTextMock.mockReturnValue({ textStream: textStream(), totalUsage: Promise.resolve(sdkUsage(3, 2)) });
+  async function* textStream() { yield { type: 'text-delta', text: 'hello' }; }
+  streamTextMock.mockReturnValue({ fullStream: textStream(), totalUsage: Promise.resolve(sdkUsage(3, 2)) });
   await ExecutionContext.run(ctx, async () => {
     await client.generate('hello');
     await client.generate('hello', { schema: {} as any });

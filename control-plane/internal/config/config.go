@@ -796,6 +796,24 @@ func ApplyEnvOverrides(cfg *Config) {
 		cfg.API.Auth.APIKey = apiKey
 	}
 
+	// CORS. These keys are absent when no config file is loaded, so viper's
+	// AutomaticEnv never resolves the documented AGENTFIELD_API_CORS_* names.
+	if val := os.Getenv("AGENTFIELD_API_CORS_ALLOWED_ORIGINS"); val != "" {
+		cfg.API.CORS.AllowedOrigins = splitEnvCSV(val)
+	}
+	if val := os.Getenv("AGENTFIELD_API_CORS_ALLOWED_METHODS"); val != "" {
+		cfg.API.CORS.AllowedMethods = splitEnvCSV(val)
+	}
+	if val := os.Getenv("AGENTFIELD_API_CORS_ALLOWED_HEADERS"); val != "" {
+		cfg.API.CORS.AllowedHeaders = splitEnvCSV(val)
+	}
+	if val := os.Getenv("AGENTFIELD_API_CORS_EXPOSED_HEADERS"); val != "" {
+		cfg.API.CORS.ExposedHeaders = splitEnvCSV(val)
+	}
+	if val := os.Getenv("AGENTFIELD_API_CORS_ALLOW_CREDENTIALS"); val != "" {
+		cfg.API.CORS.AllowCredentials = parseEnvBool(val)
+	}
+
 	if val := os.Getenv("AGENTFIELD_REGISTRATION_SERVERLESS_DISCOVERY_ALLOWED_HOSTS"); val != "" {
 		parts := strings.Split(val, ",")
 		cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts = cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts[:0]
@@ -990,6 +1008,9 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_DEFAULT_DENY"); val != "" {
 		cfg.Features.DID.Authorization.DefaultDeny = val == "true" || val == "1"
+	}
+	if val := strings.TrimSpace(os.Getenv("AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE")); val != "" {
+		cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode = strings.ToLower(val)
 	}
 
 	// Node log proxy (UI → agent NDJSON)

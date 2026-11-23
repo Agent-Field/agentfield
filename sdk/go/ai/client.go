@@ -202,7 +202,7 @@ func (c *Client) sendRequest(ctx context.Context, req *Request, body []byte) (*R
 
 	// Check for errors
 	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newAPIError(httpResp.StatusCode, respBody)
+		return nil, newAPIErrorFromResponse(httpResp, respBody)
 	}
 
 	// Parse response
@@ -273,7 +273,7 @@ func (c *Client) openStream(ctx context.Context, req *Request, body []byte) (*ht
 		respBody, _ := io.ReadAll(httpResp.Body)
 		httpResp.Body.Close()
 		cancel()
-		return nil, nil, newAPIError(httpResp.StatusCode, respBody)
+		return nil, nil, newAPIErrorFromResponse(httpResp, respBody)
 	}
 	return httpResp, cancel, nil
 }
@@ -369,6 +369,7 @@ type SSEDecoder struct {
 	reader      io.Reader
 	accumulated []byte
 	buf         []byte
+	readErr     error
 }
 
 // NewSSEDecoder creates a new SSE decoder.
@@ -389,14 +390,20 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 			message := data[:idx]
 			d.accumulated = []byte(data[idx+2:])
 
-			// Parse SSE message
-			// The SSE field is "data:" with an optional single space after the colon.
-			if strings.HasPrefix(message, "data:") {
-				jsonData := strings.TrimPrefix(message, "data:")
-				jsonData = strings.TrimSpace(jsonData)
+			// SSE fields may appear in any order. Join data fields with newlines,
+			// ignoring comments and metadata such as event, id, and retry.
+			var dataLines []string
+			for _, line := range strings.Split(message, "\n") {
+				field, value, _ := strings.Cut(line, ":")
+				if field == "data" {
+					dataLines = append(dataLines, strings.TrimPrefix(value, " "))
+				}
+			}
+			if len(dataLines) > 0 {
+				jsonData := strings.Join(dataLines, "\n")
 
 				// Check for stream end
-				if jsonData == "[DONE]" {
+				if strings.TrimSpace(jsonData) == "[DONE]" {
 					return StreamChunk{}, io.EOF
 				}
 
@@ -404,11 +411,22 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 				if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 					continue // Skip malformed chunks
 				}
+				// Providers (e.g. OpenRouter) report mid-stream failures as a
+				// {"error":{...}} data event on an HTTP 200 stream. Surface it
+				// instead of yielding an empty chunk.
+				if streamErr := parseStreamError([]byte(jsonData)); streamErr != nil {
+					return StreamChunk{}, streamErr
+				}
 				chunk.normalizeNativeCost()
 
 				return chunk, nil
 			}
 			continue // Non-data message, try next
+		}
+
+		// Return a saved read error only after consuming all complete events.
+		if d.readErr != nil {
+			return StreamChunk{}, d.readErr
 		}
 
 		// Need more data. Per the io.Reader contract, a Read may return n > 0
@@ -419,12 +437,37 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 		n, err := d.reader.Read(d.buf)
 		if n > 0 {
 			d.accumulated = append(d.accumulated, d.buf[:n]...)
+			d.readErr = err
 			continue
 		}
 		if err != nil {
 			return StreamChunk{}, err
 		}
 	}
+}
+
+// parseStreamError returns an error when an SSE data payload is an in-stream
+// {"error":{...}} event, or nil for ordinary chunks.
+func parseStreamError(data []byte) error {
+	var probe struct {
+		Error *struct {
+			Message string          `json:"message"`
+			Type    string          `json:"type"`
+			Code    json.RawMessage `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil || probe.Error == nil {
+		return nil
+	}
+	msg := probe.Error.Message
+	if msg == "" {
+		msg = "unknown error"
+	}
+	code := strings.Trim(string(probe.Error.Code), `"`)
+	if code != "" && code != "null" {
+		return fmt.Errorf("stream error (code %s): %s", code, msg)
+	}
+	return fmt.Errorf("stream error: %s", msg)
 }
 
 // Convenience functions for common patterns

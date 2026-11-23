@@ -461,7 +461,9 @@ type StorageProvider interface {
 	// Real-time features (optional, may be handled by CacheProvider)
 	// SubscribeToMemoryChanges opens a stream of memory change events for a scope.
 	// The ctx scopes the subscription, and scope and scopeID identify the memory namespace to watch.
-	// Returns an event channel or an error if subscription setup fails.
+	// Returns an event channel or an error if subscription setup fails. The channel is
+	// closed when ctx is done, or early if the subscriber falls too far behind; a close
+	// before ctx is done means events were missed.
 	SubscribeToMemoryChanges(ctx context.Context, scope, scopeID string) (<-chan types.MemoryChangeEvent, error)
 	// PublishMemoryChange broadcasts a memory change event to subscribers.
 	// The ctx scopes the publish, and event contains the change notification to send.

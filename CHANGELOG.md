@@ -6,6 +6,253 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.1] - 2026-11-19
+
+
+### Fixed
+
+- Fix(sdk-go): honor the Retry-After header on 429 responses
+
+APIError dropped the response headers, so the rate limiter never saw the provider's Retry-After hint. Record the header (seconds or HTTP date) in APIError.RetryAfter and prefer it when computing the backoff.
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com> (f404fbf)
+
+## [0.1.146] - 2026-11-18
+
+## [0.1.146-rc.39] - 2026-11-18
+
+
+### Fixed
+
+- Fix(sdk-go): accept SSE data fields without a space in audio generation (#1210)
+
+OpenRouterMediaProvider.GenerateAudio only recognised lines starting with "data: ", so a valid SSE "data:{...}" event was skipped and the call returned success with empty audio and text. The SSE field value may follow the colon directly; match "data:" and let the existing TrimSpace drop the optional space, as client.go already does.
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com> (36d50b4)
+
+## [0.1.146-rc.38] - 2026-11-16
+
+
+### Added
+
+- Feat(sdk/go): real-time memory change subscriptions (#1208)
+
+* feat(sdk/go): real-time memory change subscriptions
+
+Add Memory().Watch, Memory().OnChange and Memory().History to the Go SDK,
+backed by the control plane's /api/v1/memory/events/ws and
+/api/v1/memory/events/history endpoints.
+
+- Server-side filtering by patterns (filepath.Match), scope and scope ID
+- Initial connect is synchronous so auth and pattern errors surface early
+- Reconnect with exponential backoff (1s to 30s), bounded attempts;
+  4xx handshake refusals stop immediately
+- Buffered events channel that applies backpressure instead of dropping
+- MemoryChangeEvent mirrors the wire format (set/delete actions, raw JSON
+  data); the "actor" scope is reported as ScopeUser
+- Backends without event support return ErrMemoryEventsUnsupported
+
+Closes #95
+
+* refactor(sdk/go): tighten memory subscription lifecycle and docs
+
+- OnChange stops through a derived context; Close no longer needs a
+  separate stop channel, and the context is released when the
+  subscription ends on its own
+- Reuse sleepCtx for reconnect waits and isTransientPollStatus for
+  permanent handshake refusals
+- Map the "actor" scope to ScopeUser in MemoryChangeEvent.UnmarshalJSON
+  instead of at each decode site
+- Extend the read deadline after each delivery so a slow consumer does
+  not make a healthy connection look silent
+- Copy DialTLSContext into the WebSocket dialer, and document that a
+  wrapping RoundTripper's settings do not apply to the handshake
+- Document that OnReconnect must not call Close, and that OnChange cannot
+  report reconnect gaps
+- Factor repeated test plumbing into helpers (fc96211)
+
+## [0.1.146-rc.37] - 2026-11-16
+
+
+### Fixed
+
+- Fix(web): hide LLM health UI when monitoring is not enabled (#1173)
+
+* fix(web): hide LLM health UI when monitoring is not enabled
+
+LLM health monitoring is opt-in (agentfield.llm_health). With it off, the
+server answers {enabled:false} and the header pill read the missing
+healthy field as false, so every default install showed "LLM Degraded".
+The pill, its popover row and the dashboard card now render only when the
+server reports monitoring as enabled.
+
+* test(web): monitored fixture for the dashboard LLM card
+
+The dashboard now draws the LLM card only when monitoring is enabled, so
+the default fixture says enabled: true, and a new case pins that the card
+is left out when it is not. (1593ad6)
+
+## [0.1.146-rc.36] - 2026-11-16
+
+
+### Fixed
+
+- Fix(control-plane): memory event subscription reliability and ordering (#1207)
+
+* fix(control-plane): memory event subscription reliability and ordering
+
+Subscriptions
+- Unsubscribe when the subscriber's context ends, so disconnected
+  clients no longer leave dead channels behind
+- Publish synchronously, so events reach each subscriber in the order
+  they were published
+- A subscriber whose 100-event buffer is full is disconnected and its
+  channel closed, instead of silently missing individual events
+
+WebSocket and SSE handlers
+- The server pings every 25s and drops a connection that is silent for
+  60s; the subscription lives exactly as long as the connection
+- A subscriber dropped for falling behind gets close code 1013 (WS) or
+  an "error" event (SSE), so clients can tell their stream has a gap
+- Malformed glob patterns are rejected with 400 instead of silently
+  matching nothing
+
+History
+- Patterns use path.Match (shared as types.MatchKeyPatterns), so
+  matching does not depend on the server's operating system
+- since is exclusive: only events strictly after it are returned
+- Local mode returns events in publication order; decimal BoltDB keys
+  previously sorted "10" before "2", so Limit kept the wrong events
+
+Refs #95
+
+* test(control-plane): decode only message frames in the memory event visibility test
+
+The SSE stub closes its channel to end the stream. With the subscription fix,
+a close while the request is still live is reported to the client as an
+"event: error" frame (the subscriber fell behind), which carries text rather
+than a change event. The test decoded every data: line as a change event and
+failed on that frame. Decode only message frames; the error frame is the
+intended behaviour of this change.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (6b09e65)
+
+## [0.1.146-rc.35] - 2026-11-16
+
+
+### Documentation
+
+- Docs: add Awesome AI Agents badge to README (#1190) (f6f3003)
+
+
+
+### Fixed
+
+- Fix(did): preserve component identities during concurrent registration (#1209)
+
+* fix(did): analyze registration from one identity snapshot
+
+Use the response snapshot for component differential analysis so a concurrent registration cannot make a no-change response omit newly issued DIDs. Cover reasoner and skill issuance with deterministic SQLite interleavings and serial controls.
+
+Fixes #1205
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* fix(did): retain identities across overlapping registrations
+
+Return a complete identity package from full registration and include concurrently issued requested components in partial responses without counting them as new allocations. Cover overlapping reasoners and skills, SDK key continuity and response-refresh failure.
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+---------
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (10fabe3)
+
+## [0.1.146-rc.34] - 2026-11-15
+
+
+### Fixed
+
+- Fix(python): preserve stored memory JSON value types (#1199)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (95c109d)
+
+## [0.1.146-rc.33] - 2026-11-15
+
+
+### Fixed
+
+- Fix(python): decode URL escapes in inline base64 media (#1200)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (e497b75)
+
+- Fix(config): honor AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE (#1201)
+
+docs/ENVIRONMENT_VARIABLES.md documents the variable, but ApplyEnvOverrides
+never read it, so setting it left tag_approval_rules.default_mode untouched
+and tags stayed auto-approved. Read it into
+features.did.authorization.tag_approval_rules.default_mode and document the
+modes the tag approval service implements (auto, manual, forbidden).
+
+Also drop AGENTFIELD_AUTHORIZATION_MASTER_SEED from the docs: nothing reads
+it, the master seed is generated and stored in the DID registry. (bd7a3c3)
+
+- Fix(control-plane): read AGENTFIELD_API_CORS_* without a config file (#1202)
+
+The CORS variables documented in docs/ENVIRONMENT_VARIABLES.md only reached
+the config through viper's AutomaticEnv, which resolves a key only when a
+loaded config file already contains it. With no config file (Railway, bare
+binary) they were dropped and the server kept the localhost default origins.
+
+Read the five variables in ApplyEnvOverrides, next to the other overrides
+that exist for the same reason. (e746d09)
+
+- Fix(go-sdk): preserve streaming read errors after buffered data (#1203)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (dde816a)
+
+- Fix(sdk-ts): apply rate-limit retry and circuit breaker to AIClient.stream (#1206) (ff1db1b)
+
+## [0.1.146-rc.32] - 2026-11-14
+
+
+### Fixed
+
+- Fix(python): enforce total timeout while awaiting approval (#1198)
+
+* fix(python): enforce total timeout while awaiting approval
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* fix(python): preserve approval wait cancellation on supported runtimes
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* style(python): format approval polling additions
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+---------
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (c148bb5)
+
+- Fix(go-sdk): parse data fields in SSE events (#1197)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (07cbd29)
+
+- Fix(sdk/go): surface in-stream error events from StreamComplete (#1194)
+
+An SSE data event of the form {"error":{...}} was unmarshalled into an
+empty StreamChunk and yielded as a normal chunk, so the caller never saw
+the provider failure. Return it as an error so it reaches errCh.
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (fef65a5)
+
 ## [0.1.146-rc.31] - 2026-11-13
 
 
