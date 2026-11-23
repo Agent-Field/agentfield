@@ -2,13 +2,19 @@ package agent
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 )
+
+// nilHandlerError reports a nil handler for the reasoner or skill called name,
+// so the offender can be found in an agent with many routers.
+func nilHandlerError(kind, name string) error {
+	return fmt.Errorf("agentfield: %s %q: nil handler", kind, name)
+}
 
 // RegisterReasoner makes a handler available at /reasoners/{name}.
 func (a *Agent) RegisterReasoner(name string, handler HandlerFunc, opts ...ReasonerOption) {
 	if handler == nil {
-		panic("nil handler supplied")
+		panic(nilHandlerError("reasoner", name).Error())
 	}
 
 	meta := &Reasoner{
@@ -50,7 +56,7 @@ func (a *Agent) RegisterReasoner(name string, handler HandlerFunc, opts ...Reaso
 // RegisterSkill makes a deterministic handler available at /skills/{name}.
 func (a *Agent) RegisterSkill(name string, handler HandlerFunc, opts ...ReasonerOption) error {
 	if handler == nil {
-		return errors.New("nil handler supplied")
+		return nilHandlerError("skill", name)
 	}
 
 	meta := &Reasoner{

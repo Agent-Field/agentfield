@@ -300,3 +300,37 @@ func TestRouter_IssueExample(t *testing.T) {
 	mustNotExecute(t, b, "users.get-profile")
 	mustNotExecute(t, b, "orders.create")
 }
+
+// A nil handler on a router must fail loudly when the router is mounted, for
+// skills as well as reasoners, and the message must name the mounted handler.
+func TestRouter_NilHandlerPanicsOnMount(t *testing.T) {
+	tests := []struct {
+		name     string
+		register func(*agent.Router)
+		want     string
+	}{
+		{
+			name:     "skill",
+			register: func(r *agent.Router) { r.RegisterSkill("lookup", nil) },
+			want:     `agentfield: skill "orders.lookup": nil handler`,
+		},
+		{
+			name:     "reasoner",
+			register: func(r *agent.Router) { r.RegisterReasoner("lookup", nil) },
+			want:     `agentfield: reasoner "orders.lookup": nil handler`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := agent.NewRouter()
+			tc.register(r)
+
+			defer func() {
+				if got := recover(); got != tc.want {
+					t.Fatalf("IncludeRouter panic = %v, want %q", got, tc.want)
+				}
+			}()
+			newTestAgent(t).IncludeRouter(r, agent.RouterOptions{Prefix: "orders"})
+		})
+	}
+}

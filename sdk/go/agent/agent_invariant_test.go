@@ -231,9 +231,9 @@ func TestInvariant_Agent_LocalCallIsolation(t *testing.T) {
 // registering a nil handler panics immediately rather than silently storing it.
 func TestInvariant_Agent_NilHandlerPanics(t *testing.T) {
 	a := makeMinimalAgent(t)
-	assert.Panics(t, func() {
+	assert.PanicsWithValue(t, `agentfield: reasoner "bad": nil handler`, func() {
 		a.RegisterReasoner("bad", nil)
-	}, "registering nil handler must panic")
+	}, "registering nil handler must panic and name the reasoner")
 }
 
 // TestInvariant_Agent_ExecuteUnknownReasoner returns a non-nil error.

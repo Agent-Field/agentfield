@@ -375,7 +375,7 @@ DALL-E has rate limits. If you hit them:
 ## Related Examples
 
 - [hello_world](../hello_world/) - Basic agent with skills and reasoners
-- [Python SDK Documentation](../../../docs/python-sdk.md) - Full SDK reference
+- [Python SDK Documentation](../../../sdk/python/README.md) - Full SDK reference
 
 ## Learn More
 

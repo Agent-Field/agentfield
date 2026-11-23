@@ -796,6 +796,16 @@ func ApplyEnvOverrides(cfg *Config) {
 		cfg.API.Auth.APIKey = apiKey
 	}
 
+	// Local storage paths. Like the CORS keys below, these are absent when no
+	// config file is loaded, so viper's AutomaticEnv never resolves the
+	// documented AGENTFIELD_STORAGE_LOCAL_* names.
+	if val := strings.TrimSpace(os.Getenv("AGENTFIELD_STORAGE_LOCAL_DATABASE_PATH")); val != "" {
+		cfg.Storage.Local.DatabasePath = val
+	}
+	if val := strings.TrimSpace(os.Getenv("AGENTFIELD_STORAGE_LOCAL_KV_STORE_PATH")); val != "" {
+		cfg.Storage.Local.KVStorePath = val
+	}
+
 	// CORS. These keys are absent when no config file is loaded, so viper's
 	// AutomaticEnv never resolves the documented AGENTFIELD_API_CORS_* names.
 	if val := os.Getenv("AGENTFIELD_API_CORS_ALLOWED_ORIGINS"); val != "" {
