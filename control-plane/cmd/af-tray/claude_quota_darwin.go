@@ -16,6 +16,12 @@ import (
 // STRICT contract (see shared.go): read-only. We never write to the Keychain,
 // and the token is only ever handed to fetchClaudeQuota, which sends it to
 // api.anthropic.com and nowhere else. It is never logged or persisted.
+//
+// OPT-IN ONLY. This reads a credential that belongs to another application, so
+// the caller must have checked claudeUsageEnabled() first: the tray never runs
+// `security find-generic-password` until the user has turned "Show Claude usage
+// limits" on. Endpoint-security tools treat an unprompted Keychain read by a
+// background helper as credential theft, and they are right to.
 
 // readClaudeCodeToken reads the OAuth access token that Claude Code stores in
 // the macOS login Keychain under the "Claude Code-credentials" generic-password
@@ -54,6 +60,11 @@ const claudeUsageURL = "https://api.anthropic.com/api/oauth/usage"
 // It returns a zero (OK=false) claudeQuota whenever anything is unavailable, so
 // the caller can render nothing without special-casing.
 func fetchClaudeQuotaNow() claudeQuota {
+	// The one door to the Keychain read: without the user's opt-in this
+	// returns before any `security` process is spawned.
+	if !claudeUsageEnabled() {
+		return claudeQuota{}
+	}
 	token := readClaudeCodeToken()
 	if token == "" {
 		return claudeQuota{}

@@ -190,6 +190,11 @@ func onReady() {
 	mLogin := mServer.AddSubMenuItemCheckbox("Start at login", "Launch the control plane automatically when you log in", serverAutostartEnabled())
 	mLogs := systray.AddMenuItem("View logs", "Open the control-plane log file")
 	mLogs.SetTemplateIcon(iconLogs, iconLogs)
+	// Off until the user turns it on: the rows read the Claude Code login from
+	// the Keychain, so the tray must never do that without being asked.
+	mClaudeUsage := systray.AddMenuItemCheckbox("Show Claude usage limits",
+		"Read the saved Claude Code login from your Keychain to show its 5-hour and 7-day usage. Off by default.",
+		claudeUsageEnabled())
 
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit the AgentField tray")
@@ -531,6 +536,9 @@ func onReady() {
 	// Claude subscription quota lives on its own goroutine and cadence so a slow
 	// or hanging call to api.anthropic.com can never block the menu refresh. It
 	// writes the latest reading under a mutex; renderUsage reads it each refresh.
+	// It does nothing, and never touches the Keychain, until the user has turned
+	// "Show Claude usage limits" on; claudeNudge makes a flip take effect now.
+	claudeNudge := make(chan struct{}, 1)
 	go func() {
 		poll := func() {
 			q := fetchClaudeQuotaNow()
@@ -541,7 +549,11 @@ func onReady() {
 		poll()
 		ticker := time.NewTicker(claudeQuotaInterval)
 		defer ticker.Stop()
-		for range ticker.C {
+		for {
+			select {
+			case <-ticker.C:
+			case <-claudeNudge:
+			}
 			poll()
 		}
 	}()
@@ -612,6 +624,21 @@ func onReady() {
 				refresh()
 			case <-mLogs.ClickedCh:
 				openLogs()
+			case <-mClaudeUsage.ClickedCh:
+				if mClaudeUsage.Checked() {
+					if err := setClaudeUsageEnabled(false); err == nil {
+						mClaudeUsage.Uncheck()
+					}
+				} else {
+					if err := setClaudeUsageEnabled(true); err == nil {
+						mClaudeUsage.Check()
+					}
+				}
+				select {
+				case claudeNudge <- struct{}{}:
+				default:
+				}
+				refresh()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return

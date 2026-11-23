@@ -903,6 +903,30 @@ func saveAPIKey(key string) error {
 
 // ---- Tray settings (persisted preferences) ---------------------------------
 
+// claudeUsagePath is the opt-in switch for the Claude plan-usage rows. The rows
+// read the Claude Code login out of the user's Keychain, which is credential
+// access that belongs to another application, so it is OFF until the user turns
+// it on from the menu. The switch is a file so every tray start (launchd, login
+// item, a manual run) sees the same answer without another settings format.
+func claudeUsagePath() string { return filepath.Join(agentfieldDir(), "tray-claude-usage") }
+
+// claudeUsageEnabled reports whether the user has opted in to the Claude rows.
+func claudeUsageEnabled() bool {
+	_, err := os.Stat(claudeUsagePath())
+	return err == nil
+}
+
+// setClaudeUsageEnabled records or clears the opt-in.
+func setClaudeUsageEnabled(on bool) error {
+	if on {
+		return writeFileAtomic(claudeUsagePath(), []byte("on\n"), 0o600)
+	}
+	if err := os.Remove(claudeUsagePath()); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // ---- Presentation helpers (pure, so they're unit-tested on any OS) ----------
 //
 // Design: the menu is a calm dashboard — a two-line header, then one fact per

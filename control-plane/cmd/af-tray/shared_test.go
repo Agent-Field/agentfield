@@ -380,3 +380,31 @@ func mustContain(t *testing.T, haystack, needle string) {
 		t.Errorf("expected output to contain %q\n---\n%s", needle, haystack)
 	}
 }
+
+// Contract: "Show Claude usage limits" is off for a fresh home, turns on and off
+// from the menu, and keeps its answer between tray starts.
+func TestClaudeUsageOptInRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if claudeUsageEnabled() {
+		t.Fatal("a fresh home must not have Claude usage turned on")
+	}
+	if err := setClaudeUsageEnabled(false); err != nil {
+		t.Fatalf("turning off when already off must not fail: %v", err)
+	}
+	if err := setClaudeUsageEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if !claudeUsageEnabled() {
+		t.Fatal("opt-in was not remembered")
+	}
+	info, err := os.Stat(claudeUsagePath())
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("opt-in file mode = %v (%v), want 0600", info.Mode().Perm(), err)
+	}
+	if err := setClaudeUsageEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	if claudeUsageEnabled() {
+		t.Fatal("opt-out was not remembered")
+	}
+}
