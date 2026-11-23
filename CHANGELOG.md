@@ -6,6 +6,141 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.8] - 2026-11-23
+
+
+### Fixed
+
+- Fix(tray): reduce endpoint-security false positives on macOS (#1236)
+
+* Separate macOS tray setup from server startup
+
+* Sign and notarize standalone macOS tray binaries
+
+* fix(tray): remove the staged tray copy when the packaged app takes over
+
+Older Desktop builds and install.sh copied the tray helper to
+~/.agentfield/bin/af-tray. Once the tray runs from the signed Desktop app that
+copy is an unreferenced executable in a hidden folder, which is exactly what
+endpoint-security tools quarantine. Delete it when Desktop adopts or hides the
+tray, but never while a tray job still names it and never the running program.
+
+af service uninstall now also removes the session tray plist and the staged
+copy, so an uninstall leaves no launchd job or helper behind.
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com>
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(install): stop stripping the macOS quarantine attribute
+
+curl never sets com.apple.quarantine on what it downloads, so the three
+xattr -d calls removed nothing, and a script that clears that attribute looks
+like Gatekeeper evasion to endpoint-security tools. The release binaries are
+Developer ID signed and notarized, so macOS accepts them as they are.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(uninstall): deregister the macOS login jobs before deleting the binaries
+
+uninstall.sh removed ~/.agentfield but left the launchd jobs and the menu-bar
+app pointing at executables that no longer existed. Run af service uninstall
+first, while the binary is still there, so no login job is left behind.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs: describe the opt-in macOS tray install
+
+The README still said the installer registers the control plane at login and
+adds a menu-bar icon by default. The tray install is opt-in (--with-tray) and
+existing tray installs are updated in place. Also drop an orphaned test comment
+left where TestParseInstallOptions was removed.
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com>
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(tray): read the Claude Code login from the Keychain only after opt-in
+
+The tray silently ran security find-generic-password against the Claude Code
+credential every five minutes and sent the token to the Claude usage endpoint.
+A background helper reading another application's saved login without being
+asked is what endpoint-security tools classify as credential theft.
+
+The usage rows now sit behind a "Show Claude usage limits" menu item that is off
+by default. fetchClaudeQuotaNow is the single door and returns before any
+security process is spawned unless the user has turned it on.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(tray): ask for the API key with a native alert instead of osascript
+
+The tray prompted for the control-plane API key by spawning osascript with a
+hidden-answer AppleScript dialog, which is also how credential-phishing malware
+asks for a password and is flagged as such. Use an NSAlert with a secure text
+field from the signed helper itself, and the same for the error alerts, so the
+tray no longer runs osascript at all.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(tray): pin what endpoint-security tools react to
+
+Source-level guards that run on every platform: the install, start and update
+path never names xattr or the quarantine attribute, the tray never runs
+osascript, and the only reader of the Keychain item is the opt-in-gated one.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* ci(release): sign and notarize af as well as the tray, and check the app's helper
+
+The control plane is launched at login by launchd just like the tray, so sign
+and notarize the standalone darwin af binaries with the same Developer ID,
+hardened runtime and timestamp. Production releases fail rather than ship
+unsigned macOS binaries; staging keeps the warn-and-continue behaviour of the
+Desktop installer step. The release job also verifies that the packed app
+carries the helper signed with the release Team ID and exactly one login agent
+definition.
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com>
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* ci: prove the packaged tray layout and run the darwin tray tests
+
+Desktop CI now builds the unsigned app with a real Mach-O af-tray stub and
+checks that the helper lands in Contents/MacOS and the one login agent in
+Contents/Library/LaunchAgents with a BundleProgram naming the helper. The macOS
+control-plane job runs the darwin-only tray and launchd tests, which the Linux
+jobs cannot execute.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(desktop): describe the packaged tray helper and release signing
+
+Replace the stale "no signing identity" limitation: release builds are Developer
+ID signed and notarized. Explain where the helper and its login agent live and
+that the Claude usage rows are opt-in.
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com>
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(tray): cover the session-plist, path and desktop-tray contracts
+
+Pins the behaviours the patch-coverage gate found untested: `af service
+status` following a server the tray registered for the session only, the
+session and staged-copy paths staying out of LaunchAgents, a failed opt-out
+of the Claude usage switch being reported, the tray job template escaping
+reserved characters while the legacy template stays recognisable for
+upgrades, and `desktop-tray` rejecting malformed arguments (exit 2) and being
+unsupported off macOS (exit 1).
+
+The status code gains a `launchdSupportedFn` seam, like the existing
+`agentLoadedFn`, so the session-plist branch is reachable on Linux CI.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com>
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (961af5f)
+
 ## [0.1.147-rc.7] - 2026-11-23
 
 
