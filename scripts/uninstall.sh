@@ -49,6 +49,33 @@ print_banner() {
   echo ""
 }
 
+# Remove the macOS launchd jobs and menu-bar app before the binaries they run
+# are deleted. Without this, a login job keeps pointing at a missing executable.
+# `af service uninstall` is the one place that knows every file involved; it is
+# best-effort, and a machine that never had a tray or server job has nothing to do.
+remove_macos_background_items() {
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+
+  local af_bin=""
+  for candidate in "$INSTALL_DIR/bin/agentfield" "$INSTALL_DIR/bin/af"; do
+    if [[ -x "$candidate" ]]; then
+      af_bin="$candidate"
+      break
+    fi
+  done
+
+  if [[ -n "$af_bin" ]]; then
+    print_info "Removing the macOS control-plane login job and menu-bar app..."
+    if "$af_bin" service uninstall >/dev/null 2>&1; then
+      print_success "macOS background items removed"
+    else
+      print_warning "Could not run '$af_bin service uninstall'; check ~/Library/LaunchAgents for ai.agentfield.* files"
+    fi
+  fi
+}
+
 # Remove AgentField directory
 remove_agentfield_dir() {
   if [[ -d "$INSTALL_DIR" ]]; then
@@ -129,6 +156,9 @@ main() {
   # Confirm uninstall
   echo -e "${BOLD}This will remove:${NC}"
   echo "  - AgentField directory: $INSTALL_DIR"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "  - macOS login jobs and the menu-bar app, if installed"
+  fi
   echo "  - PATH configuration from shell config files"
   echo ""
   read -p "Are you sure you want to uninstall AgentField? (y/N) " -n 1 -r
@@ -139,6 +169,9 @@ main() {
   fi
 
   echo ""
+
+  # Stop and deregister the macOS background jobs first
+  remove_macos_background_items
 
   # Remove AgentField directory
   remove_agentfield_dir
