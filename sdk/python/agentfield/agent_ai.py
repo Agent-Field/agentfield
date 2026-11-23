@@ -992,7 +992,12 @@ class AgentAI:
                     )
                 else:
                     turn_resp = await _call_with_fallbacks()
-                _record_tool_turn_usage(turn_resp, params)
+                try:
+                    _record_tool_turn_usage(turn_resp, params)
+                except Exception as e:
+                    # Usage accounting is an observation side effect: it must
+                    # never fail a completion that already succeeded.
+                    log_debug(f"Tool loop: usage recording failed: {e}")
                 return turn_resp
 
             def _record_tool_turn_usage(turn_resp, params):

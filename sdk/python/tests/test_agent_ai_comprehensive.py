@@ -659,3 +659,47 @@ async def test_ai_tool_loop_records_cache_tokens_and_missing_usage(
     assert entries[0]["cache_read_tokens"] == 4
     assert entries[0]["cache_creation_tokens"] == 2
     assert entries[1]["usage_status"] == "missing"
+
+
+@pytest.mark.asyncio
+async def test_ai_tool_loop_survives_usage_tracker_failure(monkeypatch, agent_with_ai):
+    """A broken cost tracker must not fail a tool-loop completion that succeeded."""
+
+    class _BrokenTracker:
+        def record(self, **kwargs):
+            raise RuntimeError("tracker down")
+
+    agent_with_ai.cost_tracker = _BrokenTracker()
+    litellm_module = setup_litellm_stub(monkeypatch)
+    usage = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    litellm_module.acompletion.side_effect = [
+        SimpleNamespace(
+            model="gpt-4",
+            usage=usage,
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="done",
+                        audio=None,
+                        tool_calls=None,
+                        model_dump=lambda: {"role": "assistant", "content": "done"},
+                    )
+                )
+            ],
+        )
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    result = await AgentAI(agent_with_ai).ai("question", tools=tools)
+
+    assert litellm_module.acompletion.await_count == 1
+    assert result.choices[0].message.content == "done"
