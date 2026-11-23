@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.7] - 2026-11-23
+
+
+### Chores
+
+- Chore(deps): bump go.opentelemetry.io/otel/sdk from 1.46.0 to 1.47.0 in /control-plane in the go_modules group across 1 directory (#1196)
+
+* chore(deps): bump go.opentelemetry.io/otel/sdk
+
+Bumps the go_modules group with 1 update in the /control-plane directory: [go.opentelemetry.io/otel/sdk](https://github.com/open-telemetry/opentelemetry-go).
+
+
+Updates `go.opentelemetry.io/otel/sdk` from 1.46.0 to 1.47.0
+- [Release notes](https://github.com/open-telemetry/opentelemetry-go/releases)
+- [Changelog](https://github.com/open-telemetry/opentelemetry-go/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/open-telemetry/opentelemetry-go/compare/v1.46.0...v1.47.0)
+
+---
+updated-dependencies:
+- dependency-name: go.opentelemetry.io/otel/sdk
+  dependency-version: 1.47.0
+  dependency-type: direct:production
+  dependency-group: go_modules
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+* build: move the Go toolchain to 1.26 for the control plane
+
+otel/sdk 1.47.0 requires go 1.26.0 in go.mod. CI used go 1.25.x with
+GOTOOLCHAIN=auto and every Dockerfile used golang:1.25 with
+GOTOOLCHAIN=local, so the image and functional-test builds failed with
+"go.mod requires go >= 1.26.0". Go 1.25 is also past upstream support
+(1.26 and 1.27 are the supported releases), and 1.47.0 closes the open
+AttributeValueLengthLimit advisories on otel/sdk and otel/trace.
+
+Bump setup-go in control-plane.yml, coverage.yml and release.yml, and the
+golang build images in the control-plane, cloud and functional-test
+Dockerfiles. sdk/go and the Go examples keep their own go directives.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (3200731)
+
 ## [0.1.147-rc.6] - 2026-11-23
 
 
