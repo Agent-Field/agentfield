@@ -38,6 +38,7 @@ func readExecutionHeaders(ctx *gin.Context) executionHeaders {
 	replaySourceRunID := strings.TrimSpace(ctx.GetHeader("X-AgentField-Replay-Source-Run-ID"))
 	replayBeforeExecutionID := strings.TrimSpace(ctx.GetHeader("X-AgentField-Replay-Before-Execution-ID"))
 	replayMode := strings.TrimSpace(ctx.GetHeader("X-AgentField-Replay-Mode"))
+	runOwner := strings.TrimSpace(ctx.GetHeader(RunOwnerHeader))
 
 	var parentPtr *string
 	if parent != "" {
@@ -61,6 +62,7 @@ func readExecutionHeaders(ctx *gin.Context) executionHeaders {
 		actorID:                 actorPtr,
 		replaySourceRunID:       replaySourceRunID,
 		replayBeforeExecutionID: replayBeforeExecutionID,
+		runOwner:                runOwner,
 		replayMode:              replayMode,
 	}
 }

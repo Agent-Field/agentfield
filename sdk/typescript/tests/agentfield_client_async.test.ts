@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import express from 'express';
@@ -9,6 +9,7 @@ import { PauseClock } from '../src/agent/pause.js';
 let server: http.Server;
 
 afterEach(() => {
+  vi.useRealTimers();
   return new Promise<void>((resolve) => {
     if (server?.listening) {
       server.closeAllConnections();
@@ -119,6 +120,67 @@ describe('AgentFieldClient.waitForExecutionResult', () => {
     await expect(
       makeClient(base).waitForExecutionResult('exec-1', { pollIntervalMs: 10 })
     ).rejects.toThrow(/failed: blew up/);
+  });
+
+  it.each([200, 503])('does not extend a new timeout by past pauses when polling returns %i', async (statusCode) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(0);
+    const clock = new PauseClock();
+    clock.startPause();
+    vi.setSystemTime(4000);
+    clock.endPause();
+    vi.setSystemTime(5000);
+
+    const { base, recs } = await startServer((req, res, all) => {
+      vi.setSystemTime(Date.now() + 100);
+      // A terminal fallback makes the broken implementation fail without hanging.
+      if (all.length >= 3) {
+        res.status(200).json({ status: 'succeeded', result: { unexpected: true } });
+      } else {
+        res.status(statusCode).json({ status: 'running' });
+      }
+    });
+
+    await expect(makeClient(base).waitForExecutionResult('exec-1', {
+      timeoutMs: 200,
+      pollIntervalMs: 1,
+      maxIntervalMs: 1,
+      pauseClock: clock
+    })).rejects.toThrow(/timed out/);
+    expect(recs).toHaveLength(2);
+    expect(clock.totalPaused()).toBe(4000);
+  });
+
+  it('excludes new WAITING time while preserving the shared clock history', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(0);
+    const clock = new PauseClock();
+    clock.startPause();
+    vi.setSystemTime(4000);
+    clock.endPause();
+    vi.setSystemTime(5000);
+
+    const statuses = ['waiting', 'waiting', 'running', 'running', 'succeeded'];
+    // 100 ms active, 1100 ms waiting, then another 100 ms active.
+    const elapsed = [100, 1000, 100, 100, 100];
+    const { base, recs } = await startServer((req, res, all) => {
+      const index = Math.min(all.length - 1, statuses.length - 1);
+      vi.setSystemTime(Date.now() + elapsed[index]);
+      res.status(200).json({ status: statuses[index], result: { unexpected: true } });
+    });
+
+    const events: string[] = [];
+    await expect(makeClient(base).waitForExecutionResult('exec-1', {
+      timeoutMs: 200,
+      pollIntervalMs: 1,
+      maxIntervalMs: 1,
+      pauseClock: clock,
+      onChildWaiting: () => { events.push('waiting'); },
+      onChildRunning: () => { events.push('running'); }
+    })).rejects.toThrow(/timed out/);
+    expect(recs).toHaveLength(4);
+    expect(events).toEqual(['waiting', 'running']);
+    expect(clock.totalPaused()).toBe(5100);
   });
 
   it('fires onChildWaiting/onChildRunning and pauses the clock across a WAITING window', async () => {

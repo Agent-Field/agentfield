@@ -90,6 +90,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 	RootCmd.PersistentFlags().BoolVar(&uiDevFlag, "ui-dev", false, "Run with UI development server (proxies to backend)")
 	RootCmd.PersistentFlags().BoolVar(&backendOnlyFlag, "backend-only", false, "Run only backend APIs, UI served separately")
 	RootCmd.PersistentFlags().IntVar(&portFlag, "port", 0, "Port for the af server (overrides config if set)")
+	RootCmd.PersistentFlags().String("host", "", "Bind host for HTTP and admin gRPC (empty binds all interfaces; overrides config and AGENTFIELD_HOST)")
 	RootCmd.PersistentFlags().BoolVar(&noVCExecution, "no-vc-execution", false, "Disable generating verifiable credentials for executions")
 	RootCmd.PersistentFlags().BoolVar(&forceVCExecution, "vc-execution", false, "Force-enable generating verifiable credentials for executions")
 	RootCmd.PersistentFlags().StringVar(&storageModeFlag, "storage-mode", "", "Override the storage backend (local or postgres)")
@@ -216,6 +217,14 @@ func GetUIDevFlag() bool {
 
 func GetBackendOnlyFlag() bool {
 	return backendOnlyFlag
+}
+
+// ApplyServerHostFlag applies an explicitly selected bind host after YAML/env
+// loading. An explicitly empty flag restores the default wildcard bind.
+func ApplyServerHostFlag(cmd *cobra.Command, cfg *config.Config) {
+	if flag := cmd.Flags().Lookup("host"); flag != nil && flag.Changed {
+		cfg.AgentField.Host, _ = cmd.Flags().GetString("host")
+	}
 }
 
 func GetPortFlag() int {

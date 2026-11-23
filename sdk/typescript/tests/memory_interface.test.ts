@@ -240,3 +240,38 @@ describe('MemoryInterface exported methods', () => {
     });
   });
 });
+
+describe('MemoryInterface.searchVector scoping', () => {
+  it('searches the scope of a session()/workflow() handle by default', async () => {
+    const client = createMemoryClient();
+    const metadata: MemoryRequestMetadata = { workflowId: 'workflow-A', sessionId: 'session-A' };
+    const memory = new MemoryInterface({ client: client as MemoryClient, metadata });
+
+    await memory.session('session-B').searchVector([1, 2], { topK: 3 });
+    await memory.workflow('workflow-B').searchVector([1, 2]);
+
+    expect(client.searchVector).toHaveBeenNthCalledWith(1, [1, 2], {
+      topK: 3,
+      scope: 'session',
+      scopeId: 'session-B',
+      metadata
+    });
+    expect(client.searchVector).toHaveBeenNthCalledWith(2, [1, 2], {
+      scope: 'workflow',
+      scopeId: 'workflow-B',
+      metadata
+    });
+  });
+
+  it('lets explicit options override the handle scope without leaking its scopeId', async () => {
+    const client = createMemoryClient();
+    const memory = new MemoryInterface({ client: client as MemoryClient });
+    const session = memory.session('session-B');
+
+    await session.searchVector([1], { scope: 'actor' });
+    await session.searchVector([1], { scope: 'global', scopeId: 'global' });
+
+    expect(client.searchVector).toHaveBeenNthCalledWith(1, [1], { scope: 'actor', scopeId: undefined, metadata: undefined });
+    expect(client.searchVector).toHaveBeenNthCalledWith(2, [1], { scope: 'global', scopeId: 'global', metadata: undefined });
+  });
+});

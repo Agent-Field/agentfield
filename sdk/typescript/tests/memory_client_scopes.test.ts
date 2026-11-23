@@ -42,6 +42,24 @@ vi.mock('axios', () => {
 });
 
 import { MemoryClient } from '../src/memory/MemoryClient.js';
+import { MemoryInterface } from '../src/memory/MemoryInterface.js';
+import type { AIClient } from '../src/ai/AIClient.js';
+import type { MemoryScope } from '../src/types/agent.js';
+
+const memoryOperations: Array<[
+  string,
+  (memory: MemoryInterface, scope: MemoryScope, scopeId?: string) => unknown
+]> = [
+  ['set', (memory, scope, id) => memory.set('order', 42, scope, id)],
+  ['get', (memory, scope, id) => memory.get('order', scope, id)],
+  ['delete', (memory, scope, id) => memory.delete('order', scope, id)],
+  ['exists', (memory, scope, id) => memory.exists('order', scope, id)],
+  ['listKeys', (memory, scope, id) => memory.listKeys(scope, id)],
+  ['setVector', (memory, scope, id) => memory.setVector('order', [1, 2], undefined, scope, id)],
+  ['deleteVector', (memory, scope, id) => memory.deleteVector('order', scope, id)],
+  ['embedAndSet', (memory, scope, id) => memory.embedAndSet('order', 'text', undefined, scope, id)],
+  ['deleteVectors', (memory, scope, id) => memory.deleteVectors(['order', 'other'], scope, id)]
+];
 
 function getHttp(): AxiosMockInstance {
   const http = createdInstances.at(-1);
@@ -62,6 +80,94 @@ describe('MemoryClient scoped headers', () => {
   beforeEach(() => {
     createMock.mockClear();
     createdInstances.length = 0;
+  });
+
+  it('uses the destination actor id when a session handle overrides its scope', async () => {
+    const client = new MemoryClient('http://control-plane.local');
+    const http = getHttp();
+    http.post.mockResolvedValue({ data: {} });
+    const memory = new MemoryInterface({
+      client,
+      metadata: { sessionId: 'session-context', actorId: 'actor-context' }
+    }).session('session-handle');
+
+    await memory.set('order', { total: 42 }, 'actor');
+
+    expect(http.post).toHaveBeenCalledWith(
+      '/api/v1/memory/set',
+      { key: 'order', data: { total: 42 }, scope: 'actor' },
+      { headers: { 'X-Session-ID': 'session-context', 'X-Actor-ID': 'actor-context' } }
+    );
+  });
+
+  describe.each([
+    { label: 'another scope', scope: 'actor', scopeId: undefined, actorId: 'actor-context', sessionId: 'session-context' },
+    { label: 'the handle scope', scope: 'session', scopeId: undefined, actorId: 'actor-context', sessionId: 'session-handle' },
+    { label: 'an explicit id', scope: 'actor', scopeId: 'actor-explicit', actorId: 'actor-explicit', sessionId: 'session-context' }
+  ] as const)('$label', ({ scope, scopeId, actorId, sessionId }) => {
+    it.each(memoryOperations)('%s uses the requested scope id', async (_name, invoke) => {
+      const client = new MemoryClient('http://control-plane.local');
+      const http = getHttp();
+      http.post.mockResolvedValue({ data: { data: 42 } });
+      http.get.mockResolvedValue({ data: [] });
+      const memory = new MemoryInterface({
+        client,
+        aiClient: { embed: vi.fn(async () => [1, 2]) } as unknown as AIClient,
+        metadata: {
+          workflowId: 'workflow-context',
+          sessionId: 'session-context',
+          actorId: 'actor-context'
+        }
+      }).session('session-handle');
+
+      await invoke(memory, scope, scopeId);
+
+      const requests = [
+        ...http.post.mock.calls.map(([, body, config]) => ({ scope: body.scope, headers: config.headers })),
+        ...http.get.mock.calls.map(([, config]) => ({ scope: config.params.scope, headers: config.headers }))
+      ];
+      expect(requests.length).toBeGreaterThan(0);
+      for (const request of requests) {
+        expect(request).toEqual({
+          scope,
+          headers: {
+            'X-Workflow-ID': 'workflow-context',
+            'X-Session-ID': sessionId,
+            'X-Actor-ID': actorId
+          }
+        });
+      }
+    });
+  });
+
+  it('resolves session ids from metadata when switching from workflow, actor, and global handles', async () => {
+    const client = new MemoryClient('http://control-plane.local');
+    const http = getHttp();
+    http.post.mockResolvedValue({ data: {} });
+    const memory = new MemoryInterface({ client, metadata: { sessionId: 'session-context' } });
+
+    for (const handle of [memory.workflow('workflow-handle'), memory.actor('actor-handle'), memory.globalScope]) {
+      await handle.set('order', 42, 'session');
+    }
+
+    expect(http.post).toHaveBeenCalledTimes(3);
+    for (const [, body, config] of http.post.mock.calls) {
+      expect(body.scope).toBe('session');
+      expect(config.headers).toEqual({ 'X-Session-ID': 'session-context' });
+    }
+  });
+
+  it('does not substitute the source id when destination metadata is missing', async () => {
+    const client = new MemoryClient('http://control-plane.local');
+    const http = getHttp();
+    http.post.mockResolvedValue({ data: {} });
+    const memory = new MemoryInterface({ client }).session('session-handle');
+
+    await memory.set('order', 42, 'actor');
+
+    expect(http.post).toHaveBeenCalledWith(
+      '/api/v1/memory/set', { key: 'order', data: 42, scope: 'actor' }, { headers: {} }
+    );
   });
 
   it('set() uses X-Workflow-ID for workflow scope and forwards metadata headers', async () => {

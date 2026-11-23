@@ -202,7 +202,7 @@ func (c *Client) sendRequest(ctx context.Context, req *Request, body []byte) (*R
 
 	// Check for errors
 	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newAPIError(httpResp.StatusCode, respBody)
+		return nil, newAPIErrorFromResponse(httpResp, respBody)
 	}
 
 	// Parse response
@@ -213,6 +213,69 @@ func (c *Client) sendRequest(ctx context.Context, req *Request, body []byte) (*R
 	response.normalizeNativeCost()
 
 	return &response, nil
+}
+
+// openStream performs a single streaming chat completion request and returns
+// the response once the headers have arrived with a 2xx status. Non-2xx
+// responses are returned as API errors with the body already closed. The
+// returned cancel func must be called once the body has been consumed.
+func (c *Client) openStream(ctx context.Context, req *Request, body []byte) (*http.Response, context.CancelFunc, error) {
+	url := strings.TrimSuffix(c.config.BaseURL, "/") + "/chat/completions"
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	apiKey := c.config.APIKey
+	if strings.TrimSpace(req.APIKeyOverride) != "" {
+		apiKey = req.APIKeyOverride
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	// Add gateway-specific attribution headers if applicable
+	switch {
+	case c.config.IsOpenRouter():
+		applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+	case c.config.IsInfron():
+		applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
+	}
+
+	// http.Client.Timeout covers reading the whole body, which would cut off
+	// a stream that is still delivering chunks. Bound only the wait for the
+	// response headers with the same duration instead.
+	streamClient := c.httpClient
+	cancel := context.CancelFunc(func() {})
+	var headerTimer *time.Timer
+	if headerTimeout := c.httpClient.Timeout; headerTimeout > 0 {
+		clone := *c.httpClient
+		clone.Timeout = 0
+		streamClient = &clone
+
+		var reqCtx context.Context
+		reqCtx, cancel = context.WithCancel(ctx)
+		headerTimer = time.AfterFunc(headerTimeout, cancel)
+		httpReq = httpReq.WithContext(reqCtx)
+	}
+
+	httpResp, err := streamClient.Do(httpReq)
+	if headerTimer != nil {
+		headerTimer.Stop()
+	}
+	if err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("execute request: %w", err)
+	}
+
+	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+		respBody, _ := io.ReadAll(httpResp.Body)
+		httpResp.Body.Close()
+		cancel()
+		return nil, nil, newAPIErrorFromResponse(httpResp, respBody)
+	}
+	return httpResp, cancel, nil
 }
 
 // StreamComplete makes a streaming chat completion request.
@@ -257,66 +320,26 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 			return
 		}
 
-		// Build URL
-		url := strings.TrimSuffix(c.config.BaseURL, "/") + "/chat/completions"
-
-		// Create HTTP request
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-		if err != nil {
-			errCh <- fmt.Errorf("create request: %w", err)
-			return
+		// Open the stream. The header phase goes through the rate limiter so
+		// 429/503 responses are retried like in Complete.
+		var httpResp *http.Response
+		var cancel context.CancelFunc
+		open := func() error {
+			var openErr error
+			httpResp, cancel, openErr = c.openStream(ctx, req, body)
+			return openErr
 		}
-
-		// Set headers
-		httpReq.Header.Set("Content-Type", "application/json")
-		apiKey := c.config.APIKey
-		if strings.TrimSpace(req.APIKeyOverride) != "" {
-			apiKey = req.APIKeyOverride
-		}
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-		httpReq.Header.Set("Accept", "text/event-stream")
-
-		// Add gateway-specific attribution headers if applicable
-		switch {
-		case c.config.IsOpenRouter():
-			applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
-		case c.config.IsInfron():
-			applyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
-		}
-
-		// http.Client.Timeout covers reading the whole body, which would cut off
-		// a stream that is still delivering chunks. Bound only the wait for the
-		// response headers with the same duration instead.
-		streamClient := c.httpClient
-		var headerTimer *time.Timer
-		if headerTimeout := c.httpClient.Timeout; headerTimeout > 0 {
-			clone := *c.httpClient
-			clone.Timeout = 0
-			streamClient = &clone
-
-			reqCtx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			headerTimer = time.AfterFunc(headerTimeout, cancel)
-			httpReq = httpReq.WithContext(reqCtx)
-		}
-
-		// Execute request
-		httpResp, err := streamClient.Do(httpReq)
-		if headerTimer != nil {
-			headerTimer.Stop()
+		if c.rateLimiter == nil {
+			err = open()
+		} else {
+			err = c.rateLimiter.Execute(ctx, open)
 		}
 		if err != nil {
-			errCh <- fmt.Errorf("execute request: %w", err)
+			errCh <- err
 			return
 		}
+		defer cancel()
 		defer httpResp.Body.Close()
-
-		// Check for errors
-		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-			respBody, _ := io.ReadAll(httpResp.Body)
-			errCh <- newAPIError(httpResp.StatusCode, respBody)
-			return
-		}
 
 		// Parse SSE stream
 		decoder := NewSSEDecoder(httpResp.Body)
@@ -346,6 +369,7 @@ type SSEDecoder struct {
 	reader      io.Reader
 	accumulated []byte
 	buf         []byte
+	readErr     error
 }
 
 // NewSSEDecoder creates a new SSE decoder.
@@ -360,18 +384,26 @@ func NewSSEDecoder(r io.Reader) *SSEDecoder {
 func (d *SSEDecoder) Decode() (StreamChunk, error) {
 	for {
 		// First check if we already have a complete message in accumulated buffer
-		data := string(d.accumulated)
+		// SSE allows CRLF line endings; normalize so "\r\n\r\n" separates events too.
+		data := strings.ReplaceAll(string(d.accumulated), "\r\n", "\n")
 		if idx := strings.Index(data, "\n\n"); idx >= 0 {
 			message := data[:idx]
 			d.accumulated = []byte(data[idx+2:])
 
-			// Parse SSE message
-			if strings.HasPrefix(message, "data: ") {
-				jsonData := strings.TrimPrefix(message, "data: ")
-				jsonData = strings.TrimSpace(jsonData)
+			// SSE fields may appear in any order. Join data fields with newlines,
+			// ignoring comments and metadata such as event, id, and retry.
+			var dataLines []string
+			for _, line := range strings.Split(message, "\n") {
+				field, value, _ := strings.Cut(line, ":")
+				if field == "data" {
+					dataLines = append(dataLines, strings.TrimPrefix(value, " "))
+				}
+			}
+			if len(dataLines) > 0 {
+				jsonData := strings.Join(dataLines, "\n")
 
 				// Check for stream end
-				if jsonData == "[DONE]" {
+				if strings.TrimSpace(jsonData) == "[DONE]" {
 					return StreamChunk{}, io.EOF
 				}
 
@@ -379,11 +411,22 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 				if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 					continue // Skip malformed chunks
 				}
+				// Providers (e.g. OpenRouter) report mid-stream failures as a
+				// {"error":{...}} data event on an HTTP 200 stream. Surface it
+				// instead of yielding an empty chunk.
+				if streamErr := parseStreamError([]byte(jsonData)); streamErr != nil {
+					return StreamChunk{}, streamErr
+				}
 				chunk.normalizeNativeCost()
 
 				return chunk, nil
 			}
 			continue // Non-data message, try next
+		}
+
+		// Return a saved read error only after consuming all complete events.
+		if d.readErr != nil {
+			return StreamChunk{}, d.readErr
 		}
 
 		// Need more data. Per the io.Reader contract, a Read may return n > 0
@@ -394,12 +437,37 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 		n, err := d.reader.Read(d.buf)
 		if n > 0 {
 			d.accumulated = append(d.accumulated, d.buf[:n]...)
+			d.readErr = err
 			continue
 		}
 		if err != nil {
 			return StreamChunk{}, err
 		}
 	}
+}
+
+// parseStreamError returns an error when an SSE data payload is an in-stream
+// {"error":{...}} event, or nil for ordinary chunks.
+func parseStreamError(data []byte) error {
+	var probe struct {
+		Error *struct {
+			Message string          `json:"message"`
+			Type    string          `json:"type"`
+			Code    json.RawMessage `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil || probe.Error == nil {
+		return nil
+	}
+	msg := probe.Error.Message
+	if msg == "" {
+		msg = "unknown error"
+	}
+	code := strings.Trim(string(probe.Error.Code), `"`)
+	if code != "" && code != "null" {
+		return fmt.Errorf("stream error (code %s): %s", code, msg)
+	}
+	return fmt.Errorf("stream error: %s", msg)
 }
 
 // Convenience functions for common patterns

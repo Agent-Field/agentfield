@@ -546,9 +546,30 @@ async def execute_tool_call_loop(
                 )
                 continue
             try:
-                func_args = json.loads(raw_args)
-            except (json.JSONDecodeError, TypeError):
-                func_args = {}
+                # Some providers send "" for tools that take no arguments.
+                func_args = json.loads(raw_args) if raw_args.strip() else {}
+                if not isinstance(func_args, dict):
+                    raise TypeError("tool arguments must be a JSON object")
+            except (json.JSONDecodeError, TypeError, AttributeError) as e:
+                # Malformed or truncated arguments: do not run the tool with
+                # empty args; report the error so the model can retry.
+                log_warn(f"Invalid JSON arguments for tool call '{func_name}': {e}")
+                invalid_args_message = {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(
+                        {
+                            "error": f"Tool call to '{func_name}' has invalid or truncated JSON arguments ({e}). Please retry with valid JSON arguments."
+                        }
+                    ),
+                }
+                messages.append(invalid_args_message)
+                trace.messages.append(
+                    TracedMessage(
+                        message=invalid_args_message, source=TRACE_SOURCE_TOOL_ERROR
+                    )
+                )
+                continue
 
             record = ToolCallRecord(
                 tool_name=func_name,

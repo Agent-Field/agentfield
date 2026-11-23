@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,11 +115,17 @@ func TestRequestApprovalHandler_MissingApprovalRequestID(t *testing.T) {
 		StartedAt:   now,
 	}))
 
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: "exec-1", RunID: "run-1", AgentNodeID: "agent-1",
+		Status: types.ExecutionStatusRunning, StartedAt: now, CreatedAt: now,
+	}))
+
 	router := gin.New()
 	router.POST("/api/v1/agents/:node_id/executions/:execution_id/request-approval",
 		AgentScopedRequestApprovalHandler(store))
 
-	// Missing required approval_request_id
+	// No approval_request_id: a run with no external approval service. The
+	// control plane mints one and the request lives only here.
 	body, _ := json.Marshal(map[string]any{
 		"approval_request_url": "https://hub.example.com/review",
 	})
@@ -128,7 +135,14 @@ func TestRequestApprovalHandler_MissingApprovalRequestID(t *testing.T) {
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var out RequestApprovalResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	assert.True(t, strings.HasPrefix(out.ApprovalRequestID, "apr_"), out.ApprovalRequestID)
+	wfExec, err := store.GetWorkflowExecution(context.Background(), "exec-1")
+	require.NoError(t, err)
+	require.NotNil(t, wfExec.ApprovalRequestID)
+	assert.Equal(t, out.ApprovalRequestID, *wfExec.ApprovalRequestID)
 }
 
 func TestRequestApprovalHandler_RejectsApprovalCreationPayload(t *testing.T) {
@@ -152,8 +166,9 @@ func TestRequestApprovalHandler_RejectsApprovalCreationPayload(t *testing.T) {
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-	assert.Contains(t, resp.Body.String(), "ApprovalRequestID")
+	// The control plane does not create approvals from a template: those
+	// fields are not its own, and an unknown execution is still not found.
+	assert.Equal(t, http.StatusNotFound, resp.Code)
 }
 
 func TestRequestApprovalHandler_ExecutionNotFound(t *testing.T) {

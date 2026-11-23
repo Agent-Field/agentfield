@@ -73,6 +73,8 @@ type UIConfig struct {
 
 // AgentFieldConfig holds the core AgentField server configuration.
 type AgentFieldConfig struct {
+	// Host selects the bind interface for HTTP and admin gRPC; empty binds all.
+	Host             string                 `yaml:"host" mapstructure:"host"`
 	Port             int                    `yaml:"port"`
 	ShutdownTimeout  time.Duration          `yaml:"shutdown_timeout" mapstructure:"shutdown_timeout"`
 	ShutdownMinDelay time.Duration          `yaml:"shutdown_min_delay" mapstructure:"shutdown_min_delay"`
@@ -291,7 +293,16 @@ type ExecutionCleanupConfig struct {
 	MaxRetries             int           `yaml:"max_retries" mapstructure:"max_retries" default:"0"`
 	RetryBackoff           time.Duration `yaml:"retry_backoff" mapstructure:"retry_backoff" default:"30s"`
 	PayloadOrphanGrace     time.Duration `yaml:"payload_orphan_grace" mapstructure:"payload_orphan_grace"`
+	// OfflineHoldCeiling is how long an execution may be held for an opted-in
+	// node that is offline (metadata.custom.holds_executions_offline) before
+	// it is failed anyway, so nothing waits forever on a node that never
+	// returns. Zero or less is the default, DefaultOfflineHoldCeiling.
+	OfflineHoldCeiling time.Duration `yaml:"offline_hold_ceiling" mapstructure:"offline_hold_ceiling" default:"168h"`
 }
+
+// DefaultOfflineHoldCeiling is a week: a laptop asleep over a long weekend
+// still finds its work waiting.
+const DefaultOfflineHoldCeiling = 7 * 24 * time.Hour
 
 // UnmarshalYAML records whether enabled was explicitly configured, including
 // the otherwise indistinguishable enabled: false value.
@@ -678,6 +689,9 @@ func ApplyDefaults(cfg *Config) {
 	if cleanup.PayloadOrphanGrace <= 0 {
 		cleanup.PayloadOrphanGrace = time.Hour
 	}
+	if cleanup.OfflineHoldCeiling <= 0 {
+		cleanup.OfflineHoldCeiling = DefaultOfflineHoldCeiling
+	}
 	if !cfg.AgentField.ExecutionQueue.agentCallTimeoutSet && cfg.AgentField.ExecutionQueue.AgentCallTimeout == 0 {
 		cfg.AgentField.ExecutionQueue.AgentCallTimeout = DefaultAgentCallTimeout
 	}
@@ -712,6 +726,9 @@ func ApplyDefaults(cfg *Config) {
 // Exported so the main server startup (which uses Viper for file loading)
 // can call it after Viper unmarshal to apply the shorter env var names.
 func ApplyEnvOverrides(cfg *Config) {
+	if host, set := os.LookupEnv("AGENTFIELD_HOST"); set {
+		cfg.AgentField.Host = host
+	}
 	// Knowledge / embedding overrides. OPENAI_API_KEY is the standard OpenAI env
 	// var; AGENTFIELD_KNOWLEDGE_* allow explicit control.
 	if val := os.Getenv("OPENAI_API_KEY"); val != "" && cfg.Features.Knowledge.OpenAI.APIKey == "" {
@@ -777,6 +794,24 @@ func ApplyEnvOverrides(cfg *Config) {
 	// Also support the nested path format for consistency
 	if apiKey := os.Getenv("AGENTFIELD_API_AUTH_API_KEY"); apiKey != "" {
 		cfg.API.Auth.APIKey = apiKey
+	}
+
+	// CORS. These keys are absent when no config file is loaded, so viper's
+	// AutomaticEnv never resolves the documented AGENTFIELD_API_CORS_* names.
+	if val := os.Getenv("AGENTFIELD_API_CORS_ALLOWED_ORIGINS"); val != "" {
+		cfg.API.CORS.AllowedOrigins = splitEnvCSV(val)
+	}
+	if val := os.Getenv("AGENTFIELD_API_CORS_ALLOWED_METHODS"); val != "" {
+		cfg.API.CORS.AllowedMethods = splitEnvCSV(val)
+	}
+	if val := os.Getenv("AGENTFIELD_API_CORS_ALLOWED_HEADERS"); val != "" {
+		cfg.API.CORS.AllowedHeaders = splitEnvCSV(val)
+	}
+	if val := os.Getenv("AGENTFIELD_API_CORS_EXPOSED_HEADERS"); val != "" {
+		cfg.API.CORS.ExposedHeaders = splitEnvCSV(val)
+	}
+	if val := os.Getenv("AGENTFIELD_API_CORS_ALLOW_CREDENTIALS"); val != "" {
+		cfg.API.CORS.AllowCredentials = parseEnvBool(val)
 	}
 
 	if val := os.Getenv("AGENTFIELD_REGISTRATION_SERVERLESS_DISCOVERY_ALLOWED_HOSTS"); val != "" {
@@ -942,6 +977,7 @@ func ApplyEnvOverrides(cfg *Config) {
 	applyIntEnv("AGENTFIELD_EXECUTION_CLEANUP_BATCH_SIZE", &cfg.AgentField.ExecutionCleanup.BatchSize)
 	applyDurationEnv("AGENTFIELD_EXECUTION_PRESERVE_RECENT", &cfg.AgentField.ExecutionCleanup.PreserveRecentDuration)
 	applyDurationEnv("AGENTFIELD_PAYLOAD_ORPHAN_GRACE", &cfg.AgentField.ExecutionCleanup.PayloadOrphanGrace)
+	applyDurationEnv("AGENTFIELD_EXECUTION_OFFLINE_HOLD_CEILING", &cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling)
 	applyDurationEnv("AGENTFIELD_AGENT_CALL_TIMEOUT", &cfg.AgentField.ExecutionQueue.AgentCallTimeout)
 	if val := os.Getenv("AGENTFIELD_EXECUTION_MAX_RETRIES"); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
@@ -972,6 +1008,9 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_DEFAULT_DENY"); val != "" {
 		cfg.Features.DID.Authorization.DefaultDeny = val == "true" || val == "1"
+	}
+	if val := strings.TrimSpace(os.Getenv("AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE")); val != "" {
+		cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode = strings.ToLower(val)
 	}
 
 	// Node log proxy (UI → agent NDJSON)

@@ -188,9 +188,7 @@ func cancelOneExecution(
 		}
 		previousStatus = current.Status
 		current.Status = types.ExecutionStatusCancelled
-		if reasonPtr != nil {
-			current.StatusReason = reasonPtr
-		}
+		current.StatusReason = cancelStatusReason(reasonPtr)
 		return current, nil
 	})
 	if err != nil {
@@ -203,9 +201,7 @@ func cancelOneExecution(
 				return nil, fmt.Errorf("execution %s not found", executionID)
 			}
 			current.Status = types.ExecutionStatusCancelled
-			if reasonPtr != nil {
-				current.StatusReason = reasonPtr
-			}
+			current.StatusReason = cancelStatusReason(reasonPtr)
 			return current, nil
 		}); updateErr != nil {
 			logger.Logger.Warn().Err(updateErr).Str("execution_id", executionID).Msg("cancel-tree: failed to sync workflow_executions (non-fatal)")

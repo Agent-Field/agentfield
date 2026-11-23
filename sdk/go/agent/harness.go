@@ -102,6 +102,11 @@ func (a *Agent) HarnessRunner() *harness.Runner {
 //	schema, _ := harness.StructToJSONSchema(result)
 //	hr, err := agent.Harness(ctx, "Review this code...", schema, &result, harness.Options{})
 func (a *Agent) Harness(ctx context.Context, prompt string, schema map[string]any, dest any, opts harness.Options) (*harness.Result, error) {
+	if opts.Live == nil {
+		var release func()
+		opts.Live, release = a.liveHarness(ctx)
+		defer release()
+	}
 	result, err := a.HarnessRunner().Run(ctx, prompt, schema, dest, opts)
 	if err == nil {
 		// Record the run's token/cost usage into the current execution's

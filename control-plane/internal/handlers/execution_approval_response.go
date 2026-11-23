@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 
 	"github.com/gin-gonic/gin"
 )
@@ -25,9 +27,21 @@ type ResolveApprovalRequest struct {
 // this endpoint lets an authenticated operator (e.g. the CLI) resolve the same
 // approval directly. Both paths share applyApprovalDecision, so state
 // transitions, idempotency, events, and callbacks are identical.
-func ResolveApprovalHandler(store ExecutionStore) gin.HandlerFunc {
-	ctrl := &webhookApprovalController{store: store}
+//
+// A caller that names itself with X-AgentField-Run-Owner (WorkAF's node) is
+// held to the runs it owns, exactly as steer and the relay are: only the run's
+// owner may answer its question. A caller that names no node is the API-key
+// holder speaking for itself, which the control plane already trusts. scope
+// is nil on a store with no run-owner table, and then nothing is refused.
+func ResolveApprovalHandler(store ExecutionStore, scope ApprovalScope) gin.HandlerFunc {
+	ctrl := &webhookApprovalController{store: store, scope: scope}
 	return ctrl.handleResolveApproval
+}
+
+// ApprovalScope refuses a caller that may not answer exec's approval; its
+// error carries the HTTP status (nodelink.CodeOf) and the words.
+type ApprovalScope interface {
+	Scope(ctx context.Context, caller, exec string) error
 }
 
 func (c *webhookApprovalController) handleResolveApproval(ctx *gin.Context) {
@@ -58,6 +72,12 @@ func (c *webhookApprovalController) handleResolveApproval(ctx *gin.Context) {
 	}
 
 	reqCtx := ctx.Request.Context()
+	if c.scope != nil {
+		if err := c.scope.Scope(reqCtx, strings.TrimSpace(ctx.GetHeader(RunOwnerHeader)), executionID); err != nil {
+			ctx.JSON(nodelink.CodeOf(err), gin.H{"error": err.Error()})
+			return
+		}
+	}
 	wfExec, err := c.store.GetWorkflowExecution(reqCtx, executionID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to get workflow execution for approval resolution")

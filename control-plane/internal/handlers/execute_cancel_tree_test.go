@@ -464,3 +464,27 @@ func TestComputeExecutionDepths_OrphanParent(t *testing.T) {
 	require.Equal(t, 0, depths["orphan"])
 }
 
+
+// The tree cancel is held to the same rule: a Stop with no reason replaces
+// the approval reason the root carried.
+func TestCancelWorkflowTreeHandler_StopReplacesTheApprovalReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := newCancelTreeStorage()
+	store.seedExecution("root", "run-approved", types.ExecutionStatusRunning, nil, 0)
+	granted := "approval_granted"
+	store.executionRecords["root"].StatusReason = &granted
+	store.workflowExecutions["root"].StatusReason = &granted
+
+	router := gin.New()
+	router.POST("/api/v1/workflows/:workflowId/cancel-tree", CancelWorkflowTreeHandler(store))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workflows/run-approved/cancel-tree", nil)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	require.NotNil(t, store.executionRecords["root"].StatusReason)
+	require.Equal(t, types.ExecutionReasonCancelled, *store.executionRecords["root"].StatusReason)
+	require.NotNil(t, store.workflowExecutions["root"].StatusReason)
+	require.Equal(t, types.ExecutionReasonCancelled, *store.workflowExecutions["root"].StatusReason)
+}

@@ -67,6 +67,35 @@ def _is_transient(error_str: str) -> bool:
     return any(pattern in lower for pattern in TRANSIENT_PATTERNS)
 
 
+def _rejects_temperature(model: str) -> bool:
+    """Keep the Go SDK's default-mode temperature policy for repair calls."""
+    model = model.strip().lower().rsplit("/", 1)[-1]
+    if len(model) >= 2 and model[0] == "o" and model[1] in "0123456789":
+        return True
+    if model == "gpt-5" or model.startswith("gpt-5-202"):
+        return True
+    families = (
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5-pro",
+        "gpt-5.2-pro",
+        "gpt-5.4-pro",
+        "gpt-5.5",
+        "gpt-5.6",
+        "gpt-5-codex",
+        "gpt-5.1-codex",
+        "gpt-5.2-codex",
+        "gpt-5.3-codex",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-5",
+        "claude-fable-5",
+    )
+    return any(model == family or model.startswith(family + "-") for family in families)
+
+
 async def _ai_schema_repair(
     text: str,
     schema: Any,
@@ -131,12 +160,17 @@ async def _ai_schema_repair(
         # Bail rather than guess; the existing retry path will handle this.
         return None
 
+    # GPT-5.1/5.2/5.4 accept temperature by default; preserve zero for them.
+    repair_kwargs: Dict[str, Any] = {}
+    if not _rejects_temperature(str(model)):
+        repair_kwargs["temperature"] = 0.0
+
     try:
         response = await asyncio.wait_for(
             litellm.acompletion(
                 model=str(model),
                 messages=[{"role": "user", "content": repair_prompt}],
-                temperature=0.0,
+                **repair_kwargs,
                 response_format={"type": "json_object"},
             ),
             timeout=_SCHEMA_REPAIR_TIMEOUT_SECONDS,

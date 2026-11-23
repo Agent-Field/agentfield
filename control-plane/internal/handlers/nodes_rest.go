@@ -37,6 +37,11 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 			HealthScore *int   `json:"health_score"`
 			// Conditions are accepted for future use but currently ignored by the control plane.
 			Conditions []map[string]interface{} `json:"conditions"`
+			// Inflight lists the executions the node is still working on. Each
+			// one that belongs to this node and is still running has its
+			// updated_at touched, so the stale reaper never times out work a
+			// live node holds (the reaper reads updated_at and nothing else).
+			Inflight []string `json:"inflight"`
 		}
 
 		if err := c.ShouldBindJSON(&payload); err != nil {
@@ -130,9 +135,17 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 			presenceManager.Touch(nodeID, agent.Version, now)
 		}
 
+		// Settle what was held while the node was away before touching: a
+		// held execution it lists carries on, one it does not was lost.
+		released, lost := ResolveOfflineHolds(ctx, storageProvider, nodeID, payload.Inflight)
+		touched := TouchInflightExecutions(ctx, storageProvider, nodeID, payload.Inflight)
+
 		c.JSON(http.StatusOK, gin.H{
 			"lease_seconds":      int(leaseTTL.Seconds()),
 			"next_lease_renewal": now.Add(leaseTTL).Format(time.RFC3339),
+			"inflight_touched":   touched,
+			"held_released":      released,
+			"held_lost":          lost,
 		})
 	}
 }

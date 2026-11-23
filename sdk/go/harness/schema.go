@@ -536,8 +536,20 @@ func CleanupTempFiles(dir string) {
 }
 
 // DiagnoseOutputFailure returns a human-readable error describing why the
-// output file failed validation.
+// output file failed validation. It knows only the schema; the runner uses
+// DiagnoseOutputFailureFor, which also knows the result type.
 func DiagnoseOutputFailure(filePath string, jsonSchema map[string]any) string {
+	return DiagnoseOutputFailureFor(filePath, jsonSchema, nil)
+}
+
+// DiagnoseOutputFailureFor says why the output file failed, naming the REAL
+// failure: the decode error into dest's type (a string where an int64 goes) or
+// the JSON Schema violation, with its location. It used to print the expected
+// and actual top-level key sets, which are equal apart from map order whenever
+// the keys are right and a value is wrong — so the model was told nothing it
+// could fix, retried blind, and two of the research run's parallel steps failed
+// on it. dest may be nil; it is never written to.
+func DiagnoseOutputFailureFor(filePath string, jsonSchema map[string]any, dest any) string {
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		return "The output file was NOT created."
 	}
@@ -554,30 +566,58 @@ func DiagnoseOutputFailure(filePath string, jsonSchema map[string]any) string {
 
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		snippet := content
-		if len(snippet) > 500 {
-			snippet = snippet[:500]
+		// The runner also accepts a cosmetically repaired file; judge that one.
+		if repaired, rerr := ReadRepairAndParse(filePath); rerr == nil {
+			parsed = repaired
+		} else {
+			snippet := content
+			if len(snippet) > 500 {
+				snippet = snippet[:500]
+			}
+			return fmt.Sprintf(
+				"The file contains invalid JSON. Parse error: %v\nFile content (first 500 chars):\n%s",
+				err, snippet,
+			)
 		}
-		return fmt.Sprintf(
-			"The file contains invalid JSON. Parse error: %v\nFile content (first 500 chars):\n%s",
-			err, snippet,
-		)
 	}
 
-	// JSON parses but may not match schema
+	var problems []string
+	if dest != nil {
+		if t := reflect.TypeOf(dest); t.Kind() == reflect.Pointer {
+			if err := unmarshalInto(parsed, reflect.New(t.Elem()).Interface()); err != nil {
+				problems = append(problems, "the JSON does not fit the result type: "+err.Error())
+			}
+		}
+	}
+	if jsonSchema != nil {
+		if err := validateAgainstSchema(parsed, jsonSchema); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
+	if len(problems) > 0 {
+		return strings.Join(problems, "\n")
+	}
+
+	// Nothing specific failed here, so say which top-level keys are missing
+	// or unexpected — sorted, and only the differences.
 	props, _ := jsonSchema["properties"].(map[string]any)
-	expectedKeys := make([]string, 0, len(props))
+	var missing, extra []string
 	for k := range props {
-		expectedKeys = append(expectedKeys, k)
+		if _, ok := parsed[k]; !ok {
+			missing = append(missing, k)
+		}
 	}
-	actualKeys := make([]string, 0, len(parsed))
 	for k := range parsed {
-		actualKeys = append(actualKeys, k)
+		if _, ok := props[k]; !ok && props != nil {
+			extra = append(extra, k)
+		}
 	}
-	return fmt.Sprintf(
-		"JSON parses but may not match expected schema.\nExpected top-level keys: %v\nActual top-level keys: %v",
-		expectedKeys, actualKeys,
-	)
+	sort.Strings(missing)
+	sort.Strings(extra)
+	if len(missing) == 0 && len(extra) == 0 {
+		return "JSON parses and matches the expected schema on re-check; the earlier read may have seen a partial file."
+	}
+	return fmt.Sprintf("JSON parses but does not match the expected schema.\nMissing top-level keys: %v\nUnexpected top-level keys: %v", missing, extra)
 }
 
 // BuildFollowupPrompt constructs a retry prompt after schema validation failure.

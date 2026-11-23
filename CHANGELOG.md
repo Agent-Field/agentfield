@@ -6,6 +6,606 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.2] - 2026-11-23
+
+
+### Chores
+
+- Chore(deps): patch follow-redirects to 1.16.2 (#1153) (36a263f)
+
+
+
+### Documentation
+
+- Docs(skills): add agentfield-sdk, a reference skill for coding agents (#1230)
+
+A short, factual SKILL.md for coding agents writing code against the
+Python and TypeScript SDKs: install, a minimal agent in each language
+(taken from examples/python_agent_nodes/hello_world and the af init
+TypeScript template), sync and async execution with polling and
+webhooks, cross-agent calls, human approval, and where identity,
+policy and audit are configured, with links to the docs.
+
+It follows the skills.sh layout (skills/<name>/SKILL.md with name and
+description frontmatter), so `npx skills add Agent-Field/agentfield`
+lists it next to the existing three. It describes how to use AgentField
+only and does not tell an agent to choose it over another framework.
+
+Assisted-by: CodeAF
+
+Co-authored-by: CodeAF <267109073+agentfield-bot@users.noreply.github.com> (198e6e8)
+
+- Docs: add a short comparison section to the README (#1220)
+
+* docs: add a short comparison section to the README
+
+How AgentField compares with LangGraph, CrewAI, Temporal and the OpenAI
+Agents SDK, each row linking its agentfield.ai comparison page, with one
+line on when to choose each.
+
+Assisted-by: CodeAF
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* docs: AgentField replaces agent frameworks rather than sitting under them
+
+Assisted-by: CodeAF
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* docs: tag the comparison links for the UTM manifest
+
+Assisted-by: CodeAF
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+---------
+
+Co-authored-by: CodeAF <267109073+agentfield-bot@users.noreply.github.com> (4e9fb95)
+
+## [0.1.147-rc.1] - 2026-11-19
+
+
+### Fixed
+
+- Fix(sdk-go): honor the Retry-After header on 429 responses
+
+APIError dropped the response headers, so the rate limiter never saw the provider's Retry-After hint. Record the header (seconds or HTTP date) in APIError.RetryAfter and prefer it when computing the backoff.
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com> (f404fbf)
+
+## [0.1.146] - 2026-11-18
+
+## [0.1.146-rc.39] - 2026-11-18
+
+
+### Fixed
+
+- Fix(sdk-go): accept SSE data fields without a space in audio generation (#1210)
+
+OpenRouterMediaProvider.GenerateAudio only recognised lines starting with "data: ", so a valid SSE "data:{...}" event was skipped and the call returned success with empty audio and text. The SSE field value may follow the colon directly; match "data:" and let the existing TrimSpace drop the optional space, as client.go already does.
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com> (36d50b4)
+
+## [0.1.146-rc.38] - 2026-11-16
+
+
+### Added
+
+- Feat(sdk/go): real-time memory change subscriptions (#1208)
+
+* feat(sdk/go): real-time memory change subscriptions
+
+Add Memory().Watch, Memory().OnChange and Memory().History to the Go SDK,
+backed by the control plane's /api/v1/memory/events/ws and
+/api/v1/memory/events/history endpoints.
+
+- Server-side filtering by patterns (filepath.Match), scope and scope ID
+- Initial connect is synchronous so auth and pattern errors surface early
+- Reconnect with exponential backoff (1s to 30s), bounded attempts;
+  4xx handshake refusals stop immediately
+- Buffered events channel that applies backpressure instead of dropping
+- MemoryChangeEvent mirrors the wire format (set/delete actions, raw JSON
+  data); the "actor" scope is reported as ScopeUser
+- Backends without event support return ErrMemoryEventsUnsupported
+
+Closes #95
+
+* refactor(sdk/go): tighten memory subscription lifecycle and docs
+
+- OnChange stops through a derived context; Close no longer needs a
+  separate stop channel, and the context is released when the
+  subscription ends on its own
+- Reuse sleepCtx for reconnect waits and isTransientPollStatus for
+  permanent handshake refusals
+- Map the "actor" scope to ScopeUser in MemoryChangeEvent.UnmarshalJSON
+  instead of at each decode site
+- Extend the read deadline after each delivery so a slow consumer does
+  not make a healthy connection look silent
+- Copy DialTLSContext into the WebSocket dialer, and document that a
+  wrapping RoundTripper's settings do not apply to the handshake
+- Document that OnReconnect must not call Close, and that OnChange cannot
+  report reconnect gaps
+- Factor repeated test plumbing into helpers (fc96211)
+
+## [0.1.146-rc.37] - 2026-11-16
+
+
+### Fixed
+
+- Fix(web): hide LLM health UI when monitoring is not enabled (#1173)
+
+* fix(web): hide LLM health UI when monitoring is not enabled
+
+LLM health monitoring is opt-in (agentfield.llm_health). With it off, the
+server answers {enabled:false} and the header pill read the missing
+healthy field as false, so every default install showed "LLM Degraded".
+The pill, its popover row and the dashboard card now render only when the
+server reports monitoring as enabled.
+
+* test(web): monitored fixture for the dashboard LLM card
+
+The dashboard now draws the LLM card only when monitoring is enabled, so
+the default fixture says enabled: true, and a new case pins that the card
+is left out when it is not. (1593ad6)
+
+## [0.1.146-rc.36] - 2026-11-16
+
+
+### Fixed
+
+- Fix(control-plane): memory event subscription reliability and ordering (#1207)
+
+* fix(control-plane): memory event subscription reliability and ordering
+
+Subscriptions
+- Unsubscribe when the subscriber's context ends, so disconnected
+  clients no longer leave dead channels behind
+- Publish synchronously, so events reach each subscriber in the order
+  they were published
+- A subscriber whose 100-event buffer is full is disconnected and its
+  channel closed, instead of silently missing individual events
+
+WebSocket and SSE handlers
+- The server pings every 25s and drops a connection that is silent for
+  60s; the subscription lives exactly as long as the connection
+- A subscriber dropped for falling behind gets close code 1013 (WS) or
+  an "error" event (SSE), so clients can tell their stream has a gap
+- Malformed glob patterns are rejected with 400 instead of silently
+  matching nothing
+
+History
+- Patterns use path.Match (shared as types.MatchKeyPatterns), so
+  matching does not depend on the server's operating system
+- since is exclusive: only events strictly after it are returned
+- Local mode returns events in publication order; decimal BoltDB keys
+  previously sorted "10" before "2", so Limit kept the wrong events
+
+Refs #95
+
+* test(control-plane): decode only message frames in the memory event visibility test
+
+The SSE stub closes its channel to end the stream. With the subscription fix,
+a close while the request is still live is reported to the client as an
+"event: error" frame (the subscriber fell behind), which carries text rather
+than a change event. The test decoded every data: line as a change event and
+failed on that frame. Decode only message frames; the error frame is the
+intended behaviour of this change.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (6b09e65)
+
+## [0.1.146-rc.35] - 2026-11-16
+
+
+### Documentation
+
+- Docs: add Awesome AI Agents badge to README (#1190) (f6f3003)
+
+
+
+### Fixed
+
+- Fix(did): preserve component identities during concurrent registration (#1209)
+
+* fix(did): analyze registration from one identity snapshot
+
+Use the response snapshot for component differential analysis so a concurrent registration cannot make a no-change response omit newly issued DIDs. Cover reasoner and skill issuance with deterministic SQLite interleavings and serial controls.
+
+Fixes #1205
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* fix(did): retain identities across overlapping registrations
+
+Return a complete identity package from full registration and include concurrently issued requested components in partial responses without counting them as new allocations. Cover overlapping reasoners and skills, SDK key continuity and response-refresh failure.
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+---------
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (10fabe3)
+
+## [0.1.146-rc.34] - 2026-11-15
+
+
+### Fixed
+
+- Fix(python): preserve stored memory JSON value types (#1199)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (95c109d)
+
+## [0.1.146-rc.33] - 2026-11-15
+
+
+### Fixed
+
+- Fix(python): decode URL escapes in inline base64 media (#1200)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (e497b75)
+
+- Fix(config): honor AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE (#1201)
+
+docs/ENVIRONMENT_VARIABLES.md documents the variable, but ApplyEnvOverrides
+never read it, so setting it left tag_approval_rules.default_mode untouched
+and tags stayed auto-approved. Read it into
+features.did.authorization.tag_approval_rules.default_mode and document the
+modes the tag approval service implements (auto, manual, forbidden).
+
+Also drop AGENTFIELD_AUTHORIZATION_MASTER_SEED from the docs: nothing reads
+it, the master seed is generated and stored in the DID registry. (bd7a3c3)
+
+- Fix(control-plane): read AGENTFIELD_API_CORS_* without a config file (#1202)
+
+The CORS variables documented in docs/ENVIRONMENT_VARIABLES.md only reached
+the config through viper's AutomaticEnv, which resolves a key only when a
+loaded config file already contains it. With no config file (Railway, bare
+binary) they were dropped and the server kept the localhost default origins.
+
+Read the five variables in ApplyEnvOverrides, next to the other overrides
+that exist for the same reason. (e746d09)
+
+- Fix(go-sdk): preserve streaming read errors after buffered data (#1203)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (dde816a)
+
+- Fix(sdk-ts): apply rate-limit retry and circuit breaker to AIClient.stream (#1206) (ff1db1b)
+
+## [0.1.146-rc.32] - 2026-11-14
+
+
+### Fixed
+
+- Fix(python): enforce total timeout while awaiting approval (#1198)
+
+* fix(python): enforce total timeout while awaiting approval
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* fix(python): preserve approval wait cancellation on supported runtimes
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+* style(python): format approval polling additions
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com>
+
+---------
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (c148bb5)
+
+- Fix(go-sdk): parse data fields in SSE events (#1197)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (07cbd29)
+
+- Fix(sdk/go): surface in-stream error events from StreamComplete (#1194)
+
+An SSE data event of the form {"error":{...}} was unmarshalled into an
+empty StreamChunk and yielded as a normal chunk, so the caller never saw
+the provider failure. Return it as an error so it reaches errCh.
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (fef65a5)
+
+## [0.1.146-rc.31] - 2026-11-13
+
+
+### Fixed
+
+- Fix(sdk-ts): keep memory scope ids with their own scope (#1189) (47be6b8)
+
+- Fix(python): keep AI prompt augmentation out of caller history (#1186)
+
+Signed-off-by: Steven Huang <134844631+remote-controlled-man@users.noreply.github.com> (f714089)
+
+- Fix(python): finish harness cleanup before propagating cancellation (#1180)
+
+* fix(python): finish harness cleanup before propagating cancellation
+
+* fix(python): retain harness cleanup during loop shutdown
+
+* test(python): respect cancellation message version contract (0145089)
+
+## [0.1.146-rc.30] - 2026-11-13
+
+
+### Fixed
+
+- Fix(sdk-typescript): omit temperature for models that reject it (#1193)
+
+generate, stream, and the tool-call loop forwarded a configured
+temperature to gpt-5, the o-series, and newer Claude models, which
+reject it. Mirror the Go SDK rejectsTemperature criterion and leave
+the field unset for those models. (9679cb6)
+
+- Fix(memory): honor legacy vector delete body scope (#1192)
+
+* fix(memory): honor legacy vector delete body scope
+
+* test(memory): align legacy delete authorization contract (ab60871)
+
+## [0.1.146-rc.29] - 2026-11-12
+
+
+### Other
+
+- Repair a workflow row left running after a failed terminal event; optional control plane bind host (#1187)
+
+* fix(sdk/go): apply default token and timeout caps to partial AI config (#1184)
+
+* fix: recover terminal event delivery and workflow projection writes (#1182)
+
+* fix(control-plane): allow selecting the HTTP and admin gRPC bind host (#1185)
+
+* Keep partial AI configs uncapped by default (withdraws the #1184 change)
+
+The #1184 change gave a partial ai.Config the SDK's default limits (4096
+output tokens, 30 seconds). Nodes that build a partial config today run with
+no cap, and a 30-second limit would cut off completions that succeed now.
+Existing deployments must keep their behaviour, so the default stays as it
+is; #1184 remains open for an explicit, opt-in way to ask for the caps.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5.2 <noreply@anthropic.com> (4fb8f0d)
+
+## [0.1.146-rc.28] - 2026-11-11
+
+
+### Other
+
+- Control-plane: an offline node keeps its executions until it comes back
+
+A node that registers with metadata.custom.holds_executions_offline = true
+(the codeaf factory on a laptop that sleeps) no longer has its running work
+timed out by the stale sweep just because nothing renewed it while it was
+away. Before the sweeps run, each cleanup pass marks the quiet executions of
+an opted-in, registered node whose lease has lapsed as held: status stays
+running, status_reason is node_offline, and the stale, workflow-stale and
+stale-retry sweeps all skip it.
+
+A hold ends four ways. The node's next lease lists the execution as inflight:
+released, it carries on. The lease does not list it: failed now as
+node_lost_execution. The node is no longer registered: failed as
+node_removed. The hold outlives offline_hold_ceiling (default 168h, env
+AGENTFIELD_EXECUTION_OFFLINE_HOLD_CEILING): failed as node_offline_too_long.
+Nodes that did not opt in are reaped exactly as before, and an opted-in node
+that is online but stops listing an execution is still reaped.
+
+Assisted-by: CodeAF
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com> (246bfc7)
+
+
+
+### Testing
+
+- Test(control-plane): cover offline hold opt-in, config, handlers, and storage (87726a1)
+
+## [0.1.146-rc.27] - 2026-11-10
+
+
+### Fixed
+
+- Fix(sdk): return an error to the model for malformed tool-call arguments (#1168)
+
+* fix(sdk): return an error to the model for malformed tool-call arguments
+
+When an LLM tool call carried invalid or truncated JSON arguments, both the
+Python and Go SDKs silently replaced them with {} and still executed the
+tool, so the tool ran with missing/default inputs and the model never learned
+its call was broken. Report the parse error back as a tool message (like the
+existing missing-"arguments" case) and skip execution. An empty arguments
+string is still accepted as "no arguments", since some providers send that for
+parameterless tools.
+
+* style(sdk): format malformed-arguments assertion
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com>
+
+* test(sdk): update error-path tests for invalid tool-call arguments
+
+Invalid arguments no longer create a tool-call record, so assert on the
+tool error message fed back to the model instead of trace.calls.
+
+---------
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com> (bcef6b5)
+
+## [0.1.146-rc.26] - 2026-11-10
+
+
+### Fixed
+
+- Fix(storage): create the relay and approval tables with the schema, never cache a failed create (#1177)
+
+The three tables #1174 added (execution_relay, run_owners, execution_approval_questions) were created lazily with CREATE TABLE IF NOT EXISTS. On Postgres two first uses raced on pg_type_typname_nsp_index, and the store cached the error, so run ownership and relay writes stayed broken until a restart; ordinary executions also ran DDL on every call.
+
+The tables are now created at startup in autoMigrateSchema for SQLite and Postgres. The remaining guard serializes creation per db, caches only success, runs no DDL in steady state, and treats a concurrent create by another process as success.
+
+Proved by the existing-deployments smoke suite (15/15 on main plus this change).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com> (186f695)
+
+## [0.1.146-rc.25] - 2026-11-09
+
+
+### Other
+
+- WorkAF harness watch: node link, relay pipe and steer, streamed only for owned runs (#1174)
+
+Lands proto/harness-watch (node-initiated link, the control plane as a pipe for codeaf harness transcripts, steer, pauses that carry their question) with the live path armed only for runs whose run has an owner (X-AgentField-Run-Watched), no relay rows kept for unowned runs, prune at most once a minute, and tests for the relay, run owners, approval questions and their routes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com> (5739844)
+
+## [0.1.146-rc.24] - 2026-11-09
+
+
+### CI
+
+- Ci: move macOS jobs from macos-14 to macos-15 (#1176)
+
+GitHub now refuses the macos-14 runner ("The configuration
+'macos-14-arm64-us-default' is not supported"), so every job pinned to it
+is cancelled within a second. That cancels the control-plane tray build
+and with it the Control Plane CI gate on every pull request, and the
+darwin build in release.yml, so no release has published since
+2026-11-08. macos-15 is the same arm64 runner family one release on.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (08635c2)
+
+## [0.1.146-rc.23] - 2026-11-09
+
+
+### Added
+
+- Feat(examples): add optional Outcrawl search backend to deep_research (#1167)
+
+Adds `SEARCH_PROVIDER=outcrawl` alongside the Tavily default and the
+Parallel, Serply and Keenable opt-ins, in the same shape as the Serply
+backend: one normalizer, one error message builder, one async executor,
+one dispatch branch, and no new entry in requirements.txt.
+
+Outcrawl needs OUTCRAWL_API_KEY (the free plan includes 1,000 credits a
+month). Each query posts `{query, limit}` to
+https://api.outcrawl.ai/v1/search with a bearer key and maps the `hits`
+rows (title, url, snippet) into the existing {title, url, content,
+raw_content} rows, five per query like the Tavily path. (f1af4ff)
+
+
+
+### Fixed
+
+- Fix(go-sdk): accept CRLF delimiters and 'data:' without space in SSE decoder (#1166)
+
+The SSEDecoder only split events on "\n\n" and required the literal
+prefix "data: ", so a server using CRLF line endings or "data:" with no
+space yielded zero chunks and StreamComplete silently lost the whole stream. (0dc4f14)
+
+## [0.1.146-rc.22] - 2026-11-08
+
+
+### Added
+
+- Feat(sdk/go/ai): support the CloudGPU provider (#1162)
+
+DefaultConfig selects CloudGPU from CLOUDGPU_API_KEY only when no
+higher-precedence provider key is set, defaults the model to
+deepseek-v4-flash, and strips a cloudgpu/ routing prefix before the
+request is sent.
+
+Signed-off-by: mrhy7176 <129925370+mrhy7176@users.noreply.github.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: CloudGPU <mrhy7176@users.noreply.github.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (9398681)
+
+
+
+### Testing
+
+- Test(sdk-python): use a shell stub for the real CodeAF version probe (#1160)
+
+test_managed_availability_and_doctor_version runs harness_doctor without a version_probe override, so the real _probe_version runs the stub with its 2 s VERSION_PROBE_TIMEOUT_SECONDS. The stub was a Python script, and under pytest-cov (on by default through addopts) the child inherits COV_CORE_* and starts coverage first. On a constrained runner that start exceeds 2 s: with --cpus=0.5 the probe takes 2.06 s and times out (0.01 s with --no-cov), giving version None and issues=('version_probe_failed',). A /bin/sh stub prints the same line without starting an interpreter.
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (60268b6)
+
+## [0.1.146-rc.21] - 2026-11-08
+
+
+### Build
+
+- Build(docker): overridable base-image build args; UI build on Node 24 LTS (#1159)
+
+* build(docker): make base images overridable build args
+
+Each third-party base image in the published Dockerfiles (control-plane, control-plane-cloud, python-agent, go-agent) is now a build arg whose default is the image used today, so a default build resolves exactly the same images. Deployments that pin bases by digest, or need a mirror registry, can pass --build-arg instead of patching the Dockerfiles.
+
+The uv binaries in the cloud image now come from a named stage (uv-dist), because COPY --from cannot expand a build arg.
+
+* build(docker): build the web UI on Node 24 LTS
+
+Node 20 reached end of life on 2026-04-30, and react-router@8.3.0 declares engines node >=22.22.0, so npm ci on node:20-bookworm-slim warns EBADENGINE. node:24-bookworm-slim builds the UI cleanly with no engine warning; the Go and runtime stages are unchanged.
+
+* fix(docker): give the go-agent image's sdk/go tests the CodeAF auth contract
+
+Dockerfile.go-agent runs go test ./... on a copy of sdk/go at /tmp/go-sdk. Since #1130 the harness and agent tests read ../../codeaf-auth-contract.json (sdk/codeaf-auth-contract.json), which is not in the image, so the build fails on main with 'open ../../codeaf-auth-contract.json: no such file or directory'. Copy sdk/go and the contract into the same relative layout.
+
+---------
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (7f3dc1a)
+
+
+
+### Testing
+
+- Test(sdk-go): order opencode concurrency events by an append log, not date +%N (#1161)
+
+TestOpenCodeConcurrencyLimit_RealSubprocess timed each fake opencode run with date +%s%N. BusyBox date (Alpine, which Dockerfile.go-agent tests on) ignores %N, so every timestamp is whole seconds, start equals end, the sweep sees no overlap and the test fails with 'no overlap observed at all'. The fake binary now appends + and - lines to one O_APPEND log and the test replays them in order. It passes 5/5 on golang:1.25-alpine and -bookworm, and with OPENCODE_MAX_CONCURRENT forced to 6 it still fails with 'observed 6 concurrent subprocesses, want <= 2'.
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (684b2ae)
+
+## [0.1.146-rc.20] - 2026-11-07
+
+
+### Fixed
+
+- Fix(sdk-go): route StreamComplete through the rate limiter (#1165)
+
+StreamComplete called the HTTP client directly, so 429/503 responses
+were never retried even with a rate limiter configured, unlike Complete.
+Extract the header phase into openStream and run it through
+rateLimiter.Execute. (d5323cc)
+
+- Fix(sdk-python): raise max_completion_tokens on empty-reasoning structured retry (#1164)
+
+_increase_retry_max_tokens only looked at max_tokens, but for OpenAI models
+the param is renamed to max_completion_tokens, so the retry reused the same
+budget. Handle both keys.
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com> (bfcb004)
+
+- Fix(sdk-ts): scope polling pause time to each wait (#1163) (62a8c6e)
+
+## [0.1.146-rc.19] - 2026-11-07
+
+
+### Fixed
+
+- Fix(sdk-python): omit temperature for models that reject it (#1158)
+
+AIConfig.get_litellm_params forwarded a user-set temperature to gpt-5,
+o-series and newer Claude models, which reject it. Mirror the Go SDK's
+rejectsTemperature criterion and drop the field for those models. (f499137)
+
+- Fix(sdk-python): omit rejected temperature in schema repair (#1157) (be5b193)
+
+- Fix(sdk-ts): default searchVector to the handle's scope (#1156)
+
+MemoryInterface.searchVector forwarded only the caller's options, so
+session()/workflow()/actor() handles searched the wrong scope. Default
+scope/scopeId from the handle like set/get/delete; explicit options win. (11f0a76)
+
 ## [0.1.146-rc.18] - 2026-11-06
 
 

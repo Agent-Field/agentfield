@@ -765,7 +765,6 @@ async def test_approval_helpers_and_wait_for_approval(client, monkeypatch):
     async def fake_sleep(_):
         return None
 
-    times = iter([0.0, 0.0, 1.0, 2.0, 3.0])
     responses = [
         AgentFieldClientError("transient"),
         SimpleNamespace(status="pending"),
@@ -779,17 +778,13 @@ async def test_approval_helpers_and_wait_for_approval(client, monkeypatch):
         return result
 
     monkeypatch.setattr(client_mod.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(client_mod.time, "time", lambda: next(times))
     monkeypatch.setattr(client, "get_approval_status", fake_get_status)
 
     waited = await client.wait_for_approval("exec-2", poll_interval=0.1, max_interval=0.2, timeout=5.0)
     assert waited.status == "approved"
 
-    times_timeout = iter([0.0, 10.0])
-    monkeypatch.setattr(client_mod.time, "time", lambda: next(times_timeout))
-
     with pytest.raises(ExecutionTimeoutError, match="timed out"):
-        await client.wait_for_approval("exec-3", poll_interval=0.1, timeout=1.0)
+        await client.wait_for_approval("exec-3", poll_interval=0.1, timeout=0)
 
 
 @pytest.mark.asyncio

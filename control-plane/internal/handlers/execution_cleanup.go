@@ -31,6 +31,11 @@ type ExecutionCleanupService struct {
 	// first-pass branch of cleanupLoop is reachable without a 30s sleep.
 	initialDelay time.Duration
 
+	// offlineAfter is how long after its last heartbeat an opted-in node is
+	// judged offline and its quiet executions held (offline_hold.go). Zero is
+	// DefaultLeaseTTL: a node that let its lease lapse.
+	offlineAfter time.Duration
+
 	// Metrics
 	totalCleaned    int64
 	lastCleanupTime time.Time
@@ -159,6 +164,10 @@ func (ecs *ExecutionCleanupService) performCleanup(ctx context.Context) {
 	payloadURIListErrors := 0
 	effectiveRetention := storage.EffectiveExecutionRetention(ecs.config.RetentionPeriod, ecs.config.PreserveRecentDuration)
 	if ecs.config.StaleExecutionTimeout > 0 {
+		// Hold the work of opted-in nodes that are offline before anything
+		// below can time it out or rewind it.
+		ecs.holdOfflineNodes(cleanupCtx)
+
 		// Retry eligible workflow executions before marking anything as timed out
 		if ecs.config.MaxRetries > 0 {
 			retriedIDs, err := ecs.storage.RetryStaleWorkflowExecutions(

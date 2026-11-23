@@ -331,6 +331,24 @@ async def test_ai_retries_empty_structured_output_after_reasoning(
     assert calls == [100, 200]
 
 
+def test_increase_retry_max_tokens_handles_max_completion_tokens():
+    from agentfield.agent_ai import _increase_retry_max_tokens
+
+    params = {"max_completion_tokens": 100}
+    _increase_retry_max_tokens(params)
+    assert params["max_completion_tokens"] == 200
+    assert "max_tokens" not in params
+
+    params = {"max_tokens": 100}
+    _increase_retry_max_tokens(params)
+    assert params["max_tokens"] == 200
+
+    params = {"max_tokens": None, "max_completion_tokens": None}
+    _increase_retry_max_tokens(params)
+    assert "max_tokens" not in params
+    assert "max_completion_tokens" not in params
+
+
 @pytest.mark.asyncio
 async def test_ai_with_vision_invokes_litellm(monkeypatch, agent_with_ai):
     stub_module = setup_litellm_stub(monkeypatch)

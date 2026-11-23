@@ -522,8 +522,11 @@ async def test_managed_availability_and_doctor_version(tmp_path, monkeypatch):
     home = tmp_path / "af-home/bin"
     home.mkdir(parents=True)
     binary = home / "codeaf"
+    # A shell stub, not a Python one: this test runs the real version probe, which
+    # allows VERSION_PROBE_TIMEOUT_SECONDS, and a Python child started under pytest-cov
+    # (COV_CORE_* in its environment) can take longer than that to start on a slow runner.
     binary.write_text(
-        f"#!{sys.executable}\nprint('codeaf v0.8.2 built 2026-10-23 11:39 · go1.26.5 linux/amd64')\n"
+        "#!/bin/sh\necho 'codeaf v0.8.2 built 2026-10-23 11:39 · go1.26.5 linux/amd64'\n"
     )
     binary.chmod(0o755)
     (home / ".codeaf.version").write_text("v0.8.2\n")

@@ -499,3 +499,58 @@ func TestOverlayDBConfigRoundTripPreservesStorageAndMergesExpected(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, string(expectedYAML), string(actualYAML))
 }
+
+func TestOverlayDBConfigLoadsOfflineHoldCeilingFromDatabase(t *testing.T) {
+	t.Run("database offline_hold_ceiling overrides file default", func(t *testing.T) {
+		cfg := baseConfigForDBTests()
+		cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling = config.DefaultOfflineHoldCeiling
+
+		err := overlayDBConfig(&cfg, &configStoreStub{entry: &storage.ConfigEntry{
+			Key: dbConfigKey,
+			Value: `agentfield:
+  execution_cleanup:
+    offline_hold_ceiling: 72h
+`,
+			Version:   1,
+			UpdatedAt: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
+		}})
+		require.NoError(t, err)
+		require.Equal(t, 72*time.Hour, cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling)
+	})
+
+	t.Run("omitted database offline_hold_ceiling preserves existing ceiling", func(t *testing.T) {
+		cfg := baseConfigForDBTests()
+		cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling = config.DefaultOfflineHoldCeiling
+
+		err := overlayDBConfig(&cfg, &configStoreStub{entry: &storage.ConfigEntry{
+			Key: dbConfigKey,
+			Value: `agentfield:
+  execution_cleanup:
+    stale_execution_timeout: 25m
+`,
+			Version:   1,
+			UpdatedAt: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
+		}})
+		require.NoError(t, err)
+		require.Equal(t, config.DefaultOfflineHoldCeiling, cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling)
+	})
+
+	t.Run("environment override wins over database offline_hold_ceiling", func(t *testing.T) {
+		t.Setenv("AGENTFIELD_EXECUTION_OFFLINE_HOLD_CEILING", "24h")
+		cfg := baseConfigForDBTests()
+		cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling = config.DefaultOfflineHoldCeiling
+
+		err := overlayDBConfig(&cfg, &configStoreStub{entry: &storage.ConfigEntry{
+			Key: dbConfigKey,
+			Value: `agentfield:
+  execution_cleanup:
+    offline_hold_ceiling: 72h
+`,
+			Version:   1,
+			UpdatedAt: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
+		}})
+		require.NoError(t, err)
+		require.Equal(t, 24*time.Hour, cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling)
+	})
+}
+

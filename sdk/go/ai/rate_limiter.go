@@ -367,12 +367,15 @@ func isRateLimitError(err error) bool {
 	return false
 }
 
-// retryAfterFromError extracts a Retry-After hint from an APIError body when the
-// provider surfaces one. It returns 0 when no usable value is present.
+// retryAfterFromError extracts a Retry-After hint from an APIError: the
+// Retry-After response header when present, else a numeric error code. It returns 0 when no usable value is present.
 func retryAfterFromError(err error) time.Duration {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		return 0
+	}
+	if apiErr.RetryAfter > 0 {
+		return apiErr.RetryAfter
 	}
 	if apiErr.Code == "" {
 		return 0

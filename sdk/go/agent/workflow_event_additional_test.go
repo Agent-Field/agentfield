@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/sdk/go/types"
@@ -89,10 +90,10 @@ func TestSendWorkflowEvent_AndPostExecutionStatus_ErrorPaths(t *testing.T) {
 	})
 
 	t.Run("postExecutionStatus surfaces request creation failures", func(t *testing.T) {
-			a := &Agent{
-				httpClient: http.DefaultClient,
-				logger:     log.New(io.Discard, "", 0),
-			}
+		a := &Agent{
+			httpClient: http.DefaultClient,
+			logger:     log.New(io.Discard, "", 0),
+		}
 
 		err := a.postExecutionStatus(context.Background(), "http://[::1", []byte(`{"ok":true}`))
 		require.Error(t, err)
@@ -115,4 +116,66 @@ func TestExecutionLogger_WithSourceAndNormalizeContext(t *testing.T) {
 	assert.Equal(t, "node-1", normalized.AgentNodeID)
 
 	assert.Nil(t, (*ExecutionLogger)(nil).WithSource("ignored"))
+}
+
+func TestCallLocalRecoversTerminalEventDelivery(t *testing.T) {
+	for _, failure := range []string{"server", "transport", "permanent", "persistent"} {
+		t.Run(failure, func(t *testing.T) {
+			attempts := 0
+			var firstBody []byte
+			transport := &workflowEventTransport{roundTrip: func(r *http.Request) (*http.Response, error) {
+				raw, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				var event types.WorkflowExecutionEvent
+				require.NoError(t, json.Unmarshal(raw, &event))
+				code := http.StatusOK
+				if event.Status == "succeeded" {
+					attempts++
+					require.Equal(t, "Bearer token-123", r.Header.Get("Authorization"))
+					require.Equal(t, "key-123", r.Header.Get("X-API-Key"))
+					require.Equal(t, "parent", *event.ParentExecutionID)
+					if attempts == 1 {
+						firstBody = raw
+					} else {
+						assert.Equal(t, firstBody, raw)
+					}
+					if failure == "permanent" {
+						code = http.StatusForbidden
+					} else if failure == "persistent" {
+						code = http.StatusServiceUnavailable
+					} else if attempts == 1 {
+						if failure == "transport" {
+							return nil, fmt.Errorf("injected transport failure")
+						}
+						code = http.StatusServiceUnavailable
+					}
+				}
+				return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("{}"))}, nil
+			}}
+			a := newUsageTestAgent(t)
+			a.cfg.Token, a.cfg.APIKey = "token-123", "key-123"
+			a.httpClient = &http.Client{Transport: transport}
+			a.RegisterReasoner("child", func(context.Context, map[string]any) (any, error) { return map[string]any{"done": true}, nil })
+			ctx := contextWithExecution(context.Background(), ExecutionContext{ExecutionID: "parent", RunID: "run", WorkflowID: "run"})
+			result, err := a.CallLocal(ctx, "child", nil)
+			require.NoError(t, err)
+			assert.Equal(t, map[string]any{"done": true}, result)
+			want := 2
+			if failure == "permanent" {
+				want = 1
+			}
+			if failure == "persistent" {
+				want = 3
+			}
+			assert.Equal(t, want, attempts, "terminal delivery must recover transient errors within a fixed attempt limit")
+		})
+	}
+}
+
+type workflowEventTransport struct {
+	roundTrip func(*http.Request) (*http.Response, error)
+}
+
+func (rt *workflowEventTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return rt.roundTrip(r)
 }

@@ -129,12 +129,13 @@ async def test_invalid_argument_type_is_reported_and_loop_continues():
     )
 
     assert trace.total_tool_calls == 1
-    assert trace.calls[0].error is not None
-    assert "mapping" in trace.calls[0].error
+    # Invalid arguments are reported to the model without creating a call record.
+    assert trace.calls == []
     assert agent.call.await_count == 0
     tool_messages = [m for m in messages if m.get("role") == "tool"]
     assert len(tool_messages) == 1
-    assert "error" in json.loads(tool_messages[0]["content"])
+    error = json.loads(tool_messages[0]["content"])["error"]
+    assert "JSON object" in error
 
 
 @pytest.mark.asyncio
@@ -164,11 +165,12 @@ async def test_mixed_valid_and_invalid_tool_calls_in_single_turn():
     )
 
     assert trace.total_tool_calls == 2
+    assert len(trace.calls) == 1
     assert trace.calls[0].result == {"echoed": "hi"}
-    assert trace.calls[1].error is not None
     agent.call.assert_awaited_once_with("utility.echo", text="hi")
     tool_messages = [m for m in messages if m.get("role") == "tool"]
     assert len(tool_messages) == 2
+    assert "invalid" in json.loads(tool_messages[1]["content"])["error"]
 
 
 @pytest.mark.asyncio

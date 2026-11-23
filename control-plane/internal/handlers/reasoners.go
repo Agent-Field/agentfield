@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time" // Added for time.Now()
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
@@ -157,6 +158,7 @@ type ExecuteReasonerResponse struct {
 // ExecuteReasonerHandler handles execution of reasoners with full tracking
 func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
 	client := agenturl.NewClient(0)
+	var watchedRuns sync.Map
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		startTime := time.Now()
@@ -323,6 +325,13 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create execution record"})
 			return
 		}
+		if runOwner := strings.TrimSpace(c.GetHeader(RunOwnerHeader)); runOwner != "" && parentExecutionID == "" {
+			if owners, ok := storageProvider.(runOwnerSetter); ok {
+				if err := owners.SetRunOwner(ctx, workflowID, runOwner); err != nil {
+					logger.Logger.Warn().Err(err).Str("run_id", workflowID).Msg("failed to record the run's owner")
+				}
+			}
+		}
 
 		agentURL, endpointErr := checkedAgentURL(targetNode, &parsedTarget{TargetName: reasonerName, TargetType: "reasoner"})
 		if endpointErr != nil {
@@ -416,6 +425,9 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		agentReq.Header.Set("X-Workflow-ID", workflowID)
 		agentReq.Header.Set("X-Execution-ID", executionID)
 		agentReq.Header.Set("X-AgentField-Request-ID", agentfieldRequestID)
+		if lookupRunWatched(ctx, storageProvider, &watchedRuns, workflowID) {
+			agentReq.Header.Set(RunWatchedHeader, "1")
+		}
 		if targetNode.DeploymentType == "serverless" {
 			agentReq.Header.Set("X-Run-ID", workflowID)
 		}
@@ -564,6 +576,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 // ExecuteSkillHandler handles execution of skills via AgentField server
 func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
 	client := agenturl.NewClient(0)
+	var watchedRuns sync.Map
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		startTime := time.Now()
@@ -728,6 +741,13 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create execution record"})
 			return
 		}
+		if runOwner := strings.TrimSpace(c.GetHeader(RunOwnerHeader)); runOwner != "" && parentExecutionID == "" {
+			if owners, ok := storageProvider.(runOwnerSetter); ok {
+				if err := owners.SetRunOwner(ctx, workflowID, runOwner); err != nil {
+					logger.Logger.Warn().Err(err).Str("run_id", workflowID).Msg("failed to record the run's owner")
+				}
+			}
+		}
 
 		agentURL, endpointErr := checkedAgentURL(targetNode, &parsedTarget{TargetName: skillName, TargetType: "skill"})
 		if endpointErr != nil {
@@ -765,6 +785,9 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		agentReq.Header.Set("X-Workflow-ID", workflowID)
 		agentReq.Header.Set("X-Execution-ID", executionID)
 		agentReq.Header.Set("X-AgentField-Request-ID", agentfieldRequestID)
+		if lookupRunWatched(ctx, storageProvider, &watchedRuns, workflowID) {
+			agentReq.Header.Set(RunWatchedHeader, "1")
+		}
 		if parentWorkflowID != "" {
 			agentReq.Header.Set("X-Parent-Workflow-ID", parentWorkflowID)
 		}

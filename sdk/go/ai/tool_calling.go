@@ -271,8 +271,28 @@ func (c *Client) ExecuteToolCallLoopResult(
 			trace.TotalToolCalls = totalCalls
 
 			var args map[string]interface{}
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			if strings.TrimSpace(tc.Function.Arguments) == "" {
+				// Some providers send "" for tools that take no arguments.
 				args = map[string]interface{}{}
+			} else if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil || args == nil {
+				// Malformed or truncated arguments: do not run the tool with
+				// empty args; report the error so the model can retry.
+				if err == nil {
+					err = fmt.Errorf("arguments must be a JSON object")
+				}
+				invalidMsg := Message{
+					Role: "tool",
+					Content: []ContentPart{{Type: "text", Text: encodeToolContent(map[string]string{
+						"error": fmt.Sprintf("Tool call to '%s' has invalid or truncated JSON arguments (%v). Please retry with valid JSON arguments.", tc.Function.Name, err),
+					})}},
+					ToolCallID: tc.ID,
+				}
+				loopMessages = append(loopMessages, invalidMsg)
+				trace.Messages = append(trace.Messages, TracedMessage{
+					Message: invalidMsg,
+					Source:  TraceSourceToolError,
+				})
+				continue
 			}
 			toolName := unsanitizeToolName(tc.Function.Name)
 

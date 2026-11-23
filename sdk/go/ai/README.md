@@ -216,6 +216,38 @@ only and never reroutes a request on its own:
 Model: "runcrate/deepseek-ai/DeepSeek-V4.1-Flash"  // sent as deepseek-ai/DeepSeek-V4.1-Flash
 ```
 
+### CloudGPU Configuration
+
+CloudGPU is an OpenAI-compatible Chat Completions endpoint for DeepSeek, Kimi,
+GLM, MiniMax, Qwen and more, so wiring it up is a base URL and a model id:
+
+```go
+aiConfig := &ai.Config{
+    APIKey:      os.Getenv("CLOUDGPU_API_KEY"),
+    BaseURL:     "https://cloudgpu.app/v1",
+    Model:       "deepseek-v4-flash", // id as returned by GET /models
+    Temperature: 0.7,
+    MaxTokens:   4096,
+}
+```
+
+`ai.DefaultConfig()` picks this up from `CLOUDGPU_API_KEY` automatically. A
+key from a provider already configured in the environment keeps precedence.
+With no `AI_MODEL` set, the default falls back to `deepseek-v4-flash`, so a
+CloudGPU-only environment works out of the box. Set `AI_MODEL` to any id from
+`GET /models` on the base URL to pick another model, for example `glm-5.3` or
+`kimi-k3`. If you route CloudGPU through a custom `AI_BASE_URL` the SDK cannot
+recognize as CloudGPU (a proxy), set `AI_MODEL` yourself.
+
+A `cloudgpu/` model prefix is accepted as a routing marker for callers that
+select the gateway by model string, and is stripped before the request goes
+out (the endpoint serves the bare id). The marker rewrites the model string
+only and never reroutes a request on its own:
+
+```go
+Model: "cloudgpu/deepseek-v4-flash"  // sent as deepseek-v4-flash
+```
+
 ### Rate Limiting & Circuit Breaker
 
 The client can automatically retry rate-limited AI calls (HTTP 429/503, or

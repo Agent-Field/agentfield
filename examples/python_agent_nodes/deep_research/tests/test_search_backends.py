@@ -52,6 +52,10 @@ def keenable_payload(results: list[dict]) -> dict:
     return {"query": "q", "results": results}
 
 
+def outcrawl_payload(hits: list[dict]) -> dict:
+    return {"hits": hits}
+
+
 class SearchProviderTests(unittest.TestCase):
     def test_search_provider_preserves_tavily_default(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -274,6 +278,75 @@ class SearchProviderTests(unittest.TestCase):
                 self.assertEqual(
                     research._keenable_error(503, payload),
                     "Keenable returned HTTP status 503",
+                )
+
+    def test_search_provider_accepts_outcrawl(self):
+        with patch.dict(os.environ, {"SEARCH_PROVIDER": " Outcrawl "}, clear=True):
+            self.assertEqual(research._search_provider(), "outcrawl")
+        with patch.dict(os.environ, {"SEARCH_PROVIDER": "other"}, clear=True):
+            with self.assertRaisesRegex(
+                ValueError, "tavily, parallel, serply, keenable, outcrawl"
+            ):
+                research._search_provider()
+
+    def test_outcrawl_results_normalize_and_skip_unusable_entries(self):
+        payload = outcrawl_payload(
+            [
+                {
+                    "title": "First",
+                    "url": "https://example.com/first",
+                    "snippet": "  One  ",
+                    "rank": 1,
+                },
+                {"title": "Missing URL", "snippet": "ignored"},
+                {"url": "https://example.com/no-title", "snippet": "ignored"},
+                "not a hit",
+                {"title": "Second", "url": "https://example.com/second"},
+            ]
+        )
+
+        self.assertEqual(
+            research._outcrawl_results(payload),
+            [
+                {
+                    "title": "First",
+                    "url": "https://example.com/first",
+                    "content": "One",
+                    "raw_content": "One",
+                },
+                {
+                    "title": "Second",
+                    "url": "https://example.com/second",
+                    "content": "",
+                    "raw_content": "",
+                },
+            ],
+        )
+
+    def test_outcrawl_results_reject_malformed_payloads(self):
+        cases = [
+            ("not a dict", "invalid JSON response"),
+            ({"code": "x"}, "no hits array"),
+            ({"hits": "nope"}, "no hits array"),
+        ]
+        for payload, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    research._outcrawl_results(payload)
+
+    def test_outcrawl_error_prefers_message_text_over_bare_status(self):
+        self.assertEqual(
+            research._outcrawl_error(
+                401,
+                {"code": "unauthorized", "message": "authentication failed"},
+            ),
+            "Outcrawl returned HTTP status 401: authentication failed",
+        )
+        for payload in (None, {}, {"message": "   "}, "<html>"):
+            with self.subTest(payload=payload):
+                self.assertEqual(
+                    research._outcrawl_error(503, payload),
+                    "Outcrawl returned HTTP status 503",
                 )
 
     def test_tavily_path_preserves_key_and_request_options(self):
@@ -725,6 +798,145 @@ class AsyncSearchProviderTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(results, [{"results": []}])
+
+    async def test_execute_search_routes_to_outcrawl_without_tavily_key(self):
+        async def fake_outcrawl(queries):
+            self.assertEqual(queries, ["query"])
+            return [
+                {
+                    "results": [
+                        {
+                            "title": "Result",
+                            "url": "https://example.com",
+                            "content": "Snippet",
+                        }
+                    ]
+                }
+            ]
+
+        environment = {"SEARCH_PROVIDER": "outcrawl"}
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(research, "_execute_outcrawl_search", fake_outcrawl),
+        ):
+            result = await research.execute_search(["query"])
+
+        self.assertEqual(
+            result,
+            {
+                "results": [
+                    {
+                        "title": "Result",
+                        "url": "https://example.com",
+                        "content": "Snippet",
+                    }
+                ],
+                "queries": ["query"],
+            },
+        )
+
+    async def test_outcrawl_search_sends_bearer_key_and_isolates_failures(self):
+        requests = []
+
+        class FakeResponse:
+            def __init__(self, status, payload=None):
+                self.status = status
+                self.payload = payload
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            async def json(self, content_type=None):
+                self_test.assertIsNone(content_type)
+                return self.payload
+
+        class FakeSession:
+            def __init__(self, **kwargs):
+                self_test.assertEqual(kwargs["timeout"].total, 30)
+                self.responses = [
+                    FakeResponse(
+                        200,
+                        outcrawl_payload(
+                            [
+                                {
+                                    "title": f"Result {index}",
+                                    "url": f"https://example.com/{index}",
+                                    "snippet": "text",
+                                    "rank": index + 1,
+                                }
+                                for index in range(7)
+                            ]
+                        ),
+                    ),
+                    FakeResponse(
+                        401, {"code": "unauthorized", "message": "Invalid API key"}
+                    ),
+                ]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            def post(self, url, *, json, headers):
+                requests.append((url, json, headers))
+                return self.responses.pop(0)
+
+        class FakeTimeout:
+            def __init__(self, total):
+                self.total = total
+
+        self_test = self
+        aiohttp = types.ModuleType("aiohttp")
+        aiohttp.ClientTimeout = FakeTimeout
+        aiohttp.ClientSession = FakeSession
+
+        with (
+            patch.dict(os.environ, {"OUTCRAWL_API_KEY": "test-key"}, clear=True),
+            patch.dict(sys.modules, {"aiohttp": aiohttp}),
+        ):
+            results = await research._execute_outcrawl_search(["good", "rejected"])
+
+        self.assertEqual(requests[0][0], research.OUTCRAWL_SEARCH_URL)
+        self.assertEqual(
+            requests[0][1],
+            {"query": "good", "limit": research.OUTCRAWL_MAX_RESULTS},
+        )
+        self.assertEqual(requests[1][1]["query"], "rejected")
+        self.assertEqual(
+            requests[0][2],
+            {"Accept": "application/json", "Authorization": "Bearer test-key"},
+        )
+        self.assertEqual(len(results[0]["results"]), research.OUTCRAWL_MAX_RESULTS)
+        self.assertEqual(
+            results[0]["results"][0],
+            {
+                "title": "Result 0",
+                "url": "https://example.com/0",
+                "content": "text",
+                "raw_content": "text",
+            },
+        )
+        self.assertEqual(
+            results[1],
+            {
+                "error": "Outcrawl returned HTTP status 401: Invalid API key",
+                "query": "rejected",
+            },
+        )
+
+    async def test_outcrawl_path_requires_its_key(self):
+        aiohttp = types.ModuleType("aiohttp")
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.dict(sys.modules, {"aiohttp": aiohttp}),
+        ):
+            with self.assertRaisesRegex(ValueError, "OUTCRAWL_API_KEY"):
+                await research._execute_outcrawl_search(["query"])
 
 
 if __name__ == "__main__":

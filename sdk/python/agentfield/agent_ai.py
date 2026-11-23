@@ -87,12 +87,16 @@ def _is_empty_structured_result(parsed: BaseModel) -> bool:
 
 
 def _increase_retry_max_tokens(params: Dict[str, Any]) -> None:
-    current = params.get("max_tokens")
-    if current is None:
-        params.pop("max_tokens", None)
-        return
-    if isinstance(current, int) and current > 0:
-        params["max_tokens"] = current * 2
+    # Some providers (e.g. OpenAI) get ``max_tokens`` renamed to
+    # ``max_completion_tokens`` before the call, so handle both keys.
+    for key in ("max_tokens", "max_completion_tokens"):
+        if key not in params:
+            continue
+        current = params[key]
+        if current is None:
+            params.pop(key, None)
+        elif isinstance(current, int) and current > 0:
+            params[key] = current * 2
 
 
 def _raise_if_empty_reasoning_structured_output(
@@ -694,7 +698,12 @@ class AgentAI:
         # Handle flexible user input with intelligent processing. When both
         # input styles are used, keep the positional multimodal content and
         # append the keyword prompt to the final user message.
-        processed_content = self._process_multimodal_args(args) if args else []
+        # Message dictionaries may belong to the caller's reusable history.
+        processed_content = (
+            [dict(message) for message in self._process_multimodal_args(args)]
+            if args
+            else []
+        )
         if user and processed_content:
             user_message = next(
                 (
@@ -707,7 +716,7 @@ class AgentAI:
             if user_message is not None:
                 content = user_message.get("content")
                 if isinstance(content, list):
-                    content.append({"type": "text", "text": user})
+                    user_message["content"] = content + [{"type": "text", "text": user}]
                 else:
                     user_message["content"] = [
                         {"type": "text", "text": content},

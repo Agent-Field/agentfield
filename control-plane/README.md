@@ -50,10 +50,18 @@ The server runs at `http://localhost:8080` and will automatically reload when yo
 Environment variables override `config/agentfield.yaml`. Common options:
 
 - `AGENTFIELD_DATABASE_URL` – PostgreSQL DSN
-- `AGENTFIELD_HTTP_ADDR` – HTTP listen address (`0.0.0.0:8080` by default)
+- `AGENTFIELD_HOST` – bind host for HTTP and admin gRPC (empty by default: all interfaces)
+- `AGENTFIELD_PORT` – HTTP port (`8080` by default)
 - `AGENTFIELD_LOG_LEVEL` – log verbosity (`info`, `debug`, etc.)
 
 Sample config files live in `config/`.
+
+Set `agentfield.host: 127.0.0.1` in YAML to restrict both listeners to loopback,
+or select a host with `af server --host 127.0.0.1 --open=false`. The standalone
+`agentfield-server` accepts the same flag. Precedence is `--host` over
+`AGENTFIELD_HOST` over YAML, including an explicit empty value to bind all
+interfaces. Use an unbracketed IPv6 address such as `::1`. HTTP and admin gRPC
+keep their existing port settings (admin defaults to HTTP port + 100).
 
 ## Web UI Development
 

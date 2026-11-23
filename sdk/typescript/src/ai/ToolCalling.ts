@@ -16,6 +16,7 @@ import type {
 } from '../types/agent.js';
 import type { Agent } from '../agent/Agent.js';
 import type { AIRequestOptions } from './AIClient.js';
+import { temperatureForModel } from './modelParams.js';
 import { recordAiSdkUsage } from '../usage/aiUsage.js';
 import {
   type PromptTemplates,
@@ -477,6 +478,10 @@ export async function executeToolCallLoop(
   const maxTurns = config.maxTurns ?? DEFAULT_MAX_TURNS;
   const maxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const templates = resolvePromptTemplates(config.promptTemplates);
+  const temperature = temperatureForModel(
+    modelChoice?.modelName ?? options.model,
+    options.temperature
+  );
 
   // toolSystemPrompt defaults to undefined (nothing injected), so existing
   // tools= calls are unchanged. When set, append it after the caller's system
@@ -543,7 +548,7 @@ export async function executeToolCallLoop(
       model: buildModel(),
       prompt,
       system: effectiveSystem,
-      temperature: options.temperature,
+      temperature,
       maxOutputTokens: options.maxTokens,
       tools: selectionTools,
       stopWhen: stepCountIs(1)  // Stop after LLM's first response (tool selection)
@@ -593,7 +598,7 @@ export async function executeToolCallLoop(
     model,
     prompt,
     system: effectiveSystem,
-    temperature: options.temperature,
+    temperature,
     maxOutputTokens: options.maxTokens,
     tools: observableTools,
     stopWhen: stepCountIs(maxTurns),

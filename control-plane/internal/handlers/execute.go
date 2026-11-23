@@ -154,6 +154,7 @@ type executionController struct {
 	internalToken  string // sent as Authorization header when forwarding to agents
 	readARDConfig  func() config.ARDConfig
 	redactPayloads bool
+	watchedRuns    sync.Map // runID → struct{}{}, positive-only cache of owned runs
 }
 
 type asyncExecutionJob struct {

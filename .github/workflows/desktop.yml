@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
+        os: [macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
       # No signing identities in CI; validate packaging unsigned.
@@ -76,7 +76,7 @@ jobs:
   # app-specific password.
   verify-signing-secrets:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Import Developer ID cert into a temporary keychain
         env:

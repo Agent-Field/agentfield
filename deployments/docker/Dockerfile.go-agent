@@ -1,6 +1,11 @@
+# Base images are build args so a deployment can pin them (for example by digest)
+# without patching this file. The defaults are the images this build has always used.
+ARG DEBIAN_IMAGE=debian:bookworm-slim
+ARG GO_IMAGE=golang:1.25-alpine
+
 # CodeAF is the default harness. Raw assets are authenticated against embedded
 # release pins; any download or verification failure fails the image build.
-FROM debian:bookworm-slim AS codeaf-dist
+FROM ${DEBIAN_IMAGE} AS codeaf-dist
 ARG TARGETARCH
 ARG CODEAF_VERSION=v0.8.2
 ARG CODEAF_BASE_URL=https://github.com/Agent-Field/CodeAF/releases/download
@@ -32,7 +37,7 @@ RUN set -eu; \
 # UNCOMPRESSED binary, so the hash is taken after gunzip.
 #
 # Pin overrides (both are build args): AFORGE_BASE_URL, AFORGE_VERSION.
-FROM debian:bookworm-slim AS aforge-dist
+FROM ${DEBIAN_IMAGE} AS aforge-dist
 ARG TARGETARCH
 ARG AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge
 ARG AFORGE_VERSION=v0.1.0
@@ -53,14 +58,18 @@ RUN set -eu; \
     fi; \
     rm -f aforge.gz checksums.txt
 
-FROM golang:1.25-alpine
+FROM ${GO_IMAGE}
 
 WORKDIR /workspace
 
-COPY sdk/go /tmp/go-sdk
+# sdk/go's harness tests read ../../codeaf-auth-contract.json, which resolves from
+# sdk/go/harness to sdk/codeaf-auth-contract.json (the CodeAF auth contract shared with
+# the Python and TypeScript SDKs). Keep that layout so the tests find it.
+COPY sdk/go /tmp/src/sdk/go
+COPY sdk/codeaf-auth-contract.json /tmp/src/sdk/codeaf-auth-contract.json
 
 RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
-    cd /tmp/go-sdk && go mod download && go test ./...
+    cd /tmp/src/sdk/go && go mod download && go test ./...
 
 # aforge is a statically linked ELF binary, so the debian-built asset runs
 # unchanged on this musl/alpine base. See the aforge-dist stage for why

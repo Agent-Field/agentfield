@@ -96,7 +96,7 @@ func TestExecuteToolCallLoop_CompletesAfterToolResponse(t *testing.T) {
 	assert.Equal(t, map[string]interface{}{"status": "open"}, trace.Calls[0].Result)
 }
 
-func TestExecuteToolCallLoop_RecordsToolErrorsAndMalformedArguments(t *testing.T) {
+func TestExecuteToolCallLoop_RecordsToolErrors(t *testing.T) {
 	var requestCount atomic.Int32
 	client := newToolLoopClient(t, func(w http.ResponseWriter, r *http.Request) {
 		count := requestCount.Add(1)
@@ -106,9 +106,9 @@ func TestExecuteToolCallLoop_RecordsToolErrorsAndMalformedArguments(t *testing.T
 					Message: Message{
 						Role: "assistant",
 						ToolCalls: []ToolCall{{
-							ID:   "call-2",
-							Type: "function",
-							Function: ToolCallFunction{Name: "lookup", Arguments: `{bad json`},
+							ID:       "call-2",
+							Type:     "function",
+							Function: ToolCallFunction{Name: "lookup", Arguments: ``},
 						}},
 					},
 					FinishReason: "tool_calls",
@@ -150,6 +150,62 @@ func TestExecuteToolCallLoop_RecordsToolErrorsAndMalformedArguments(t *testing.T
 	require.Len(t, trace.Calls, 1)
 	assert.Equal(t, assert.AnError.Error(), trace.Calls[0].Error)
 	assert.Empty(t, trace.Calls[0].Arguments)
+}
+
+func TestExecuteToolCallLoop_MalformedArgumentsAreNotExecuted(t *testing.T) {
+	var requestCount atomic.Int32
+	client := newToolLoopClient(t, func(w http.ResponseWriter, r *http.Request) {
+		count := requestCount.Add(1)
+		if count == 1 {
+			require.NoError(t, json.NewEncoder(w).Encode(Response{
+				Choices: []Choice{{
+					Message: Message{
+						Role: "assistant",
+						ToolCalls: []ToolCall{{
+							ID:       "call-3",
+							Type:     "function",
+							Function: ToolCallFunction{Name: "lookup", Arguments: `{"query": "trunca`},
+						}},
+					},
+					FinishReason: "tool_calls",
+				}},
+			}))
+			return
+		}
+
+		var req Request
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.Len(t, req.Messages, 3)
+		assert.Equal(t, "tool", req.Messages[2].Role)
+		assert.Equal(t, "call-3", req.Messages[2].ToolCallID)
+		assert.Contains(t, req.Messages[2].Content[0].Text, "invalid or truncated JSON arguments")
+		require.NoError(t, json.NewEncoder(w).Encode(Response{
+			Choices: []Choice{{
+				Message: Message{
+					Role:    "assistant",
+					Content: []ContentPart{{Type: "text", Text: "retry later"}},
+				},
+				FinishReason: "stop",
+			}},
+		}))
+	})
+
+	called := false
+	resp, trace, err := client.ExecuteToolCallLoop(
+		context.Background(),
+		[]Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "Lookup"}}}},
+		[]ToolDefinition{{Type: "function", Function: ToolFunction{Name: "lookup", Parameters: map[string]interface{}{"type": "object"}}}},
+		ToolCallConfig{MaxTurns: 3, MaxToolCalls: 2},
+		func(_ context.Context, _ string, _ map[string]interface{}) (map[string]interface{}, error) {
+			called = true
+			return map[string]interface{}{}, nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "retry later", resp.Text())
+	assert.False(t, called, "tool must not run with malformed arguments")
+	assert.Empty(t, trace.Calls)
 }
 
 func TestSimpleAndStructuredAIAndResponseHelpers(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 )
 
@@ -44,6 +45,7 @@ type CancelDispatcher struct {
 	httpClient    *http.Client
 	cancelPath    string
 	internalToken string
+	link          *nodelink.Hub
 
 	subscriberID string
 
@@ -72,6 +74,10 @@ type CancelDispatcherConfig struct {
 	// callback so workers running with RequireOriginAuth=true accept it.
 	// Matches the existing reasoner-dispatch auth contract.
 	InternalToken string
+	// Link is the node-initiated link hub. A cancel for a node holding a live
+	// link goes down the link (acked, redelivered until acked) instead of the
+	// one best-effort HTTP POST. nil keeps HTTP for every node.
+	Link *nodelink.Hub
 }
 
 // NewCancelDispatcher constructs a dispatcher with sensible defaults.
@@ -99,6 +105,7 @@ func NewCancelDispatcher(store storage.StorageProvider, cfg CancelDispatcherConf
 		cancelPath:    path,
 		subscriberID:  subscriberID,
 		internalToken: cfg.InternalToken,
+		link:          cfg.Link,
 	}
 }
 
@@ -177,6 +184,16 @@ func (d *CancelDispatcher) dispatch(ctx context.Context, ev events.ExecutionEven
 	}
 	if agent == nil {
 		logger.Logger.Debug().Str("agent_node_id", agentNodeID).Str("execution_id", executionID).Msg("cancel-dispatcher: agent not registered, skipping")
+		return
+	}
+	if d.link != nil && (d.link.LiveFor(agent.ID, nodelink.KindCancel) || agent.BaseURL == "") {
+		reason := ""
+		if m, ok := ev.Data.(map[string]interface{}); ok {
+			if r, ok := m["reason"].(string); ok {
+				reason = r
+			}
+		}
+		d.link.Deliver(agent.ID, nodelink.Delivery{Kind: nodelink.KindCancel, ExecutionID: executionID, Reason: reason})
 		return
 	}
 	baseURL := agent.BaseURL

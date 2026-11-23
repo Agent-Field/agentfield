@@ -376,9 +376,34 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	if runCLI == nil {
 		runCLI = runCodeAFCLI
 	}
+	// A WATCHED RUN IS THE SAME ENGINE A WORKAF STEP RUNS (codeaf_live.go):
+	// `codeaf chat --once`, a full session whose conversation record is
+	// streamed line by line through --events and steered through --steer. A
+	// codeaf too old for those flags is run the old way, unwatched: watching
+	// a run is a convenience and must never cost the run itself.
+	var live *liveRun
+	runCmd, runCwd := cmd, ""
+	if command == "exec" && options.Live != nil {
+		run, flags, err := startLive(options.Live)
+		if err != nil {
+			log.Printf("WARNING CodeAF live transcript unavailable: %v", err)
+		} else {
+			live = run
+			runCmd, runCwd = codeAFChatCommand(binary.path, model, input, options, deadline, flags), root
+		}
+	}
 	// The context is the exact deadline; the integer CLI cap rounds up so it cannot shorten it.
 	outerTimeout := int(math.Ceil(time.Until(deadline).Seconds()))
-	cli, err := runCLI(runCtx, cmd, env, "", outerTimeout, 0, input)
+	var cli *CLIResult
+	if live != nil {
+		cli, err = runCLI(runCtx, runCmd, env, runCwd, outerTimeout, 0, nil)
+	} else {
+		cli, err = runCLI(runCtx, cmd, env, "", outerTimeout, 0, input)
+	}
+	live.finish()
+	if live != nil && err == nil && cli != nil && cli.ReturnCode != 0 && strings.Contains(cli.Stderr, "-events") && strings.Contains(cli.Stderr, "not defined") {
+		cli, err = runCLI(runCtx, cmd, env, "", int(math.Ceil(time.Until(deadline).Seconds())), 0, input)
+	}
 	elapsed := int(time.Since(started).Milliseconds())
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		return &RawResult{Provider: ProviderCodeAF, IsError: true, FailureType: FailureTimeout,
@@ -396,6 +421,20 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 		return nil, err
 	}
 	return codeAFResult(cli, model, elapsed), nil
+}
+
+// codeAFChatCommand is the watched run's command line: one headless session
+// turn with nobody to ask (--yolo), on this process's own engine (--no-host),
+// printing the machine envelope (--json).
+func codeAFChatCommand(bin, model string, prompt []byte, options Options, deadline time.Time, live []string) []string {
+	text := string(prompt)
+	if system := strings.TrimSpace(options.SystemPrompt); system != "" {
+		text = system + "\n\n" + text
+	}
+	hours := math.Max(0.02, time.Until(deadline).Hours())
+	cmd := []string{bin, "chat", "--once", text, "--json", "--yolo", "--no-host", "--model", model,
+		"--max-hours", strconv.FormatFloat(hours, 'f', 3, 64)}
+	return append(cmd, live...)
 }
 
 func codeAFResult(cli *CLIResult, model string, elapsed int) *RawResult {

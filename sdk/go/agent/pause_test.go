@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -606,11 +609,169 @@ func TestPause_NoExecutionIDReturnsError(t *testing.T) {
 	}
 }
 
-func TestPause_MissingApprovalRequestIDReturnsError(t *testing.T) {
-	a := newPauseAgent()
-	_, err := a.Pause(context.Background(), PauseOptions{ExecutionID: "exec-1"})
-	if err == nil {
-		t.Fatal("expected error when approval_request_id is empty")
+// fakeApprovalCP is a control plane for a pause with no external approval
+// service: it mints the request id, keeps the question it was sent, answers
+// approval-status from status(), and never calls the node back unless told.
+type fakeApprovalCP struct {
+	mu     sync.Mutex
+	asked  []client.RequestApprovalRequest
+	status func(id string) map[string]any
+}
+
+func (f *fakeApprovalCP) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		id := fmt.Sprintf("apr_%d", len(f.asked))
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/request-approval"):
+			var req client.RequestApprovalRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			f.asked = append(f.asked, req)
+			if req.ApprovalRequestID != "" {
+				id = req.ApprovalRequestID
+			} else {
+				id = fmt.Sprintf("apr_%d", len(f.asked))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"approval_request_id": id, "status": "pending"})
+		case strings.HasSuffix(r.URL.Path, "/approval-status"):
+			if len(f.asked) > 0 && f.asked[len(f.asked)-1].ApprovalRequestID != "" {
+				id = f.asked[len(f.asked)-1].ApprovalRequestID
+			}
+			_ = json.NewEncoder(w).Encode(f.status(id))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+// With no id of its own, Pause sends the question, takes the minted id and
+// resumes from the poll when no callback ever comes — carrying the person's
+// words, so the reasoner can revise and pause again.
+func TestPause_WithoutAnIDSendsTheQuestionAndResumesFromThePoll(t *testing.T) {
+	var polls atomic.Int32
+	f := &fakeApprovalCP{status: func(id string) map[string]any {
+		if polls.Add(1) < 3 {
+			return map[string]any{"status": "pending", "approval_request_id": id}
+		}
+		return map[string]any{"status": "request_changes", "approval_request_id": id,
+			"feedback": "split the migration", "response": `{"feedback":"split the migration"}`}
+	}}
+	cp := f.server(t)
+	defer cp.Close()
+	a, cleanup := buildPauseAgent(t, cp.URL)
+	defer cleanup()
+
+	res, err := a.Pause(context.Background(), PauseOptions{
+		ExecutionID: "exec-1", Kind: "plan_review", Question: "Approve the plan?",
+		Body: "# Plan\n1. migrate", Options: []string{"approve", "request_changes", "reject"},
+		PollInterval: 10 * time.Millisecond, Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if !res.ChangesRequested() || res.Feedback != "split the migration" || res.ApprovalRequestID != "apr_1" {
+		t.Fatalf("result=%+v want request_changes with the words, id apr_1", res)
+	}
+	if res.RawResponse["feedback"] != "split the migration" {
+		t.Errorf("raw=%v", res.RawResponse)
+	}
+	f.mu.Lock()
+	got := f.asked[0]
+	f.mu.Unlock()
+	if got.ApprovalRequestID != "" || got.Kind != "plan_review" || got.Question != "Approve the plan?" ||
+		got.Body != "# Plan\n1. migrate" || len(got.Options) != 3 || !strings.HasSuffix(got.CallbackURL, "/webhooks/approval") {
+		t.Fatalf("request-approval body=%+v", got)
+	}
+	if a.pauseManager.PendingCount() != 0 {
+		t.Errorf("PendingCount=%d want 0", a.pauseManager.PendingCount())
+	}
+}
+
+// A status that describes another round (the one answered before this pause)
+// is not this pause's answer.
+func TestPause_PollIgnoresAnotherRound(t *testing.T) {
+	var polls atomic.Int32
+	f := &fakeApprovalCP{status: func(id string) map[string]any {
+		if polls.Add(1) < 4 {
+			return map[string]any{"status": "request_changes", "approval_request_id": "the-old-round", "feedback": "old words"}
+		}
+		return map[string]any{"status": "approved", "approval_request_id": id}
+	}}
+	cp := f.server(t)
+	defer cp.Close()
+	a, cleanup := buildPauseAgent(t, cp.URL)
+	defer cleanup()
+	res, err := a.Pause(context.Background(), PauseOptions{ApprovalRequestID: "r2", ExecutionID: "exec-1",
+		PollInterval: 10 * time.Millisecond, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if !res.Approved() || res.Feedback != "" {
+		t.Fatalf("result=%+v want approved for r2", res)
+	}
+}
+
+// The revision loop: request changes with words, the reasoner revises and
+// pauses again, then is approved — each answer arriving by callback.
+func TestPause_RevisionLoopCarriesTheWordsBack(t *testing.T) {
+	f := &fakeApprovalCP{status: func(id string) map[string]any { return map[string]any{"status": "pending"} }}
+	cp := f.server(t)
+	defer cp.Close()
+	a, cleanup := buildPauseAgent(t, cp.URL)
+	defer cleanup()
+	answers := []map[string]any{
+		{"decision": "request_changes", "feedback": "add a rollback step"},
+		{"decision": "approved", "feedback": ""},
+	}
+	plan := "1. migrate"
+	for round, ans := range answers {
+		done := make(chan *ApprovalResult, 1)
+		go func() {
+			res, err := a.Pause(context.Background(), PauseOptions{ExecutionID: "exec-1", Kind: "plan_review",
+				Body: plan, PollInterval: -1, Timeout: 5 * time.Second})
+			if err != nil {
+				t.Errorf("Pause: %v", err)
+			}
+			done <- res
+		}()
+		var id string
+		deadline := time.Now().Add(2 * time.Second)
+		for id == "" && time.Now().Before(deadline) {
+			f.mu.Lock()
+			if len(f.asked) == round+1 && a.pauseManager.PendingCount() == 1 {
+				id = fmt.Sprintf("apr_%d", round+1)
+			}
+			f.mu.Unlock()
+			time.Sleep(5 * time.Millisecond)
+		}
+		if id == "" {
+			t.Fatalf("round %d never paused", round)
+		}
+		body := map[string]any{"execution_id": "exec-1", "approval_request_id": id}
+		for k, v := range ans {
+			body[k] = v
+		}
+		raw, _ := json.Marshal(body)
+		resp, err := http.Post(a.cfg.PublicURL+"/webhooks/approval", "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		res := <-done
+		if res.Decision != ans["decision"] || res.Feedback != ans["feedback"] {
+			t.Fatalf("round %d result=%+v want %v", round, res, ans)
+		}
+		if res.ChangesRequested() {
+			plan += "\n2. " + res.Feedback // the reasoner revises with the words
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.asked) != 2 || !strings.Contains(f.asked[1].Body, "add a rollback step") {
+		t.Fatalf("the second pause did not carry the revised plan: %+v", f.asked)
 	}
 }
 

@@ -61,11 +61,19 @@ class ApprovalRequestResponse:
 @dataclass
 class ApprovalStatusResponse:
     """Response from polling approval status."""
-    status: str  # pending, approved, rejected, expired
-    response: Optional[Dict[str, Any]] = None
+    status: str  # pending, approved, request_changes, rejected, expired
+    response: Optional[Any] = None
     request_url: Optional[str] = None
     requested_at: Optional[str] = None
     responded_at: Optional[str] = None
+    # The question the round asked, and the answerer's words once answered.
+    approval_request_id: Optional[str] = None
+    kind: Optional[str] = None
+    question: Optional[str] = None
+    body: Optional[str] = None
+    options: Optional[List[str]] = None
+    feedback: Optional[str] = None
+    expires_at: Optional[str] = None
 
 
 @dataclass
@@ -1958,10 +1966,14 @@ class AgentFieldClient:
     async def request_approval(
         self,
         execution_id: str,
-        approval_request_id: str,
+        approval_request_id: Optional[str] = None,
         approval_request_url: str = "",
         callback_url: str = "",
         expires_in_hours: int = 72,
+        kind: Optional[str] = None,
+        question: Optional[str] = None,
+        body: Optional[str] = None,
+        options: Optional[List[str]] = None,
     ) -> ApprovalRequestResponse:
         """Request human approval for an execution, transitioning it to ``waiting``.
 
@@ -1976,6 +1988,13 @@ class AgentFieldClient:
             approval_request_url: URL where the human can review the request.
             callback_url: URL the CP should POST to when the approval resolves.
             expires_in_hours: Time before the request expires.
+            kind: ``plan_review``, ``question`` or ``approval`` (the default).
+            question: The one-line question a person is asked.
+            body: The full markdown a person reads to judge (a plan).
+            options: Answer labels; default approve, request_changes, reject.
+
+        With no ``approval_request_id`` (no external approval service), the
+        control plane mints one and returns it.
 
         Returns:
             ApprovalRequestResponse with ``approval_request_id`` and ``approval_request_url``.
@@ -1984,21 +2003,28 @@ class AgentFieldClient:
             AgentFieldClientError: If the request fails.
         """
         node_id = self.caller_agent_id or ""
-        body: Dict[str, Any] = {
-            "approval_request_id": approval_request_id,
-            "expires_in_hours": expires_in_hours,
-        }
+        payload: Dict[str, Any] = {"expires_in_hours": expires_in_hours}
+        if approval_request_id:
+            payload["approval_request_id"] = approval_request_id
+        if kind:
+            payload["kind"] = kind
+        if question:
+            payload["question"] = question
+        if body:
+            payload["body"] = body
+        if options:
+            payload["options"] = list(options)
         if approval_request_url:
-            body["approval_request_url"] = approval_request_url
+            payload["approval_request_url"] = approval_request_url
         if callback_url:
-            body["callback_url"] = callback_url
+            payload["callback_url"] = callback_url
         url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/request-approval"
 
         try:
             client = await self.get_async_http_client()
             response = await client.post(
                 url,
-                json=body,
+                json=payload,
                 headers=self._sanitize_header_values(self._get_headers_with_context(None)),
                 timeout=30,
             )
@@ -2119,6 +2145,13 @@ class AgentFieldClient:
             request_url=data.get("request_url"),
             requested_at=data.get("requested_at"),
             responded_at=data.get("responded_at"),
+            approval_request_id=data.get("approval_request_id"),
+            kind=data.get("kind"),
+            question=data.get("question"),
+            body=data.get("body"),
+            options=data.get("options"),
+            feedback=data.get("feedback"),
+            expires_at=data.get("expires_at"),
         )
 
     async def wait_for_approval(
@@ -2134,7 +2167,8 @@ class AgentFieldClient:
             execution_id: Execution ID to wait for.
             poll_interval: Initial polling interval in seconds.
             max_interval: Maximum polling interval in seconds.
-            timeout: Total timeout in seconds (None = wait indefinitely).
+            timeout: Total timeout including polling delays and requests, in seconds
+                (None = wait indefinitely).
 
         Returns:
             ApprovalStatusResponse with the final approval status (approved/rejected/expired).
@@ -2143,29 +2177,47 @@ class AgentFieldClient:
             AgentFieldClientError: If polling encounters a non-retryable error.
             ExecutionTimeoutError: If timeout is reached.
         """
-        start_time = time.time()
-        interval = poll_interval
-        backoff_factor = 2.0
 
-        while True:
-            if timeout is not None and (time.time() - start_time) >= timeout:
-                raise ExecutionTimeoutError(
-                    f"Approval for execution {execution_id} timed out after {timeout}s"
-                )
+        async def poll() -> ApprovalStatusResponse:
+            interval = poll_interval
+            backoff_factor = 2.0
 
-            await asyncio.sleep(interval)
+            while True:
+                await asyncio.sleep(interval)
 
-            try:
-                result = await self.get_approval_status(execution_id)
-            except AgentFieldClientError:
-                # Transient failure — back off and retry
+                try:
+                    result = await self.get_approval_status(execution_id)
+                except AgentFieldClientError:
+                    # Transient failure — back off and retry
+                    interval = min(interval * backoff_factor, max_interval)
+                    continue
+
+                if result.status != "pending":
+                    return result
+
                 interval = min(interval * backoff_factor, max_interval)
-                continue
 
-            if result.status != "pending":
-                return result
+        if timeout is None:
+            return await poll()
 
-            interval = min(interval * backoff_factor, max_interval)
+        timeout_message = (
+            f"Approval for execution {execution_id} timed out after {timeout}s"
+        )
+        if timeout <= 0:
+            raise ExecutionTimeoutError(timeout_message)
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        polling = asyncio.create_task(poll())
+        try:
+            done, _ = await asyncio.wait({polling}, timeout=timeout)
+            if not done or loop.time() >= deadline:
+                raise ExecutionTimeoutError(timeout_message)
+            return polling.result()
+        finally:
+            if not polling.done():
+                polling.cancel()
+            await asyncio.gather(polling, return_exceptions=True)
 
     async def post_execution_logs(
         self,

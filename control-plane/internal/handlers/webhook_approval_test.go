@@ -186,8 +186,10 @@ func TestApprovalWebhook_RequestChanges_FlatFormat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, types.ExecutionStatusRunning, wfExec.Status)
 
-	// request_changes clears approval fields so agent can re-request
-	assert.Nil(t, wfExec.ApprovalRequestID)
+	// request_changes keeps the round's id (approval-status still describes
+	// it) and clears the URL fields; a non-pending status lets the agent
+	// re-request.
+	assert.NotNil(t, wfExec.ApprovalRequestID)
 	assert.Nil(t, wfExec.ApprovalRequestURL)
 	assert.Nil(t, wfExec.ApprovalCallbackURL)
 
@@ -639,8 +641,9 @@ func TestApprovalWebhook_CallbackNotification(t *testing.T) {
 	var callbackReceived atomic.Bool
 	var callbackBody map[string]any
 	callbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callbackReceived.Store(true)
+		// Decode first: the flag is what publishes callbackBody to the test.
 		_ = json.NewDecoder(r.Body).Decode(&callbackBody)
+		callbackReceived.Store(true)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer callbackServer.Close()
@@ -871,7 +874,8 @@ func TestApprovalFlow_RequestChanges_ThenReapprove(t *testing.T) {
 	// Execution should be back to running with cleared approval fields
 	wfExec, _ := store.GetWorkflowExecution(context.Background(), "exec-rc-flow")
 	assert.Equal(t, types.ExecutionStatusRunning, wfExec.Status)
-	assert.Nil(t, wfExec.ApprovalRequestID, "approval fields should be cleared after request_changes")
+	require.NotNil(t, wfExec.ApprovalStatus)
+	assert.Equal(t, "request_changes", *wfExec.ApprovalStatus, "the round answered stays readable until the next one")
 
 	// ---- Round 2: Agent re-requests approval ----
 	reqBody2, _ := json.Marshal(map[string]any{

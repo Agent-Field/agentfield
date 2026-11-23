@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestWaitForShutdownReturnsWhenContextIsCancelled(t *testing.T) {
@@ -187,4 +188,34 @@ func TestDrainOnShutdownZeroDelayStopsImmediately(t *testing.T) {
 	started := time.Now()
 	require.NoError(t, drainOnShutdown(ctx, nil, func() {}, 0, func() error { return nil }))
 	require.Less(t, time.Since(started), 40*time.Millisecond)
+}
+
+func TestServerConfigHostPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, env, flag, want string
+		useFlag               bool
+	}{
+		{name: "yaml", want: "127.0.0.1"},
+		{name: "environment", env: "127.0.0.2", want: "127.0.0.2"},
+		{name: "flag", env: "127.0.0.2", flag: "::1", want: "::1", useFlag: true},
+		{name: "empty flag restores wildcard", env: "127.0.0.2", useFlag: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.env != "" {
+				t.Setenv("AGENTFIELD_HOST", tc.env)
+			}
+			var args []string
+			if tc.useFlag {
+				args = append(args, "--host="+tc.flag)
+			}
+			cmd := serverCommandWithConfig(t, "agentfield:\n  host: 127.0.0.1\n", args...)
+			cfg, err := loadServerConfig(cmd)
+			require.NoError(t, err)
+			encoded, err := yaml.Marshal(cfg)
+			require.NoError(t, err)
+			var value map[string]map[string]any
+			require.NoError(t, yaml.Unmarshal(encoded, &value))
+			require.Equal(t, tc.want, value["agentfield"]["host"])
+		})
+	}
 }

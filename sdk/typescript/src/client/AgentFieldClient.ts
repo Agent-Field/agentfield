@@ -519,10 +519,12 @@ export class AgentFieldClient {
     const maxInterval = opts.maxIntervalMs ?? 5000;
     const pauseClock = opts.pauseClock;
     const start = Date.now();
+    const pausedAtStart = pauseClock?.totalPaused() ?? 0;
     let interval = pollInterval;
     let childWaiting = false;
 
-    const activeElapsed = () => (Date.now() - start) - (pauseClock?.totalPaused() ?? 0);
+    // The clock belongs to the parent execution; exclude only pauses during this wait.
+    const activeElapsed = () => (Date.now() - start) - ((pauseClock?.totalPaused() ?? 0) - pausedAtStart);
 
     try {
       while (true) {

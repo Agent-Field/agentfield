@@ -512,9 +512,10 @@ func TestExecuteReasonerAndWebhookHelpersCoverage(t *testing.T) {
 		services.SetWebhookAllowedHosts([]string{"127.0.0.1"})
 		t.Cleanup(func() { services.SetWebhookAllowedHosts(nil) })
 
-		ctrl.notifyApprovalCallback(server.URL, "exec-1", "approved", "running", "ok", &response, "req-1")
-		ctrl.notifyApprovalCallback(server.URL+"/fail", "exec-2", "rejected", "cancelled", "", nil, "req-2")
-		ctrl.notifyApprovalCallback("http://127.0.0.1:1", "exec-3", "approved", "running", "", nil, "req-3")
+		withApprovalCallbackBackoff(t, nil)
+		ctrl.notifyApprovalCallback(approvalCallback{url: server.URL, executionID: "exec-1", decision: "approved", newStatus: "running", feedback: "ok", response: &response, approvalRequestID: "req-1"})
+		ctrl.notifyApprovalCallback(approvalCallback{url: server.URL + "/fail", executionID: "exec-2", decision: "rejected", newStatus: "cancelled", approvalRequestID: "req-2"})
+		ctrl.notifyApprovalCallback(approvalCallback{url: "http://127.0.0.1:1", executionID: "exec-3", decision: "approved", newStatus: "running", approvalRequestID: "req-3"})
 
 		first := <-callbacks
 		second := <-callbacks

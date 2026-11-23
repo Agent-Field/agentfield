@@ -122,9 +122,9 @@ describe('AIClient extra coverage', () => {
     generateTextMock.mockResolvedValue({ text: 'plain text' });
     generateObjectMock.mockResolvedValue({ object: { ok: true } });
     streamTextMock.mockReturnValue({
-      textStream: (async function* () {
-        yield 'one';
-        yield 'two';
+      fullStream: (async function* () {
+        yield { type: 'text-delta', text: 'one' };
+        yield { type: 'text-delta', text: 'two' };
       })()
     });
     embedMock.mockResolvedValue({ embedding: [0.1, 0.2] });
@@ -176,7 +176,7 @@ describe('AIClient extra coverage', () => {
     await client.generate('describe these inputs', {
       content: [image, dataImage, audio, video, dataVideo, file, dataFile]
     });
-    await client.stream('summarize these inputs', { content: [image, video, file] });
+    for await (const _ of await client.stream('summarize these inputs', { content: [image, video, file] })) void _;
 
     expect(generateTextMock).toHaveBeenCalledWith(expect.objectContaining({
       prompt: [{

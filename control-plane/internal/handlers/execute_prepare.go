@@ -254,6 +254,18 @@ func (c *executionController) prepareExecutionForTargetWithAdmissionAndStatus(ct
 	if err := c.store.CreateExecutionRecord(ctx, exec); err != nil {
 		return nil, fmt.Errorf("create execution record: %w", err)
 	}
+	// The node that started a run owns it. Only a root records it: a nested
+	// call joins its parent's run, which already has its owner, and the
+	// first owner wins anyway (storage/relay.go).
+	if headers.runOwner != "" && headers.parentExecutionID == nil {
+		if owners, ok := c.store.(interface {
+			SetRunOwner(ctx context.Context, runID, owner string) error
+		}); ok {
+			if err := owners.SetRunOwner(ctx, runID, headers.runOwner); err != nil {
+				logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to record the run's owner")
+			}
+		}
+	}
 	if headers.parentExecutionID == nil && req.RunMetadata != nil {
 		c.persistExecuteRunMetadata(ctx, runID, *req.RunMetadata, headers.actorID)
 	}

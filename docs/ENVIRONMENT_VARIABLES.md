@@ -9,6 +9,7 @@ AgentField uses Viper with the prefix `AGENTFIELD` and maps nested config keys u
 ### Core
 
 - `AGENTFIELD_PORT` (optional): HTTP port for the control plane (default: `8080`).
+- `AGENTFIELD_HOST` (optional): bind host for HTTP and admin gRPC. Empty or unset by default binds all interfaces. Overrides YAML `agentfield.host`; `--host` overrides both, including an explicitly empty value. Use `127.0.0.1` for IPv4 loopback or unbracketed `::1` for IPv6 loopback. Port settings and advertised URLs are unchanged.
 - `AGENTFIELD_CONFIG_FILE` (optional): Path to `agentfield.yaml` (in containers this is typically `/etc/agentfield/config/agentfield.yaml`).
 - `AGENTFIELD_HOME` (recommended in containers): Base directory where AgentField stores local state (SQLite DB, Bolt DB, keys, logs). In Kubernetes, mount a PVC and set `AGENTFIELD_HOME=/data`.
 
@@ -266,8 +267,7 @@ When enabled, the control plane issues DID identities to agents and enforces tag
 
 - `AGENTFIELD_AUTHORIZATION_ENABLED` (default: `false`): Enable VC-based authorization.
 - `AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN` (recommended): Separate token for admin operations and `/debug/pprof/*`; clients send it in `X-Admin-Token`. Without it, those endpoints rely on the global API key, so do not expose pprof outside trusted networks unless authentication is configured.
-- `AGENTFIELD_AUTHORIZATION_MASTER_SEED` (required when enabled): Master seed for deriving Ed25519 keypairs for agent DIDs. Keep this secret and consistent across restarts — changing it invalidates all existing DID signatures.
-- `AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE` (default: `auto`): `auto` (tags approved immediately) or `admin` (tags require admin approval before the agent becomes ready).
+- `AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE` (default: `auto`): Approval mode for proposed tags that match no rule in `tag_approval_rules.rules`: `auto` (approved immediately), `manual` (an admin must approve them before the agent becomes ready), or `forbidden` (registration with those tags is rejected). Equivalent YAML: `features.did.authorization.tag_approval_rules.default_mode`.
 - `AGENTFIELD_AUTHORIZATION_DEFAULT_DENY` (default: `false`): When `true`, the tag policy middleware returns HTTP 403 for any request where no access policy matches the `(caller_tags, target_tags, function)` tuple. Default is `false`, preserving the existing behavior of allowing unmatched requests. The unmatched tuple is logged at `DEBUG` in both modes for diagnosis. Equivalent YAML: `features.did.authorization.default_deny`.
 
 ### Connector (External Management API)
@@ -416,6 +416,12 @@ IO Intelligence is OpenAI-compatible (Chat Completions) and serves Hugging Face-
 - `RUNCRATE_API_KEY`: API key for Runcrate. When it is the only provider key set, the Go SDK's `ai.DefaultConfig()` points at `https://api.runcrate.ai/v1`. `OPENAI_API_KEY`, `INFRON_API_KEY`, `IONET_API_KEY` and `OPENROUTER_API_KEY` all keep precedence over it, so adding this key never reroutes an existing deployment. When `AI_MODEL` is unset, the model defaults to `deepseek-ai/DeepSeek-V4.1-Flash` (Runcrate serves open-weight models only, so the global `gpt-4o` fallback would 404); routing through a custom `AI_BASE_URL` the SDK cannot recognize as Runcrate requires setting `AI_MODEL`.
 
 Runcrate is OpenAI-compatible (Chat Completions) and serves Hugging Face-style `org/name` model ids (`deepseek-ai/DeepSeek-V4.1-Flash`, `zai-org/GLM-5.3`; the exact list comes from `GET /models` on the configured base URL). A `runcrate/` prefix is accepted as a routing marker for callers that select the gateway by model string, and is stripped before the request is sent, since the endpoint serves the bare id. The marker rewrites the model string only and never reroutes a request on its own; the base URL still follows the provider-key precedence above.
+
+### CloudGPU
+
+- `CLOUDGPU_API_KEY`: API key for CloudGPU. When it is the only provider key set, the Go SDK's `ai.DefaultConfig()` points at `https://cloudgpu.app/v1`. `OPENAI_API_KEY`, `INFRON_API_KEY`, `IONET_API_KEY`, `RUNCRATE_API_KEY` and `OPENROUTER_API_KEY` all keep precedence over it, so adding this key never reroutes an existing deployment. When `AI_MODEL` is unset, the model defaults to `deepseek-v4-flash`; routing through a custom `AI_BASE_URL` the SDK cannot recognize as CloudGPU requires setting `AI_MODEL`.
+
+CloudGPU is OpenAI-compatible (Chat Completions) and serves bare model ids (`deepseek-v4-flash`, `glm-5.3`, `kimi-k3`; the exact list comes from `GET /models` on the configured base URL). A `cloudgpu/` prefix is accepted as a routing marker for callers that select the gateway by model string, and is stripped before the request is sent, since the endpoint serves the bare id. The marker rewrites the model string only and never reroutes a request on its own; the base URL still follows the provider-key precedence above.
 
 ### Harness (SDKs)
 

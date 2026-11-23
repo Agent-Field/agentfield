@@ -19,7 +19,7 @@ import (
 func resolveApprovalRouter(store ExecutionStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.POST("/api/v1/executions/:execution_id/approval-response", ResolveApprovalHandler(store))
+	router.POST("/api/v1/executions/:execution_id/approval-response", ResolveApprovalHandler(store, nil))
 	return router
 }
 

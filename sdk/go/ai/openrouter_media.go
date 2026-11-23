@@ -678,10 +678,10 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimPrefix(line, "data:")
 		data = strings.TrimSpace(data)
 		if data == "[DONE]" {
 			break

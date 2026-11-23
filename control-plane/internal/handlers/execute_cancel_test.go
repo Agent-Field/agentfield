@@ -261,3 +261,33 @@ func TestCancelExecutionHandler_WithoutReasonOmitsReasonField(t *testing.T) {
 	_, hasReason := payload["reason"]
 	require.False(t, hasReason)
 }
+
+// A run whose plan was approved carries status_reason "approval_granted"; a
+// person's Stop sends no reason. The cancelled run must report the cancel,
+// not the approval it had before (WorkAF live run, 2026-11-07: the run
+// summary's root_error_category read "approval_granted" after a Stop).
+func TestCancelExecutionHandler_StopReplacesTheApprovalReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := newCancelHandlerStorage()
+	store.seedExecution("exec-approved", types.ExecutionStatusRunning)
+	granted := "approval_granted"
+	store.executionRecords["exec-approved"].StatusReason = &granted
+	store.workflowExecutions["exec-approved"].StatusReason = &granted
+
+	router := gin.New()
+	router.POST("/api/v1/executions/:execution_id/cancel", CancelExecutionHandler(store))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/exec-approved/cancel", nil)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	exec, err := store.GetExecutionRecord(context.Background(), "exec-approved")
+	require.NoError(t, err)
+	require.NotNil(t, exec.StatusReason)
+	require.Equal(t, types.ExecutionReasonCancelled, *exec.StatusReason)
+	wfExec, err := store.GetWorkflowExecution(context.Background(), "exec-approved")
+	require.NoError(t, err)
+	require.NotNil(t, wfExec.StatusReason)
+	require.Equal(t, types.ExecutionReasonCancelled, *wfExec.StatusReason)
+}

@@ -208,10 +208,10 @@ func TestNotifyApprovalCallback_UsesSSRFSafeClient(t *testing.T) {
 	// dial time (no actual TCP connection), so this returns quickly.
 	// If it used a plain http.Client instead, it would attempt a real
 	// connection to 127.0.0.1:80 which would either connect or timeout.
-	ctrl.notifyApprovalCallback(
-		"http://127.0.0.1:1/ssrf-test",
-		"exec-1", "approved", "running", "", nil, "req-1",
-	)
+	ctrl.notifyApprovalCallback(approvalCallback{
+		url: "http://127.0.0.1:1/ssrf-test", executionID: "exec-1",
+		decision: "approved", newStatus: "running", approvalRequestID: "req-1",
+	})
 
 	// If we reach here without hanging, the SSRF-safe client properly
 	// rejected the private IP at the transport level.

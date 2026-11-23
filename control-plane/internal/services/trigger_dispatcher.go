@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -31,6 +34,60 @@ type TriggerDispatcher struct {
 	storage    storage.StorageProvider
 	vcService  *VCService
 	httpClient *http.Client
+	// internalToken is sent as Authorization: Bearer on every dispatch,
+	// exactly as the execute controller and the cancel dispatcher send it,
+	// so a node running with origin auth can refuse anyone else.
+	internalToken string
+	// link is the node-initiated link hub. When the target node holds a live
+	// link (or has no base_url to reach it on), the dispatch goes down the
+	// link instead of over HTTP. nil keeps HTTP for every node.
+	link *nodelink.Hub
+	// watchedRuns caches positive RunOwner answers because an owner never moves.
+	watchedRuns sync.Map
+}
+
+// WithInternalToken sets the bearer every dispatch carries.
+func (d *TriggerDispatcher) WithInternalToken(token string) *TriggerDispatcher {
+	d.internalToken = token
+	return d
+}
+
+// WithLink routes dispatches to linked nodes down their link.
+func (d *TriggerDispatcher) WithLink(h *nodelink.Hub) *TriggerDispatcher {
+	d.link = h
+	return d
+}
+
+// runOwnerSetter is the store's record of who owns a run (storage/relay.go).
+type runOwnerSetter interface {
+	SetRunOwner(ctx context.Context, runID, owner string) error
+}
+
+type runOwnerReader interface {
+	RunOwner(ctx context.Context, runID string) (string, error)
+}
+
+// isRunWatched reports whether runID has a recorded owner. Positive answers are
+// cached in memory because a run's owner never moves; negative answers stay
+// uncached.
+func (d *TriggerDispatcher) isRunWatched(ctx context.Context, runID string) bool {
+	runID = strings.TrimSpace(runID)
+	if runID == "" || d.storage == nil {
+		return false
+	}
+	if _, ok := d.watchedRuns.Load(runID); ok {
+		return true
+	}
+	owners, ok := d.storage.(runOwnerReader)
+	if !ok {
+		return false
+	}
+	owner, err := owners.RunOwner(ctx, runID)
+	if err != nil || strings.TrimSpace(owner) == "" {
+		return false
+	}
+	d.watchedRuns.Store(runID, struct{}{})
+	return true
 }
 
 // NewTriggerDispatcher returns a dispatcher with sensible defaults.
@@ -62,7 +119,15 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("target node %q not found: %v", trig.TargetNodeID, err))
 		return
 	}
-	if node.HealthStatus == types.HealthStatusInactive || node.LifecycleStatus == types.AgentStatusOffline {
+	// A linked node takes the dispatch as a dispatch frame (codeaf's factory
+	// node) or as the HTTP request itself carried down the link (the Go SDK,
+	// whose hello accepts "http").
+	linkDispatch := d.link != nil && d.link.LiveFor(node.ID, nodelink.KindDispatch)
+	linkHTTP := d.link != nil && d.link.LiveFor(node.ID, nodelink.KindHTTP)
+	linked := linkDispatch || linkHTTP
+	// A linked node is reached down its link, so an HTTP health probe that
+	// cannot reach it (it is behind NAT, or has no base_url) says nothing.
+	if !linked && (node.HealthStatus == types.HealthStatusInactive || node.LifecycleStatus == types.AgentStatusOffline) {
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("target node %q unreachable (health=%s lifecycle=%s)", trig.TargetNodeID, node.HealthStatus, node.LifecycleStatus))
 		return
 	}
@@ -137,7 +202,22 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	dispatchExecutionID := utils.GenerateExecutionID()
 	requestID := utils.GenerateAgentFieldRequestID()
 
-	endpoint, err := agenturl.ForNode(node.ID, node.BaseURL, "reasoners", trig.TargetReasoner)
+	// Down the link: a node with a live link, or one with no address at all
+	// (it waits in the hub's queue for the node to connect, up to the
+	// dispatch expiry). Everything else is HTTP exactly as before.
+	if d.link != nil && (linkDispatch || (node.BaseURL == "" && !linkHTTP)) {
+		d.dispatchOverLink(ctx, node, trig, ev, dispatchWorkflowID, dispatchExecutionID, requestID, parentVCID, body)
+		return
+	}
+
+	// A node whose link carries HTTP is reached on its link host, so the
+	// request below rides the link (agenturl/link.go) whatever base_url it
+	// registered; every other node is dialled exactly as before.
+	base := node.BaseURL
+	if linkHTTP {
+		base = "http://" + agenturl.LinkHost(node.ID)
+	}
+	endpoint, err := agenturl.ForNode(node.ID, base, "reasoners", trig.TargetReasoner)
 	if err != nil {
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("build request: %v", err))
 		return
@@ -154,7 +234,15 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Workflow-ID", dispatchWorkflowID)
+	// THE RUN IS THE WORKFLOW. createDispatchRecords files the root under
+	// run_id = workflow id; a node that is not told that run mints a fresh one
+	// for every child it calls, and the CP then cannot link any child to its
+	// parent, so a trigger-started run had a one-node tree.
+	req.Header.Set("X-Run-ID", dispatchWorkflowID)
 	req.Header.Set("X-Execution-ID", dispatchExecutionID)
+	if d.isRunWatched(ctx, dispatchWorkflowID) {
+		req.Header.Set(nodelink.RunWatchedHeader, "1")
+	}
 	// Record the workflow ID against the inbound event so the runs-list
 	// and run-dag handlers can correlate a triggered run back to this
 	// event without walking the DID/VC chain (which only exists when DID
@@ -174,6 +262,9 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	if parentVCID != "" {
 		req.Header.Set("X-Parent-VC-ID", parentVCID)
 	}
+	if d.internalToken != "" {
+		req.Header.Set("Authorization", "Bearer "+d.internalToken)
+	}
 
 	resp, err := d.httpClient.Do(req)
 	agenturl.WarnNode(node.ID, err)
@@ -186,10 +277,18 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 
-	if resp.StatusCode >= 400 {
-		msg := fmt.Sprintf("agent returned %d: %s", resp.StatusCode, truncate(respBody, 256))
-		d.failDispatchExecution(ctx, dispatchExecutionID, msg)
-		d.markFailed(ctx, ev.ID, msg)
+	d.settle(ctx, ev.ID, dispatchExecutionID, parentVCID, resp.StatusCode, respBody)
+}
+
+// settle is what a node's answer to a dispatch means, whichever carrier
+// brought it: >=400 fails the execution and the event; 202 leaves the
+// execution running for the node to report on; any other 2xx completes it
+// with the answer as its result.
+func (d *TriggerDispatcher) settle(ctx context.Context, eventID, executionID, parentVCID string, status int, respBody []byte) {
+	if status >= 400 {
+		msg := fmt.Sprintf("agent returned %d: %s", status, truncate(respBody, 256))
+		d.failDispatchExecution(ctx, executionID, msg)
+		d.markFailed(ctx, eventID, msg)
 		return
 	}
 	// 2xx other than 202 means the node handled the work synchronously, so
@@ -197,16 +296,69 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	// the work and will report final status via a later async callback (the
 	// reasoner-result/event ingestion path), so we leave the execution in
 	// Running and let that path complete it.
-	if resp.StatusCode != http.StatusAccepted {
-		d.completeDispatchExecution(ctx, dispatchExecutionID, respBody)
+	if status != http.StatusAccepted {
+		d.completeDispatchExecution(ctx, executionID, respBody)
 	}
 
-	if err := d.storage.MarkInboundEventProcessed(ctx, ev.ID, types.InboundEventStatusDispatched, "", parentVCID); err != nil {
+	if err := d.storage.MarkInboundEventProcessed(ctx, eventID, types.InboundEventStatusDispatched, "", parentVCID); err != nil {
 		logger.Logger.Warn().
 			Err(err).
-			Str("event_id", ev.ID).
+			Str("event_id", eventID).
 			Msg("failed to mark inbound event dispatched")
 	}
+}
+
+// dispatchOverLink writes the same execution records the HTTP path writes and
+// hands the same body and headers to the node's link. The node's ack settles
+// it the way an HTTP answer would: accepted is 202, done is 200 with its
+// result, rejected is 422 with its error. A delivery no link took before it
+// expired fails the way an unreachable node does today.
+func (d *TriggerDispatcher) dispatchOverLink(ctx context.Context, node *types.AgentNode, trig *types.Trigger, ev *types.InboundEvent, workflowID, executionID, requestID, parentVCID string, body []byte) {
+	if err := d.createDispatchRecords(ctx, node, trig, ev, workflowID, executionID, requestID, body); err != nil {
+		d.markFailed(ctx, ev.ID, fmt.Sprintf("create dispatch execution record: %v", err))
+		return
+	}
+	if err := d.storage.SetInboundEventDispatchedWorkflow(ctx, ev.ID, workflowID); err != nil {
+		logger.Logger.Warn().Err(err).Str("event_id", ev.ID).Msg("failed to record dispatched workflow id on inbound event")
+	}
+	headers := map[string]string{
+		"X-Workflow-ID":           workflowID,
+		"X-Run-ID":                workflowID,
+		"X-Execution-ID":          executionID,
+		"X-AgentField-Request-ID": requestID,
+		"X-Trigger-ID":            trig.ID,
+		"X-Source-Name":           trig.SourceName,
+		"X-Event-Type":            ev.EventType,
+		"X-Event-ID":              ev.ID,
+	}
+	if parentVCID != "" {
+		headers["X-Parent-VC-ID"] = parentVCID
+	}
+	if d.isRunWatched(ctx, workflowID) {
+		headers[nodelink.RunWatchedHeader] = "1"
+	}
+	eventID := ev.ID
+	settleCtx := context.WithoutCancel(ctx)
+	d.link.Deliver(node.ID, nodelink.Delivery{
+		Kind:        nodelink.KindDispatch,
+		ExecutionID: executionID,
+		Dedupe:      ev.IdempotencyKey,
+		Dispatch:    &nodelink.Dispatch{Reasoner: trig.TargetReasoner, Input: body, Headers: headers},
+		OnSettle: func(o nodelink.Outcome) {
+			switch o.Outcome {
+			case nodelink.OutcomeAccepted, nodelink.OutcomeDuplicate:
+				d.settle(settleCtx, eventID, executionID, parentVCID, http.StatusAccepted, nil)
+			case nodelink.OutcomeDone:
+				d.settle(settleCtx, eventID, executionID, parentVCID, http.StatusOK, o.Result)
+			case nodelink.OutcomeExpired:
+				msg := "dispatch request failed: no link from node " + node.ID + " took it before it expired"
+				d.failDispatchExecution(settleCtx, executionID, msg)
+				d.markFailed(settleCtx, eventID, msg)
+			default:
+				d.settle(settleCtx, eventID, executionID, parentVCID, http.StatusUnprocessableEntity, []byte(o.Error))
+			}
+		},
+	})
 }
 
 func (d *TriggerDispatcher) createDispatchRecords(ctx context.Context, node *types.AgentNode, trig *types.Trigger, ev *types.InboundEvent, workflowID, executionID, requestID string, input []byte) error {
@@ -229,6 +381,13 @@ func (d *TriggerDispatcher) createDispatchRecords(ctx context.Context, node *typ
 	}
 	if err := d.storage.CreateExecutionRecord(ctx, exec); err != nil {
 		return err
+	}
+	// The node a trigger routed the run to owns it: it is the subscriber the
+	// pipe sends this run's tree and harness entries to (nodelink/pipe.go).
+	if owners, ok := d.storage.(runOwnerSetter); ok {
+		if err := owners.SetRunOwner(ctx, runID, node.ID); err != nil {
+			logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to record the run's owner")
+		}
 	}
 
 	workflowExec := &types.WorkflowExecution{

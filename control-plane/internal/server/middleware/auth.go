@@ -51,6 +51,13 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 			}
 		}
 
+		// The node link authenticates its own upgrade, taking the API key or
+		// the internal token (internal/nodelink Hub.authorized).
+		if strings.HasPrefix(c.Request.URL.Path, "/api/v1/nodes/") && strings.HasSuffix(c.Request.URL.Path, "/link") && strings.Count(c.Request.URL.Path, "/") == 5 {
+			c.Next()
+			return
+		}
+
 		// Always allow health and metrics by default
 		if strings.HasPrefix(c.Request.URL.Path, "/api/v1/health") || c.Request.URL.Path == "/health" || c.Request.URL.Path == "/metrics" {
 			c.Next()

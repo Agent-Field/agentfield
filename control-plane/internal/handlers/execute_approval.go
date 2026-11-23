@@ -1,9 +1,13 @@
 package handlers
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
@@ -24,11 +28,82 @@ type approvalController struct {
 // RequestApprovalRequest is the body for POST /executions/:execution_id/request-approval.
 // The agent creates the approval request externally and passes the metadata here
 // so the CP can track it and transition the execution to "waiting".
+//
+// ApprovalRequestID is optional: a run with no external approval service (no
+// hax) names none and the control plane mints one, so the request lives only
+// here. Kind, Question, Body and Options carry the question itself, so any
+// door can show a person the whole of what they are asked to judge.
 type RequestApprovalRequest struct {
-	ApprovalRequestID  string `json:"approval_request_id" binding:"required"`
-	ApprovalRequestURL string `json:"approval_request_url,omitempty"`
-	CallbackURL        string `json:"callback_url,omitempty"`
-	ExpiresInHours     *int   `json:"expires_in_hours,omitempty"`
+	ApprovalRequestID  string   `json:"approval_request_id,omitempty"`
+	ApprovalRequestURL string   `json:"approval_request_url,omitempty"`
+	CallbackURL        string   `json:"callback_url,omitempty"`
+	ExpiresInHours     *int     `json:"expires_in_hours,omitempty"`
+	Kind               string   `json:"kind,omitempty"`
+	Question           string   `json:"question,omitempty"`
+	Body               string   `json:"body,omitempty"`
+	Options            []string `json:"options,omitempty"`
+}
+
+// The largest question a request may carry. THE BODY CAP KEEPS A RUN FRAME
+// UNDER THE LINK'S 1 MiB CEILING: the body rides the frame that tells the
+// run's owner the execution is waiting.
+const (
+	maxApprovalQuestion = 500
+	maxApprovalBody     = 256 << 10
+	maxApprovalOptions  = 12
+	maxApprovalOption   = 200
+)
+
+// ApprovalQuestionStore keeps what an approval round asks. A store without
+// it still pauses and resumes; it just cannot show the question.
+type ApprovalQuestionStore interface {
+	PutApprovalQuestion(ctx context.Context, q types.ApprovalQuestion) error
+	GetApprovalQuestion(ctx context.Context, executionID, approvalRequestID string) (*types.ApprovalQuestion, error)
+}
+
+// normalizeApprovalQuestion checks and fills the question fields of req.
+func normalizeApprovalQuestion(req *RequestApprovalRequest) error {
+	req.Kind = strings.TrimSpace(req.Kind)
+	switch req.Kind {
+	case "":
+		req.Kind = types.ApprovalKindApproval
+	case types.ApprovalKindPlanReview, types.ApprovalKindQuestion, types.ApprovalKindApproval:
+	default:
+		return fmt.Errorf("kind must be %s, %s or %s", types.ApprovalKindPlanReview, types.ApprovalKindQuestion, types.ApprovalKindApproval)
+	}
+	req.Question = strings.TrimSpace(req.Question)
+	if len(req.Question) > maxApprovalQuestion {
+		return fmt.Errorf("question is at most %d bytes", maxApprovalQuestion)
+	}
+	if len(req.Body) > maxApprovalBody {
+		return fmt.Errorf("body is at most %d bytes", maxApprovalBody)
+	}
+	opts := make([]string, 0, len(req.Options))
+	for _, o := range req.Options {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		if len(o) > maxApprovalOption {
+			return fmt.Errorf("an option is at most %d bytes", maxApprovalOption)
+		}
+		opts = append(opts, o)
+	}
+	if len(opts) > maxApprovalOptions {
+		return fmt.Errorf("at most %d options", maxApprovalOptions)
+	}
+	if len(opts) == 0 {
+		opts = append(opts, types.DefaultApprovalOptions...)
+	}
+	req.Options = opts
+	return nil
+}
+
+// mintApprovalRequestID names a request that no external service named.
+func mintApprovalRequestID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "apr_" + hex.EncodeToString(b[:])
 }
 
 // RequestApprovalResponse is returned when the execution transitions to waiting.
@@ -40,7 +115,14 @@ type RequestApprovalResponse struct {
 
 // ApprovalStatusResponse is returned by GET /executions/:execution_id/approval-status.
 type ApprovalStatusResponse struct {
-	Status      string  `json:"status"`
+	Status            string   `json:"status"`
+	ApprovalRequestID string   `json:"approval_request_id,omitempty"`
+	Kind              string   `json:"kind,omitempty"`
+	Question          string   `json:"question,omitempty"`
+	Body              string   `json:"body,omitempty"`
+	Options           []string `json:"options,omitempty"`
+	// Feedback is the answerer's words (the reason given with the decision).
+	Feedback    string  `json:"feedback,omitempty"`
 	Response    *string `json:"response,omitempty"`
 	RequestURL  string  `json:"request_url,omitempty"`
 	RequestedAt string  `json:"requested_at,omitempty"`
@@ -72,6 +154,14 @@ func (c *approvalController) handleRequestApproval(ctx *gin.Context) {
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid request body: %v", err)})
 		return
+	}
+	if err := normalizeApprovalQuestion(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid_question", "message": err.Error()})
+		return
+	}
+	req.ApprovalRequestID = strings.TrimSpace(req.ApprovalRequestID)
+	if req.ApprovalRequestID == "" {
+		req.ApprovalRequestID = mintApprovalRequestID()
 	}
 
 	reqCtx := ctx.Request.Context()
@@ -105,8 +195,8 @@ func (c *approvalController) handleRequestApproval(ctx *gin.Context) {
 	approvalPending := wfExec.ApprovalStatus == nil || *wfExec.ApprovalStatus == "pending"
 	if wfExec.ApprovalRequestID != nil && *wfExec.ApprovalRequestID != "" && approvalPending {
 		ctx.JSON(http.StatusConflict, gin.H{
-			"error":                "approval_already_requested",
-			"message":              "An approval request already exists for this execution",
+			"error":               "approval_already_requested",
+			"message":             "An approval request already exists for this execution",
 			"approval_request_id": *wfExec.ApprovalRequestID,
 		})
 		return
@@ -176,22 +266,39 @@ func (c *approvalController) handleRequestApproval(ctx *gin.Context) {
 		return
 	}
 
+	// Keep the question beside the approval. A failure here is logged and
+	// the pause goes on: the run still waits and can still be answered.
+	if qs, ok := c.store.(ApprovalQuestionStore); ok {
+		if qErr := qs.PutApprovalQuestion(reqCtx, types.ApprovalQuestion{
+			ExecutionID:       executionID,
+			ApprovalRequestID: req.ApprovalRequestID,
+			Kind:              req.Kind,
+			Question:          req.Question,
+			Body:              req.Body,
+			Options:           req.Options,
+		}); qErr != nil {
+			logger.Logger.Warn().Err(qErr).Str("execution_id", executionID).Msg("failed to keep the approval question (non-fatal)")
+		}
+	}
+
 	// Emit execution event for observability
 	waitingStatus := types.ExecutionStatusWaiting
 	eventPayload, _ := json.Marshal(map[string]interface{}{
 		"approval_request_id":  req.ApprovalRequestID,
 		"approval_request_url": req.ApprovalRequestURL,
 		"wait_kind":            "approval",
+		"kind":                 req.Kind,
+		"question":             req.Question,
 	})
 	event := &types.WorkflowExecutionEvent{
-		ExecutionID: executionID,
-		WorkflowID:  wfExec.WorkflowID,
-		RunID:       wfExec.RunID,
-		EventType:   "execution.waiting",
-		Status:      &waitingStatus,
+		ExecutionID:  executionID,
+		WorkflowID:   wfExec.WorkflowID,
+		RunID:        wfExec.RunID,
+		EventType:    "execution.waiting",
+		Status:       &waitingStatus,
 		StatusReason: &statusReason,
-		Payload:     eventPayload,
-		EmittedAt:   now,
+		Payload:      eventPayload,
+		EmittedAt:    now,
 	}
 	if storeErr := c.store.StoreWorkflowExecutionEvent(reqCtx, event); storeErr != nil {
 		logger.Logger.Warn().Err(storeErr).Str("execution_id", executionID).Msg("failed to store approval event (non-fatal)")
@@ -214,6 +321,17 @@ func (c *approvalController) handleRequestApproval(ctx *gin.Context) {
 			},
 		})
 	}
+
+	// THE WAIT GOES ON THE GLOBAL BUS TOO. The store's bus feeds the UI's
+	// streams; the node link's pipe follows only the global bus, and it is
+	// what tells the run's owner (WorkAF) within a second that a person is
+	// needed, as a run frame carrying the question.
+	events.PublishExecutionWaiting(executionID, wfExec.WorkflowID, wfExec.AgentNodeID, map[string]interface{}{
+		"status_reason":       statusReason,
+		"approval_request_id": req.ApprovalRequestID,
+		"wait_kind":           "approval",
+		"kind":                req.Kind,
+	})
 
 	logger.Logger.Info().
 		Str("execution_id", executionID).
@@ -281,14 +399,41 @@ func (c *approvalController) handleGetApprovalStatus(ctx *gin.Context) {
 		expiresAtStr = &formatted
 	}
 
-	ctx.JSON(http.StatusOK, ApprovalStatusResponse{
-		Status:      status,
-		Response:    wfExec.ApprovalResponse,
-		RequestURL:  requestURL,
-		RequestedAt: requestedAt,
-		ExpiresAt:   expiresAtStr,
-		RespondedAt: respondedAt,
-	})
+	out := ApprovalStatusResponse{
+		Status:            status,
+		ApprovalRequestID: *wfExec.ApprovalRequestID,
+		Feedback:          approvalFeedback(wfExec.ApprovalResponse),
+		Response:          wfExec.ApprovalResponse,
+		RequestURL:        requestURL,
+		RequestedAt:       requestedAt,
+		ExpiresAt:         expiresAtStr,
+		RespondedAt:       respondedAt,
+	}
+	if qs, ok := c.store.(ApprovalQuestionStore); ok {
+		if q, qErr := qs.GetApprovalQuestion(reqCtx, executionID, *wfExec.ApprovalRequestID); qErr == nil && q != nil {
+			out.Kind, out.Question, out.Body, out.Options = q.Kind, q.Question, q.Body, q.Options
+		}
+	}
+	ctx.JSON(http.StatusOK, out)
+}
+
+// approvalFeedback reads the answerer's words out of a stored response: the
+// "feedback" field the resolver writes, or a "reason"/"text" one an external
+// service sent.
+func approvalFeedback(resp *string) string {
+	if resp == nil || *resp == "" {
+		return ""
+	}
+	var m map[string]any
+	if json.Unmarshal([]byte(*resp), &m) != nil {
+		return ""
+	}
+	for _, k := range []string{"feedback", "reason", "text", "comment"} {
+		if v, ok := m[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // AgentScopedRequestApprovalHandler is the agent-scoped version of RequestApprovalHandler.

@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 func TestFinishShutdownTreatsTimeoutAsSuccessfulExit(t *testing.T) {
@@ -318,6 +319,10 @@ func TestRunServer_AppliesFlagOverrides(t *testing.T) {
 	cmd.Flags().Bool("ui-dev", false, "")
 	cmd.Flags().Bool("open", true, "")
 	cmd.Flags().Int("port", 0, "")
+	cmd.Flags().String("host", "", "")
+	if err := cmd.Flags().Set("host", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
 	cmd.Flags().Bool("no-vc-execution", false, "")
 
 	if err := cmd.Flags().Set("backend-only", "true"); err != nil {
@@ -331,6 +336,7 @@ func TestRunServer_AppliesFlagOverrides(t *testing.T) {
 	}
 
 	t.Setenv("AGENTFIELD_PORT", "12345")
+	t.Setenv("AGENTFIELD_HOST", "127.0.0.2")
 
 	runServer(cmd, nil)
 
@@ -341,6 +347,17 @@ func TestRunServer_AppliesFlagOverrides(t *testing.T) {
 	}
 	if gotCfg.AgentField.Port != 12345 {
 		t.Fatalf("expected env override port 12345, got %d", gotCfg.AgentField.Port)
+	}
+	encoded, err := yaml.Marshal(gotCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]map[string]any
+	if err := yaml.Unmarshal(encoded, &value); err != nil {
+		t.Fatal(err)
+	}
+	if got := value["agentfield"]["host"]; got != "127.0.0.1" {
+		t.Fatalf("host flag must reach server config, got %v", got)
 	}
 	if gotCfg.Telemetry.AgentFieldVersion != version {
 		t.Fatalf("expected telemetry build version %q, got %q", version, gotCfg.Telemetry.AgentFieldVersion)
@@ -459,5 +476,40 @@ func TestDefaultWaitForShutdown(t *testing.T) {
 		// success
 	case <-time.After(3 * time.Second):
 		t.Fatal("defaultWaitForShutdown did not unblock after SIGINT")
+	}
+}
+
+// The documented AGENTFIELD_API_CORS_* variables must reach the config when
+// there is no config file (Railway, bare binary): viper's AutomaticEnv only
+// resolves keys it already knows from a file, so nothing else carries them.
+func TestLoadConfig_CORSFromEnvWithoutConfigFile(t *testing.T) {
+	t.Setenv("AGENTFIELD_CONFIG_FILE", "")
+	t.Setenv("AGENTFIELD_API_CORS_ALLOWED_ORIGINS", "https://app.example.com, https://admin.example.com")
+	t.Setenv("AGENTFIELD_API_CORS_ALLOWED_METHODS", "GET,POST")
+	t.Setenv("AGENTFIELD_API_CORS_ALLOWED_HEADERS", "Authorization,X-API-Key")
+	t.Setenv("AGENTFIELD_API_CORS_EXPOSED_HEADERS", "X-Total-Count")
+	t.Setenv("AGENTFIELD_API_CORS_ALLOW_CREDENTIALS", "true")
+	viper.Reset()
+
+	cfg, err := loadConfig("/dev/null")
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+
+	cors := cfg.API.CORS
+	if got, want := fmt.Sprint(cors.AllowedOrigins), "[https://app.example.com https://admin.example.com]"; got != want {
+		t.Errorf("allowed origins = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(cors.AllowedMethods), "[GET POST]"; got != want {
+		t.Errorf("allowed methods = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(cors.AllowedHeaders), "[Authorization X-API-Key]"; got != want {
+		t.Errorf("allowed headers = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(cors.ExposedHeaders), "[X-Total-Count]"; got != want {
+		t.Errorf("exposed headers = %s, want %s", got, want)
+	}
+	if !cors.AllowCredentials {
+		t.Error("expected allow credentials true from env")
 	}
 }

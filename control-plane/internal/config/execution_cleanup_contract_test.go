@@ -104,3 +104,18 @@ func TestExecutionCleanupNonPositiveIntervalIsClamped(t *testing.T) {
 		})
 	}
 }
+
+func TestExecutionCleanupOfflineHoldCeilingDefaultAndEnvOverride(t *testing.T) {
+	cfg := Config{}
+	ApplyDefaults(&cfg)
+	require.Equal(t, DefaultOfflineHoldCeiling, cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling)
+
+	t.Setenv("AGENTFIELD_EXECUTION_OFFLINE_HOLD_CEILING", "48h")
+	ApplyEnvOverrides(&cfg)
+	require.Equal(t, 48*time.Hour, cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling)
+
+	t.Setenv("AGENTFIELD_EXECUTION_OFFLINE_HOLD_CEILING", "not-a-duration")
+	ApplyEnvOverrides(&cfg)
+	require.Equal(t, 48*time.Hour, cfg.AgentField.ExecutionCleanup.OfflineHoldCeiling)
+}
+

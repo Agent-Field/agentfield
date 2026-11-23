@@ -364,6 +364,44 @@ class HarnessConfig(BaseModel):
     )
 
 
+def _model_rejects_temperature(model: Optional[str]) -> bool:
+    """Return True for models whose default mode rejects a custom temperature.
+
+    Mirrors ``rejectsTemperature`` in the Go SDK (sdk/go/ai/model_params.go):
+    o-series, gpt-5 (base/mini/nano/pro/codex), gpt-5.5+, and newer Claude
+    models. GPT-5.1/5.2/5.4 accept temperature, so not all ``gpt-5*`` match.
+    """
+    if not model:
+        return False
+    m = model.strip().lower().rsplit("/", 1)[-1]
+    if len(m) >= 2 and m[0] == "o" and m[1].isdigit():
+        return True
+    if m == "gpt-5" or m.startswith("gpt-5-202"):
+        return True
+    for family in (
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5-pro",
+        "gpt-5.2-pro",
+        "gpt-5.4-pro",
+        "gpt-5.5",
+        "gpt-5.6",
+        "gpt-5-codex",
+        "gpt-5.1-codex",
+        "gpt-5.2-codex",
+        "gpt-5.3-codex",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-5",
+        "claude-fable-5",
+    ):
+        if m == family or m.startswith(family + "-"):
+            return True
+    return False
+
+
 class AIConfig(BaseModel):
     """
     Configuration for AI calls, defining default models, temperatures, and other parameters.
@@ -748,6 +786,10 @@ class AIConfig(BaseModel):
 
         # Apply runtime overrides (highest priority)
         params.update(overrides)
+
+        # Models that reject a custom temperature must not receive one
+        if _model_rejects_temperature(params.get("model") or self.model):
+            params.pop("temperature", None)
 
         # Remove None values
         params = {k: v for k, v in params.items() if v is not None}

@@ -218,6 +218,20 @@ func (c *Client) PostExecutionLogs(ctx context.Context, executionID string, payl
 	return c.do(ctx, http.MethodPost, route, payload, nil)
 }
 
+// PostExecutionRelay posts a codeaf harness run's entries to the control
+// plane's relay and answers the last seq it now holds.
+func (c *Client) PostExecutionRelay(ctx context.Context, executionID string, entries any) (int64, error) {
+	if strings.TrimSpace(executionID) == "" {
+		return 0, fmt.Errorf("executionID is required")
+	}
+	var out struct {
+		Through int64 `json:"through"`
+	}
+	route := fmt.Sprintf("/api/v1/executions/%s/relay", url.PathEscape(executionID))
+	err := c.do(ctx, http.MethodPost, route, map[string]any{"entries": entries}, &out)
+	return out.Through, err
+}
+
 func (c *Client) do(ctx context.Context, method string, endpoint string, body any, out any) error {
 	u := *c.baseURL
 	rel := strings.TrimPrefix(endpoint, "/")
