@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.4] - 2026-11-23
+
+
+### Documentation
+
+- Docs: fix broken relative links in examples and SDK READMEs (#1232) (7014ddf)
+
 ## [0.1.147-rc.3] - 2026-11-23
 
 
