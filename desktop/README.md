@@ -182,6 +182,15 @@ later use Service Management for the login item and may request approval in
 System Settings. The tray’s **Control plane → Start at login** setting controls
 the server separately.
 
+The helper is shipped signed inside the app (`Contents/MacOS/af-tray`) and the
+login item is a bundled launch agent
+(`Contents/Library/LaunchAgents/ai.agentfield.tray.login.plist`) that macOS
+registers on the app's behalf. Nothing is copied into a second app bundle or
+written into `~/Library/LaunchAgents` for it, which is what keeps endpoint-security
+tools from reading the install as malware persistence. The helper's
+**Show Claude usage limits** item is off until the user turns it on, because it
+reads the saved Claude Code login from the Keychain.
+
 CLI-only macOS users can install the tray at login with `install.sh --with-tray`.
 The CLI installer updates existing CLI tray registrations by default. Tray
 updates and hiding the icon leave the server process and its login job alone.
@@ -316,9 +325,9 @@ Packaging is unsigned for now (no notarization/signing identities configured).
 - The registry is read directly from `~/.agentfield/installed.yaml`; once
   `af list -o json` lands, the app should shell out to the CLI instead (see
   the `TODO(af-cli)` seam in `src/main/agentfield.ts`).
-- Packaging has no signing identity. Builds without one get a valid **ad-hoc**
-  signature (`scripts/macos-adhoc-sign.mjs`, afterPack) — electron-builder
-  would otherwise leave a resource-less linker signature that codesign/spctl
-  reject as invalid. Ad-hoc is enough to run locally-built apps normally;
-  *downloaded* builds still carry quarantine and need right-click-Open or
-  `xattr -dr com.apple.quarantine` until real signing/notarization lands.
+- Local and CI pull-request builds have no signing identity. They get a valid
+  **ad-hoc** signature (`scripts/macos-adhoc-sign.mjs`, afterPack) —
+  electron-builder would otherwise leave a resource-less linker signature that
+  codesign/spctl reject as invalid. Release DMGs are Developer ID signed with the
+  hardened runtime and notarized (see `.github/workflows/release.yml`), so a
+  downloaded release opens without any quarantine workaround.
