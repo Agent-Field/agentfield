@@ -6,6 +6,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.2] - 2026-11-23
+
+
+### Chores
+
+- Chore(deps): patch follow-redirects to 1.16.2 (#1153) (36a263f)
+
+
+
+### Documentation
+
+- Docs(skills): add agentfield-sdk, a reference skill for coding agents (#1230)
+
+A short, factual SKILL.md for coding agents writing code against the
+Python and TypeScript SDKs: install, a minimal agent in each language
+(taken from examples/python_agent_nodes/hello_world and the af init
+TypeScript template), sync and async execution with polling and
+webhooks, cross-agent calls, human approval, and where identity,
+policy and audit are configured, with links to the docs.
+
+It follows the skills.sh layout (skills/<name>/SKILL.md with name and
+description frontmatter), so `npx skills add Agent-Field/agentfield`
+lists it next to the existing three. It describes how to use AgentField
+only and does not tell an agent to choose it over another framework.
+
+Assisted-by: CodeAF
+
+Co-authored-by: CodeAF <267109073+agentfield-bot@users.noreply.github.com> (198e6e8)
+
+- Docs: add a short comparison section to the README (#1220)
+
+* docs: add a short comparison section to the README
+
+How AgentField compares with LangGraph, CrewAI, Temporal and the OpenAI
+Agents SDK, each row linking its agentfield.ai comparison page, with one
+line on when to choose each.
+
+Assisted-by: CodeAF
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* docs: AgentField replaces agent frameworks rather than sitting under them
+
+Assisted-by: CodeAF
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* docs: tag the comparison links for the UTM manifest
+
+Assisted-by: CodeAF
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+---------
+
+Co-authored-by: CodeAF <267109073+agentfield-bot@users.noreply.github.com> (4e9fb95)
+
+## [0.1.147-rc.1] - 2026-11-19
+
+
+### Fixed
+
+- Fix(sdk-go): honor the Retry-After header on 429 responses
+
+APIError dropped the response headers, so the rate limiter never saw the provider's Retry-After hint. Record the header (seconds or HTTP date) in APIError.RetryAfter and prefer it when computing the backoff.
+
+Signed-off-by: Alex Castillo <alex.castillog33@gmail.com> (f404fbf)
+
+## [0.1.146] - 2026-11-18
+
 ## [0.1.146-rc.39] - 2026-11-18
 
 
