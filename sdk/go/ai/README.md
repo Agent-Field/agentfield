@@ -455,16 +455,6 @@ if err := response.Into(&result); err != nil {
 3. **Streaming**: Use streaming for long responses to improve perceived latency
 4. **Model Selection**: Choose appropriate models for your use case (faster models = lower latency)
 
-## Examples
-
-See the [examples/ai-agent](../examples/ai-agent/) directory for complete examples including:
-- Simple text responses
-- Structured outputs
-- Sentiment analysis
-- Agent reasoners with AI
-- Streaming responses
-- OpenRouter usage
-
 ## License
 
 Proprietary - Authorized users only
