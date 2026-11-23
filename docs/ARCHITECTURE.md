@@ -35,6 +35,8 @@ AgentField provides a modular platform for orchestrating AI agents. The system i
 
 The control plane orchestrates agent workflows, provides API endpoints, manages credentials, and serves a React-based administration UI.
 
+See the [App link contract](app-link-contract.md) for outbound nodes, run ownership, and live execution controls.
+
 - **`cmd/`** – entry points for binaries (HTTP server, background workers).
 - **`internal/`** – business logic, services, repositories, and use-cases.
 - **`pkg/`** – reusable packages (database, telemetry, utility helpers).
