@@ -26,3 +26,16 @@ func TestPlatformSubcommandsNoOpOffMacOS(t *testing.T) {
 		t.Errorf("uninstallDesktop() stub returned %v, want nil", err)
 	}
 }
+
+// Contract: off macOS, desktop-tray says it is unsupported (exit 1) instead of
+// reporting a login setting it never applied.
+func TestDesktopTrayIsUnsupportedOffMacOS(t *testing.T) {
+	for _, args := range [][]string{
+		{"desktop-tray", "show", "auto"},
+		{"desktop-tray", "hide", "login"},
+	} {
+		if code := run(args); code != 1 {
+			t.Errorf("run(%q) = %d, want 1", args, code)
+		}
+	}
+}

@@ -44,6 +44,11 @@ Examples:
 // assemble a status without shelling out to launchctl at all.
 var agentLoadedFn = launchdsvc.AgentLoaded
 
+// launchdSupportedFn is launchd's availability probe, indirected for the same
+// reason: the status code that follows a session-registered server is only
+// reachable where launchd exists, and tests must cover it on every platform.
+var launchdSupportedFn = launchdsvc.Supported
+
 func servicePort() int {
 	if v := os.Getenv("AGENTFIELD_PORT"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
@@ -98,13 +103,13 @@ type serviceStatus struct {
 func collectServiceStatus() serviceStatus {
 	port := servicePort()
 	st := serviceStatus{
-		Supported: launchdsvc.Supported(),
+		Supported: launchdSupportedFn(),
 		Port:      port,
 		PlistPath: launchdsvc.ServerPlistPath(serviceHome()),
 	}
 	if owner, ok := launchdsvc.ReadPlistOwner(st.PlistPath); ok {
 		st.Program = owner.Program
-	} else if path := launchdsvc.ServerSessionPlistPath(serviceHome()); launchdsvc.Supported() {
+	} else if path := launchdsvc.ServerSessionPlistPath(serviceHome()); launchdSupportedFn() {
 		if owner, ok := launchdsvc.ReadPlistOwner(path); ok {
 			st.PlistPath, st.Program = path, owner.Program
 		}

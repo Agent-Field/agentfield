@@ -408,3 +408,39 @@ func TestClaudeUsageOptInRoundTrip(t *testing.T) {
 		t.Fatal("opt-out was not remembered")
 	}
 }
+
+// Contract: a failure to turn the opt-in off is reported, not swallowed. If the
+// switch cannot be removed the Keychain rows would keep running while the menu
+// claims they are off.
+func TestClaudeUsageOptOutReportsFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// A non-empty directory at the switch's path cannot be removed.
+	if err := os.MkdirAll(filepath.Join(claudeUsagePath(), "keep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := setClaudeUsageEnabled(false); err == nil {
+		t.Fatal("turning off must report that the switch could not be removed")
+	}
+}
+
+// Contract: tray jobs written now are valid XML even when the program path holds
+// characters XML reserves, while the template older installers wrote (unescaped)
+// stays recognisable so an upgrade can still migrate those machines.
+func TestTrayPlistEscapesPathsButLegacyTemplateStaysRecognisable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	program := "/Users/a&b/<x>/af-tray"
+	current, legacy := trayPlistFor(program), legacyTrayPlistFor(program)
+	if strings.Contains(current, "a&b") || !strings.Contains(current, "a&amp;b") {
+		t.Errorf("current template must escape the path:\n%s", current)
+	}
+	if !strings.Contains(legacy, "<string>"+program+"</string>") {
+		t.Errorf("legacy template must keep the raw path older installers wrote:\n%s", legacy)
+	}
+	if current == legacy {
+		t.Error("the escaped and legacy templates must differ for a path with reserved characters")
+	}
+	plain := "/Users/plain/af-tray"
+	if trayPlistFor(plain) != legacyTrayPlistFor(plain) {
+		t.Error("for an ordinary path the two templates must be byte-identical")
+	}
+}

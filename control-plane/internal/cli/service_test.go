@@ -303,3 +303,38 @@ func TestServiceStatusRunE(t *testing.T) {
 		}
 	})
 }
+
+// Contract: when the control plane was started by the tray for this session only
+// (no LaunchAgents plist, a session plist under ~/.agentfield), `af service
+// status` still reports the binary launchd runs and where its definition lives.
+func TestServiceStatusFollowsASessionRegisteredServer(t *testing.T) {
+	origLoaded, origSupported := agentLoadedFn, launchdSupportedFn
+	agentLoadedFn = func(string) bool { return true }
+	launchdSupportedFn = func() bool { return true }
+	t.Cleanup(func() { agentLoadedFn, launchdSupportedFn = origLoaded, origSupported })
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AGENTFIELD_PORT", "1") // nothing listens: the probe must not matter
+	session := filepath.Join(home, ".agentfield", "server-session.plist")
+	if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plist := `<plist><dict><key>ProgramArguments</key><array>` +
+		`<string>/opt/session/bin/agentfield</string><string>server</string></array>` +
+		`<key>WorkingDirectory</key><string>/opt/session</string></dict></plist>`
+	if err := os.WriteFile(session, []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := collectServiceStatus()
+	if st.Program != "/opt/session/bin/agentfield" || st.PlistPath != session || !st.Loaded {
+		t.Fatalf("status = program %q plist %q loaded %v, want the session-registered server", st.Program, st.PlistPath, st.Loaded)
+	}
+
+	// Without launchd there is no session registration to follow.
+	launchdSupportedFn = func() bool { return false }
+	if st := collectServiceStatus(); st.Program != "" || st.Supported {
+		t.Fatalf("status = %+v, want nothing reported where launchd is unsupported", st)
+	}
+}
