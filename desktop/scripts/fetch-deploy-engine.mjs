@@ -1,8 +1,8 @@
 import { chmod, copyFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
-import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { extractZip } from './extract-zip.mjs'
 
 const TOFU_VERSION = '1.10.6'
 const RAILWAY_VERSION = '0.6.2'
@@ -28,25 +28,6 @@ async function BunlessWrite(path, bytes) {
   await writeFile(path, bytes)
 }
 
-function command(program, args) {
-  return new Promise((resolveCommand, reject) => {
-    const child = spawn(program, args, { stdio: 'inherit' })
-    child.on('error', reject)
-    child.on('close', (code) => code === 0 ? resolveCommand() : reject(new Error(`${program} exited with ${code}`)))
-  })
-}
-
-async function extract(zip, directory) {
-  await mkdir(directory, { recursive: true })
-  if (process.platform === 'win32') {
-    const escapedZip = zip.replaceAll("'", "''")
-    const escapedDir = directory.replaceAll("'", "''")
-    await command('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${escapedZip}' -DestinationPath '${escapedDir}' -Force`])
-  } else {
-    await command('unzip', ['-o', zip, '-d', directory])
-  }
-}
-
 try {
   const tofuZip = join(temporary, 'tofu.zip')
   const providerZip = join(temporary, 'provider.zip')
@@ -56,17 +37,20 @@ try {
     download(`https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_${platform}_${arch}.zip`, tofuZip),
     download(`https://github.com/terraform-community-providers/terraform-provider-railway/releases/download/v${RAILWAY_VERSION}/terraform-provider-railway_${RAILWAY_VERSION}_${platform}_${arch}.zip`, providerZip)
   ])
-  await Promise.all([extract(tofuZip, tofuExtract), extract(providerZip, providerExtract)])
+  await Promise.all([extractZip(tofuZip, tofuExtract), extractZip(providerZip, providerExtract)])
   await mkdir(providerDir, { recursive: true })
   const tofuName = process.platform === 'win32' ? 'tofu.exe' : 'tofu'
   const providerName = process.platform === 'win32' ? `terraform-provider-railway_v${RAILWAY_VERSION}.exe` : `terraform-provider-railway_v${RAILWAY_VERSION}`
+  const tofuFiles = await readdir(tofuExtract)
+  const extractedTofu = tofuFiles.find((name) => name.toLowerCase() === tofuName)
+  if (!extractedTofu) throw new Error(`OpenTofu archive did not contain ${tofuName} (found: ${tofuFiles.join(', ') || 'nothing'})`)
   const providerFiles = await readdir(providerExtract)
   const extractedProvider = providerFiles.find((name) => name.startsWith('terraform-provider-railway'))
-  if (!extractedProvider) throw new Error('Provider archive did not contain the Railway provider binary')
+  if (!extractedProvider) throw new Error(`Provider archive did not contain the Railway provider binary (found: ${providerFiles.join(', ') || 'nothing'})`)
   await mkdir(destination, { recursive: true })
   await rm(join(destination, tofuName), { force: true })
   await rm(join(providerDir, providerName), { force: true })
-  await copyFile(join(tofuExtract, tofuName), join(destination, tofuName))
+  await copyFile(join(tofuExtract, extractedTofu), join(destination, tofuName))
   await copyFile(join(providerExtract, extractedProvider), join(providerDir, providerName))
   if (process.platform !== 'win32') await Promise.all([chmod(join(destination, tofuName), 0o755), chmod(join(providerDir, providerName), 0o755)])
   console.log(`Deploy engine ${TOFU_VERSION} and Railway provider ${RAILWAY_VERSION} installed in ${destination}`)
