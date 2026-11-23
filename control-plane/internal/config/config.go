@@ -85,9 +85,16 @@ type AgentFieldConfig struct {
 	ExecutionCleanup ExecutionCleanupConfig `yaml:"execution_cleanup" mapstructure:"execution_cleanup"`
 	ExecutionQueue   ExecutionQueueConfig   `yaml:"execution_queue" mapstructure:"execution_queue"`
 	Approval         ApprovalConfig         `yaml:"approval" mapstructure:"approval"`
+	RunOwner         RunOwnerConfig         `yaml:"run_owner" mapstructure:"run_owner"`
 	NodeLogProxy     NodeLogProxyConfig     `yaml:"node_log_proxy" mapstructure:"node_log_proxy"`
 	ExecutionLogs    ExecutionLogsConfig    `yaml:"execution_logs" mapstructure:"execution_logs"`
 	RateLimit        RateLimitConfig        `yaml:"rate_limit" mapstructure:"rate_limit"`
+}
+
+// RunOwnerConfig controls the signing key and enforcement for HTTP owner claims.
+type RunOwnerConfig struct {
+	RequireProof bool   `yaml:"require_proof" mapstructure:"require_proof"`
+	ProofKey     string `yaml:"proof_key" mapstructure:"proof_key"`
 }
 
 // ARDConfig controls Agentic Resource Discovery exposure. Config/env values are
@@ -728,6 +735,10 @@ func ApplyDefaults(cfg *Config) {
 func ApplyEnvOverrides(cfg *Config) {
 	if host, set := os.LookupEnv("AGENTFIELD_HOST"); set {
 		cfg.AgentField.Host = host
+	}
+	applyBoolEnv("AGENTFIELD_RUN_OWNER_REQUIRE_PROOF", &cfg.AgentField.RunOwner.RequireProof)
+	if val := os.Getenv("AGENTFIELD_RUN_OWNER_PROOF_KEY"); val != "" {
+		cfg.AgentField.RunOwner.ProofKey = val
 	}
 	// Knowledge / embedding overrides. OPENAI_API_KEY is the standard OpenAI env
 	// var; AGENTFIELD_KNOWLEDGE_* allow explicit control.

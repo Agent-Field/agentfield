@@ -1,7 +1,11 @@
 package middleware
 
 import (
+	"io"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -44,7 +48,7 @@ func GinLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		raw := c.Request.URL.RawQuery
+		raw := redactOwnerProofQuery(c.Request.URL.RawQuery)
 
 		c.Next()
 
@@ -67,4 +71,55 @@ func GinLogger() gin.HandlerFunc {
 			Str("error", errorMessage).
 			Msg("http_request")
 	}
+}
+
+var ownerProofToken = regexp.MustCompile(`afo1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
+var ownerProofHeaderLine = regexp.MustCompile(`(?mi)^(X-AgentField-Run-Owner-Proof:[ \t]*)[^\r\n]*`)
+
+// redactOwnerProofQuery keeps a misplaced proof out of request logs. The
+// query is retained verbatim apart from the credential's value.
+func redactOwnerProofQuery(raw string) string {
+	const header = "X-AgentField-Run-Owner-Proof"
+	if raw == "" {
+		return ""
+	}
+	fields := strings.Split(raw, "&")
+	for i, field := range fields {
+		key, value, hasValue := strings.Cut(field, "=")
+		if !hasValue || value == "" {
+			continue
+		}
+		decodedKey, _ := url.QueryUnescape(key)
+		decodedValue, _ := url.QueryUnescape(value)
+		if strings.EqualFold(decodedKey, header) || ownerProofToken.MatchString(decodedValue) {
+			fields[i] = key + "=REDACTED"
+		}
+	}
+	return strings.Join(fields, "&")
+}
+
+// GinRecovery keeps Gin's recovery behavior while redacting proofs from the
+// request dump it can include with a panic.
+func GinRecovery() gin.HandlerFunc {
+	if gin.DefaultErrorWriter == nil {
+		return gin.Recovery()
+	}
+	return gin.RecoveryWithWriter(ownerProofLogWriter{gin.DefaultErrorWriter})
+}
+
+type ownerProofLogWriter struct {
+	dest io.Writer
+}
+
+func (w ownerProofLogWriter) Write(p []byte) (int, error) {
+	safe := ownerProofHeaderLine.ReplaceAll(p, []byte("${1}REDACTED"))
+	safe = ownerProofToken.ReplaceAll(safe, []byte("REDACTED"))
+	n, err := w.dest.Write(safe)
+	if err == nil && n != len(safe) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }

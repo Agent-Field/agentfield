@@ -106,7 +106,7 @@ func steerRequest(a *Agent, id, message string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// THE DEVELOPER WRITES ONLY a.Harness(...): the run's transcript reaches its
+// Contract B2 and B6: A reasoner calls a.Harness(...): the run's transcript reaches its
 // own execution's logs verbatim and in order, a person's steer reaches the
 // running codeaf, and nothing else is steerable.
 func TestHarnessOnCodeAFStreamsItsTranscriptAndTakesASteer(t *testing.T) {
@@ -136,7 +136,7 @@ func TestHarnessOnCodeAFStreamsItsTranscriptAndTakesASteer(t *testing.T) {
 	// Not a codeaf run: refused, whatever is running beside it.
 	rec := steerRequest(a, "exec-plan", "hello")
 	assert.Equal(t, http.StatusConflict, rec.Code)
-	assert.Contains(t, rec.Body.String(), "not running the codeaf harness")
+	assert.Contains(t, rec.Body.String(), "not running anything that takes notes right now")
 
 	require.Eventually(t, func() bool { return a.steer.get("exec-write") != nil }, 5*time.Second, 10*time.Millisecond, "the run never became steerable")
 	rec = steerRequest(a, "exec-write", "also add a doc comment")
@@ -226,7 +226,7 @@ func TestHarnessOnAnotherProviderIsNeverSteerable(t *testing.T) {
 	assert.ErrorIs(t, a.Steer("exec-x", "hi"), ErrNotSteerable)
 }
 
-// The link: a steer for a codeaf run is acked accepted, one for anything else
+// Contract B5 and B6: A steer with a mailbox is acked accepted, one without it
 // is acked rejected with the refusal's words, and hello says what it accepts.
 func TestLinkServesSteerAndRefusesANonCodeAFExecution(t *testing.T) {
 	t.Setenv("AGENTFIELD_LOG_STDOUT", "off")
@@ -292,7 +292,7 @@ func TestLinkServesSteerAndRefusesANonCodeAFExecution(t *testing.T) {
 	first, second, again := <-acks, <-acks, <-acks
 	assert.Equal(t, "dlv_1", first["id"])
 	assert.Equal(t, 409, first["code"])
-	assert.Contains(t, first["body"], "not running the codeaf harness")
+	assert.Contains(t, first["body"], "not running anything that takes notes right now")
 	assert.Equal(t, "dlv_2", second["id"])
 	assert.Equal(t, 200, second["code"])
 	assert.Equal(t, second, again, "a redelivery is answered with the same ack")
@@ -498,7 +498,7 @@ func TestAgentStreamsOnlyWatchedRuns(t *testing.T) {
 	assert.ErrorIs(t, a.Steer("exec-unwatched", "do not steer"), ErrNotSteerable)
 	steerRec := steerRequest(a, "exec-unwatched", "do not steer")
 	assert.Equal(t, http.StatusConflict, steerRec.Code)
-	assert.Contains(t, steerRec.Body.String(), "not running the codeaf harness")
+	assert.Contains(t, steerRec.Body.String(), "not running anything that takes notes right now")
 
 	require.NoError(t, os.Remove(holdFile))
 	require.Eventually(t, func() bool {

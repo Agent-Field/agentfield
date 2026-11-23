@@ -23,11 +23,11 @@ import (
 // The node that runs an execution sends its harness entries up (an entries
 // frame on its link, or POST /executions/:id/relay), numbered per execution
 // from 1. The control plane holds them in execution_relay only until the
-// run's subscriber — the node that owns the run, WorkAF's codeaf-factory —
-// acks them, then deletes them. WORKAF IS THE SYSTEM OF RECORD; THE CONTROL
-// PLANE IS A PIPE. The execution-log retention setting is the ceiling: an
-// entry nobody acked within it is dropped, so an offline subscriber can catch
-// up while it is gone and the table cannot grow without bound.
+// run's subscriber (the node that owns the run) acks them, then deletes
+// them. The subscriber keeps the transcript. The execution-log retention
+// setting is the ceiling: an entry nobody acked within it is dropped, so an
+// offline subscriber can catch up while it is gone and the table cannot grow
+// without bound.
 //
 // IDEMPOTENT ON (execution, seq). A resend of a seq already held is ignored;
 // a resend of a seq already acked (and so deleted) is ignored too, because
@@ -66,8 +66,9 @@ type PipeStore interface {
 
 // Pipe is the store-and-forward between nodes and run owners.
 type Pipe struct {
-	Store PipeStore
-	Hub   *Hub
+	Store  PipeStore
+	Hub    *Hub
+	Owners *OwnerPolicy
 	// Retention is the ceiling an unacked entry is held for; zero is 24h.
 	Retention func() time.Duration
 	// InternalToken is the bearer a steer carries to the node.
@@ -271,6 +272,12 @@ func (p *Pipe) Put(ctx context.Context, exec string, entries []Entry) (int, int6
 // Own records owner as runID's owner unless it has one.
 func (p *Pipe) Own(ctx context.Context, runID, owner string) error {
 	return p.Store.SetRunOwner(ctx, runID, owner)
+}
+
+// RunOf resolves an execution's run for checking run-restricted proofs.
+func (p *Pipe) RunOf(ctx context.Context, exec string) (string, error) {
+	run, _, err := p.ownerOf(ctx, exec)
+	return run, err
 }
 
 // ownerOf is exec's run and that run's owner ("" for none yet).
@@ -710,6 +717,30 @@ func (p *Pipe) frame(l *link, f Frame) bool {
 		_ = l.send(Frame{T: TOK, Seq: f.Seq, Exec: f.Exec}, body)
 	}
 	switch f.T {
+	case TDelegate:
+		if p.Owners == nil || p.Owners.Signer == nil {
+			return false
+		}
+		var req DelegateUp
+		if err := json.Unmarshal(f.Body, &req); err != nil {
+			answer(0, refuse(http.StatusBadRequest, "delegate: invalid request body"), 0, 0)
+			return true
+		}
+		if req.TTLSeconds < 0 {
+			answer(0, refuse(http.StatusBadRequest, "delegate ttl_seconds must be non-negative"), 0, 0)
+			return true
+		}
+		// Bound seconds before conversion to keep even very large inputs safe.
+		ttl := effectiveProofTTL(time.Duration(min(req.TTLSeconds, int(maxProofTTL/time.Second))) * time.Second)
+		token, expires, err := p.Owners.Signer.Mint(l.node, req.Scopes, req.Run, ttl)
+		if err != nil {
+			answer(0, err, 0, 0)
+			return true
+		}
+		_ = l.send(Frame{T: TOK, Seq: f.Seq, Exec: f.Exec}, OKBody{
+			Code: http.StatusOK, Token: token, ExpiresAt: expires.UTC().Format(time.RFC3339),
+			ExpiresIn: int(ttl / time.Second), Scopes: canonicalProofScopes(req.Scopes),
+		})
 	case TEntries:
 		var up EntriesUp
 		if err := json.Unmarshal(f.Body, &up); err != nil {

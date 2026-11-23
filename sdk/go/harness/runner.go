@@ -62,6 +62,9 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 	if err != nil {
 		return nil, err
 	}
+	if _, supportsLive := provider.(LiveProvider); !supportsLive {
+		opts.Live = nil
+	}
 
 	// Always isolate schema output in a per-run directory under the effective
 	// project root. Concurrent calls sharing one checkout must not overwrite or

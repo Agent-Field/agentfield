@@ -126,7 +126,7 @@ func (s *AgentFieldServer) noteOwnershipEnforced() bool {
 // drift.
 func useStructuredRequestLogging(router *gin.Engine) {
 	router.Use(middleware.GinLogger())
-	router.Use(gin.Recovery())
+	router.Use(middleware.GinRecovery())
 }
 
 func streamingQueryAPIKeyAllowedPaths() []string {

@@ -1,30 +1,7 @@
 package agent
 
-// ── A CODEAF HARNESS RUN, WATCHED AND STEERED WITH NOTHING WRITTEN FOR IT ──
-//
-// Inside a watched run (X-AgentField-Run-Watched: 1), a reasoner that calls
-// a.Harness(...) on the codeaf provider gets, for free:
-//
-//   - WATCH: every line codeaf streams while it works — one line of the run's
-//     own conversation record, carried VERBATIM — is relayed to the control
-//     plane under THIS execution (relay.go), numbered from 1 by this node and
-//     replayed until the control plane answers, so a control plane restart
-//     mid-run loses no line and doubles none. The control plane only holds a
-//     line until WorkAF, which keeps the transcript, has acked it.
-//   - STEER: while the run works the execution has a mailbox. A person's note
-//     reaches it from the control plane — POST /_internal/executions/:id/steer,
-//     which travels down the node link for a node with no address — and the
-//     harness writes it to the run's steer file, where codeaf reads it at its
-//     next turn boundary.
-//
-// A relayed "started" entry ({harness: codeaf, steerable: true}) opens the run
-// and "ended" closes it, so a reader can tell whether a step is steerable now.
-//
-// STEERING EXISTS ONLY WHILE A CODEAF RUN IS WORKING. The mailbox opens in
-// harness.Live.Begin, which only the codeaf provider calls, and closes in End.
-// A steer for any other execution — a plain reasoner, another harness, a run
-// that has finished — is refused with ErrNotSteerable, and the control plane
-// answers the person with that refusal.
+// Live runs relay their output to the control plane for a watcher to read.
+// A steerable run opens a mailbox for notes from either node-side carrier.
 
 import (
 	"context"
@@ -38,9 +15,8 @@ import (
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 )
 
-// ErrNotSteerable is a steer for an execution that is not running the codeaf
-// harness right now.
-var ErrNotSteerable = errors.New("this execution is not running the codeaf harness, so it cannot be steered")
+// ErrNotSteerable means the execution has no open mailbox for notes.
+var ErrNotSteerable = errors.New("this execution is not running anything that takes notes right now, so it cannot be steered")
 
 type steerBoxes struct {
 	mu    sync.Mutex
@@ -70,49 +46,97 @@ func (s *steerBoxes) get(id string) chan string {
 	return s.boxes[id]
 }
 
-// Steer hands a person's note to the codeaf run working in executionID. It
-// never blocks: a mailbox that is full refuses rather than holding the caller.
+// Steer hands a person's note to a running execution that accepts notes. It
+// never waits for the execution to read a note from a full mailbox.
 func (a *Agent) Steer(executionID, text string) error {
+	return a.queueSteerNote(executionID, text, false)
+}
+
+func (a *Agent) queueSteerNote(executionID, text string, relayNote bool) error {
 	executionID, text = strings.TrimSpace(executionID), strings.TrimSpace(text)
 	if text == "" {
 		return errors.New("a steer note has words")
 	}
-	box := a.steer.get(executionID)
+	a.steer.mu.Lock()
+	defer a.steer.mu.Unlock()
+	box := a.steer.boxes[executionID]
 	if box == nil {
 		return ErrNotSteerable
 	}
 	select {
 	case box <- text:
+		if relayNote {
+			// Hold the mailbox open until the receipt is part of the transcript.
+			raw, _ := json.Marshal(map[string]string{"text": text})
+			a.relayFor(executionID).send(RelayPerson, raw)
+		}
+		return nil
 	default:
 		return errors.New("the run has notes it has not read yet; send this again in a moment")
 	}
-	return nil
 }
 
-// liveHarness arms harness.Live for the execution in ctx when the control
-// plane marked its run as watched. An unwatched run, or a harness call outside
-// a reasoner, gets nil so codeaf runs its plain non-streaming exec path.
-func (a *Agent) liveHarness(ctx context.Context) (*harness.Live, func()) {
+// LiveRun is the live watch and steer channel of a watched execution.
+type LiveRun struct {
+	relay      *execRelay
+	notes      chan string
+	deferFlush bool
+}
+
+// LiveRun returns the channel a watched reasoner can use to report its
+// progress and receive notes. It returns false outside a watched execution.
+func (a *Agent) LiveRun(ctx context.Context) (*LiveRun, bool) {
 	ec := executionContextFrom(ctx)
 	id := strings.TrimSpace(ec.ExecutionID)
 	if a == nil || id == "" || !ec.RunWatched {
+		return nil, false
+	}
+	return &LiveRun{relay: a.relayFor(id), notes: make(chan string, 16)}, true
+}
+
+// Begin announces the run and opens its mailbox if it takes notes.
+func (l *LiveRun) Begin(info harness.LiveInfo) {
+	if info.Steerable {
+		l.relay.agent.steer.open(l.relay.id, l.notes)
+	}
+	raw, _ := json.Marshal(info)
+	l.relay.send(RelayStarted, raw)
+}
+
+// Emit relays one line with the data supplied by the caller.
+func (l *LiveRun) Emit(line json.RawMessage) {
+	l.relay.send(RelayLine, line)
+}
+
+// Notes receives steer notes while a steerable run is active.
+func (l *LiveRun) Notes() <-chan string {
+	return l.notes
+}
+
+// End stops accepting notes, relays the end of the run, and waits up to 30
+// seconds for the relay to flush.
+func (l *LiveRun) End() {
+	l.relay.agent.steer.close(l.relay.id, l.notes)
+	l.relay.send(RelayEnded, json.RawMessage(`{}`))
+	if !l.deferFlush {
+		l.flush()
+	}
+}
+
+func (l *LiveRun) flush() {
+	l.relay.flush(30 * time.Second)
+}
+
+// liveHarness wires the agent's live channel to a watched harness run.
+func (a *Agent) liveHarness(ctx context.Context) (*harness.Live, func()) {
+	live, ok := a.LiveRun(ctx)
+	if !ok {
 		return nil, func() {}
 	}
-	relay := a.relayFor(id)
-	box := make(chan string, 16)
-	live := &harness.Live{
-		Steer: box,
-		Begin: func() {
-			a.steer.open(id, box)
-			relay.send(RelayStarted, json.RawMessage(`{"harness":"codeaf","steerable":true}`))
-		},
-		End: func() {
-			a.steer.close(id, box)
-			relay.send(RelayEnded, json.RawMessage(`{}`))
-		},
-		Event: func(line json.RawMessage) { relay.send(RelayLine, line) },
-	}
-	return live, func() { relay.flush(30 * time.Second) }
+	// Providers can finish an attempt before the runner retries or falls back.
+	// Flush once when the full harness invocation returns.
+	live.deferFlush = true
+	return &harness.Live{Begin: live.Begin, Event: live.Emit, Steer: live.Notes(), End: live.End}, live.flush
 }
 
 // handleInternalExecution serves the control plane's two worker
@@ -126,8 +150,7 @@ func (a *Agent) handleInternalExecution(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleInternalSteer is POST /_internal/executions/:id/steer {message}.
-// 200 when the note reached a codeaf run's mailbox; 409 with the refusal's
-// words when the execution is not one.
+// It reports 200 when the execution took the note or 409 with the refusal.
 func (a *Agent) handleInternalSteer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -151,14 +174,8 @@ func (a *Agent) handleInternalSteer(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "execution_id": id})
 }
 
-// steerFromControlPlane is a steer that came from a person through the
-// control plane, by either carrier. It also relays that a person sent it, so
-// the record shows the note the moment it arrives, before codeaf reads it.
+// steerFromControlPlane accepts a note from either carrier and records its
+// receipt for the watcher.
 func (a *Agent) steerFromControlPlane(id, text string) error {
-	if err := a.Steer(id, text); err != nil {
-		return err
-	}
-	raw, _ := json.Marshal(map[string]string{"text": strings.TrimSpace(text)})
-	a.relayFor(id).send(RelayPerson, raw)
-	return nil
+	return a.queueSteerNote(id, text, true)
 }

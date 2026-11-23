@@ -11,10 +11,9 @@ import (
 
 // ── THE RELAY, FROM THE NODE'S SIDE ─────────────────────────────────────────
 //
-// A codeaf harness run's lines go to the control plane's relay — an
-// `entries` frame on the node's link, or POST /api/v1/executions/:id/relay
-// when no link is up — which holds them only until WorkAF —
-// the system of record for the transcript — has acked them.
+// A live run's lines go to the control plane's relay in an `entries` frame
+// or a POST to /api/v1/executions/:id/relay. The control plane holds them
+// until the run's watcher acknowledges them.
 //
 // NOTHING IS LOST AND NOTHING IS DOUBLED ACROSS A CONTROL PLANE OUTAGE. This
 // node numbers each execution's entries from 1 and keeps every entry the
@@ -24,8 +23,8 @@ import (
 
 // Relay entry kinds.
 const (
-	RelayStarted = "started" // {harness: "codeaf", steerable: true}
-	RelayLine    = "line"    // one codeaf conversation-record line, verbatim
+	RelayStarted = "started" // {harness, steerable}
+	RelayLine    = "line"    // one transcript line, verbatim
 	RelayPerson  = "person"  // {text}: a person's steer as this node received it
 	RelayEnded   = "ended"   // {}
 )
@@ -144,7 +143,7 @@ func (r *execRelay) loop() {
 // already holds, its data seqs in the body and the frame's own seq the reply
 // key. With no link up, or no answer on it, the same entries go by HTTP
 // (POST /api/v1/executions/:id/relay), which the control plane serves by the
-// same code. Either way the control plane holds them only until WorkAF acks.
+// same code. Either way the control plane holds them only until the watcher acks them.
 func (r *execRelay) deliver(batch []RelayEntry) (int64, error) {
 	ok, err := r.agent.linkAsk("entries", r.id, map[string]any{"entries": batch}, 10*time.Second)
 	if err == nil {

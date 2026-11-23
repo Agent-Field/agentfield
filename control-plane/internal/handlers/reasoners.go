@@ -13,6 +13,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils" // Added for ID generation
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"      // Added for new types
@@ -321,15 +322,29 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		}
 		workflowExecution.InputData = inputJSON
 		workflowExecution.InputSize = len(inputJSON)
+		owners, _ := storageProvider.(runOwnerSetter)
+		runOwner := strings.TrimSpace(c.GetHeader(RunOwnerHeader))
+		claimsOwner := owners != nil && runOwner != "" && parentExecutionID == ""
+		if claimsOwner {
+			proof := strings.TrimSpace(c.GetHeader(RunOwnerProofHeader))
+			run := strings.TrimSpace(c.GetHeader("X-Run-ID"))
+			// The legacy workflow ID also identifies the stored run. A proof
+			// restricted to a different run cannot authorize this claim.
+			if run != workflowID {
+				run = ""
+			}
+			if err := runOwnerPolicy.Load().Check(runOwner, proof, nodelink.ScopeOwn, run); err != nil {
+				pipeRefusal(c, err)
+				return
+			}
+		}
 		if err := createLegacyExecutionRecord(ctx, storageProvider, workflowExecution); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create execution record"})
 			return
 		}
-		if runOwner := strings.TrimSpace(c.GetHeader(RunOwnerHeader)); runOwner != "" && parentExecutionID == "" {
-			if owners, ok := storageProvider.(runOwnerSetter); ok {
-				if err := owners.SetRunOwner(ctx, workflowID, runOwner); err != nil {
-					logger.Logger.Warn().Err(err).Str("run_id", workflowID).Msg("failed to record the run's owner")
-				}
+		if claimsOwner {
+			if err := owners.SetRunOwner(ctx, workflowID, runOwner); err != nil {
+				logger.Logger.Warn().Err(err).Str("run_id", workflowID).Msg("failed to record the run's owner")
 			}
 		}
 
@@ -737,15 +752,29 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		}
 		workflowExecution.InputData = inputJSON
 		workflowExecution.InputSize = len(inputJSON)
+		owners, _ := storageProvider.(runOwnerSetter)
+		runOwner := strings.TrimSpace(c.GetHeader(RunOwnerHeader))
+		claimsOwner := owners != nil && runOwner != "" && parentExecutionID == ""
+		if claimsOwner {
+			proof := strings.TrimSpace(c.GetHeader(RunOwnerProofHeader))
+			run := strings.TrimSpace(c.GetHeader("X-Run-ID"))
+			// The legacy workflow ID also identifies the stored run. A proof
+			// restricted to a different run cannot authorize this claim.
+			if run != workflowID {
+				run = ""
+			}
+			if err := runOwnerPolicy.Load().Check(runOwner, proof, nodelink.ScopeOwn, run); err != nil {
+				pipeRefusal(c, err)
+				return
+			}
+		}
 		if err := createLegacyExecutionRecord(ctx, storageProvider, workflowExecution); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create execution record"})
 			return
 		}
-		if runOwner := strings.TrimSpace(c.GetHeader(RunOwnerHeader)); runOwner != "" && parentExecutionID == "" {
-			if owners, ok := storageProvider.(runOwnerSetter); ok {
-				if err := owners.SetRunOwner(ctx, workflowID, runOwner); err != nil {
-					logger.Logger.Warn().Err(err).Str("run_id", workflowID).Msg("failed to record the run's owner")
-				}
+		if claimsOwner {
+			if err := owners.SetRunOwner(ctx, workflowID, runOwner); err != nil {
+				logger.Logger.Warn().Err(err).Str("run_id", workflowID).Msg("failed to record the run's owner")
 			}
 		}
 

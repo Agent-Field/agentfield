@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/gin-gonic/gin"
@@ -29,6 +30,37 @@ import (
 // that node the run's owner; on a relay read, ack or steer it scopes the
 // call to the runs that node owns.
 const RunOwnerHeader = "X-AgentField-Run-Owner"
+
+// RunOwnerProofHeader carries a proof of the named owner's consent.
+const RunOwnerProofHeader = "X-AgentField-Run-Owner-Proof"
+
+var runOwnerPolicy atomic.Pointer[nodelink.OwnerPolicy]
+
+// SetRunOwnerPolicy wires the policy shared by the execute and HTTP relay doors.
+func SetRunOwnerPolicy(p *nodelink.OwnerPolicy) {
+	runOwnerPolicy.Store(p)
+}
+
+type executionRunLookup interface {
+	RunOf(ctx context.Context, exec string) (string, error)
+}
+
+func checkExecutionOwner(c *gin.Context, lookup any, owner, scope string) error {
+	policy := runOwnerPolicy.Load()
+	if policy == nil || owner == "" {
+		return nil
+	}
+	proof := strings.TrimSpace(c.GetHeader(RunOwnerProofHeader))
+	var run string
+	if proof != "" {
+		if resolver, ok := lookup.(executionRunLookup); ok {
+			// An unavailable run cannot satisfy a restriction. The underlying
+			// operation still handles lookup errors for an unrestricted proof.
+			run, _ = resolver.RunOf(c.Request.Context(), c.Param("execution_id"))
+		}
+	}
+	return policy.Check(owner, proof, scope, run)
+}
 
 // RunWatchedHeader tells an agent node that the execution's run has an owner
 // watching its live harness transcript. Never forward RunOwnerHeader to nodes:
@@ -97,7 +129,12 @@ func RelayReadHandler(pipe *nodelink.Pipe) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		after, _ := strconv.ParseInt(c.DefaultQuery("after", "0"), 10, 64)
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "500"))
-		entries, err := pipe.Read(c.Request.Context(), strings.TrimSpace(c.GetHeader(RunOwnerHeader)), c.Param("execution_id"), after, limit)
+		owner := strings.TrimSpace(c.GetHeader(RunOwnerHeader))
+		if err := checkExecutionOwner(c, pipe, owner, nodelink.ScopeRead); err != nil {
+			pipeRefusal(c, err)
+			return
+		}
+		entries, err := pipe.Read(c.Request.Context(), owner, c.Param("execution_id"), after, limit)
 		if err != nil {
 			pipeRefusal(c, err)
 			return
@@ -117,7 +154,12 @@ func RelayAckHandler(pipe *nodelink.Pipe) gin.HandlerFunc {
 			Through int64 `json:"through"`
 		}
 		_ = c.ShouldBindJSON(&body)
-		dropped, err := pipe.Ack(c.Request.Context(), strings.TrimSpace(c.GetHeader(RunOwnerHeader)), c.Param("execution_id"), body.Through)
+		owner := strings.TrimSpace(c.GetHeader(RunOwnerHeader))
+		if err := checkExecutionOwner(c, pipe, owner, nodelink.ScopeAct); err != nil {
+			pipeRefusal(c, err)
+			return
+		}
+		dropped, err := pipe.Ack(c.Request.Context(), owner, c.Param("execution_id"), body.Through)
 		if err != nil {
 			pipeRefusal(c, err)
 			return
@@ -147,7 +189,12 @@ func SteerExecutionHandler(pipe *nodelink.Pipe) gin.HandlerFunc {
 			Message string `json:"message"`
 		}
 		_ = c.ShouldBindJSON(&body)
-		via, err := pipe.Steer(c.Request.Context(), strings.TrimSpace(c.GetHeader(RunOwnerHeader)), c.Param("execution_id"), body.Message)
+		owner := strings.TrimSpace(c.GetHeader(RunOwnerHeader))
+		if err := checkExecutionOwner(c, pipe, owner, nodelink.ScopeAct); err != nil {
+			pipeRefusal(c, err)
+			return
+		}
+		via, err := pipe.Steer(c.Request.Context(), owner, c.Param("execution_id"), body.Message)
 		if err != nil {
 			pipeRefusal(c, err)
 			return

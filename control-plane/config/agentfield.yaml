@@ -27,6 +27,9 @@ agentfield:
     webhook_max_attempts: 3       # Number of attempts before marking the webhook as failed
     webhook_retry_backoff: 1s     # Initial backoff between webhook retries (exponential)
     webhook_max_retry_backoff: 5s # Upper bound for webhook retry backoff
+  # run_owner:
+  #   require_proof: false  # Require a proof of owner consent for HTTP owner claims.
+  #   proof_key: ""        # At least 16 bytes when set. Empty uses the data directory key.
   approval:
     webhook_secret: ""                 # Required for HMAC auth on approval webhook callbacks; empty disables the endpoint
     default_expiry_hours: 72           # Default approval expiry (hours)

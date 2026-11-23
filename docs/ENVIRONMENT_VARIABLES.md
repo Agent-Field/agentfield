@@ -13,6 +13,13 @@ AgentField uses Viper with the prefix `AGENTFIELD` and maps nested config keys u
 - `AGENTFIELD_CONFIG_FILE` (optional): Path to `agentfield.yaml` (in containers this is typically `/etc/agentfield/config/agentfield.yaml`).
 - `AGENTFIELD_HOME` (recommended in containers): Base directory where AgentField stores local state (SQLite DB, Bolt DB, keys, logs). In Kubernetes, mount a PVC and set `AGENTFIELD_HOME=/data`.
 
+### Run ownership
+
+| Variable | Description |
+| --- | --- |
+| `AGENTFIELD_RUN_OWNER_REQUIRE_PROOF` | Require a proof of owner consent when an HTTP caller names an owner. Overrides YAML `agentfield.run_owner.require_proof`. Defaults to false. |
+| `AGENTFIELD_RUN_OWNER_PROOF_KEY` | Signing secret for proofs of owner consent, used verbatim and at least 16 bytes. Overrides YAML `agentfield.run_owner.proof_key`. When unset, the control plane uses a generated key in its data directory. |
+
 ### Coding harness (CodeAF)
 
 The SDK default is `codeaf`; `aforge` is an alias unless a legacy binary is

@@ -230,3 +230,29 @@ func TestRouterLogsAllowedCrossOriginRequest(t *testing.T) {
 	require.Equal(t, "debug", entries[0]["level"])
 	require.Equal(t, float64(http.StatusOK), entries[0]["status"])
 }
+
+// Contract A14: The access and recovery logs omit an owner proof even
+// when the request fails unexpectedly or the caller puts it in the URL.
+func TestRouterRedactsOwnerProofContractA14(t *testing.T) {
+	previousMode := gin.Mode()
+	gin.SetMode(gin.DebugMode)
+	t.Cleanup(func() { gin.SetMode(previousMode) })
+	ginOut := captureGinWriters(t)
+	logOut := captureServerLogger(t, zerolog.DebugLevel)
+	router := newRouter()
+	router.GET("/owner", func(ctx *gin.Context) {
+		require.Equal(t, "header-value", ctx.GetHeader("X-AgentField-Run-Owner-Proof"))
+		panic("unexpected failure")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/owner?proof=afo1.example.signature", nil)
+	req.Header.Set("X-AgentField-Run-Owner-Proof", "header-value")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	for _, log := range []string{ginOut.String(), logOut.String()} {
+		require.NotContains(t, log, "header-value")
+		require.NotContains(t, log, "afo1.example.signature")
+	}
+	require.Contains(t, ginOut.String(), "REDACTED")
+}

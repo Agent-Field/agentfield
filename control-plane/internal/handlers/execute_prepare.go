@@ -10,6 +10,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/agenturl"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/nodelink"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -251,19 +252,24 @@ func (c *executionController) prepareExecutionForTargetWithAdmissionAndStatus(ct
 		exec.ActorID = headers.actorID
 	}
 
+	// A nested execution inherits the run's owner. Check a root's claim
+	// before writing its execution and use only the caller-supplied run ID.
+	owners, _ := c.store.(runOwnerSetter)
+	claimsOwner := owners != nil && headers.runOwner != "" && headers.parentExecutionID == nil
+	if claimsOwner {
+		if err := runOwnerPolicy.Load().Check(headers.runOwner, headers.runOwnerProof, nodelink.ScopeOwn, headers.runID); err != nil {
+			return nil, err
+		}
+	}
 	if err := c.store.CreateExecutionRecord(ctx, exec); err != nil {
 		return nil, fmt.Errorf("create execution record: %w", err)
 	}
 	// The node that started a run owns it. Only a root records it: a nested
 	// call joins its parent's run, which already has its owner, and the
 	// first owner wins anyway (storage/relay.go).
-	if headers.runOwner != "" && headers.parentExecutionID == nil {
-		if owners, ok := c.store.(interface {
-			SetRunOwner(ctx context.Context, runID, owner string) error
-		}); ok {
-			if err := owners.SetRunOwner(ctx, runID, headers.runOwner); err != nil {
-				logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to record the run's owner")
-			}
+	if claimsOwner {
+		if err := owners.SetRunOwner(ctx, runID, headers.runOwner); err != nil {
+			logger.Logger.Warn().Err(err).Str("run_id", runID).Msg("failed to record the run's owner")
 		}
 	}
 	if headers.parentExecutionID == nil && req.RunMetadata != nil {
