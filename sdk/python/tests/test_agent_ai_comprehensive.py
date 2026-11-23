@@ -592,3 +592,70 @@ async def test_ai_tool_loop_records_usage_per_turn(monkeypatch, agent_with_ai):
     summary = agent_with_ai.cost_tracker.serialize()
     assert len(summary["entries"]) == 2
     assert summary["total_tokens"] == 42
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rate_limit_retry", [True, False])
+async def test_ai_tool_loop_records_cache_tokens_and_missing_usage(
+    monkeypatch, agent_with_ai, rate_limit_retry
+):
+    """Tool-loop turns keep prompt-cache counts, and a turn whose provider
+    reported no usage is flagged as missing rather than silently dropped."""
+    from agentfield.cost_tracker import CostTracker
+
+    agent_with_ai.cost_tracker = CostTracker()
+    agent_with_ai.ai_config.enable_rate_limit_retry = rate_limit_retry
+    litellm_module = setup_litellm_stub(monkeypatch)
+
+    def chat(content, tool_calls, usage):
+        return SimpleNamespace(
+            model="gpt-4",
+            usage=usage,
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=content,
+                        audio=None,
+                        tool_calls=tool_calls,
+                        model_dump=lambda: {"role": "assistant", "content": content},
+                    )
+                )
+            ],
+        )
+
+    tool_call = SimpleNamespace(
+        id="call_1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    litellm_module.acompletion.side_effect = [
+        chat(
+            None,
+            [tool_call],
+            {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "cache_read_input_tokens": 4,
+                "cache_creation_input_tokens": 2,
+            },
+        ),
+        chat("done", None, None),
+    ]
+    agent_with_ai.call = AsyncMock(return_value={"ok": True})
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    await AgentAI(agent_with_ai).ai("question", tools=tools)
+
+    entries = agent_with_ai.cost_tracker.serialize()["entries"]
+    assert len(entries) == 2
+    assert entries[0]["cache_read_tokens"] == 4
+    assert entries[0]["cache_creation_tokens"] == 2
+    assert entries[1]["usage_status"] == "missing"
