@@ -6,6 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.11] - 2026-11-23
+
+
+### Added
+
+- Feat: generic app link (owner proof, provider-agnostic live watch and steer, contract doc) (#1238)
+
+* feat(control-plane): proof of owner consent for run ownership
+
+X-AgentField-Run-Owner was a free string. Add an optional
+X-AgentField-Run-Owner-Proof: a signed, scoped (own, read, act), expiring
+token a node mints over its own live link (new `delegate` frame) and that
+the control plane verifies on a root execute and on relay read/ack, steer
+and approval-response. A bad, expired or mismatched proof is refused with
+403 in both modes and no execution record is written.
+
+Defaults are unchanged: a claim with no proof is accepted as before, with
+one debounced warning and a Prometheus counter. Strict mode
+(agentfield.run_owner.require_proof / AGENTFIELD_RUN_OWNER_REQUIRE_PROOF)
+refuses unproven claims. The signing key is configured, else kept in a
+0600 file in the data directory, else per-process; it is never derived from
+the API key. The proof shows a link with that node name consented; it is
+not an identity proof.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): keep owner proofs out of request and recovery logs
+
+Gin's recovery dump prints every request header when a handler panics, which
+would write an X-AgentField-Run-Owner-Proof token to the log, and a proof
+misplaced in a query string would reach the access log. Redact the proof in
+both.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(sdk/go): provider-agnostic live watch and steer
+
+Live watch and steer worked only for the codeaf harness: the started entry
+was hard-coded to codeaf and only that provider read Options.Live.
+
+- harness.LiveProvider (LiveInfo) is the interface a harness implements to be
+  watched and steered; the runner hands Options.Live only to a LiveProvider.
+  harness.RegisterProvider plugs in a custom harness.
+- Agent.LiveRun gives a plain reasoner the same watch/steer channel.
+- CodeAF is one implementation: its started entry is byte-identical, and its
+  events/steer files and old-binary fallback are unchanged.
+- ErrNotSteerable no longer names a harness.
+- A steer note's receipt is relayed under the mailbox lock, so it cannot
+  land after the run's ended entry.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(sdk/go): request a run owner proof over the node link
+
+Agent.RunOwnerProof asks the node's own link for a proof of owner consent
+(the control plane's new `delegate` frame) and RunOwnerProofHeader names the
+header to send it in. With no link up it returns an error and never invents a
+token; the ask honours its context.
+
+linkOnce now sends hello before publishing the connection to other
+goroutines: the hub ignores any frame that arrives before hello, so a relay
+or proof request racing the handshake could be dropped.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs: app link contract
+
+Describe, in neutral terms, how an app registers as a node over the outbound
+link and works with reasoners: frames, run ownership and the owner proof (with
+its trust model), watching, steer, pause-with-question and the approval doors,
+reasoner tag conventions, and how a reasoner starts work in an app.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (c7a165f)
+
 ## [0.1.147-rc.10] - 2026-11-23
 
 
