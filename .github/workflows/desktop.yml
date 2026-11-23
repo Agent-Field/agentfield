@@ -71,9 +71,34 @@ jobs:
             cc -o vendor/af-tray "$RUNNER_TEMP/af-tray-stub.c"
           fi
 
+      # The release job runs this same fetch before it builds the installers.
+      # It broke there once (a runner-image PowerShell update changed
+      # Expand-Archive) with no PR check to catch it, so releases went out
+      # without their Windows installer. Run it here on both OSes, before
+      # packaging so the unpacked app carries the deploy engine, as in a release.
+      - name: Fetch deploy engine (OpenTofu + Railway provider)
+        working-directory: desktop
+        run: npm run fetch:deploy-engine
+
       - name: Package (unsigned, unpacked)
         working-directory: desktop
         run: npm run dist:dir
+
+      # electron-builder silently skips a missing extraResources source, so
+      # look inside the packaged app, not just at vendor/.
+      - name: Assert the packaged app bundles the deploy engine
+        working-directory: desktop
+        shell: bash
+        # Plain tests only: see the v0.1.119 note in release.yml.
+        run: |
+          if [ -z "$(find release -type f \( -name tofu -o -name tofu.exe \) -path '*/bin/deploy-engine/*' 2>/dev/null)" ]; then
+            echo "::error::the packaged app has no bin/deploy-engine/tofu binary"
+            exit 1
+          fi
+          if [ -z "$(find release -type f -name 'terraform-provider-railway*' -path '*/bin/deploy-engine/providers/*' 2>/dev/null)" ]; then
+            echo "::error::the packaged app has no Railway provider binary under bin/deploy-engine/providers"
+            exit 1
+          fi
 
       # The tray helper must ship inside the app, with the one bundled login
       # agent that Service Management registers. Without them the app falls back

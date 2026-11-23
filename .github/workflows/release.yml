@@ -834,6 +834,10 @@ jobs:
             echo "::error::vendor/deploy-engine/providers mirror is missing; offline provider install would fail"
             exit 1
           fi
+          if [ -z "$(find vendor/deploy-engine/providers -type f -name 'terraform-provider-railway*' 2>/dev/null)" ]; then
+            echo "::error::vendor/deploy-engine/providers has no Railway provider binary; offline provider install would fail"
+            exit 1
+          fi
 
       # electron-builder signs every Mach-O in the bundle (including the
       # bundled af/af-tray) with the Developer ID cert + hardened runtime,
