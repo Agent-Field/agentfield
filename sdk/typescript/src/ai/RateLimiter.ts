@@ -33,6 +33,9 @@ export class RateLimitError extends Error {
   }
 }
 
+/** Upper bound on a server-suggested Retry-After, in seconds (mirrors the Python SDK). */
+const MAX_RETRY_AFTER_SECONDS = 300;
+
 export interface RateLimiterOptions {
   maxRetries?: number;
   baseDelay?: number;
@@ -178,9 +181,13 @@ export class StatelessRateLimiter {
   }
 
   protected _calculateBackoffDelay(attempt: number, retryAfter?: number): number {
+    // Honour server cooldowns up to the ceiling, even above the local
+    // exponential-backoff cap. Invalid hints use the normal backoff.
     let baseDelay: number;
-    if (retryAfter && retryAfter <= this.maxDelay) {
-      baseDelay = retryAfter;
+    let minimumDelay = 0;
+    if (retryAfter !== undefined && Number.isFinite(retryAfter) && retryAfter > 0) {
+      baseDelay = Math.min(retryAfter, Math.max(this.maxDelay, MAX_RETRY_AFTER_SECONDS));
+      minimumDelay = baseDelay;
     } else {
       baseDelay = Math.min(this.baseDelay * 2 ** attempt, this.maxDelay);
     }
@@ -189,7 +196,8 @@ export class StatelessRateLimiter {
     const rng = this._createJitterRng(this._containerSeed + attempt);
     const jitter = (rng() * 2 - 1) * jitterRange;
 
-    const delay = Math.max(0.1, baseDelay + jitter);
+    // Negative jitter must not end the server's cooldown early.
+    const delay = Math.max(0.1, minimumDelay, baseDelay + jitter);
     return delay;
   }
 
