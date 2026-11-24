@@ -1,9 +1,5 @@
 # AgentField Go SDK
 
-## Graceful shutdown
-
-Server agents notify the control plane, stop accepting requests, and drain in-flight executions on SIGTERM, SIGINT, or `POST /shutdown`. Set `AGENTFIELD_SHUTDOWN_TIMEOUT` to bare seconds (`30`) or a duration (`30s`, `5m`); the default is 30 seconds. `Config.ShutdownTimeout` takes precedence. In Kubernetes, set `terminationGracePeriodSeconds` higher than the drain timeout.
-
 The AgentField Go SDK provides idiomatic Go bindings for interacting with the AgentField control plane.
 
 ## Installation
@@ -181,17 +177,21 @@ sub2, err := a.Memory().OnChange(ctx, "user_*.preferences", func(ev agent.Memory
 
 See the [environment-variable reference](../../docs/ENVIRONMENT_VARIABLES.md) for details.
 
+## Graceful shutdown
+
+Server agents notify the control plane, stop accepting requests, and drain in-flight executions on SIGTERM, SIGINT, or `POST /shutdown`. Set `AGENTFIELD_SHUTDOWN_TIMEOUT` to bare seconds (`30`) or a duration (`30s`, `5m`); the default is 30 seconds. `Config.ShutdownTimeout` takes precedence. In Kubernetes, set `terminationGracePeriodSeconds` higher than the drain timeout.
+
 ## Testing
 
 ```bash
 go test ./...
 ```
 
-## License
-
-Distributed under the Apache 2.0 License. See the repository root for full details.
-
 ## Realtime session turn detection
 
 See [session turn detection and interruption](../../docs/session-turn-detection.md)
 for VAD configuration, defaults, validation, and the WebRTC connection flow.
+
+## License
+
+Distributed under the Apache 2.0 License. See the repository root for full details.
