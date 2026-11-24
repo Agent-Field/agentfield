@@ -24,23 +24,38 @@ class AudioOutput(BaseModel):
 
     def save(self, path: Union[str, Path]) -> None:
         """Save audio to file."""
-        if not self.data:
-            raise ValueError("No audio data available to save")
+        # Resolve the bytes before touching the destination so a failed
+        # decode or download cannot truncate an existing file at *path*.
+        audio_bytes = self._resolve_bytes("No audio data or URL available to save")
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Decode base64 audio data
-        audio_bytes = base64.b64decode(self.data)
-
         with open(path, "wb") as f:
             f.write(audio_bytes)
 
     def get_bytes(self) -> bytes:
         """Get raw audio bytes."""
-        if not self.data:
-            raise ValueError("No audio data available")
-        return base64.b64decode(self.data)
+        return self._resolve_bytes("No audio data or URL available")
+
+    def _resolve_bytes(self, missing_message: str) -> bytes:
+        if self.data:
+            return base64.b64decode(self.data)
+        elif is_data_url(self.url):
+            # Inline payload - decode locally, never hand a data: URL to requests
+            return decode_data_url(self.url)
+        elif self.url:
+            try:
+                import requests
+
+                response = requests.get(self.url, timeout=120)
+                response.raise_for_status()
+                return response.content
+            except ImportError:
+                raise ImportError(
+                    "URL download requires requests: pip install requests"
+                )
+        else:
+            raise ValueError(missing_message)
 
     def play(self) -> None:
         """Play audio if possible (requires system audio support)."""

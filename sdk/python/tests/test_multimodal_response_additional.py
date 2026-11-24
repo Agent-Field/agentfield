@@ -49,10 +49,10 @@ def test_image_and_file_outputs_support_url_downloads(tmp_path, monkeypatch, fak
 
 
 def test_output_objects_raise_for_missing_data():
-    with pytest.raises(ValueError, match="No audio data available to save"):
+    with pytest.raises(ValueError, match="No audio data or URL available to save"):
         AudioOutput().save("unused.wav")
 
-    with pytest.raises(ValueError, match="No audio data available"):
+    with pytest.raises(ValueError, match="No audio data or URL available"):
         AudioOutput().get_bytes()
 
     with pytest.raises(ValueError, match="No image data or URL available to save"):
@@ -242,3 +242,50 @@ def test_detect_multimodal_response_other_shapes_and_fallbacks():
 
     recursive_result = detect_multimodal_response(RecursiveOnly())
     assert recursive_result.images[0].url == "https://example.com/nested.png"
+
+
+def test_audio_output_url_only_save_and_get_bytes(tmp_path, monkeypatch):
+    calls = []
+
+    class DummyResponse:
+        content = b"remote-audio"
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, timeout=None):
+        calls.append((url, timeout))
+        return DummyResponse()
+
+    monkeypatch.setitem(
+        __import__("sys").modules, "requests", SimpleNamespace(get=fake_get)
+    )
+    audio = AudioOutput(url="https://example.com/a.wav")
+    assert audio.get_bytes() == b"remote-audio"
+    out = tmp_path / "a.wav"
+    audio.save(out)
+    assert out.read_bytes() == b"remote-audio"
+    assert calls and all(c[0] == "https://example.com/a.wav" and c[1] for c in calls)
+
+
+def test_audio_output_data_url_decodes_locally(tmp_path, monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("requests must not be used for data: URLs")
+
+    monkeypatch.setitem(
+        __import__("sys").modules, "requests", SimpleNamespace(get=boom)
+    )
+    payload = base64.b64encode(b"inline-audio").decode()
+    audio = AudioOutput(url=f"data:audio/wav;base64,{payload}")
+    assert audio.get_bytes() == b"inline-audio"
+    out = tmp_path / "a.wav"
+    audio.save(out)
+    assert out.read_bytes() == b"inline-audio"
+
+
+def test_audio_output_failed_save_keeps_existing_file(tmp_path):
+    out = tmp_path / "a.wav"
+    out.write_bytes(b"keep")
+    with pytest.raises(ValueError):
+        AudioOutput(url="data:audio/wav;base64,").save(out)
+    assert out.read_bytes() == b"keep"
