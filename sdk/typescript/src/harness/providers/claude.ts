@@ -61,6 +61,8 @@ export class ClaudeCodeProvider implements HarnessProvider {
 
     const messages: Array<Record<string, unknown>> = [];
     let resultText: string | undefined;
+    let isError = false;
+    let errorMessage: string | undefined;
     let totalCost: number | undefined;
     let numTurns = 0;
     let sessionId = '';
@@ -79,6 +81,15 @@ export class ClaudeCodeProvider implements HarnessProvider {
 
         const msgType = getString(msgObj, 'type') ?? '';
         if (msgType === 'result') {
+          isError = msgObj.is_error === true;
+          errorMessage = undefined;
+          if (isError) {
+            const errors = Array.isArray(msgObj.errors)
+              ? msgObj.errors.filter((error): error is string => typeof error === 'string')
+              : [];
+            errorMessage = errors.join('\n') || getString(msgObj, 'subtype') || 'Claude Code execution failed';
+          }
+
           const resultValue = msgObj.result ?? msgObj.text;
           resultText = typeof resultValue === 'string' ? resultValue : resultValue == null ? '' : String(resultValue);
 
@@ -149,7 +160,8 @@ export class ClaudeCodeProvider implements HarnessProvider {
           cacheCreationTokens,
           model: modelName,
         }),
-        isError: false,
+        isError,
+        errorMessage,
       });
     } catch (error: unknown) {
       return createRawResult({

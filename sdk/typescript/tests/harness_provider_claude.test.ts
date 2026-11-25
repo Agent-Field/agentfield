@@ -18,7 +18,15 @@ describe('ClaudeCodeProvider', () => {
           captured.options = options;
           return (async function* stream() {
             yield { type: 'assistant', content: [{ type: 'text', text: 'intermediate' }] };
-            yield { type: 'result', result: 'final', session_id: 'sess-1', cost_usd: 0.2, num_turns: 4 };
+            yield {
+              type: 'result',
+              subtype: 'success',
+              is_error: false,
+              result: 'final',
+              session_id: 'sess-1',
+              cost_usd: 0.2,
+              num_turns: 4,
+            };
           })();
         },
       }),
@@ -253,6 +261,41 @@ describe('ClaudeCodeProvider', () => {
     expect(raw.metrics.inputTokens).toBeUndefined();
     expect(raw.metrics.outputTokens).toBeUndefined();
     expect(raw.metrics.usage).toBeUndefined();
+  });
+
+  it('returns terminal SDK errors with their session and metrics', async () => {
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: () =>
+          (async function* stream() {
+            yield {
+              type: 'result',
+              subtype: 'error_max_turns',
+              is_error: true,
+              errors: ['Maximum turns reached', 'Run stopped'],
+              session_id: 'sess-4',
+              total_cost_usd: 0.3,
+              num_turns: 2,
+              usage: { input_tokens: 100, output_tokens: 20 },
+            };
+          })(),
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const raw = await new ClaudeCodeProvider().execute('hello', { maxTurns: 2 });
+
+    expect(raw.isError).toBe(true);
+    expect(raw.errorMessage).toBe('Maximum turns reached\nRun stopped');
+    expect(raw.metrics).toMatchObject({
+      sessionId: 'sess-4',
+      totalCostUsd: 0.3,
+      numTurns: 2,
+      inputTokens: 100,
+      outputTokens: 20,
+    });
   });
 
   it('returns error result when SDK stream fails', async () => {
