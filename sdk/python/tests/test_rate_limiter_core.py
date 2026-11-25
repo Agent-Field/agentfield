@@ -10,7 +10,9 @@ from agentfield.rate_limiter import RateLimitError, StatelessRateLimiter
 class DummyHTTPError(Exception):
     status_code = 429
 
-    def __init__(self, message: str = "rate limited", retry_after: float | None = None):
+    def __init__(
+        self, message: str = "rate limited", retry_after: float | str | None = None
+    ):
         super().__init__(message)
         self.retry_after = retry_after
         self.response = type(
@@ -90,6 +92,33 @@ async def test_execute_with_retry_respects_server_wait(monkeypatch, retry_after)
     assert await limiter.execute_with_retry(rate_limited_call) == "ok"
     assert len(attempts) == 2
     assert attempts[1] >= retry_after
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry_after", ["Wed, 01 Jan 2025 00:00:15 GMT", "15"])
+async def test_execute_with_retry_waits_for_server_window(monkeypatch, retry_after):
+    limiter = StatelessRateLimiter(max_retries=2, base_delay=0.5, jitter_factor=0.0)
+    elapsed = 0.0
+    attempts = []
+
+    async def fake_sleep(delay):
+        nonlocal elapsed
+        elapsed += delay
+
+    async def rate_limited_call():
+        attempts.append(elapsed)
+        if elapsed < 15:
+            raise DummyHTTPError(retry_after=retry_after)
+        return "ok"
+
+    monkeypatch.setattr("agentfield.rate_limiter.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(
+        "agentfield.rate_limiter.time.time", lambda: 1735689600 + elapsed
+    )
+
+    assert await limiter.execute_with_retry(rate_limited_call) == "ok"
+    assert attempts == [0, 15]
 
 
 @pytest.mark.unit
