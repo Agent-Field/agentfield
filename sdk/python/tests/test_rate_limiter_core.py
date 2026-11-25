@@ -164,7 +164,10 @@ async def test_execute_with_retry_bounds_server_wait(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-@pytest.mark.parametrize("retry_after", [-1.0, float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "retry_after",
+    [-1.0, float("nan"), float("inf"), "soon", "Wed, 01 Jan 2020 00:00:00 GMT"],
+)
 async def test_execute_with_retry_ignores_invalid_server_wait(monkeypatch, retry_after):
     limiter = StatelessRateLimiter(max_retries=1, base_delay=0.5, jitter_factor=0.0)
     attempts = 0
