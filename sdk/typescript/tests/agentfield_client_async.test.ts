@@ -113,6 +113,14 @@ describe('AgentFieldClient.waitForExecutionResult', () => {
     expect(result).toEqual({ answer: 42 });
   });
 
+  it.each([null, false, 0])('unwraps a succeeded result containing %s', async (value) => {
+    const { base } = await startServer((req, res) => {
+      res.status(200).json({ status: 'succeeded', result: { result: value } });
+    });
+
+    await expect(makeClient(base).waitForExecutionResult('exec-1')).resolves.toBe(value);
+  });
+
   it('throws when the execution fails', async () => {
     const { base } = await startServer((req, res) => {
       res.status(200).json({ execution_id: 'exec-1', status: 'failed', error: 'blew up' });
