@@ -44,7 +44,7 @@ def test_code_origin_plain_and_wrapped_functions() -> None:
 def test_code_origin_returns_none_for_builtin_or_missing_source() -> None:
     assert code_origin(len) is None
     callable_obj = SimpleNamespace(__call__=lambda: None)
-    # Functions without a readable file source (e.g. builtins) return None.
+    # Builtins and non-function callable-like instances have no inspectable source.
     assert code_origin(callable_obj) is None  # type: ignore[arg-type]
 
 
@@ -106,12 +106,14 @@ def test_resolve_reasoner_metadata_handles_non_deletable_pending_and_no_origin()
     None
 ):
     class ReadOnlyPendingCallable:
-        @property
-        def _pending_triggers(self) -> list[SimpleNamespace]:
-            return [SimpleNamespace(source="class-attr")]
-
         def __call__(self) -> None:
             return None
+
+    setattr(
+        ReadOnlyPendingCallable,
+        PENDING_TRIGGERS_ATTR,
+        property(lambda self: [SimpleNamespace(source="class-attr")]),
+    )
 
     instance = ReadOnlyPendingCallable()
     merged, accepts = resolve_reasoner_metadata(instance)
@@ -120,6 +122,10 @@ def test_resolve_reasoner_metadata_handles_non_deletable_pending_and_no_origin()
     assert merged[0].source == "class-attr"
     assert not hasattr(merged[0], "code_origin")
     assert accepts is True
+    assert hasattr(instance, PENDING_TRIGGERS_ATTR)
+    assert isinstance(
+        getattr(ReadOnlyPendingCallable, PENDING_TRIGGERS_ATTR), property
+    )
 
 
 @pytest.mark.parametrize(
