@@ -64,7 +64,9 @@ func resolveExecutionProvider(name, binPath string) string {
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(os.Getenv(ProviderEnvVar)) == "" &&
 		(binPath != "" || strings.TrimSpace(os.Getenv("AFORGE_BIN")) != "") {
 		legacyPinOnce.Do(func() {
-			log.Print(`INFO Legacy aforge pin in effect; unset it or select provider "codeaf" to use CodeAF`)
+			log.Print(`INFO Legacy aforge pin in effect: a harness binary is set but no provider is. ` +
+				`Select provider "codeaf" to run CodeAF with the same binary (live watching and steering included), ` +
+				`or provider "aforge" to keep the legacy adapter explicitly`)
 		})
 		return ProviderAforge
 	}
