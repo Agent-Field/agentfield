@@ -298,6 +298,25 @@ describe('ClaudeCodeProvider', () => {
     });
   });
 
+  it('treats an error subtype as a failure when is_error is absent', async () => {
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: () =>
+          (async function* stream() {
+            yield { type: 'result', subtype: 'error_during_execution' };
+          })(),
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const raw = await new ClaudeCodeProvider().execute('hello', {});
+
+    expect(raw.isError).toBe(true);
+    expect(raw.errorMessage).toBe('error_during_execution');
+  });
+
   it('returns error result when SDK stream fails', async () => {
     vi.doMock(
       '@anthropic-ai/claude-agent-sdk',
