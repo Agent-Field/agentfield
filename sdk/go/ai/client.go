@@ -64,6 +64,7 @@ func NewClient(config *Config, opts ...ClientOption) (*Client, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+	config = config.withDefaults()
 
 	client := &Client{
 		config: config,

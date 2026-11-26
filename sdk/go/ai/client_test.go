@@ -64,7 +64,9 @@ func TestNewClient(t *testing.T) {
 				if tt.config == nil {
 					assert.NotNil(t, client.config)
 				} else {
-					assert.Equal(t, tt.config, client.config)
+					assert.Equal(t, tt.config.APIKey, client.config.APIKey)
+					assert.Equal(t, tt.config.BaseURL, client.config.BaseURL)
+					assert.Equal(t, tt.config.Model, client.config.Model)
 				}
 			}
 		})
