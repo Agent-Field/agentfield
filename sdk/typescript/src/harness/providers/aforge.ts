@@ -102,7 +102,7 @@ function innerTimeout(outer: number): number {
   return outer > LANDING_WINDOW_SECONDS ? outer - LANDING_WINDOW_SECONDS : 1;
 }
 
-function taskInput(prompt: string, systemPrompt: unknown): string {
+export function taskInput(prompt: string, systemPrompt: unknown): string {
   return typeof systemPrompt === 'string' && systemPrompt.trim()
     ? `${systemPrompt.trim()}\n\nTask:\n${prompt}`
     : prompt;

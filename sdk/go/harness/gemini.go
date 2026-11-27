@@ -23,6 +23,9 @@ func NewGeminiProvider(binPath string) *GeminiProvider {
 }
 
 func (p *GeminiProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
+	// gemini gets no system-prompt flag here, so prepend it to the task.
+	prompt = aforgeTaskInput(prompt, options.SystemPrompt)
+
 	cmd := []string{p.BinPath}
 
 	if options.PermissionMode == "auto" {

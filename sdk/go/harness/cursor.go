@@ -29,6 +29,9 @@ func NewCursorProvider(binPath string) *CursorProvider {
 }
 
 func (p *CursorProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
+	// cursor gets no system-prompt flag here, so prepend it to the task.
+	prompt = aforgeTaskInput(prompt, options.SystemPrompt)
+
 	// -p runs headless; --force/--trust bypass interactive confirmations so the
 	// agent can act non-interactively; --output-format json yields one JSON
 	// object on completion instead of streamed text.

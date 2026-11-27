@@ -13,6 +13,7 @@ from agentfield.harness._cli import (
 )
 from agentfield.harness._availability import ensure_cli_available, provider_unavailable
 from agentfield.harness._result import FailureType, Metrics, RawResult
+from agentfield.harness.providers.aforge import _task_input
 
 
 class GeminiProvider:
@@ -23,6 +24,8 @@ class GeminiProvider:
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
         ensure_cli_available("gemini", self._bin)
+        # gemini gets no system-prompt flag here, so prepend it to the task.
+        prompt = _task_input(prompt, options.get("system_prompt"))
         cmd = [self._bin]
 
         # permission_mode → approval mode (agentfield#687). NOTE: gemini's

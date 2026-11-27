@@ -79,6 +79,9 @@ func withoutFlagValue(cmd []string, flag string) []string {
 }
 
 func (p *CodexProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
+	// codex gets no system-prompt flag here, so prepend it to the task.
+	prompt = aforgeTaskInput(prompt, options.SystemPrompt)
+
 	// --skip-git-repo-check lets the harness run in arbitrary working dirs
 	// (temp dirs, non-repo project roots); codex exec otherwise refuses to
 	// start outside a git repo.
