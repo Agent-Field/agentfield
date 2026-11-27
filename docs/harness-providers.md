@@ -177,9 +177,31 @@ separately available executable or wrapper, as listed above.
 
 With no explicit provider (including no `AGENTFIELD_HARNESS_PROVIDER`), an
 existing `AFORGE_BIN` or SDK legacy binary option keeps the legacy aforge adapter.
-Select `provider="codeaf"` explicitly to use CodeAF despite that pin. Doctor checks
+Select `provider="codeaf"` explicitly to use CodeAF despite that pin; the binary
+override is kept and the run is still watched and steerable. Doctor checks
 for unpinned `aforge` look for CodeAF without downloading, report its version,
 and fall back to checking legacy aforge; a pinned alias checks only that pin.
+
+#### Upgrading a node that sets a harness binary
+
+Nodes that set a binary path without a provider (for example a Go
+`HarnessConfig{BinPath: ...}` filled from a node-specific variable) stay on the
+legacy aforge adapter after an SDK upgrade, so they run `exec` with no live
+events or steering. To move such a node to CodeAF and keep the custom binary,
+name the provider next to the path:
+
+```go
+agent.Config{
+    HarnessConfig: &agent.HarnessConfig{
+        Provider: "codeaf",            // or AGENTFIELD_HARNESS_PROVIDER=codeaf
+        BinPath:  os.Getenv("MY_NODE_HARNESS_BIN"),
+    },
+}
+```
+
+The path must point to a CodeAF binary. To keep the legacy adapter on purpose
+during an upgrade, set `Provider: "aforge"` with the legacy path; that pin is
+explicit and is not affected by later default changes.
 
 ### CodeAF adapter contract
 
