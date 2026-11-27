@@ -558,7 +558,8 @@ export class AgentFieldClient {
 
         if (isTerminalExecutionStatus(status)) {
           if (status === 'succeeded') {
-            return (snapshot.result?.result as T) ?? (snapshot.result as T);
+            const wrappedResult = snapshot.result?.result;
+            return (wrappedResult === undefined ? snapshot.result : wrappedResult) as T;
           }
           const detail = snapshot.error || snapshot.statusReason || status;
           const failure: ExecutionError = Object.assign(
