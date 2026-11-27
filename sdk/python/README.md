@@ -194,6 +194,12 @@ for mount layout, `call_local`, error behavior, and limitations.
 
 See the [environment-variable reference](https://github.com/Agent-Field/agentfield/blob/main/docs/ENVIRONMENT_VARIABLES.md) and [agent-node logs API](https://github.com/Agent-Field/agentfield/blob/main/docs/api/AGENT_NODE_LOGS.md) for details.
 
+## Graceful shutdown
+
+On SIGTERM or a graceful `POST /shutdown`, the agent stops heartbeats, notifies the control plane that it is stopping, and drains in-progress reasoners. `AGENTFIELD_SHUTDOWN_TIMEOUT` sets the drain budget as bare seconds (`30`) or a duration (`30s`, `5m`) and defaults to 30 seconds; a reasoner still running when it expires is cancelled. `app.serve(timeout_graceful_shutdown=N)` sets the same budget unless the variable is set; when both are set, the `serve()` argument controls the direct-HTTP drain and the variable controls dispatched reasoners.
+
+See the [environment-variable reference](https://github.com/Agent-Field/agentfield/blob/main/docs/ENVIRONMENT_VARIABLES.md#python-sdk-agents) for details.
+
 ## Testing
 
 ```bash
@@ -209,11 +215,11 @@ To run coverage locally:
 The wrapper sets a private `PYTEST_DEBUG_TEMPROOT` automatically so local runs
 and CI do not rely on pytest's predictable default temp directory layout.
 
-## License
-
-Distributed under the Apache 2.0 License. See the project root `LICENSE` for details.
-
 ## Realtime session turn detection
 
 See [session turn detection and interruption](../../docs/session-turn-detection.md)
 for VAD configuration, defaults, validation, and the WebRTC connection flow.
+
+## License
+
+Distributed under the Apache 2.0 License. See the project root `LICENSE` for details.
