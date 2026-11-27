@@ -4,6 +4,8 @@ import math
 import os
 import random
 import time
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Optional
 from agentfield.logger import log_debug
 
@@ -118,7 +120,15 @@ class StatelessRateLimiter:
                 try:
                     return float(retry_after)
                 except ValueError:
-                    pass
+                    try:
+                        retry_at = parsedate_to_datetime(retry_after)
+                    except (TypeError, ValueError):
+                        pass
+                    else:
+                        # Obsolete HTTP dates may omit the timezone, but use GMT.
+                        if retry_at.tzinfo is None:
+                            retry_at = retry_at.replace(tzinfo=timezone.utc)
+                        return retry_at.timestamp() - time.time()
 
         # Check for retry_after in error attributes
         if hasattr(error, "retry_after"):
