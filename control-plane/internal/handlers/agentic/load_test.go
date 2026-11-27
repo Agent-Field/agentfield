@@ -1,16 +1,41 @@
 package agentic
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// fakeLoadStore is a minimal LoadStore that records calls and returns canned data.
+type fakeLoadStore struct {
+	agents       []*types.AgentNode
+	agentsErr    error
+	summaries    []*storage.RunSummaryAggregation
+	summariesErr error
+
+	listAgentsCalls int
+	lastFilter      types.ExecutionFilter
+}
+
+func (f *fakeLoadStore) ListAgents(_ context.Context, _ types.AgentFilters) ([]*types.AgentNode, error) {
+	f.listAgentsCalls++
+	return f.agents, f.agentsErr
+}
+
+func (f *fakeLoadStore) QueryRunSummaries(_ context.Context, filter types.ExecutionFilter) ([]*storage.RunSummaryAggregation, int, error) {
+	f.lastFilter = filter
+	return f.summaries, len(f.summaries), f.summariesErr
+}
 
 func TestRecommendedMaxConcurrent(t *testing.T) {
 	cases := []struct {
@@ -194,4 +219,87 @@ func TestMetaLoadSurvivesCLIMetaMerge(t *testing.T) {
 	assert.Equal(t, float64(3), load["active_executions"])
 	assert.Equal(t, float64(4), load["cpu_cores"])
 	assert.Equal(t, float64(2), load["recommended_max_concurrent"])
+}
+
+func TestActiveExecutionCount(t *testing.T) {
+	cases := []struct {
+		name   string
+		counts map[string]int
+		want   int
+	}{
+		{name: "nil map", counts: nil, want: 0},
+		{name: "empty map", counts: map[string]int{}, want: 0},
+		{name: "only terminal statuses", counts: map[string]int{"succeeded": 5, "failed": 2, "cancelled": 1, "timeout": 3}, want: 0},
+		{name: "only non-terminal statuses", counts: map[string]int{"running": 2, "queued": 3}, want: 5},
+		{name: "mixed statuses count only non-terminal", counts: map[string]int{"running": 4, "succeeded": 10, "failed": 1}, want: 4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, activeExecutionCount(tc.counts))
+		})
+	}
+}
+
+func TestComputeStorageLoad_CountsAgentsAndActiveExecutions(t *testing.T) {
+	store := &fakeLoadStore{
+		agents: []*types.AgentNode{
+			{ID: "a", HealthStatus: types.HealthStatusActive},
+			{ID: "b", HealthStatus: types.HealthStatusActive},
+			{ID: "c", HealthStatus: types.HealthStatusInactive},
+			nil, // a nil entry must not panic and is not counted as running
+		},
+		summaries: []*storage.RunSummaryAggregation{
+			{RunID: "r1", StatusCounts: map[string]int{"running": 2, "succeeded": 7}},
+			nil, // a nil summary is skipped
+			{RunID: "r2", StatusCounts: map[string]int{"queued": 1, "failed": 4}},
+		},
+	}
+
+	info, err := computeStorageLoad(store)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+
+	assert.Equal(t, 2, info.RunningAgents, "only health-active agents are running")
+	assert.Equal(t, 4, info.TotalAgents, "total is every registered entry")
+	assert.Equal(t, 3, info.ActiveExecutions, "non-terminal executions summed across runs")
+	assert.Equal(t, runtime.NumCPU(), info.CPUCores)
+	assert.Equal(t, RecommendedMaxConcurrent(runtime.NumCPU()), info.RecommendedMaxConcurrent)
+	assert.True(t, store.lastFilter.ActiveOnly, "active executions must be queried with ActiveOnly")
+}
+
+func TestComputeStorageLoad_ListAgentsErrorFailsSnapshot(t *testing.T) {
+	store := &fakeLoadStore{agentsErr: errors.New("agents unavailable")}
+
+	info, err := computeStorageLoad(store)
+	require.Error(t, err)
+	assert.Nil(t, info)
+}
+
+func TestComputeStorageLoad_RunSummariesErrorLeavesActiveAtZero(t *testing.T) {
+	store := &fakeLoadStore{
+		agents:       []*types.AgentNode{{ID: "a", HealthStatus: types.HealthStatusActive}},
+		summariesErr: errors.New("summaries unavailable"),
+	}
+
+	info, err := computeStorageLoad(store)
+	require.NoError(t, err, "active_executions is best-effort and must not fail the snapshot")
+	require.NotNil(t, info)
+	assert.Equal(t, 1, info.RunningAgents)
+	assert.Equal(t, 1, info.TotalAgents)
+	assert.Equal(t, 0, info.ActiveExecutions)
+}
+
+func TestNewStorageLoadProvider_ServesCachedSnapshotWithinTTL(t *testing.T) {
+	store := &fakeLoadStore{
+		agents: []*types.AgentNode{{ID: "a", HealthStatus: types.HealthStatusActive}},
+	}
+	provider := NewStorageLoadProvider(store, time.Minute)
+
+	first := provider()
+	second := provider()
+
+	require.NotNil(t, first)
+	assert.Equal(t, 1, first.RunningAgents)
+	assert.Same(t, first, second, "a second call within the TTL returns the cached snapshot")
+	assert.Equal(t, 1, store.listAgentsCalls, "storage is queried once per TTL window")
 }
