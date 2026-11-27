@@ -2912,9 +2912,10 @@ class OpenRouterProvider(MediaProvider):
                     while b"\n" in buf:
                         raw_line, buf = buf.split(b"\n", 1)
                         decoded = raw_line.decode("utf-8", errors="replace").strip()
-                        if not decoded.startswith("data: "):
+                        # The space after ``data:`` is optional in SSE.
+                        if not decoded.startswith("data:"):
                             continue
-                        data_str = decoded[len("data: ") :]
+                        data_str = decoded[len("data:") :].lstrip()
                         if data_str == "[DONE]":
                             done = True
                             break

@@ -392,9 +392,10 @@ class TestOpenRouterVideoE2E:
 
 
 class TestOpenRouterAudioE2E:
+    @pytest.mark.parametrize("prefix", [b"data: ", b"data:"])
     @pytest.mark.asyncio
-    async def test_audio_sse_stream_to_audio_output(self):
-        """Mock SSE stream -> AudioOutput with transcript."""
+    async def test_audio_sse_stream_to_audio_output(self, prefix):
+        """Mock SSE stream -> AudioOutput; the space after ``data:`` is optional."""
         provider = OpenRouterProvider(api_key="test-key")
 
         # Simulate SSE lines
@@ -404,6 +405,7 @@ class TestOpenRouterAudioE2E:
             b'data: {"choices":[{"delta":{"audio":{"data":"BBBB","transcript":"Hi"}}}]}\n',
             b"data: [DONE]\n",
         ]
+        sse_lines = [line.replace(b"data: ", prefix, 1) for line in sse_lines]
 
         mock_resp = AsyncMock()
         mock_resp.status = 200
