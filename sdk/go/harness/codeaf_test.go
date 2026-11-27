@@ -30,8 +30,12 @@ func isolateCodeAF(t *testing.T) {
 	}
 	t.Setenv("AGENTFIELD_SKIP_CODEAF", "1")
 	resetCodeAFResolution()
+	resetCodeAFLiveProbes()
 	codeAFAliasOnce, codeAFLegacyOnce, codeAFCommandOnce = sync.Once{}, sync.Once{}, sync.Once{}
-	t.Cleanup(resetCodeAFResolution)
+	t.Cleanup(func() {
+		resetCodeAFResolution()
+		resetCodeAFLiveProbes()
+	})
 }
 
 func resetCodeAFResolution() {
@@ -55,6 +59,11 @@ func stubCodeAF() *CodeAFProvider {
 	p := NewCodeAFProvider("/opt/codeaf")
 	p.resolveBinary = func(context.Context, string) (codeAFBinary, error) {
 		return codeAFBinary{path: p.BinPath}, nil
+	}
+	// The stubbed binary is a current build: its `chat --help` lists every
+	// flag a watched run passes. Tests of the probe replace this.
+	p.probeCLI = func(context.Context, []string, map[string]string, string, int, int, []byte) (*CLIResult, error) {
+		return &CLIResult{Stdout: "flags:\n  --events string\n  --json\n  --session string\n  --steer string\n"}, nil
 	}
 	return p
 }
