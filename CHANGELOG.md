@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.147-rc.12] - 2026-11-27
+
+
+### Fixed
+
+- Fix(sdk/go): probe codeaf for watched-run support, fall back to exec, and pin CodeAF v0.8.4 (#1254)
+
+* fix(sdk/go): probe codeaf for watched-run support and fall back to exec on older builds
+
+A watched run starts `codeaf chat --once ... --json --events --steer
+--session`. codeaf v0.8.2 and v0.8.3 refuse that command line ("codeaf chat
+has no --json flag", exit 1, nothing on stdout), and the only fallback fired
+on a different message, so every watched run died at once.
+
+Before choosing the watched path the SDK now runs `<bin> chat --help` (10s
+cap) and requires all four flags to be listed. The answer is cached per
+binary path, modification time and size, so it costs one probe per process
+per binary. A build without them logs one WARNING and runs the unwatched
+`exec` command, exactly as a non-watched run does. A failed probe runs that
+one run unwatched and is not remembered.
+
+The post-run fallback also recognises "has no --(json|events|steer|session)
+flag" and "flag provided but not defined: -(json|events|steer|session|once)",
+and re-runs only when the run exited non-zero with no envelope on stdout.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(sdk/go): pin CodeAF v0.8.4, the first release whose chat --once takes the watched-run flags
+
+v0.8.2 refused `codeaf chat --once ... --json --events --steer --session`
+("codeaf chat has no --json flag"), so every watched run the harness started
+on the managed binary exited at once. v0.8.4 accepts them. The six hashes are
+the release's own checksums.txt, each checked against the downloaded asset.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (7813f84)
+
 ## [0.1.147-rc.11] - 2026-11-23
 
 
