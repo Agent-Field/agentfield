@@ -46,14 +46,14 @@ class AudioOutput(BaseModel):
         elif self.url:
             try:
                 import requests
-
-                response = requests.get(self.url, timeout=120)
-                response.raise_for_status()
-                return response.content
             except ImportError:
                 raise ImportError(
                     "URL download requires requests: pip install requests"
                 )
+
+            response = requests.get(self.url, timeout=120)
+            response.raise_for_status()
+            return response.content
         else:
             raise ValueError(missing_message)
 
