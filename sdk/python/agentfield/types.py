@@ -486,6 +486,13 @@ class AIConfig(BaseModel):
             "set https://api.minimaxi.com/v1 for the China endpoint."
         ),
     )
+    wavespeed_api_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "WaveSpeedAI API key. If not set, uses WAVESPEED_API_KEY environment "
+            "variable."
+        ),
+    )
     video_model: str = Field(
         default="fal-ai/minimax-video/image-to-video",
         description="Default model for video generation.",

@@ -42,6 +42,7 @@ from .media_providers import (
     LiteLLMProvider,
     MiniMaxProvider,
     OpenRouterProvider,
+    WaveSpeedProvider,
     get_provider,
     register_provider,
 )
@@ -143,6 +144,7 @@ __all__ = [
     "LiteLLMProvider",
     "MiniMaxProvider",
     "OpenRouterProvider",
+    "WaveSpeedProvider",
     "get_provider",
     "register_provider",
     # DID authentication

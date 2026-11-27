@@ -6,6 +6,7 @@ Provides a unified interface for different media generation backends:
 - MiniMax (Media generation)
 - OpenRouter (via LiteLLM)
 - OpenAI DALL-E (via LiteLLM)
+- WaveSpeedAI (Image, TTS, Video models)
 - Future: ElevenLabs, Replicate, etc.
 
 Each provider implements the same interface, making it easy to swap
@@ -17,7 +18,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import quote, urlparse
 
 from agentfield import openrouter_retry
@@ -3280,12 +3281,425 @@ class OpenRouterProvider(MediaProvider):
         )
 
 
+WAVESPEED_BASE_URL = "https://api.wavespeed.ai"
+WAVESPEED_DEFAULT_IMAGE_MODEL = "bytedance/seedream-v5.5"
+WAVESPEED_DEFAULT_VIDEO_MODEL = "alibaba/wan-3.0/text-to-video"
+WAVESPEED_DEFAULT_IMAGE_TO_VIDEO_MODEL = "alibaba/wan-3.0/image-to-video"
+WAVESPEED_DEFAULT_AUDIO_MODEL = "wavespeed-ai/qwen3-tts/text-to-speech"
+
+
+class WaveSpeedProvider(MediaProvider):
+    """
+    WaveSpeedAI provider for image, audio, and video generation.
+
+    Every model is called through the same asynchronous REST API: the model
+    input is submitted to ``POST /api/v3/{model}`` and the prediction is
+    polled at ``GET /api/v3/predictions/{id}/result`` until it completes.
+    Any model id from the WaveSpeedAI catalogue can be passed as ``model``;
+    model-specific inputs (``aspect_ratio``, ``resolution``, ``seed``, ...)
+    are passed through as keyword arguments unchanged.
+
+    Through ``AgentAI`` the models are routed with the ``wavespeed/`` prefix,
+    e.g. ``model="wavespeed/bytedance/seedream-v5.5"``.
+
+    Defaults:
+    - Image: ``bytedance/seedream-v5.5``
+    - Video: ``alibaba/wan-3.0/text-to-video`` (``alibaba/wan-3.0/image-to-video``
+      when ``image_url`` is given)
+    - Audio: ``wavespeed-ai/qwen3-tts/text-to-speech``
+
+    Requires WAVESPEED_API_KEY environment variable or explicit api_key.
+
+    Example:
+        provider = WaveSpeedProvider()
+        result = await provider.generate_image(
+            "A lighthouse on a cliff at sunrise",
+            aspect_ratio="16:9",
+        )
+        result.images[0].save("lighthouse.png")
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        poll_interval: float = 1.0,
+        timeout: float = 600.0,
+    ):
+        """
+        Initialize WaveSpeedAI provider.
+
+        Args:
+            api_key: WaveSpeedAI API key. If not provided, uses
+                WAVESPEED_API_KEY env var.
+            base_url: API base URL (defaults to https://api.wavespeed.ai).
+            poll_interval: Seconds between result polls.
+            timeout: Maximum seconds to wait for a prediction to finish.
+        """
+        self._api_key = api_key
+        self._base_url = (base_url or WAVESPEED_BASE_URL).rstrip("/")
+        self._poll_interval = poll_interval
+        self._timeout = timeout
+
+    @property
+    def name(self) -> str:
+        return "wavespeed"
+
+    @property
+    def supported_modalities(self) -> List[str]:
+        return ["image", "audio", "video"]
+
+    @staticmethod
+    def _strip_prefix(model: str) -> str:
+        return model[len("wavespeed/") :] if model.startswith("wavespeed/") else model
+
+    def _require_api_key(self) -> str:
+        import os
+
+        api_key = self._api_key or os.environ.get("WAVESPEED_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "WaveSpeedAI API key required. Set WAVESPEED_API_KEY or pass "
+                "api_key to WaveSpeedProvider."
+            )
+        return api_key
+
+    @staticmethod
+    def _unwrap(payload: Any, operation: str) -> Dict[str, Any]:
+        """Return the ``data`` object of an API envelope or raise on errors."""
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"WaveSpeedAI {operation} returned an invalid response")
+        code = payload.get("code")
+        if code is not None and code != 200:
+            message = payload.get("message") or "unknown error"
+            raise RuntimeError(f"WaveSpeedAI {operation} failed ({code}): {message}")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError(f"WaveSpeedAI {operation} returned an invalid response")
+        return data
+
+    @staticmethod
+    def _retry_after_seconds(value: Optional[str]) -> Optional[float]:
+        """Parse a ``Retry-After`` header (seconds or HTTP date)."""
+        if not value:
+            return None
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            pass
+        try:
+            from datetime import datetime, timezone
+            from email.utils import parsedate_to_datetime
+
+            retry_at = parsedate_to_datetime(value)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+    async def _poll_once(
+        self, session: Any, result_url: str, headers: Dict[str, str], prediction_id: str
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
+        """Fetch the prediction result once.
+
+        Returns ``(data, None)`` on success, or ``(None, retry_after)`` when
+        the poll should be retried (5xx, 429, 408).
+        """
+        async with session.get(result_url, headers=headers) as response:
+            if response.status >= 500 or response.status in (408, 429):
+                return None, self._retry_after_seconds(
+                    response.headers.get("Retry-After")
+                )
+            if response.status >= 400:
+                detail = await response.text()
+                raise RuntimeError(
+                    f"WaveSpeedAI result for {prediction_id} failed "
+                    f"({response.status}): {detail[:500]}"
+                )
+            return self._unwrap(await response.json(), "result"), None
+
+    async def _run(self, model: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Submit a prediction and poll until it completes.
+
+        The submit request is never retried because each accepted submission
+        starts a new, billed prediction. While polling, network errors, 5xx,
+        429 and 408 responses are retried (honouring ``Retry-After``) until
+        ``timeout``; each sleep and each poll request is bounded by the time
+        remaining.
+        """
+        import asyncio
+        import time
+
+        import aiohttp
+
+        send_model = self._strip_prefix(model).strip().strip("/")
+        if not send_model:
+            raise ValueError("WaveSpeedAI generation requires a model")
+        headers = {
+            "Authorization": f"Bearer {self._require_api_key()}",
+            "Content-Type": "application/json",
+        }
+        timeout = aiohttp.ClientTimeout(total=None, connect=30.0, sock_read=60.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{self._base_url}/api/v3/{send_model}",
+                headers=headers,
+                json=payload,
+            ) as response:
+                if response.status >= 400:
+                    detail = await response.text()
+                    raise RuntimeError(
+                        f"WaveSpeedAI submit failed ({response.status}): {detail[:500]}"
+                    )
+                data = self._unwrap(await response.json(), "submit")
+
+            prediction_id = data.get("id")
+            if not prediction_id:
+                raise RuntimeError("WaveSpeedAI submit returned no prediction id")
+            result_url = (
+                f"{self._base_url}/api/v3/predictions/"
+                f"{quote(str(prediction_id), safe='')}/result"
+            )
+            deadline = time.monotonic() + self._timeout
+            delay = self._poll_interval
+            while True:
+                status = data.get("status")
+                if status == "completed":
+                    return data
+                if status == "failed":
+                    error = data.get("error") or "unknown error"
+                    raise RuntimeError(
+                        f"WaveSpeedAI prediction {prediction_id} failed: {error}"
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"WaveSpeedAI prediction {prediction_id} did not finish "
+                        f"within {self._timeout} seconds"
+                    )
+                await asyncio.sleep(min(delay, remaining))
+                delay = self._poll_interval
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    continue
+                try:
+                    polled, retry_after = await asyncio.wait_for(
+                        self._poll_once(
+                            session, result_url, headers, str(prediction_id)
+                        ),
+                        timeout=remaining,
+                    )
+                except (aiohttp.ClientError, asyncio.TimeoutError):
+                    continue
+                if polled is None:
+                    if retry_after is not None:
+                        delay = retry_after
+                    continue
+                data = polled
+
+    async def _download(self, url: str) -> bytes:
+        """Download an output file within the provider timeout."""
+        import aiohttp
+
+        _assert_safe_download_url(url)
+        timeout = aiohttp.ClientTimeout(total=self._timeout, connect=30.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"Failed to download WaveSpeedAI output from {url}: "
+                        f"HTTP {response.status}"
+                    )
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > MAX_AUDIO_B64_BYTES:
+                    raise RuntimeError(
+                        f"WaveSpeedAI output too large ({int(content_length)} bytes)"
+                    )
+                content = await response.read()
+        if len(content) > MAX_AUDIO_B64_BYTES:
+            raise RuntimeError(
+                f"WaveSpeedAI output exceeded {MAX_AUDIO_B64_BYTES} byte limit"
+            )
+        return content
+
+    @staticmethod
+    def _output_urls(data: Dict[str, Any]) -> List[str]:
+        outputs = data.get("outputs") or []
+        urls = [value for value in outputs if isinstance(value, str) and value]
+        if not urls:
+            raise RuntimeError("WaveSpeedAI prediction returned no outputs")
+        return urls
+
+    async def generate_image(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        **kwargs,
+    ) -> MultimodalResponse:
+        """
+        Generate images with a WaveSpeedAI model.
+
+        Args:
+            prompt: Text prompt for image generation
+            model: WaveSpeedAI model id (defaults to "bytedance/seedream-v5.5")
+            size: Accepted for interface compatibility and not sent; pass the
+                model's own size fields (e.g. ``aspect_ratio``,
+                ``resolution``) as keyword arguments instead
+            quality: Accepted for interface compatibility and not sent
+            **kwargs: Model input fields, sent unchanged. The interface-only
+                ``response_format`` and ``style`` arguments are not sent;
+                outputs are always returned as URLs, so
+                ``response_format="b64_json"`` is rejected
+
+        Returns:
+            MultimodalResponse with generated images
+        """
+        response_format = kwargs.pop("response_format", None)
+        kwargs.pop("style", None)
+        if response_format not in (None, "url"):
+            raise ValueError(
+                "WaveSpeedAI returns image outputs as URLs only; "
+                f"response_format={response_format!r} is not supported. "
+                "Use ImageOutput.save() or get_bytes() to download the image."
+            )
+        payload: Dict[str, Any] = {"prompt": prompt, **kwargs}
+        data = await self._run(model or WAVESPEED_DEFAULT_IMAGE_MODEL, payload)
+        images = [ImageOutput(url=url) for url in self._output_urls(data)]
+        return MultimodalResponse(
+            text=prompt,
+            audio=None,
+            images=images,
+            files=[],
+            raw_response=data,
+        )
+
+    async def generate_audio(
+        self,
+        text: str,
+        model: Optional[str] = None,
+        voice: str = "alloy",
+        format: str = "wav",
+        *,
+        system: Optional[str] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """
+        Generate speech with a WaveSpeedAI text-to-speech model.
+
+        Args:
+            text: Text to convert to speech
+            model: WaveSpeedAI model id (defaults to
+                "wavespeed-ai/qwen3-tts/text-to-speech")
+            voice: Voice name supported by the model. The SDK-wide default
+                "alloy" is not sent, so the model's own default voice is used.
+            format: Fallback label for the output format when it cannot be
+                inferred from the output URL; the model chooses the container
+            system: Not used by WaveSpeedAI models
+            **kwargs: Model input fields (e.g. ``language``), sent unchanged
+
+        Returns:
+            MultimodalResponse with generated audio. The output file is
+            downloaded, so ``audio.data`` is set alongside ``audio.url``.
+        """
+        send_model = model or WAVESPEED_DEFAULT_AUDIO_MODEL
+        payload: Dict[str, Any] = {"text": text}
+        if voice and voice != "alloy":
+            payload["voice"] = voice
+        speed = kwargs.pop("speed", None)
+        if speed not in (None, 1.0):
+            payload["speed"] = speed
+        if self._strip_prefix(send_model) == WAVESPEED_DEFAULT_AUDIO_MODEL:
+            # This model requires language and voice; use its documented defaults.
+            payload.setdefault("language", "auto")
+            payload.setdefault("voice", "Vivian")
+        payload.update(kwargs)
+
+        data = await self._run(send_model, payload)
+        url = self._output_urls(data)[0]
+        suffix = Path(urlparse(url).path).suffix.lstrip(".").lower()
+        import base64
+
+        audio_data = base64.b64encode(await self._download(url)).decode("ascii")
+        return MultimodalResponse(
+            text=text,
+            audio=AudioOutput(url=url, data=audio_data, format=suffix or format),
+            images=[],
+            files=[],
+            raw_response=data,
+        )
+
+    async def generate_video(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        image_url: Optional[str] = None,
+        duration: Optional[float] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """
+        Generate video with a WaveSpeedAI model.
+
+        Args:
+            prompt: Text description for the video
+            model: WaveSpeedAI model id. Defaults to
+                "alibaba/wan-3.0/text-to-video", or
+                "alibaba/wan-3.0/image-to-video" when ``image_url`` is given
+            image_url: Input image URL, sent as the model's ``image`` field
+            duration: Video duration in seconds (model-dependent)
+            **kwargs: Model input fields (e.g. ``aspect_ratio``,
+                ``resolution``, ``seed``), sent unchanged
+
+        Returns:
+            MultimodalResponse with video in videos and files lists
+        """
+        if model is None:
+            model = (
+                WAVESPEED_DEFAULT_IMAGE_TO_VIDEO_MODEL
+                if image_url
+                else WAVESPEED_DEFAULT_VIDEO_MODEL
+            )
+        payload: Dict[str, Any] = {"prompt": prompt}
+        if image_url:
+            payload["image"] = image_url
+        if duration is not None:
+            payload["duration"] = (
+                int(duration) if float(duration).is_integer() else duration
+            )
+        payload.update(kwargs)
+
+        data = await self._run(model, payload)
+        files: List[FileOutput] = []
+        videos: List[VideoOutput] = []
+        for index, url in enumerate(self._output_urls(data)):
+            filename = Path(urlparse(url).path).name or f"generated_video_{index}.mp4"
+            files.append(
+                FileOutput(url=url, data=None, mime_type="video/mp4", filename=filename)
+            )
+            videos.append(
+                VideoOutput(
+                    url=url, data=None, mime_type="video/mp4", filename=filename
+                )
+            )
+        return MultimodalResponse(
+            text=prompt,
+            audio=None,
+            images=[],
+            files=files,
+            videos=videos,
+            raw_response=data,
+        )
+
+
 # Provider registry for easy access
 _PROVIDERS: Dict[str, type] = {
     "fal": FalProvider,
     "litellm": LiteLLMProvider,
     "minimax": MiniMaxProvider,
     "openrouter": OpenRouterProvider,
+    "wavespeed": WaveSpeedProvider,
 }
 
 
@@ -3294,7 +3708,7 @@ def get_provider(name: str, **kwargs) -> MediaProvider:
     Get a media provider instance by name.
 
     Args:
-        name: Provider name ('fal', 'litellm', 'minimax', 'openrouter')
+        name: Provider name ('fal', 'litellm', 'minimax', 'openrouter', 'wavespeed')
         **kwargs: Provider-specific initialization arguments
 
     Returns:
