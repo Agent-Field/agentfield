@@ -1,5 +1,6 @@
 import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
+import { taskInput } from './aforge.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
 import { markProviderCommand, runCli, parseJsonl, extractFinalText } from '../cli.js';
@@ -14,6 +15,8 @@ export class CodexProvider implements HarnessProvider {
   }
 
   async execute(prompt: string, options: Record<string, unknown>): Promise<RawResult> {
+    // codex gets no system-prompt flag here, so prepend it to the task.
+    const input = taskInput(prompt, options.systemPrompt ?? options.system_prompt);
     const cmd = [this.bin, 'exec', '--json'];
     const root = resolveRoot(options);
 
@@ -36,7 +39,7 @@ export class CodexProvider implements HarnessProvider {
       cmd.push('-c', `model_reasoning_effort=${variantValue}`);
     }
 
-    cmd.push(prompt);
+    cmd.push(input);
 
     const startApi = Date.now();
     try {

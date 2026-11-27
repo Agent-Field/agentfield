@@ -16,6 +16,7 @@ from agentfield.harness._cli import (
 )
 from agentfield.harness._availability import ensure_cli_available, provider_unavailable
 from agentfield.harness._result import FailureType, Metrics, RawResult
+from agentfield.harness.providers.aforge import _task_input
 
 
 class CodexProvider:
@@ -26,6 +27,8 @@ class CodexProvider:
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
         ensure_cli_available("codex", self._bin)
+        # codex gets no system-prompt flag here, so prepend it to the task.
+        prompt = _task_input(prompt, options.get("system_prompt"))
         # --skip-git-repo-check lets the harness run in arbitrary working dirs
         # (temp dirs, non-repo project roots); codex exec otherwise refuses to
         # start outside a git repo.

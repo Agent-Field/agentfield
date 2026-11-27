@@ -1,5 +1,6 @@
 import type { HarnessProvider } from './base.js';
 import { resolveRoot } from './base.js';
+import { taskInput } from './aforge.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
 import { markProviderCommand, runCli } from '../cli.js';
@@ -14,6 +15,8 @@ export class GeminiProvider implements HarnessProvider {
   }
 
   async execute(prompt: string, options: Record<string, unknown>): Promise<RawResult> {
+    // gemini gets no system-prompt flag here, so prepend it to the task.
+    const input = taskInput(prompt, options.systemPrompt ?? options.system_prompt);
     const cmd = [this.bin];
 
     if (options.permissionMode === 'auto') {
@@ -27,7 +30,7 @@ export class GeminiProvider implements HarnessProvider {
     if (modelValue) {
       cmd.push('-m', modelValue);
     }
-    cmd.push('-p', prompt);
+    cmd.push('-p', input);
 
     const startApi = Date.now();
     try {
