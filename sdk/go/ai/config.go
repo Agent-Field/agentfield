@@ -27,6 +27,14 @@ const defaultRuncrateBaseURL = "https://api.runcrate.ai/v1"
 // names, e.g. "deepseek-v4-flash".
 const defaultCloudGPUBaseURL = "https://cloudgpu.app/v1"
 
+// Caps applied when a Config leaves them at zero, so a partially filled
+// Config never sends max_tokens=0 (which some providers read as "no limit")
+// or builds an HTTP client without a timeout.
+const (
+	defaultMaxTokens = 4096
+	defaultTimeout   = 30 * time.Second
+)
+
 // Config holds AI/LLM configuration for making API calls.
 type Config struct {
 	// API Key for the selected provider: OpenAI, Infron,
@@ -48,10 +56,12 @@ type Config struct {
 	// Default temperature for responses (0.0 to 2.0)
 	Temperature float64
 
-	// Default max tokens for responses
+	// Default max tokens for responses. Zero or negative means the SDK
+	// default (4096); use WithMaxTokens to change it per request.
 	MaxTokens int
 
-	// HTTP timeout for requests
+	// HTTP timeout for requests. Zero or negative means the SDK default
+	// (30s). For streaming calls it bounds the wait for response headers.
 	Timeout time.Duration
 
 	// Optional: Site URL for OpenRouter rankings
@@ -151,8 +161,8 @@ func DefaultConfig() *Config {
 		BaseURL:     baseURL,
 		Model:       model,
 		Temperature: 0.7,
-		MaxTokens:   4096,
-		Timeout:     30 * time.Second,
+		MaxTokens:   defaultMaxTokens,
+		Timeout:     defaultTimeout,
 	}
 	switch {
 	case cfg.IsOpenRouter():
@@ -197,6 +207,18 @@ func (c *Config) Validate() error {
 		return errors.New("model is required")
 	}
 	return nil
+}
+
+// withDefaults returns a copy of the config with unset caps filled in.
+func (c *Config) withDefaults() *Config {
+	cfg := *c
+	if cfg.MaxTokens <= 0 {
+		cfg.MaxTokens = defaultMaxTokens
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = defaultTimeout
+	}
+	return &cfg
 }
 
 // IsOpenRouter returns true if the base URL is for OpenRouter.
