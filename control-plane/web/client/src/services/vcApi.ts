@@ -13,7 +13,7 @@ import type {
   ProvenanceVerificationResponse
 } from '../types/did';
 import { normalizeExecutionStatus, isSuccessStatus, isFailureStatus } from '../utils/status';
-import { getGlobalApiKey } from './api';
+import { authHeaders, getGlobalApiKey } from './api';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
 
@@ -137,6 +137,17 @@ export async function verifyProvenanceAudit(
  */
 export async function getWorkflowVCChain(workflowId: string): Promise<WorkflowVCChainResponse> {
   return fetchWrapper<WorkflowVCChainResponse>(`/workflows/${workflowId}/vc-chain`);
+}
+
+/**
+ * The chain's status, step counts, verifiability and workflow issuer, without
+ * the per-step credentials (`component_vcs` is empty and the DID resolution
+ * bundle is absent). What a run page shows; the full chain grows by a signed
+ * document per step, so fetch it with getWorkflowVCChain only to download or
+ * verify it.
+ */
+export async function getWorkflowVCChainSummary(workflowId: string): Promise<WorkflowVCChainResponse> {
+  return fetchWrapper<WorkflowVCChainResponse>(`/workflows/${workflowId}/vc-chain?view=summary`);
 }
 
 /**
@@ -795,7 +806,7 @@ export async function getDIDResolutionBundle(did: string): Promise<{
 export async function downloadDIDResolutionBundle(did: string): Promise<void> {
   try {
 
-    const response = await fetch(`${API_BASE_URL}/did/${encodeURIComponent(did)}/resolution-bundle/download`);
+    const response = await fetch(`${API_BASE_URL}/did/${encodeURIComponent(did)}/resolution-bundle/download`, { headers: authHeaders() });
 
     if (!response.ok) {
       throw new Error(`Failed to download DID resolution bundle: ${response.status}`);

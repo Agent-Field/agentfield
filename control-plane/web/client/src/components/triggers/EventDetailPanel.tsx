@@ -1,4 +1,5 @@
 "use client";
+import { authHeaders } from "@/services/api";
 
 import * as React from "react";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,7 @@ export function EventDetailPanel({
         `/api/v1/triggers/${triggerID}/events/${event.id}/replay`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
         }
       );
       if (response.ok) {

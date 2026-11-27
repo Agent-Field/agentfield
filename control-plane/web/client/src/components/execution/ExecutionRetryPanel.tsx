@@ -1,3 +1,4 @@
+import { authHeaders } from "@/services/api";
 import { useState } from "react";
 import {
   ArrowCounterClockwise,
@@ -121,7 +122,8 @@ export function ExecutionRetryPanel({ execution }: ExecutionRetryPanelProps) {
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...authHeaders(),
         },
         body: JSON.stringify(payload)
       });

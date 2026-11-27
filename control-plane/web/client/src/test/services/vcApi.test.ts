@@ -18,6 +18,7 @@ import {
   getVCStatusSummary,
   getWorkflowAuditTrail,
   getWorkflowVCChain,
+  getWorkflowVCChainSummary,
   getWorkflowVCStatuses,
   isValidVCDocument,
   verifyExecutionVCComprehensive,
@@ -112,6 +113,15 @@ describe("vcApi", () => {
       "/api/ui/v1/did/export/vcs?limit=10&status=verified&workflow_id=wf-1"
     );
     expect(vi.mocked(globalThis.fetch).mock.calls[1]?.[0]).toBe("/api/ui/v1/workflows/wf-1/vc-chain");
+  });
+
+  it("asks for the summary view of a workflow VC chain", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { workflow_id: "wf-1", component_vcs: [], verifiable: true }));
+
+    await expect(getWorkflowVCChainSummary("wf-1")).resolves.toMatchObject({ workflow_id: "wf-1", verifiable: true });
+    expect(vi.mocked(globalThis.fetch).mock.calls[0]?.[0]).toBe("/api/ui/v1/workflows/wf-1/vc-chain?view=summary");
   });
 
   it("fetches workflow VC statuses from the batch endpoint and fills defaults", async () => {

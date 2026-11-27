@@ -7,6 +7,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -56,8 +57,60 @@ function shouldInvalidateForEvent(data: unknown): boolean {
   return type !== "connected" && type !== "heartbeat";
 }
 
+/**
+ * Live events are coalesced: a busy control plane emits several execution
+ * events a second, and refetching the runs list, the dashboard and the open
+ * run's graph on each one turned into a request storm in which every new
+ * request cancelled the one in flight while the server still finished it.
+ * Keys are collected and flushed at most once per interval; the first event
+ * after a quiet spell flushes at once, so a single change still shows
+ * immediately. An in-flight refetch is never cancelled.
+ */
+export const LIVE_REFRESH_INTERVAL_MS = 2000;
+
+function useCoalescedInvalidation() {
+  const queryClient = useQueryClient();
+  const pending = useRef(new Map<string, readonly unknown[]>());
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFlush = useRef(0);
+
+  const flush = useCallback(() => {
+    timer.current = null;
+    lastFlush.current = Date.now();
+    const keys = [...pending.current.values()];
+    pending.current.clear();
+    for (const queryKey of keys) {
+      void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+    }
+  }, [queryClient]);
+
+  const schedule = useCallback(
+    (keys: ReadonlyArray<readonly unknown[]>) => {
+      for (const key of keys) pending.current.set(JSON.stringify(key), key);
+      if (timer.current) return;
+      const wait = LIVE_REFRESH_INTERVAL_MS - (Date.now() - lastFlush.current);
+      if (wait <= 0) {
+        flush();
+        return;
+      }
+      timer.current = setTimeout(flush, wait);
+    },
+    [flush],
+  );
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  return schedule;
+}
+
 function useSSEQuerySyncCore(): SSESyncContextValue {
   const queryClient = useQueryClient();
+  const invalidate = useCoalescedInvalidation();
 
   const {
     latestEvent: execEvent,
@@ -86,19 +139,13 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
         : {};
     if (!shouldInvalidateForEvent(data)) return;
 
-    void queryClient.invalidateQueries({ queryKey: ["runs"] });
-    void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
-
     const runId = (data.run_id ?? data.workflow_id) as string | undefined;
     const execId = data.execution_id as string | undefined;
-
-    if (runId) {
-      void queryClient.invalidateQueries({ queryKey: ["run-dag", runId] });
-    }
-    if (execId) {
-      void queryClient.invalidateQueries({ queryKey: ["step-detail", execId] });
-    }
-  }, [execEvent, queryClient]);
+    const keys: (readonly unknown[])[] = [["runs"], ["dashboard-summary"]];
+    if (runId) keys.push(["run-dag", runId]);
+    if (execId) keys.push(["step-detail", execId]);
+    invalidate(keys);
+  }, [execEvent, invalidate]);
 
   const {
     latestEvent: nodeEvent,
@@ -129,9 +176,8 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
 
     if (!shouldInvalidateForEvent(nodeEvent.data)) return;
 
-    void queryClient.invalidateQueries({ queryKey: ["agents"] });
-    void queryClient.invalidateQueries({ queryKey: ["reasoners"] });
-  }, [nodeEvent, queryClient]);
+    invalidate([["agents"], ["reasoners"]]);
+  }, [nodeEvent, invalidate]);
 
   const {
     latestEvent: reasonerEvent,
@@ -151,8 +197,8 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
         ? (reasonerEvent.data as Record<string, unknown>)
         : {};
     if (!shouldInvalidateForEvent(data)) return;
-    void queryClient.invalidateQueries({ queryKey: ["reasoners"] });
-  }, [reasonerEvent, queryClient]);
+    invalidate([["reasoners"]]);
+  }, [reasonerEvent, invalidate]);
 
   const refreshAllLiveQueries = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["runs"] });

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
@@ -32,7 +33,7 @@ func (ls *LocalStorage) StoreExecutionVC(ctx context.Context, vcID, executionID,
 			document_size_bytes = excluded.document_size_bytes;`
 
 	_, err := ls.db.ExecContext(ctx, query, vcID, executionID, workflowID, sessionID, issuerDID, targetDID,
-		callerDID, vcDocument, signature, storageURI, documentSizeBytes, inputHash, outputHash, status, time.Now())
+		callerDID, vcDocument, signature, storageURI, documentSizeBytes, inputHash, outputHash, status, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("failed to store execution VC: %w", err)
 	}
@@ -54,9 +55,13 @@ func (ls *LocalStorage) StoreExecutionVCRecord(ctx context.Context, vc *types.Ex
 	if kind == "" {
 		kind = types.ExecutionVCKindExecution
 	}
-	created := vc.CreatedAt
-	if created.IsZero() {
-		created = time.Now()
+	// created_at is always written in UTC. SQLite stores it as text and the
+	// created_after/created_before filters and ORDER BY compare that text, so
+	// a value in the host's zone would sort by its wall clock instead of its
+	// instant.
+	created := vc.CreatedAt.UTC()
+	if vc.CreatedAt.IsZero() {
+		created = time.Now().UTC()
 	}
 
 	query := `
@@ -482,4 +487,98 @@ func (ls *LocalStorage) GetFullExecutionVC(vcID string) (json.RawMessage, string
 	}
 
 	return json.RawMessage(vcDocument), signature, nil
+}
+
+const executionVCUTCMigration = "execution_vcs_utc_created_at"
+
+// normalizeExecutionVCTimestamps rewrites, once, every execution_vcs.created_at
+// that is not in the UTC text form the driver writes for a UTC time. Older
+// builds wrote created_at with time.Now() in the host's zone, so on a host west
+// of UTC a fresh VC sorted before an older UTC bound and fell out of a
+// created_after filter. The rewrite keeps the instant; only its spelling
+// changes. SQLite only: Postgres columns are timestamptz and compare by instant.
+func (ls *LocalStorage) normalizeExecutionVCTimestamps(ctx context.Context) error {
+	var done int
+	if err := ls.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version = ?", executionVCUTCMigration).Scan(&done); err != nil {
+		return fmt.Errorf("check %s: %w", executionVCUTCMigration, err)
+	}
+	if done > 0 {
+		return nil
+	}
+	n, err := ls.rewriteColumnToUTC(ctx, "execution_vcs", "created_at")
+	if err != nil {
+		return err
+	}
+	if _, err := ls.db.ExecContext(ctx, "INSERT INTO schema_migrations (version, description) VALUES (?, ?)",
+		executionVCUTCMigration, "Rewrite execution VC created_at to UTC"); err != nil {
+		return fmt.Errorf("record %s: %w", executionVCUTCMigration, err)
+	}
+	if n > 0 {
+		logger.Logger.Info().Int("rows", n).Msg("Rewrote execution VC created_at to UTC")
+	}
+	return nil
+}
+
+// rewriteColumnToUTC rewrites table.column to UTC for every row whose stored
+// text is not already "YYYY-MM-DD HH:MM:SS[.fff]+00:00", in batches so one
+// transaction never holds the whole table. The batches walk rowid upwards, so
+// the whole rewrite is one pass over the table.
+func (ls *LocalStorage) rewriteColumnToUTC(ctx context.Context, table, column string) (int, error) {
+	sel := fmt.Sprintf(`SELECT rowid, %[1]s FROM %[2]s
+		WHERE rowid > ? AND %[1]s IS NOT NULL AND NOT (%[1]s LIKE '____-__-__ __:__:__%%+00:00')
+		ORDER BY rowid LIMIT 5000`, column, table)
+	upd := fmt.Sprintf("UPDATE %s SET %s = ? WHERE rowid = ?", table, column)
+	type fix struct {
+		id int64
+		at time.Time
+	}
+	total := 0
+	var after int64
+	for {
+		rows, err := ls.db.QueryContext(ctx, sel, after)
+		if err != nil {
+			return total, fmt.Errorf("scan %s.%s: %w", table, column, err)
+		}
+		read := 0
+		var fixes []fix
+		for rows.Next() {
+			var id int64
+			var raw interface{}
+			if err := rows.Scan(&id, &raw); err != nil {
+				rows.Close()
+				return total, err
+			}
+			read++
+			after = id
+			// A value that does not parse is left as it is.
+			if t, err := parseDBTime(raw); err == nil && !t.IsZero() {
+				fixes = append(fixes, fix{id, t.UTC()})
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return total, err
+		}
+		if read == 0 {
+			return total, nil
+		}
+		if len(fixes) == 0 {
+			continue
+		}
+		tx, err := ls.db.BeginTx(ctx, nil)
+		if err != nil {
+			return total, err
+		}
+		for _, fx := range fixes {
+			if _, err := tx.ExecContext(ctx, upd, fx.at, fx.id); err != nil {
+				_ = tx.Rollback()
+				return total, fmt.Errorf("rewrite %s.%s: %w", table, column, err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return total, err
+		}
+		total += len(fixes)
+	}
 }
