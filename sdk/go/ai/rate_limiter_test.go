@@ -349,15 +349,28 @@ func TestBackoffDelayUsesRetryAfter(t *testing.T) {
 	assert.InDelta(t, 3*time.Second, d, float64(50*time.Millisecond))
 }
 
-func TestBackoffDelayIgnoresUnreasonableRetryAfter(t *testing.T) {
+func TestBackoffDelayHonorsRetryAfterAboveMaxDelay(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		BaseDelay:    time.Second,
+		MaxDelay:     5 * time.Second,
+		JitterFactor: 0.25,
+	})
+	// retryAfter exceeds maxDelay but is within the Retry-After ceiling: the
+	// server cooldown must not be cut short, even with negative jitter.
+	for attempt := 0; attempt < 5; attempt++ {
+		d := rl.backoffDelay(attempt, 20*time.Second)
+		assert.GreaterOrEqual(t, d, 20*time.Second)
+	}
+}
+
+func TestBackoffDelayCapsRetryAfterAtCeiling(t *testing.T) {
 	rl := NewRateLimiter(RateLimiterConfig{
 		BaseDelay:    time.Second,
 		MaxDelay:     5 * time.Second,
 		JitterFactor: 0.0001,
 	})
-	// retryAfter exceeds maxDelay: fall back to exponential backoff.
 	d := rl.backoffDelay(0, time.Hour)
-	assert.InDelta(t, time.Second, d, float64(50*time.Millisecond))
+	assert.InDelta(t, 300*time.Second, d, float64(100*time.Millisecond))
 }
 
 func TestBackoffDelayEnforcesMinimum(t *testing.T) {

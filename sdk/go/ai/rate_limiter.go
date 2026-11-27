@@ -76,6 +76,8 @@ const (
 	defaultCircuitBreakerThreshold = 5
 	defaultCircuitBreakerTimeout   = 30 * time.Second
 	rateLimiterMinDelay            = 100 * time.Millisecond
+	// maxRetryAfter bounds a server-suggested Retry-After (mirrors the Python SDK).
+	maxRetryAfter = 300 * time.Second
 )
 
 // RateLimiter provides adaptive exponential backoff with jitter and a circuit
@@ -301,12 +303,22 @@ func (r *RateLimiter) releaseProbe(isProbe bool) {
 }
 
 // backoffDelay computes the delay for a given 0-based attempt, honoring a
-// server-suggested retryAfter when present and reasonable, and adding
+// server-suggested retryAfter when present (capped at maxRetryAfter), and adding
 // deterministic per-container jitter.
 func (r *RateLimiter) backoffDelay(attempt int, retryAfter time.Duration) time.Duration {
-	var base time.Duration
-	if retryAfter > 0 && retryAfter <= r.maxDelay {
+	// Honour server cooldowns up to the ceiling, even above the local
+	// exponential-backoff cap.
+	var base, minimum time.Duration
+	if retryAfter > 0 {
+		ceiling := r.maxDelay
+		if maxRetryAfter > ceiling {
+			ceiling = maxRetryAfter
+		}
 		base = retryAfter
+		if base > ceiling {
+			base = ceiling
+		}
+		minimum = base
 	} else {
 		scaled := float64(r.baseDelay) * math.Pow(2, float64(attempt))
 		if scaled > float64(r.maxDelay) {
@@ -323,6 +335,10 @@ func (r *RateLimiter) backoffDelay(attempt int, retryAfter time.Duration) time.D
 	jitter := (rng.Float64()*2 - 1) * jitterRange
 
 	delay := time.Duration(float64(base) + jitter)
+	// Negative jitter must not end the server's cooldown early.
+	if delay < minimum {
+		delay = minimum
+	}
 	if delay < rateLimiterMinDelay {
 		delay = rateLimiterMinDelay
 	}

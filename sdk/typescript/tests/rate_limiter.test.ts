@@ -36,6 +36,20 @@ describe('StatelessRateLimiter', () => {
     expect((limiter as any)._calculateBackoffDelay(1, undefined)).toBeCloseTo(2.0);
   });
 
+  it('honors retry-after above maxDelay and never undercuts it with jitter', () => {
+    const limiter = new StatelessRateLimiter({ baseDelay: 1.0, jitterFactor: 0.25, maxDelay: 5.0 });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect((limiter as any)._calculateBackoffDelay(attempt, 20)).toBeGreaterThanOrEqual(20);
+    }
+  });
+
+  it('caps retry-after at the 300 second ceiling', () => {
+    const limiter = new StatelessRateLimiter({ baseDelay: 1.0, jitterFactor: 0.0, maxDelay: 5.0 });
+
+    expect((limiter as any)._calculateBackoffDelay(0, 3600)).toBeCloseTo(300);
+  });
+
   it('retries on rate limits until success', async () => {
     const limiter = new StatelessRateLimiter({ maxRetries: 3, baseDelay: 0.01, jitterFactor: 0.0 });
     const sleeps: number[] = [];
