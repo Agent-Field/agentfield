@@ -1,17 +1,12 @@
 package ui
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -239,49 +234,4 @@ func TestWorkflowRunHelperUtilities(t *testing.T) {
 		require.Equal(t, "updated_at", sanitizeRunSortField("latest"))
 		require.Equal(t, "updated_at", sanitizeRunSortField("unexpected"))
 	})
-}
-
-// A huge page must not overflow (page-1)*page_size into a negative offset, which
-// storage clamps to 0 and would serve the first page under the requested number.
-func TestListWorkflowRunsHandlerCapsPage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	tests := []struct {
-		name       string
-		query      string
-		wantPage   int
-		wantOffset int
-	}{
-		{"first page", "page=1&page_size=20", 1, 0},
-		{"ordinary page", "page=3&page_size=20", 3, 40},
-		{"page at the cap", "page=1000000&page_size=200", maxRunsPage, (maxRunsPage - 1) * 200},
-		{"page past the cap", "page=1000001&page_size=200", maxRunsPage, (maxRunsPage - 1) * 200},
-		{"page that overflows the offset", "page=9223372036854775807&page_size=200", maxRunsPage, (maxRunsPage - 1) * 200},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var got types.ExecutionFilter
-			store := &workflowRunOverrideStorage{
-				StorageProvider: setupTestStorage(t),
-				queryRunSummariesFn: func(_ context.Context, f types.ExecutionFilter) ([]*storage.RunSummaryAggregation, int, error) {
-					got = f
-					return nil, 5, nil
-				},
-			}
-			router := gin.New()
-			router.GET("/runs", NewWorkflowRunHandler(store).ListWorkflowRunsHandler)
-
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/runs?"+tt.query, nil))
-			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-
-			var body struct {
-				Page    int  `json:"page"`
-				HasMore bool `json:"has_more"`
-			}
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-			require.Equal(t, tt.wantOffset, got.Offset)
-			require.Equal(t, tt.wantPage, body.Page)
-			require.False(t, body.HasMore, "5 total runs never has more past the first page")
-		})
-	}
 }

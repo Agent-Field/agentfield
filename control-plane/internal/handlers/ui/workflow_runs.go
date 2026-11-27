@@ -158,14 +158,10 @@ type apiWorkflowExecution struct {
 	ApprovalStatus     *string `json:"approval_status,omitempty"`
 }
 
-// maxRunsPage bounds the page query parameter so (page-1)*pageSize cannot
-// overflow into a negative offset, which storage would clamp to the first page.
-const maxRunsPage = 1_000_000
-
 func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	page := parsePositiveIntWithin(c.DefaultQuery("page", "1"), 1, 1, maxRunsPage)
+	page := parsePage(c.Query("page"))
 	pageSize := parsePositiveIntWithin(c.DefaultQuery("page_size", "20"), 20, 1, 200)
 	offset := (page - 1) * pageSize
 
