@@ -43,10 +43,13 @@ func WarnCodeAFMissingKeyOnce(warn func(string)) {
 // CodeAFProvider invokes CodeAF's canonical headless exec or do protocol.
 // Binary discovery and managed installation happen lazily on first execution.
 // When CodeAF is unavailable it can delegate to the unchanged legacy adapter.
+// probeCLI runs `chat --help` to learn whether a watched run can use the
+// binary; nil means the real runner.
 type CodeAFProvider struct {
 	BinPath       string
 	alias         bool
 	runCLI        func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout, idleSeconds int, stdin []byte) (*CLIResult, error)
+	probeCLI      func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout, idleSeconds int, stdin []byte) (*CLIResult, error)
 	resolveBinary func(context.Context, string) (codeAFBinary, error)
 }
 
@@ -384,10 +387,14 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 	// A watched run uses `codeaf chat --once`, a full session whose record is
 	// streamed line by line through --events and steered through --steer. A
 	// codeaf too old for those flags is run the old way, unwatched: watching
-	// a run is a convenience and must never cost the run itself.
+	// a run is a convenience and must never cost the run itself. The binary
+	// is asked first (`chat --help`), because a build that does not know the
+	// flags refuses the command line and the watched run dies at once; the
+	// check after the run below is the net for a build that lists the flags
+	// and still refuses them.
 	var live *liveRun
 	runCmd, runCwd := cmd, ""
-	if command == "exec" && options.Live != nil {
+	if command == "exec" && options.Live != nil && p.supportsLiveChat(runCtx, binary.path, env) {
 		run, flags, err := startLive(options.Live, p.LiveInfo())
 		if err != nil {
 			log.Printf("WARNING CodeAF live transcript unavailable: %v", err)
@@ -405,7 +412,7 @@ func (p *CodeAFProvider) Execute(ctx context.Context, prompt string, options Opt
 		cli, err = runCLI(runCtx, cmd, env, "", outerTimeout, 0, input)
 	}
 	live.finish()
-	if live != nil && err == nil && cli != nil && cli.ReturnCode != 0 && strings.Contains(cli.Stderr, "-events") && strings.Contains(cli.Stderr, "not defined") {
+	if live != nil && err == nil && codeAFRejectedLiveFlags(cli) {
 		cli, err = runCLI(runCtx, cmd, env, "", int(math.Ceil(time.Until(deadline).Seconds())), 0, input)
 	}
 	elapsed := int(time.Since(started).Milliseconds())
