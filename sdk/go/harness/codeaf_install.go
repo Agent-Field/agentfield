@@ -18,21 +18,21 @@ import (
 
 const (
 	// CodeAFVersion is the managed CodeAF release, verified using embedded hashes.
-	CodeAFVersion = "v0.8.2"
+	CodeAFVersion = "v0.8.4"
 	// CodeAFBaseURL is the pinned release directory, overridable by AGENTFIELD_CODEAF_BASE_URL.
-	CodeAFBaseURL         = "https://github.com/Agent-Field/CodeAF/releases/download/v0.8.2"
+	CodeAFBaseURL         = "https://github.com/Agent-Field/CodeAF/releases/download/v0.8.4"
 	maxCodeAFDownloadSize = 128 << 20
 	codeAFVersionFilename = ".codeaf.version"
 	codeAFDownloadRetry   = time.Minute
 )
 
 var codeAFHashes = map[string]string{
-	"codeaf-darwin-amd64":      "a476f1ce44b21f8016583a65c49b21497d10713bcd72c33478b3bd12e52446d7",
-	"codeaf-darwin-arm64":      "e61adac060bf2345c08a3e23ae83239871c3050eadac046879f5f3176270c4f1",
-	"codeaf-linux-amd64":       "681d9813f2517addc86fb644d313e3f7cf0ab60be708c8e8b13d77fb16a6798c",
-	"codeaf-linux-arm64":       "c6375d58d198d9e1a84880d8b4324ee6c067a0e5e351af115ca5506b1ffa1c78",
-	"codeaf-windows-amd64.exe": "ff80f6f0c89c209fc809e960c70a1eb3518ccfc06775d587d5a187edd5d5222d",
-	"codeaf-windows-arm64.exe": "bfc0b386e5248e7e6756f097b372f72e4e955ee1e19e9216ccafee47064b2b80",
+	"codeaf-darwin-amd64":      "9a8db2d6cdb01affd5eab5d0259d2a8b773d2e7939ee3c519ee46eadff2b268d",
+	"codeaf-darwin-arm64":      "5ba7992a61d1bcd4e222ba5de96b8221dc3e664ede78baf8524a2cbcafdacf64",
+	"codeaf-linux-amd64":       "0af6241aa8822be7ed97c9cf14b302393ff0dbac481a74c213cceba94f2a4315",
+	"codeaf-linux-arm64":       "bf4c485c77d98a40c7163e9ccdd452d3c06065491d9b045f4e83fad4df13a39e",
+	"codeaf-windows-amd64.exe": "e1701579bc0d26ba60bd4c11be9181592e85ed8071ef0ba3bff785f637b75b91",
+	"codeaf-windows-arm64.exe": "a54b3019e8bdd32894a3bf1ab956e592697299ed8ce10ea405cd9f74f0b6b83c",
 }
 
 type codeAFBinary struct {

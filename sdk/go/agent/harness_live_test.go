@@ -22,8 +22,14 @@ import (
 )
 
 // fakeCodeAF is a codeaf that streams two entries, waits for a person's note
-// on its steer file, says it read it, and answers.
+// on its steer file, says it read it, and answers. Like a current build, it
+// lists the watched run's flags when asked for `chat --help`; the SDK asks
+// before it starts a watched run.
 const fakeCodeAF = `#!/bin/sh
+if [ "$1" = chat ] && [ "$2" = --help ]; then
+  printf '%s\n' 'flags:' '  --events string' '  --json' '  --session string' '  --steer string'
+  exit 0
+fi
 events=""; steer=""
 while [ $# -gt 0 ]; do
   case "$1" in --events) events="$2"; shift;; --steer) steer="$2"; shift;; esac
@@ -402,6 +408,10 @@ func TestRelayRidesTheLinkAndFallsBackToHTTP(t *testing.T) {
 // recordingCodeAF records its argv and stdin into REC_DIR so a test can prove
 // whether codeaf ran on the origin/main exec path or the watched chat path.
 const recordingCodeAF = `#!/bin/sh
+if [ "$1" = chat ] && [ "$2" = --help ]; then
+  printf '%s\n' 'flags:' '  --events string' '  --json' '  --session string' '  --steer string'
+  exit 0
+fi
 : > "$REC_DIR/argv"
 for arg in "$@"; do
   printf '%s\n' "$arg" >> "$REC_DIR/argv"
