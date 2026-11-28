@@ -77,7 +77,8 @@ export class StatelessRateLimiter {
     return parseInt(hash.slice(0, 8), 16);
   }
 
-  protected _isRateLimitError(error: unknown): boolean {
+  protected _isRateLimitError(thrown: unknown): boolean {
+    const error = unwrapRetryError(thrown);
     if (!error) return false;
 
     if (error instanceof RateLimitError) {
@@ -127,7 +128,8 @@ export class StatelessRateLimiter {
     return rateLimitKeywords.some((keyword) => message.includes(keyword));
   }
 
-  protected _extractRetryAfter(error: unknown): number | undefined {
+  protected _extractRetryAfter(thrown: unknown): number | undefined {
+    const error = unwrapRetryError(thrown);
     if (!error) return undefined;
 
     if (error instanceof RateLimitError && error.retryAfter) {
@@ -139,11 +141,14 @@ export class StatelessRateLimiter {
     type HeaderBag = Record<string, string | string[] | undefined>;
     const err = error as {
       response?: { headers?: HeaderBag; Headers?: HeaderBag; header?: HeaderBag };
+      responseHeaders?: HeaderBag;
       retryAfter?: string | number;
       retry_after?: string | number;
     };
 
-    const headers = err.response?.headers ?? err.response?.Headers ?? err.response?.header;
+    // The AI SDK's APICallError exposes headers as `responseHeaders`.
+    const headers =
+      err.response?.headers ?? err.response?.Headers ?? err.response?.header ?? err.responseHeaders;
     if (headers && typeof headers === 'object') {
       const retryAfterKey = Object.keys(headers).find((k) => k.toLowerCase() === 'retry-after');
       if (retryAfterKey) {
@@ -268,6 +273,12 @@ export class StatelessRateLimiter {
   }
 }
 
+
+/** The AI SDK wraps the provider error in a RetryError once its own retries run out. */
+function unwrapRetryError(error: unknown): unknown {
+  const wrapper = error as { name?: string; lastError?: unknown } | null | undefined;
+  return wrapper?.name === 'AI_RetryError' && wrapper.lastError ? wrapper.lastError : error;
+}
 
 function toError(error: unknown): Error {
   if (error instanceof Error) return error;
