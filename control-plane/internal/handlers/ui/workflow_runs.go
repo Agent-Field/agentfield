@@ -161,7 +161,7 @@ type apiWorkflowExecution struct {
 func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	page := parsePositiveInt(c.DefaultQuery("page", "1"), 1)
+	page := parsePage(c.Query("page"))
 	pageSize := parsePositiveIntWithin(c.DefaultQuery("page_size", "20"), 20, 1, 200)
 	offset := (page - 1) * pageSize
 

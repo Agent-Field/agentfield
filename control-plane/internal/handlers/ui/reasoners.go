@@ -358,13 +358,8 @@ func (h *ReasonersHandler) GetExecutionHistoryHandler(c *gin.Context) {
 	}
 
 	// Parse pagination parameters
-	pageStr := c.DefaultQuery("page", "1")
+	page := parsePage(c.Query("page"))
 	limitStr := c.DefaultQuery("limit", "20")
-
-	page, err := strconv.Atoi(pageStr)
-	if err != nil || page < 1 {
-		page = 1
-	}
 
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || limit < 1 || limit > 100 {

@@ -241,7 +241,7 @@ func (h *ExecutionHandler) ListExecutionsHandler(c *gin.Context) {
 		return
 	}
 
-	page := parsePositiveIntOrDefault(c.Query("page"), 1)
+	page := parsePage(c.Query("page"))
 	pageSize := parseBoundedIntOrDefault(c.Query("pageSize"), 10, 1, 100)
 	status := strings.TrimSpace(c.Query("status"))
 	runID := strings.TrimSpace(c.Query("workflowId"))
@@ -323,7 +323,7 @@ func (h *ExecutionHandler) GetExecutionDetailsHandler(c *gin.Context) {
 // GET /api/ui/v1/executions/summary
 func (h *ExecutionHandler) GetExecutionsSummaryHandler(c *gin.Context) {
 	ctx := c.Request.Context()
-	page := parsePositiveIntOrDefault(c.Query("page"), 1)
+	page := parsePage(c.Query("page"))
 	pageSize := parseBoundedIntOrDefault(c.Query("page_size"), 20, 1, 100)
 	status := strings.TrimSpace(c.Query("status"))
 	runID := strings.TrimSpace(c.Query("workflow_id"))
@@ -472,7 +472,7 @@ func (h *ExecutionHandler) GetExecutionStatsHandler(c *gin.Context) {
 func (h *ExecutionHandler) GetEnhancedExecutionsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	page := parsePositiveIntOrDefault(c.Query("page"), 1)
+	page := parsePage(c.Query("page"))
 	limit := parseBoundedIntOrDefault(c.Query("limit"), 50, 1, 200)
 	offset := (page - 1) * limit
 
